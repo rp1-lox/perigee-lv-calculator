@@ -253,6 +253,18 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .comp-card-specs{display:flex;flex-wrap:wrap;gap:1px 10px;font-family:var(--mono);font-size:8px;color:var(--text-dim);line-height:1.6;}
 .comp-card-specs b{color:var(--text);}
 .comp-card-hint{display:none;}
+
+.comp-card-ghost{background:transparent;border:1px dashed var(--border);padding:7px 10px;
+  opacity:.35;cursor:default;transition:border-color .15s,opacity .15s;}
+.comp-card-ghost.drop-hover{border-color:var(--accent);opacity:.7;}
+.comp-card-ghost-label{font-family:var(--mono);font-size:9px;color:var(--text-dim);
+  letter-spacing:.08em;font-style:italic;}
+th.sh-ghost{color:var(--border-bright)!important;border:1px dashed var(--border)!important;
+  background:transparent!important;cursor:copy;}
+th.sh-ghost.drop-hover{border-color:var(--accent)!important;color:var(--accent)!important;}
+td.ghost-cell input{color:var(--border)!important;background:transparent!important;
+  border-color:var(--border)!important;pointer-events:none;}
+
 .comp-booster-wrap{border-top:1px solid var(--border);padding-top:10px;margin-top:4px;}
 
 /* ── STYLED SCROLLBARS ── */
@@ -1141,6 +1153,24 @@ function buildTable(){
     th.addEventListener('drop',     e=>onColDrop(e,si));
     hr.appendChild(th);
   }
+  // ── Ghost columns (up to 4 total) ──
+  const numGhost=Math.max(0,4-numStages);
+  for(let g=0;g<numGhost;g++){
+    const slotIdx=numStages+g;
+    const gth=document.createElement('th');
+    gth.className='sh sh-ghost';
+    gth.textContent=`Stage ${slotIdx+1}`;
+    gth.title='Drop a stage here to add it';
+    gth.addEventListener('dragover',e=>{e.preventDefault();gth.classList.add('drop-hover');});
+    gth.addEventListener('dragleave',()=>gth.classList.remove('drop-hover'));
+    gth.addEventListener('drop',e=>{
+      e.preventDefault();gth.classList.remove('drop-hover');
+      if(!_draggingStage||_draggingStage._isVehicle)return;
+      setStages(slotIdx+1);
+      applyStageData(slotIdx,_draggingStage);
+    });
+    hr.appendChild(gth);
+  }
 
   // ── Booster row values (read from DOM before rebuild wipes them) ──
   const bDefaults={dry:500,prop:5000,thrust:400,isp:265,res:2};
@@ -1163,6 +1193,10 @@ function buildTable(){
       const id=`s${s+1}_${row.key}`;
       const val=(stageStore[s]&&stageStore[s][row.key]!==undefined)?stageStore[s][row.key]:row.def[s];
       html+=`<td class="s-active"><input type="number" id="${id}" value="${val}" min="0" step="any"></td>`;
+    }
+    // Ghost cells
+    for(let g=0;g<numGhost;g++){
+      html+=`<td class="s-active ghost-cell"><input type="number" value="0" disabled tabindex="-1"></td>`;
     }
     tr.innerHTML=html;
     tbody.appendChild(tr);
@@ -2545,6 +2579,39 @@ function buildStageComposition(){
       parseFloat(document.getElementById('b_isp')?.value)||0,
       null,true
     ));
+  }
+  // Ghost placeholder cards up to 4 total
+  const ghostCount=Math.max(0,4-numStages);
+  for(let g=0;g<ghostCount;g++){
+    const slotIdx=numStages+g;
+    const wrap=document.createElement('div');
+    wrap.style.cssText='display:flex;flex-direction:column;';
+    const lbl=document.createElement('div');
+    lbl.className='comp-stage-label';lbl.style.opacity='.35';
+    lbl.textContent=`Stage ${slotIdx+1}`;
+    wrap.appendChild(lbl);
+    // Ghost row (card + empty save area)
+    const row=document.createElement('div');row.style.cssText='display:flex;align-items:stretch;';
+    const ghost=document.createElement('div');
+    ghost.className='comp-card-ghost';ghost.style.flex='1';
+    const ghostLbl=document.createElement('div');
+    ghostLbl.className='comp-card-ghost-label';
+    ghostLbl.textContent='// drop stage here';
+    ghost.appendChild(ghostLbl);
+    ghost.addEventListener('dragover',e=>{e.preventDefault();ghost.classList.add('drop-hover');});
+    ghost.addEventListener('dragleave',()=>ghost.classList.remove('drop-hover'));
+    ghost.addEventListener('drop',e=>{
+      e.preventDefault();ghost.classList.remove('drop-hover');
+      if(!_draggingStage||_draggingStage._isVehicle)return;
+      setStages(slotIdx+1);
+      applyStageData(slotIdx,_draggingStage);
+    });
+    // Empty save area placeholder
+    const savePh=document.createElement('div');
+    savePh.style.cssText='width:22px;border:1px dashed var(--border);border-left:none;opacity:.3;flex-shrink:0;';
+    row.appendChild(ghost);row.appendChild(savePh);
+    wrap.appendChild(row);
+    body.appendChild(wrap);
   }
 }
 
