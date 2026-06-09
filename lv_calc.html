@@ -372,6 +372,9 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
 @media(max-width:900px){#vehicles-beginner{grid-template-columns:1fr !important;}}
 
+/* ── ART IMAGE INVERSION ── */
+.art-mono{filter:invert(var(--art-invert,0));}
+
 /* ── ART CANVAS ── */
 #art-canvas{background:rgba(0,0,0,.35);flex:1;position:relative;overflow:hidden;min-height:300px;
   background-image:radial-gradient(var(--border) 1px,transparent 1px);background-size:24px 24px;}
@@ -2483,6 +2486,7 @@ function applyTheme(key){
   const sel=document.getElementById('theme-select');
   if(sel){for(const o of sel.options){if(o.value===key){sel.value=key;break;}}}
   if(typeof progRenderNodeMap==='function')progRenderNodeMap();
+  if(typeof artUpdateInvertFilter==='function')artUpdateInvertFilter();
 }
 function rebuildThemeSelect(){
   const sel=document.getElementById('theme-select');const cur=sel.value;sel.innerHTML='';
@@ -3492,7 +3496,7 @@ function buildRocketArtPanel() {
     const badge = stageStore[s]?.s15 ? '½ ' : '';
     html += `<div class="veh-art-block" style="height:${h}px;" onclick="vehArtOpenPicker('s${s}')">`;
     if (art) {
-      html += `<img src="${art.dataURL}" style="width:100%;height:100%;object-fit:contain;display:block;">`;
+      html += `<img src="${art.dataURL}"${art.monochrome?' class="art-mono"':''} style="width:100%;height:100%;object-fit:contain;display:block;">`;
     } else {
       html += `<div style="width:100%;height:100%;background:linear-gradient(180deg,rgba(255,255,255,.05) 0%,rgba(0,0,0,0) 100%);border-top:2px solid var(--border);"></div>`;
     }
@@ -3509,7 +3513,7 @@ function buildRocketArtPanel() {
     const art    = artId ? PROG_ART_REGISTRY[artId] : null;
     html += `<div class="veh-art-block" style="height:${h}px;" onclick="vehArtOpenPicker('booster')">`;
     if (art) {
-      html += `<img src="${art.dataURL}" style="width:100%;height:100%;object-fit:contain;display:block;">`;
+      html += `<img src="${art.dataURL}"${art.monochrome?' class="art-mono"':''} style="width:100%;height:100%;object-fit:contain;display:block;">`;
     } else {
       html += `<div style="width:100%;height:100%;background:linear-gradient(180deg,rgba(255,255,255,.05) 0%,rgba(0,0,0,0) 100%);border-top:2px solid var(--border);"></div>`;
     }
@@ -3539,7 +3543,7 @@ function vehArtOpenPicker(slotKey) {
       const sid   = entry.artId;
       const isCur = sid === curId;
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">`
-        + `<img src="${entry.dataURL}" style="width:26px;height:26px;object-fit:contain;flex-shrink:0;`
+        + `<img src="${entry.dataURL}"${entry.monochrome?' class="art-mono"':''} style="width:26px;height:26px;object-fit:contain;flex-shrink:0;`
         + `background:rgba(255,255,255,.04);border:1px solid var(--border);">`
         + `<span style="flex:1;min-width:0;font-family:var(--mono);font-size:10px;color:var(--text);`
         + `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.name}</span>`
@@ -9062,11 +9066,48 @@ function _progArtDbGetAll() {
 
 // ── Registry helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Sample a loaded Image synchronously; return true if all opaque pixels are
+ * effectively grayscale (max RGB channel spread ≤ 30 out of 255).
+ */
+function _artSampleMonochrome(img) {
+  try {
+    const cvs = document.createElement('canvas');
+    cvs.width = cvs.height = 64;
+    const ctx = cvs.getContext('2d');
+    ctx.drawImage(img, 0, 0, 64, 64);
+    const px = ctx.getImageData(0, 0, 64, 64).data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i+3] < 32) continue; // skip transparent/near-transparent pixels
+      const spread = Math.max(px[i], px[i+1], px[i+2]) - Math.min(px[i], px[i+1], px[i+2]);
+      if (spread > 30) return false;
+    }
+    return true;
+  } catch (_) { return false; }
+}
+
+/** Read --bg luminance and set --art-invert (0 or 1) on :root. */
+function artUpdateInvertFilter() {
+  const d = document.createElement('div');
+  d.style.cssText = 'color:var(--bg);position:absolute;visibility:hidden;pointer-events:none;';
+  document.body.appendChild(d);
+  const rgb = getComputedStyle(d).color;
+  document.body.removeChild(d);
+  const m = rgb.match(/\d+/g);
+  const lum = m ? (0.299 * +m[0] + 0.587 * +m[1] + 0.114 * +m[2]) / 255 : 0;
+  document.documentElement.style.setProperty('--art-invert', lum < 0.5 ? '1' : '0');
+}
+
 /** Pre-load one registry entry into the image cache; re-renders band view on load. */
 function _progArtPreload(entry) {
   const img = new Image();
   img.onload = () => {
     _progArtImgCache.set(entry.artId, img);
+    // Back-fill monochrome flag for entries loaded from IndexedDB without it
+    if (entry.monochrome === undefined) {
+      entry.monochrome = _artSampleMonochrome(img);
+      _progArtDbPut(entry).catch(() => {}); // persist the flag
+    }
     if (typeof progRenderBandView === 'function') progRenderBandView();
   };
   img.src = entry.dataURL;
@@ -9104,7 +9145,8 @@ function progArtUploadFile(input) {
     const probe      = new Image();
     probe.onload = () => {
       const entry = { artId, name, dataURL, mimeType: file.type || 'image/png',
-                      width: probe.naturalWidth, height: probe.naturalHeight };
+                      width: probe.naturalWidth, height: probe.naturalHeight,
+                      monochrome: _artSampleMonochrome(probe) };
       PROG_ART_REGISTRY[artId] = entry;
       _progArtPreload(entry);
       _progArtDbPut(entry).catch(err => console.warn('[Art] DB write:', err));
@@ -9149,7 +9191,7 @@ function _progArtRebuildManagerList() {
   el.innerHTML = entries.map(entry => {
     const sid = entry.artId.replace(/'/g, "\\'");
     return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);">
-      <img src="${entry.dataURL}" style="width:28px;height:28px;object-fit:contain;flex-shrink:0;
+      <img src="${entry.dataURL}"${entry.monochrome?' class="art-mono"':''} style="width:28px;height:28px;object-fit:contain;flex-shrink:0;
         background:rgba(255,255,255,.04);border:1px solid var(--border);">
       <span style="flex:1;min-width:0;font-family:var(--mono);font-size:10px;color:var(--text);
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${entry.name}">${entry.name}</span>
@@ -9199,7 +9241,7 @@ function artCanvasRender() {
     return `<div class="art-ci" id="aci-${item.id}"
         style="left:${item.x}px;top:${item.y}px;width:${item.w}px;height:${item.h}px;"
         onmousedown="artCiMousedown(event,'${item.id}','move')">
-      <img src="${art.dataURL}">
+      <img src="${art.dataURL}"${art.monochrome?' class="art-mono"':''}>
       <div class="art-ci-del" onmousedown="event.stopPropagation()"
         onclick="event.stopPropagation();artCanvasRemove('${item.id}')">✕</div>
       <div class="art-ci-rsz"
@@ -9293,7 +9335,7 @@ function progOpenArtPicker(vdefIdx) {
       const sid   = entry.artId.replace(/'/g, "\\'");
       const isCur = vd?.artKey === entry.artId;
       return `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);">
-        <img src="${entry.dataURL}" style="width:26px;height:26px;object-fit:contain;flex-shrink:0;
+        <img src="${entry.dataURL}"${entry.monochrome?' class="art-mono"':''} style="width:26px;height:26px;object-fit:contain;flex-shrink:0;
           background:rgba(255,255,255,.04);border:1px solid var(--border);">
         <span style="flex:1;min-width:0;font-family:var(--mono);font-size:10px;color:var(--text);
           overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.name}</span>
@@ -9744,6 +9786,7 @@ progInitPorkchop();
 progInitBandView();
 progRenderNodeMap();
 progArtInit(); // load art registry from IndexedDB
+artUpdateInvertFilter(); // set --art-invert based on initial theme
 
 // Delegated listeners for user-defined tracking
 document.getElementById('stage-tbody').addEventListener('input',e=>{
