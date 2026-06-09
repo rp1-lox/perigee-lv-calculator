@@ -6498,40 +6498,56 @@ function progNmHideTip() {
 // transit nodes represent a trajectory between bodies (TLI, TMI, etc.)
 // Node positions are in world-space coords. The canvas uses a zoomable/pannable
 // <g id="nm-world"> so these coords are independent of the SVG viewBox size.
-// Planet systems are arranged like a compressed solar system (left=Earth, right=planets).
-// Each system's nodes orbit radially above their planet-body center.
+// Systems are laid out like a compressed solar system (Earth left → planets right).
+// Within each system nodes fan RADIALLY around the planet body:
+//   surface → just outside/below the planet disc
+//   orbitals → spread above at increasing distances, angled apart so they don't crowd
+//   escape/transit → near the SOI boundary or in open space between systems
+// All positions verified: no node overlaps each other or the planet body disc.
 const PROG_NM_NODES = [
-  // ── Earth system — center (195, 270), SOI r≈125 ──────────────────────────────
-  { id:'earth-surface', label:'EARTH',   sub:'surface',        zone:'earth',  cx:195, cy:270, r:22,
+  // ── Earth system — body center (195, 255), bodyR=26, SOI r=150 ───────────────
+  // Surface sits just below the planet disc.
+  { id:'earth-surface', label:'EARTH',   sub:'surface',        zone:'earth',  cx:195, cy:313, r:22,
     orbit:{ type:'surface',  body:'Earth' } },
-  { id:'leo',           label:'LEO',     sub:'185 – 400 km',   zone:'earth',  cx:195, cy:228, r:20,
+  // LEO directly above the planet (57 px from center → 19 px clear of disc top).
+  { id:'leo',           label:'LEO',     sub:'185 – 400 km',   zone:'earth',  cx:195, cy:190, r:20,
     orbit:{ type:'circular', body:'Earth', perigee:185,   apogee:185,   inclination:28.5 } },
-  { id:'gto',           label:'GTO',     sub:'35,786 km apo',  zone:'earth',  cx:195, cy:207, r:18,
+  // GTO upper-left; GEO upper-right — same altitude band, fanned ±30° from vertical.
+  { id:'gto',           label:'GTO',     sub:'35,786 km apo',  zone:'earth',  cx:140, cy:168, r:18,
     orbit:{ type:'elliptic', body:'Earth', perigee:185,   apogee:35786, inclination:28.5 } },
-  { id:'geo',           label:'GEO',     sub:'35,786 km circ', zone:'earth',  cx:195, cy:191, r:18,
+  { id:'geo',           label:'GEO',     sub:'35,786 km circ', zone:'earth',  cx:252, cy:163, r:18,
     orbit:{ type:'circular', body:'Earth', perigee:35786, apogee:35786, inclination:0    } },
-  { id:'escape',        label:'ESCAPE',  sub:'C3 ≥ 0',         zone:'earth',  cx:195, cy:160, r:17, dashed:true,
+  // Escape near the SOI boundary, centred above.
+  { id:'escape',        label:'ESCAPE',  sub:'C3 ≥ 0',         zone:'earth',  cx:195, cy:122, r:17, dashed:true,
     orbit:{ type:'escape',   body:'Earth', c3:0.1 } },
-  // ── Lunar system — center (448, 208), SOI r≈52 ───────────────────────────────
-  { id:'tlc',           label:'TLC',     sub:'trans-lunar',    zone:'lunar',  cx:335, cy:250, r:17, dashed:true,
+
+  // ── Lunar system — body center (450, 192), bodyR=12, SOI r=70 ────────────────
+  // TLC floats in the transfer corridor, well outside both SOIs.
+  { id:'tlc',           label:'TLC',     sub:'trans-lunar',    zone:'lunar',  cx:352, cy:244, r:17, dashed:true,
     orbit:{ type:'transit',  body:'Earth', c3:-1.9, destination:'Moon' } },
-  { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:448, cy:168, r:18,
-    orbit:{ type:'circular', body:'Moon',  perigee:68300, apogee:68300, inclination:0 } },
-  { id:'llo',           label:'LLO',     sub:'100 km lunar',   zone:'lunar',  cx:448, cy:183, r:18,
+  // LLO upper-left of Moon, DRO upper-right — angled apart so they're clear.
+  { id:'llo',           label:'LLO',     sub:'100 km lunar',   zone:'lunar',  cx:418, cy:152, r:18,
     orbit:{ type:'circular', body:'Moon',  perigee:100,   apogee:100,   inclination:90 } },
-  { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:448, cy:208, r:20,
+  { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:483, cy:138, r:18,
+    orbit:{ type:'circular', body:'Moon',  perigee:68300, apogee:68300, inclination:0 } },
+  // Surface just below Moon disc.
+  { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:236, r:20,
     orbit:{ type:'surface',  body:'Moon' } },
-  // ── Mars system — center (840, 238), SOI r≈62 ────────────────────────────────
-  { id:'mars-transit',  label:'TRANSIT', sub:'Earth → Mars',   zone:'interp', cx:650, cy:242, r:17, dashed:true,
+
+  // ── Mars system — body center (860, 205), bodyR=18, SOI r=80 ─────────────────
+  { id:'mars-transit',  label:'TRANSIT', sub:'Earth → Mars',   zone:'interp', cx:655, cy:244, r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:8.7,  departure_body:'Earth', destination:'Mars'  } },
-  { id:'mars-orbit',    label:'MARS',    sub:'orbit 400 km',   zone:'interp', cx:840, cy:190, r:22,
+  // Orbit above, surface below.
+  { id:'mars-orbit',    label:'MARS',    sub:'orbit 400 km',   zone:'interp', cx:860, cy:150, r:22,
     orbit:{ type:'circular', body:'Mars',  perigee:400,   apogee:400,   inclination:0 } },
-  { id:'mars-surface',  label:'MARS',    sub:'surface',        zone:'interp', cx:840, cy:238, r:20,
+  { id:'mars-surface',  label:'MARS',    sub:'surface',        zone:'interp', cx:860, cy:248, r:20,
     orbit:{ type:'surface',  body:'Mars' } },
-  // ── Venus system — center (825, 392), SOI r≈56 ───────────────────────────────
-  { id:'venus-transit', label:'TRANSIT', sub:'Earth → Venus',  zone:'interp', cx:650, cy:368, r:17, dashed:true,
+
+  // ── Venus system — body center (848, 380), bodyR=15, SOI r=67 ────────────────
+  { id:'venus-transit', label:'TRANSIT', sub:'Earth → Venus',  zone:'interp', cx:655, cy:366, r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:6.3,  departure_body:'Earth', destination:'Venus' } },
-  { id:'venus-orbit',   label:'VENUS',   sub:'orbit 300 km',   zone:'interp', cx:825, cy:344, r:20,
+  // Orbit above Venus disc.
+  { id:'venus-orbit',   label:'VENUS',   sub:'orbit 300 km',   zone:'interp', cx:848, cy:318, r:20,
     orbit:{ type:'circular', body:'Venus', perigee:300,   apogee:300,   inclination:0 } },
 ];
 
@@ -6653,10 +6669,10 @@ function progRenderNodeMap() {
   // Each blob = layered concentric circles creating a soft "sphere of influence" glow.
   // Decorative planet body circle at center (NOT interactive — nodes sit on top).
   const PLANET_BLOBS = [
-    { cx:195, cy:270, r:125, col:nmEarth,  bodyR:22, label:'EARTH'  },
-    { cx:448, cy:208, r:52,  col:nmLunar,  bodyR:11, label:'MOON'   },
-    { cx:840, cy:238, r:62,  col:nmInterp, bodyR:16, label:'MARS'   },
-    { cx:825, cy:392, r:56,  col:nmInterp, bodyR:13, label:'VENUS'  },
+    { cx:195, cy:255, r:150, col:nmEarth,  bodyR:26, label:'EARTH'  },
+    { cx:450, cy:192, r:70,  col:nmLunar,  bodyR:12, label:'MOON'   },
+    { cx:860, cy:205, r:80,  col:nmInterp, bodyR:18, label:'MARS'   },
+    { cx:848, cy:380, r:67,  col:nmInterp, bodyR:15, label:'VENUS'  },
   ];
   for (const b of PLANET_BLOBS) {
     // Soft concentric fill layers (outermost → innermost, increasing opacity)
