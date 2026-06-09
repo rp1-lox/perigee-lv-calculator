@@ -304,6 +304,13 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .orbit-scroll::-webkit-scrollbar-thumb:hover{background:var(--text-bright);}
 .lib-body,.lv-list,#case-list,.orbit-scroll,#comp-body{scrollbar-width:thin;scrollbar-color:var(--accent) var(--border);}
 
+/* ── VEHICLE ART PANEL ── */
+.veh-art-block{position:relative;cursor:pointer;overflow:hidden;border:1px solid var(--border);transition:border-color .15s;flex-shrink:0;display:flex;align-items:stretch;justify-content:center;}
+.veh-art-block:hover{border-color:var(--accent);}
+.veh-art-block-lbl{position:absolute;bottom:3px;left:0;right:0;text-align:center;font-family:var(--mono);font-size:7px;letter-spacing:.06em;color:var(--text-dim);pointer-events:none;text-transform:uppercase;}
+.veh-art-block-add{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;color:var(--text-dim);opacity:0;transition:opacity .15s;background:rgba(0,0,0,.35);}
+.veh-art-block:hover .veh-art-block-add{opacity:1;}
+
 /* ── TOOLTIP ── */
 .info-tip{display:inline-flex;align-items:center;justify-content:center;
   width:14px;height:14px;border-radius:50%;border:1px solid var(--text-dim);
@@ -363,6 +370,7 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 #vehicles-advanced{padding:16px 20px;background:var(--panel);border:1px solid var(--border);margin-bottom:14px;}
 #vehicles-stage-params{padding:0 4px;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
+@media(max-width:900px){#vehicles-beginner{grid-template-columns:1fr !important;}}
 </style>
 </head>
 <body>
@@ -376,6 +384,13 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
     <button class="nav-btn" id="nav-results" onclick="showPage('results')">Results</button>
     <button class="nav-btn" id="nav-program" onclick="showPage('program')">Program</button>
   </nav>
+  <div id="veh-view-wrap" style="display:flex;align-items:center;gap:8px;">
+    <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.12em;text-transform:uppercase;">View</span>
+    <div class="seg" id="view-mode-toggle">
+      <button class="active" onclick="setVehicleMode('beginner')">Beginner</button>
+      <button onclick="setVehicleMode('advanced')">Advanced</button>
+    </div>
+  </div>
   <div class="theme-wrap">
     <label>Theme</label>
     <select id="theme-select" onchange="applyTheme(this.value)">
@@ -393,20 +408,22 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 <!-- ═══════════════════════════════════════════════ PAGE: VEHICLES -->
 <div id="page-vehicles" class="page active">
 
-  <!-- Mode toggle -->
-  <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:10px;gap:10px;">
-    <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.12em;text-transform:uppercase;">View</span>
-    <div class="seg" id="view-mode-toggle">
-      <button class="active" onclick="setVehicleMode('beginner')">Beginner</button>
-      <button onclick="setVehicleMode('advanced')">Advanced</button>
-    </div>
-  </div>
-
   <!-- BEGINNER VIEW: Composition + Library -->
-  <div id="vehicles-beginner" style="display:grid;grid-template-columns:2fr 3fr;gap:14px;align-items:start;margin-bottom:14px;">
+  <div id="vehicles-beginner" style="display:grid;grid-template-columns:160px 2fr 2fr;gap:14px;align-items:stretch;margin-bottom:14px;">
+
+    <!-- ART PANEL: rocket visualization -->
+    <div class="lib-panel" id="veh-art-panel" style="margin-top:0;min-width:0;padding:10px;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-shrink:0;">
+        <span class="sl" style="margin-bottom:0;flex:1;font-size:9px;">Rocket</span>
+        <button class="act-btn" onclick="progOpenArtManager()" style="font-size:8px;padding:2px 6px;" title="Open art library">Art</button>
+      </div>
+      <div id="veh-art-body" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:2px;scrollbar-width:thin;scrollbar-color:var(--accent) var(--border);">
+        <!-- built by buildRocketArtPanel() -->
+      </div>
+    </div>
 
     <!-- LEFT: Stage Composition + controls -->
-    <div>
+    <div class="lib-panel" style="margin-top:0;min-width:0;display:flex;flex-direction:column;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <div class="sl" style="margin-bottom:0;flex:1;">Stage Composition</div>
         <button class="act-btn green" onclick="openSaveLVModal()">SAVE LV</button>
@@ -449,13 +466,13 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
         </div>
       </div>
 
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;overflow:hidden;margin-bottom:4px;">
-        <div style="padding:5px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.18);">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;overflow:hidden;margin-bottom:0;flex:1;display:flex;flex-direction:column;">
+        <div style="padding:5px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.18);flex-shrink:0;">
           <span style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--text-dim);text-transform:uppercase;">STAGES</span>
           <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
           <span id="comp-stage-count" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);opacity:.55;flex-shrink:0;"></span>
         </div>
-        <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto;padding:6px;"></div>
+        <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;flex:1;min-height:0;overflow-y:auto;padding:6px;"></div>
       </div>
       <div id="preset-grid" style="display:none"></div>
     </div>
@@ -1445,6 +1462,8 @@ function showPage(p){
   pg.classList.add('active');
   pg.style.display=(p==='program')?'flex':'block';
   document.getElementById('nav-'+p).classList.add('active');
+  const vvw=document.getElementById('veh-view-wrap');
+  if(vvw){vvw.style.display=(p==='vehicles')?'flex':'none';}
 }
 
 // ─── BUILD TABLE ──────────────────────────────
@@ -3423,6 +3442,113 @@ function buildStageComposition(){
     wrap.appendChild(row);
     body.appendChild(wrap);
   }
+  buildRocketArtPanel();
+}
+
+// ─── VEHICLE ART PANEL ───────────────────────
+let stageArtMap = {};       // slotKey ('s0','s1',...,'booster') → artId
+let _vehArtPickerSlot = null;
+
+function buildRocketArtPanel() {
+  const body = document.getElementById('veh-art-body');
+  if (!body) return;
+
+  // Collect prop masses for proportional block heights
+  const stageProps = [];
+  for (let s = 0; s < numStages; s++) stageProps.push(parseFloat(stageStore[s]?.prop) || 0);
+  const bProp = useBooster ? (parseFloat(document.getElementById('b_prop')?.value) || 0) : 0;
+  const allProps = stageProps.concat(bProp > 0 ? [bProp] : []);
+  const maxProp = Math.max(...allProps, 1);
+  const minH = 36, maxH = 108;
+  const getH = p => Math.round(minH + (p / maxProp) * (maxH - minH));
+
+  let html = '';
+
+  // Payload stub at the top
+  html += `<div style="flex-shrink:0;height:18px;border:1px dashed var(--border);display:flex;`
+        + `align-items:center;justify-content:center;font-family:var(--mono);font-size:7px;`
+        + `letter-spacing:.08em;color:var(--text-dim);text-transform:uppercase;opacity:.55;">PAYLOAD</div>`;
+
+  // Stages — rendered top → bottom (last index = top stage, index 0 = first stage)
+  for (let s = numStages - 1; s >= 0; s--) {
+    const h    = getH(stageProps[s]);
+    const artId = stageArtMap['s' + s];
+    const art   = artId ? PROG_ART_REGISTRY[artId] : null;
+    const badge = stageStore[s]?.s15 ? '½ ' : '';
+    html += `<div class="veh-art-block" style="height:${h}px;" onclick="vehArtOpenPicker('s${s}')">`;
+    if (art) {
+      html += `<img src="${art.dataURL}" style="width:100%;height:100%;object-fit:contain;display:block;">`;
+    } else {
+      html += `<div style="width:100%;height:100%;background:linear-gradient(180deg,rgba(255,255,255,.05) 0%,rgba(0,0,0,0) 100%);border-top:2px solid var(--border);"></div>`;
+    }
+    html += `<div class="veh-art-block-lbl">${badge}S${s + 1}</div>`;
+    html += `<div class="veh-art-block-add">${art ? '✎' : '+ art'}</div>`;
+    html += `</div>`;
+  }
+
+  // Booster band at the bottom (if enabled)
+  if (useBooster && bProp > 0) {
+    const h      = getH(bProp);
+    const bCount = parseInt(document.getElementById('num-boosters')?.value) || 0;
+    const artId  = stageArtMap['booster'];
+    const art    = artId ? PROG_ART_REGISTRY[artId] : null;
+    html += `<div class="veh-art-block" style="height:${h}px;" onclick="vehArtOpenPicker('booster')">`;
+    if (art) {
+      html += `<img src="${art.dataURL}" style="width:100%;height:100%;object-fit:contain;display:block;">`;
+    } else {
+      html += `<div style="width:100%;height:100%;background:linear-gradient(180deg,rgba(255,255,255,.05) 0%,rgba(0,0,0,0) 100%);border-top:2px solid var(--border);"></div>`;
+    }
+    html += `<div class="veh-art-block-lbl">×${bCount} BOOSTER</div>`;
+    html += `<div class="veh-art-block-add">${art ? '✎' : '+ art'}</div>`;
+    html += `</div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+function vehArtOpenPicker(slotKey) {
+  _vehArtPickerSlot = slotKey;
+  const el      = document.getElementById('veh-art-picker-list');
+  if (!el) return;
+  const entries = Object.values(PROG_ART_REGISTRY);
+  const curId   = stageArtMap[slotKey] || null;
+  const slotLbl = slotKey === 'booster' ? 'BOOSTER' : 'S' + (parseInt(slotKey.slice(1)) + 1);
+
+  if (entries.length === 0) {
+    el.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:14px;text-align:center;">`
+      + `No art in library.<br>Open <b>Art Lib</b> to upload images.</div>`;
+  } else {
+    const header = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);`
+      + `letter-spacing:.1em;padding:0 0 8px;flex-shrink:0;">CHOOSE ART FOR ${slotLbl}</div>`;
+    const rows = entries.map(entry => {
+      const sid   = entry.artId;
+      const isCur = sid === curId;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">`
+        + `<img src="${entry.dataURL}" style="width:26px;height:26px;object-fit:contain;flex-shrink:0;`
+        + `background:rgba(255,255,255,.04);border:1px solid var(--border);">`
+        + `<span style="flex:1;min-width:0;font-family:var(--mono);font-size:10px;color:var(--text);`
+        + `overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.name}</span>`
+        + `<button onclick="vehArtAssign('${sid}')" style="font-family:var(--mono);font-size:9px;`
+        + `background:transparent;border:1px solid var(--border);cursor:pointer;padding:2px 8px;`
+        + `white-space:nowrap;flex-shrink:0;color:${isCur ? 'var(--text-dim)' : 'var(--accent)'};">`
+        + `${isCur ? '✓ Set' : '+ Assign'}</button></div>`;
+    }).join('');
+    const remove = curId
+      ? `<div style="padding:7px 0;"><button onclick="vehArtAssign(null)"
+          style="width:100%;font-family:var(--mono);font-size:9px;background:transparent;
+          border:1px solid var(--border);color:var(--accent2);padding:3px 0;cursor:pointer;">
+          ✕ Remove Art</button></div>` : '';
+    el.innerHTML = header + rows + remove;
+  }
+  openModal('modal-veh-art-picker');
+}
+
+function vehArtAssign(artId) {
+  if (!_vehArtPickerSlot) return;
+  if (artId) { stageArtMap[_vehArtPickerSlot] = artId; }
+  else        { delete stageArtMap[_vehArtPickerSlot]; }
+  closeModal('modal-veh-art-picker');
+  buildRocketArtPanel();
 }
 
 // Track booster name
@@ -9623,6 +9749,17 @@ document.getElementById('stage-tbody').addEventListener('input',e=>{
       <button onclick="closeModal('modal-prog-art-picker')" class="modal-close">✕</button>
     </div>
     <div id="art-picker-list" style="flex:1;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- ── MODAL: Vehicle Stage Art Picker ── -->
+<div class="modal-overlay" id="modal-veh-art-picker" style="display:none">
+  <div class="modal-box" style="width:380px;max-height:70vh;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0;">
+      <span class="modal-title">Assign Stage Art</span>
+      <button onclick="closeModal('modal-veh-art-picker')" class="modal-close">✕</button>
+    </div>
+    <div id="veh-art-picker-list" style="flex:1;overflow-y:auto;"></div>
   </div>
 </div>
 
