@@ -1645,11 +1645,15 @@ function _luParseGeneric(html) {
   return out;
 }
 
-// Derive propellant from gross − dry if not directly available
+// Derive missing mass field from the other two (gross, dry, prop)
 function _luDeriveProps(out) {
   if (out.grossMass && out.dry && !out.prop) {
     const p = Math.round(out.grossMass.value - out.dry.value);
     if (p > 0) out.prop = { raw: `${out.grossMass.raw} − ${out.dry.raw}`, value: p, unit: 'kg', checked: true };
+  }
+  if (out.grossMass && out.prop && !out.dry) {
+    const d = Math.round(out.grossMass.value - out.prop.value);
+    if (d > 0) out.dry = { raw: `${out.grossMass.raw} − ${out.prop.raw}`, value: d, unit: 'kg', checked: true };
   }
 }
 
