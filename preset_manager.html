@@ -1542,7 +1542,10 @@ function _luParseB14643(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const vehicleFields = {};
   const stages = [];   // [{name, fields}]
-  let current = null;  // null = vehicle-level
+  // currentGroup: array of {fields} objects active for the current section.
+  // Single-entry  → vehicle-level or single-variant stage (use cells.last).
+  // Multi-entry   → positional mapping, one entry per named variant column.
+  let currentGroup = [{ fields: vehicleFields }];
 
   const stageHdrRE = /^(?:stage\s+\d+|booster|core\s+stage|strap[\s\-]?on|solid\s+rocket)/i;
   const isGrayCell = c => /^#?c0c0c0$/i.test(c.getAttribute('bgcolor') || '');
@@ -1553,35 +1556,69 @@ function _luParseB14643(html) {
     const cells = [...row.querySelectorAll('td,th')];
     if (!cells.length) return;
 
-    // ── Stage header row: first cell is gray AND text looks like "Stage N" ──
+    // ── Stage header row ──────────────────────────────────────────────────────
     if (isGrayCell(cells[0])) {
       const stageLabel = nbTrim(cells[0].textContent).replace(/\s+/g, ' ');
-      if (stageHdrRE.test(stageLabel)) {
-        // Engine/designation: cols 2+ of the gray row (col 0 = stage number, col 1 = "Name" label)
-        const designation = cells.slice(2)
-          .map(c => nbTrim(c.textContent).replace(/\s+/g, ' '))
-          .filter(s => s.length > 0)
-          .join(' / ');
+      if (!stageHdrRE.test(stageLabel)) return;
+
+      // col0 = "Stage N", col1 = "Name" label, col2+ = variant name strings
+      const nameCells = cells.slice(2)
+        .map(c => nbTrim(c.textContent).replace(/\s+/g, ' '))
+        .filter(s => s.length > 0);
+
+      if (nameCells.length === 0) {
         const sFields = {};
-        if (designation) sFields.engines = { raw: designation, value: designation, unit: '', checked: true };
-        stages.push({ name: designation || stageLabel, fields: sFields });
-        current = sFields;
+        stages.push({ name: stageLabel, fields: sFields });
+        currentGroup = [{ fields: sFields }];
+      } else {
+        // Create one stage chip per distinct variant name found in the header row
+        currentGroup = nameCells.map(name => {
+          const sFields = { engines: { raw: name, value: name, unit: '', checked: true } };
+          stages.push({ name, fields: sFields });
+          return { fields: sFields };
+        });
       }
       return;
     }
 
-    // ── Data row: label | unit | value ──
+    // ── Data row ──────────────────────────────────────────────────────────────
     if (cells.length < 2) return;
-    const key     = nbTrim(cells[0].textContent).toLowerCase().replace(/\s+/g, ' ');
-    const unitTxt = cells.length >= 3 ? nbTrim(cells[1].textContent) : '';
-    const numTxt  = nbTrim(cells[cells.length - 1].textContent);
-    // Combine into a single parseable string e.g. "54.43 t" or "667.2 kN"
-    const val = unitTxt ? numTxt + ' ' + unitTxt : numTxt;
 
-    _luMapB14643Field(key, val, current ?? vehicleFields);
+    // cells[0] has rowspan ⟹ it's the section-spacer (first row of a stage block).
+    // Subsequent rows within that rowspan omit the spacer, so indices shift left.
+    const firstInBlock = cells[0].hasAttribute('rowspan');
+    const labelIdx = firstInBlock ? 1 : 0;
+    const unitIdx  = firstInBlock ? 2 : 1;
+    if (cells.length <= unitIdx) return;
+
+    const key     = nbTrim(cells[labelIdx].textContent).toLowerCase().replace(/\s+/g, ' ');
+    const unitTxt = nbTrim(cells[unitIdx].textContent);
+
+    if (currentGroup.length === 1) {
+      // Single-variant: always take cells.last
+      const numTxt = nbTrim(cells[cells.length - 1].textContent);
+      const val    = unitTxt ? numTxt + ' ' + unitTxt : numTxt;
+      _luMapB14643Field(key, val, currentGroup[0].fields);
+    } else {
+      // Multi-variant: map each stage to its positional column.
+      // First-in-block: value cells = cells after [spacer,label,unit] WITHOUT rowspan
+      //   (cells with rowspan are empty placeholder columns for absent variants)
+      // Subsequent rows: value cells start at cells[labelIdx + 2]
+      const valueCells = firstInBlock
+        ? cells.slice(3).filter(c => !c.hasAttribute('rowspan'))
+        : cells.slice(labelIdx + 2);
+
+      for (let i = 0; i < currentGroup.length; i++) {
+        const vc = valueCells[i];
+        if (!vc) continue;
+        const numTxt = nbTrim(vc.textContent);
+        if (!numTxt) continue;
+        const val = unitTxt ? numTxt + ' ' + unitTxt : numTxt;
+        _luMapB14643Field(key, val, currentGroup[i].fields);
+      }
+    }
   });
 
-  // Derive dry mass (gross − prop) for every bucket
   stages.forEach(s => _luDeriveProps(s.fields));
   _luDeriveProps(vehicleFields);
 
