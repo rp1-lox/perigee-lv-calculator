@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RP Preset Manager</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#0f1117;--surface:#181b22;--surface2:#1f232c;--border:#282d38;--border2:#343b48;
+  --accent:#88c657;--accent-dim:rgba(136,198,87,.12);--warn:#e09357;--danger:#e06c75;
+  --text:#bec8d2;--text-dim:#5a6470;--text-bright:#e8f0f8;
+  --mono:'JetBrains Mono','Consolas',monospace;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-size:14px;font-family:system-ui,sans-serif;overflow:hidden;}
+
+/* HEADER */
+#hdr{display:flex;align-items:center;gap:14px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;}
+#hdr h1{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.18em;text-transform:uppercase;white-space:nowrap;}
+#hdr .sep{flex:1;}
+#fname{font-family:var(--mono);font-size:11px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px;}
+#dirty-badge{font-family:var(--mono);font-size:10px;color:var(--warn);display:none;}
+
+/* BUTTONS */
+.btn{background:transparent;border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:5px 13px;cursor:pointer;transition:border-color .15s,color .15s;white-space:nowrap;}
+.btn:hover{border-color:var(--accent);color:var(--accent);}
+.btn:disabled{opacity:.35;pointer-events:none;}
+.btn.primary{border-color:var(--accent);color:var(--accent);}
+.btn.primary:hover{background:var(--accent-dim);}
+.btn.danger{border-color:var(--danger);color:var(--danger);}
+.btn.danger:hover{background:rgba(224,108,117,.1);}
+.btn.sm{padding:3px 9px;font-size:9px;}
+
+/* TABS */
+#tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);padding:0 16px;flex-shrink:0;}
+.tab{background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim);font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:9px 16px;cursor:pointer;}
+.tab:hover{color:var(--text);}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+/* LAYOUT */
+#body{display:flex;flex:1;height:calc(100vh - 80px);overflow:hidden;}
+.panel{display:flex;flex:1;overflow:hidden;}
+.left-pane{width:260px;flex-shrink:0;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--border);}
+.list-toolbar{padding:8px;display:flex;gap:6px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.list-scroll{flex:1;overflow-y:auto;}
+.right-pane{flex:1;overflow-y:auto;padding:20px 26px;background:var(--bg);}
+
+/* LIST */
+.cat-row{display:flex;align-items:center;padding:8px 10px 2px;gap:4px;}
+.cat-label{font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);flex:1;}
+.cat-actions{display:flex;gap:2px;opacity:0;transition:opacity .15s;}
+.cat-row:hover .cat-actions{opacity:1;}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--text-dim);cursor:pointer;padding:2px 4px;font-size:11px;line-height:1;}
+.icon-btn:hover{color:var(--accent);}
+.icon-btn.d:hover{color:var(--danger);}
+
+.li{display:flex;align-items:center;padding:6px 12px 6px 20px;cursor:pointer;gap:8px;border-left:2px solid transparent;transition:background .1s;}
+.li:hover{background:rgba(255,255,255,.04);}
+.li.sel{background:var(--accent-dim);border-left-color:var(--accent);}
+.li-name{flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.li-sub{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.li-del{opacity:0;font-size:11px;color:var(--danger);cursor:pointer;padding:0 2px;}
+.li:hover .li-del,.li.sel .li-del{opacity:.5;}
+.li-del:hover{opacity:1 !important;}
+
+/* EDITOR */
+.ed-title{font-family:var(--mono);font-size:13px;color:var(--text-bright);margin-bottom:18px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+.ed-subtitle{font-size:10px;color:var(--text-dim);margin-left:8px;}
+.placeholder{color:var(--text-dim);font-family:var(--mono);font-size:11px;padding:40px;text-align:center;}
+.no-file{color:var(--text-dim);font-family:var(--mono);font-size:11px;padding:60px;text-align:center;line-height:1.9;}
+.no-file b{color:var(--accent);}
+
+/* FORM */
+.fs{margin-bottom:20px;}
+.fs-title{font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid var(--border);}
+.frow{display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap;align-items:flex-end;}
+.ff{display:flex;flex-direction:column;gap:3px;}
+.ff label{font-family:var(--mono);font-size:8px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim);}
+.ff input,.ff textarea,.ff select{background:rgba(0,0,0,.35);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:11px;padding:5px 8px;outline:none;min-width:0;}
+.ff input:focus,.ff textarea:focus,.ff select:focus{border-color:var(--accent);}
+.ff textarea{resize:vertical;line-height:1.5;}
+.ff.wide{flex:1;min-width:160px;}
+.ff.med{width:120px;}
+.ff.narrow{width:88px;}
+.ff.xnarrow{width:70px;}
+.ff select option{background:var(--surface2);}
+.form-actions{display:flex;gap:8px;margin-top:18px;padding-top:14px;border-bottom:1px solid var(--border);}
+
+/* STAGE TABLE */
+.stage-tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px;margin-bottom:6px;}
+.stage-tbl th{font-size:7px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);}
+.stage-tbl td{padding:2px 3px;border-bottom:1px solid var(--border);}
+.stage-tbl input[type=number],.stage-tbl input[type=text]{width:100%;background:transparent;border:1px solid transparent;color:var(--text);padding:3px 5px;font-family:var(--mono);font-size:11px;}
+.stage-tbl input:focus{border-color:var(--accent);outline:none;background:rgba(0,0,0,.3);}
+.stage-tbl .s15-row{background:rgba(136,198,87,.04);}
+.s15-extra td{padding:4px 8px;}
+.s15-block{display:flex;gap:8px;flex-wrap:wrap;}
+
+/* RADIO groups */
+.rg{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;}
+.rg label{display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text-dim);}
+.rg label:hover{color:var(--text);}
+
+/* TOAST */
+#toast{position:fixed;bottom:20px;right:20px;background:var(--accent);color:#000;padding:7px 16px;font-family:var(--mono);font-size:10px;letter-spacing:.06em;pointer-events:none;opacity:0;transition:opacity .25s;}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+</style>
+</head>
+<body>
+
+<div id="hdr">
+  <h1>RP — Preset Manager</h1>
+  <button class="btn primary" onclick="doOpen()">Open lv_calc.html</button>
+  <span id="fname">No file loaded</span>
+  <span class="sep"></span>
+  <span id="dirty-badge">● Unsaved</span>
+  <button class="btn" id="btn-save" disabled onclick="doSave()">Save File</button>
+</div>
+
+<div id="tabs">
+  <button class="tab active" id="tab-stages-btn" onclick="switchTab('stages')">Stage Library</button>
+  <button class="tab" id="tab-vehicles-btn" onclick="switchTab('vehicles')">Vehicle Presets</button>
+</div>
+
+<div id="body">
+  <!-- STAGES -->
+  <div class="panel" id="pane-stages">
+    <div class="left-pane">
+      <div class="list-toolbar">
+        <button class="btn sm" onclick="promptAddCategory()">+ Category</button>
+        <button class="btn sm" onclick="promptAddStage()">+ Stage</button>
+      </div>
+      <div class="list-scroll" id="stages-list"></div>
+    </div>
+    <div class="right-pane" id="stage-editor"><div class="no-file">Open <b>lv_calc.html</b> to begin</div></div>
+  </div>
+
+  <!-- VEHICLES -->
+  <div class="panel" id="pane-vehicles" style="display:none">
+    <div class="left-pane">
+      <div class="list-toolbar">
+        <button class="btn sm" onclick="addVehicle()">+ Vehicle</button>
+      </div>
+      <div class="list-scroll" id="vehicles-list"></div>
+    </div>
+    <div class="right-pane" id="vehicle-editor"><div class="no-file">Open <b>lv_calc.html</b> to begin</div></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ══════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════
+let fh       = null;   // FileSystemFileHandle
+let src      = '';     // raw file text
+let stageLib = {};     // STAGE_LIBRARY  {cat:[{...}]}
+let presets  = [];     // BUILTIN_PRESETS [{...}]
+let _dirty   = false;
+let selStage   = null; // {cat,idx}
+let selVehicle = null; // number
+
+// ══════════════════════════════════════════════════════════
+//  FILE OPS
+// ══════════════════════════════════════════════════════════
+async function doOpen() {
+  if (!window.showOpenFilePicker) {
+    alert('File System Access API not supported.\nUse Chrome or Edge 86+.');
+    return;
+  }
+  try {
+    [fh] = await window.showOpenFilePicker({
+      types: [{ description: 'HTML file', accept: { 'text/html': ['.html'] } }],
+      id: 'lv-calc'
+    });
+    const file = await fh.getFile();
+    src = await file.text();
+    parseAll();
+    renderStagesList();
+    renderVehiclesList();
+    document.getElementById('fname').textContent = fh.name;
+    document.getElementById('btn-save').disabled = false;
+    document.getElementById('stage-editor').innerHTML  = '<div class="placeholder">Select a stage to edit</div>';
+    document.getElementById('vehicle-editor').innerHTML = '<div class="placeholder">Select a vehicle to edit</div>';
+    setDirty(false);
+    showToast('Loaded ' + Object.keys(stageLib).length + ' categories, ' + presets.length + ' vehicles');
+  } catch (e) {
+    if (e.name !== 'AbortError') alert('Open error: ' + e.message);
+  }
+}
+
+async function doSave() {
+  if (!fh) return;
+  try {
+    const newSrc = buildNewSource();
+    const w = await fh.createWritable();
+    await w.write(newSrc);
+    await w.close();
+    src = newSrc;
+    setDirty(false);
+    showToast('Saved ✓');
+  } catch (e) {
+    alert('Save error: ' + e.message);
+  }
+}
+
+function setDirty(d) {
+  _dirty = d;
+  document.getElementById('dirty-badge').style.display = d ? 'inline' : 'none';
+  const btn = document.getElementById('btn-save');
+  if (btn) btn.classList.toggle('primary', d);
+}
+
+// ══════════════════════════════════════════════════════════
+//  PARSING
+// ══════════════════════════════════════════════════════════
+/**
+ * Find "const <varName>" in source, then extract the balanced bracket region.
+ * Returns {start, sectionStart, end, code} or null.
+ */
+function extractSection(source, varName, openBr, closeBr) {
+  const marker = 'const ' + varName;
+  const start = source.indexOf(marker);
+  if (start < 0) return null;
+  let i = source.indexOf(openBr, start);
+  if (i < 0) return null;
+  const sectionStart = i;
+  let depth = 0, inLC = false, inBC = false, inStr = false, strCh = '';
+  for (; i < source.length; i++) {
+    const c = source[i];
+    if (inLC)  { if (c === '\n') inLC = false; continue; }
+    if (inBC)  { if (c === '*' && source[i+1] === '/') { inBC = false; i++; } continue; }
+    if (inStr) { if (c === '\\') { i++; continue; } if (c === strCh) inStr = false; continue; }
+    if (c === '/' && source[i+1] === '/') { inLC = true; continue; }
+    if (c === '/' && source[i+1] === '*') { inBC = true; i++; continue; }
+    if (c === '"' || c === "'" || c === '`') { inStr = true; strCh = c; continue; }
+    if (c === openBr) depth++;
+    else if (c === closeBr) { depth--; if (depth === 0) return { start, sectionStart, end: i, code: source.slice(sectionStart, i + 1) }; }
+  }
+  return null;
+}
+
+function parseAll() {
+  const sl = extractSection(src, 'STAGE_LIBRARY', '{', '}');
+  if (sl) { try { stageLib = (0, eval)('(' + sl.code + ')'); } catch(e) { alert('Parse STAGE_LIBRARY failed:\n' + e.message); stageLib = {}; } }
+  const bp = extractSection(src, 'BUILTIN_PRESETS', '[', ']');
+  if (bp) { try { presets = (0, eval)('(' + bp.code + ')'); } catch(e) { alert('Parse BUILTIN_PRESETS failed:\n' + e.message); presets = []; } }
+}
+
+// ══════════════════════════════════════════════════════════
+//  SERIALIZATION
+// ══════════════════════════════════════════════════════════
+function jsStr(s) {
+  return "'" + String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n') + "'";
+}
+
+function jsVal(v, depth) {
+  depth = depth || 0;
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'boolean') return String(v);
+  if (typeof v === 'number')  return String(v);
+  if (typeof v === 'string')  return jsStr(v);
+  const pad  = '  '.repeat(depth);
+  const inner = '  '.repeat(depth + 1);
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '[]';
+    if (v.every(x => x === null || typeof x !== 'object')) {
+      const inline = '[' + v.map(x => jsVal(x, 0)).join(',') + ']';
+      if (inline.length <= 72) return inline;
+    }
+    return '[\n' + v.map(x => inner + jsVal(x, depth + 1)).join(',\n') + '\n' + pad + ']';
+  }
+  if (typeof v === 'object') {
+    const entries = Object.entries(v).filter(([, val]) => val !== undefined);
+    if (entries.length === 0) return '{}';
+    if (entries.every(([, val]) => val === null || typeof val !== 'object')) {
+      const inline = '{' + entries.map(([k,val]) => k + ':' + jsVal(val, 0)).join(',') + '}';
+      if (inline.length <= 72) return inline;
+    }
+    return '{\n' + entries.map(([k, val]) => {
+      const key = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(k) ? k : jsStr(k);
+      return inner + key + ':' + jsVal(val, depth + 1);
+    }).join(',\n') + '\n' + pad + '}';
+  }
+  return String(v);
+}
+
+function serializeStageLib(lib) {
+  const parts = Object.entries(lib).map(([cat, stages]) =>
+    '  ' + jsStr(cat) + ':[\n' +
+    stages.map(s => '    ' + jsVal(s, 2)).join(',\n') +
+    '\n  ]'
+  );
+  return 'const STAGE_LIBRARY={\n' + parts.join(',\n') + '\n}';
+}
+
+function serializePresets(ps) {
+  return 'const BUILTIN_PRESETS=[\n' +
+    ps.map(p => '  ' + jsVal(p, 1)).join(',\n') +
+  '\n]';
+}
+
+function replaceSection(source, varName, openBr, closeBr, newContent) {
+  const sec = extractSection(source, varName, openBr, closeBr);
+  if (!sec) return source;
+  let end = sec.end + 1;
+  // skip trailing semicolons
+  while (end < source.length && source[end] === ';') end++;
+  return source.slice(0, sec.start) + newContent + ';' + source.slice(end);
+}
+
+function buildNewSource() {
+  let out = src;
+  out = replaceSection(out, 'BUILTIN_PRESETS', '[', ']', serializePresets(presets));
+  out = replaceSection(out, 'STAGE_LIBRARY',   '{', '}', serializeStageLib(stageLib));
+  return out;
+}
+
+// ══════════════════════════════════════════════════════════
+//  TAB SWITCHING
+// ══════════════════════════════════════════════════════════
+function switchTab(tab) {
+  ['stages','vehicles'].forEach(t => {
+    document.getElementById('tab-'+t+'-btn').classList.toggle('active', t === tab);
+    document.getElementById('pane-'+t).style.display = t === tab ? 'flex' : 'none';
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  STAGE LIBRARY — LIST
+// ══════════════════════════════════════════════════════════
+function renderStagesList() {
+  const el = document.getElementById('stages-list');
+  if (!el) return;
+  let html = '';
+  for (const [cat, stages] of Object.entries(stageLib)) {
+    const catE = esc(cat);
+    html += `<div class="cat-row">
+      <span class="cat-label">${catE}</span>
+      <span class="cat-actions">
+        <button class="icon-btn" onclick="addStageToCategory('${catE}')" title="Add stage">+</button>
+        <button class="icon-btn" onclick="renameCategory('${catE}')" title="Rename">✎</button>
+        <button class="icon-btn d" onclick="deleteCategory('${catE}')" title="Delete">✕</button>
+      </span>
+    </div>`;
+    stages.forEach((s, idx) => {
+      const isSel = selStage && selStage.cat === cat && selStage.idx === idx;
+      html += `<div class="li${isSel?' sel':''}" onclick="selectStage('${catE}',${idx})">
+        <span class="li-name">${esc(s.name||'Unnamed')}</span>
+        <span class="li-del" onclick="event.stopPropagation();deleteStage('${catE}',${idx})">✕</span>
+      </div>`;
+    });
+  }
+  el.innerHTML = html;
+}
+
+function selectStage(cat, idx) {
+  selStage = {cat, idx};
+  renderStagesList();
+  renderStageEditor(stageLib[cat]?.[idx], cat, idx);
+}
+
+// ══════════════════════════════════════════════════════════
+//  STAGE LIBRARY — EDITOR
+// ══════════════════════════════════════════════════════════
+function renderStageEditor(stage, cat, idx) {
+  const el = document.getElementById('stage-editor');
+  if (!stage) { el.innerHTML = '<div class="placeholder">Stage not found</div>'; return; }
+
+  const cats = Object.keys(stageLib).map(c =>
+    `<option value="${esc(c)}"${c===cat?' selected':''}>${esc(c)}</option>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="ed-title">${esc(stage.name||'New Stage')}
+      <span class="ed-subtitle">in ${esc(cat)}</span>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Identity</div>
+      <div class="frow">
+        <div class="ff wide"><label>Name</label><input id="se-name" type="text" value="${esc(stage.name||'')}"></div>
+        <div class="ff med"><label>Category</label><select id="se-cat">${cats}</select></div>
+      </div>
+      <div class="frow">
+        <div class="ff wide"><label>Engines</label><input id="se-engines" type="text" value="${esc(stage.engines||'')}"></div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Performance</div>
+      <div class="frow">
+        <div class="ff narrow"><label>Dry Mass (kg)</label><input id="se-dry" type="number" value="${stage.dry||0}"></div>
+        <div class="ff narrow"><label>Propellant (kg)</label><input id="se-prop" type="number" value="${stage.prop||0}"></div>
+        <div class="ff narrow"><label>Thrust (kN)</label><input id="se-thrust" type="number" value="${stage.thrust||0}"></div>
+        <div class="ff narrow"><label>Isp (s)</label><input id="se-isp" type="number" value="${stage.isp||0}"></div>
+        <div class="ff xnarrow"><label>Residuals %</label><input id="se-res" type="number" value="${stage.res??2}" step="0.1"></div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Meta</div>
+      <div class="frow">
+        <div class="ff wide"><label>Tags (comma-separated)</label><input id="se-tags" type="text" value="${esc((stage.tags||[]).join(', '))}"></div>
+      </div>
+      <div class="frow">
+        <div class="ff wide"><label>Note</label><textarea id="se-note" rows="3">${esc(stage.note||'')}</textarea></div>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn primary" onclick="saveStageEdits('${esc(cat)}',${idx})">Save Changes</button>
+      <button class="btn danger" onclick="deleteStage('${esc(cat)}',${idx})">Delete Stage</button>
+    </div>`;
+}
+
+function saveStageEdits(oldCat, idx) {
+  const newCat = document.getElementById('se-cat').value;
+  const stage = {
+    name:    document.getElementById('se-name').value.trim(),
+    dry:     numF('se-dry'),
+    prop:    numF('se-prop'),
+    thrust:  numF('se-thrust'),
+    isp:     numF('se-isp'),
+    res:     numF('se-res'),
+    engines: document.getElementById('se-engines').value.trim() || undefined,
+    note:    document.getElementById('se-note').value.trim()    || undefined,
+    tags:    document.getElementById('se-tags').value.split(',').map(t=>t.trim()).filter(Boolean),
+  };
+  purgeUndefined(stage);
+
+  if (newCat !== oldCat) {
+    stageLib[oldCat].splice(idx, 1);
+    if (!stageLib[oldCat].length) delete stageLib[oldCat];
+    if (!stageLib[newCat]) stageLib[newCat] = [];
+    stageLib[newCat].push(stage);
+    selStage = {cat: newCat, idx: stageLib[newCat].length - 1};
+  } else {
+    stageLib[oldCat][idx] = stage;
+    selStage = {cat: oldCat, idx};
+  }
+  setDirty(true);
+  renderStagesList();
+  renderStageEditor(stage, selStage.cat, selStage.idx);
+  showToast('Stage saved');
+}
+
+function deleteStage(cat, idx) {
+  if (!confirm(`Delete "${stageLib[cat]?.[idx]?.name||'this stage'}"?`)) return;
+  stageLib[cat].splice(idx, 1);
+  if (!stageLib[cat].length) delete stageLib[cat];
+  if (selStage?.cat === cat && selStage?.idx === idx) selStage = null;
+  setDirty(true);
+  renderStagesList();
+  document.getElementById('stage-editor').innerHTML = '<div class="placeholder">Select a stage to edit</div>';
+}
+
+function addStageToCategory(cat) {
+  const name = prompt('Stage name:', 'New Stage');
+  if (!name) return;
+  if (!stageLib[cat]) stageLib[cat] = [];
+  stageLib[cat].push({name, dry:0, prop:0, thrust:0, isp:300, res:2, tags:[]});
+  const idx = stageLib[cat].length - 1;
+  setDirty(true);
+  renderStagesList();
+  selectStage(cat, idx);
+}
+
+function promptAddCategory() {
+  const name = prompt('Category name:');
+  if (!name || stageLib[name]) return;
+  stageLib[name] = [];
+  setDirty(true);
+  renderStagesList();
+}
+
+function promptAddStage() {
+  const cats = Object.keys(stageLib);
+  if (!cats.length) { alert('Add a category first.'); return; }
+  const ans = prompt('Add to category (name or number):\n\n' + cats.map((c,i)=>`${i+1}.  ${c}`).join('\n'));
+  if (!ans) return;
+  const resolved = isNaN(ans.trim()) ? ans.trim() : cats[parseInt(ans.trim())-1];
+  if (!resolved || !stageLib[resolved]) { alert('Invalid selection.'); return; }
+  addStageToCategory(resolved);
+}
+
+function renameCategory(oldName) {
+  const newName = prompt('Rename category:', oldName);
+  if (!newName || newName === oldName) return;
+  if (stageLib[newName]) { alert('Category already exists.'); return; }
+  const rebuilt = {};
+  for (const [k,v] of Object.entries(stageLib)) rebuilt[k===oldName ? newName : k] = v;
+  stageLib = rebuilt;
+  if (selStage?.cat === oldName) selStage.cat = newName;
+  setDirty(true);
+  renderStagesList();
+  if (selStage) renderStageEditor(stageLib[selStage.cat]?.[selStage.idx], selStage.cat, selStage.idx);
+}
+
+function deleteCategory(cat) {
+  if (!confirm(`Delete category "${cat}" and ALL its stages?`)) return;
+  delete stageLib[cat];
+  if (selStage?.cat === cat) selStage = null;
+  setDirty(true);
+  renderStagesList();
+  document.getElementById('stage-editor').innerHTML = '<div class="placeholder">Select a stage to edit</div>';
+}
+
+// ══════════════════════════════════════════════════════════
+//  VEHICLE PRESETS — LIST
+// ══════════════════════════════════════════════════════════
+function renderVehiclesList() {
+  const el = document.getElementById('vehicles-list');
+  if (!el) return;
+  el.innerHTML = presets.map((p, idx) => {
+    const isSel = selVehicle === idx;
+    const sub = (p.tags||[]).join(' · ') || (p.mode==='escape'?'escape':'orbit');
+    return `<div class="li${isSel?' sel':''}" onclick="selectVehicle(${idx})">
+      <div style="flex:1;min-width:0;">
+        <div class="li-name">${esc(p.name||'Unnamed')}</div>
+        <div class="li-sub">${esc(sub.slice(0,50))}</div>
+      </div>
+      <span class="li-del" onclick="event.stopPropagation();deleteVehicle(${idx})">✕</span>
+    </div>`;
+  }).join('');
+}
+
+function selectVehicle(idx) {
+  selVehicle = idx;
+  renderVehiclesList();
+  renderVehicleEditor(presets[idx], idx);
+}
+
+// ══════════════════════════════════════════════════════════
+//  VEHICLE PRESETS — EDITOR
+// ══════════════════════════════════════════════════════════
+function renderVehicleEditor(p, idx) {
+  const el = document.getElementById('vehicle-editor');
+  if (!p) { el.innerHTML = '<div class="placeholder">Vehicle not found</div>'; return; }
+
+  const mode     = p.mode || 'orbit';
+  const hasSD    = !!p.stageData;
+  const bstType  = p.boosterName ? 'lib' : (p.boosterData ? 'inline' : 'none');
+
+  // Build stage-names rows
+  let snHtml = (p.stageNames||[]).map((n,i) => stageNameRow(n,i)).join('');
+
+  // Build stage-data table rows
+  let sdHtml = (p.stageData||[]).map((s,i) => stageDataRow(s,i)).join('');
+
+  el.innerHTML = `
+    <div class="ed-title">${esc(p.name||'New Vehicle')}</div>
+
+    <div class="fs">
+      <div class="fs-title">Identity</div>
+      <div class="frow">
+        <div class="ff wide"><label>Name</label><input id="ve-name" type="text" value="${esc(p.name||'')}"></div>
+      </div>
+      <div class="frow">
+        <div class="ff wide"><label>Tags (comma-separated)</label><input id="ve-tags" type="text" value="${esc((p.tags||[]).join(', '))}"></div>
+      </div>
+      <div class="frow">
+        <div class="ff wide"><label>Note</label><textarea id="ve-note" rows="2">${esc(p.note||'')}</textarea></div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Payload &amp; Fairing</div>
+      <div class="frow">
+        <div class="ff narrow"><label>Payload (kg)</label><input id="ve-payload" type="number" value="${p.payload||0}"></div>
+        <div class="ff narrow"><label>Fairing Mass (kg)</label><input id="ve-fairing-mass" type="number" value="${p.fairingMass||0}"></div>
+        <div class="ff med"><label>Fairing Jettison</label>
+          <select id="ve-fj">
+            <option value="0"${(p.fairingJettison||0)===0?' selected':''}>Never</option>
+            ${[1,2,3,4,5].map(n=>`<option value="${n}"${p.fairingJettison===n?' selected':''}>After Stage ${n}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Stage Configuration</div>
+      <div class="rg" style="margin-bottom:10px;">
+        <label><input type="radio" name="ve-stype" value="names" ${!hasSD?'checked':''} onchange="veToggleStageType()"> Library names</label>
+        <label><input type="radio" name="ve-stype" value="data"  ${hasSD?'checked':''}  onchange="veToggleStageType()"> Inline data</label>
+      </div>
+
+      <div id="ve-sn-wrap" style="display:${!hasSD?'block':'none'}">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:5px;">
+          Stage names bottom→top, referencing the Stage Library
+        </div>
+        <div id="ve-sn-list">${snHtml}</div>
+        <button class="btn sm" style="margin-top:4px;" onclick="veAddStageName()">+ Stage Name</button>
+      </div>
+
+      <div id="ve-sd-wrap" style="display:${hasSD?'block':'none'}">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:5px;">
+          Inline stage data — S1 = bottom, last = top
+        </div>
+        <table class="stage-tbl">
+          <thead><tr><th>#</th><th>Dry (kg)</th><th>Prop (kg)</th><th>Thrust (kN)</th><th>Isp (s)</th><th>Res %</th><th>S1½?</th><th></th></tr></thead>
+          <tbody id="ve-sd-tbody">${sdHtml}</tbody>
+        </table>
+        <button class="btn sm" onclick="veAddStageRow()">+ Stage Row</button>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Strap-on Boosters</div>
+      <div class="rg" style="margin-bottom:8px;">
+        <label><input type="radio" name="ve-btype" value="none"   ${bstType==='none'  ?'checked':''} onchange="veToggleBst()"> None</label>
+        <label><input type="radio" name="ve-btype" value="lib"    ${bstType==='lib'   ?'checked':''} onchange="veToggleBst()"> Library name</label>
+        <label><input type="radio" name="ve-btype" value="inline" ${bstType==='inline'?'checked':''} onchange="veToggleBst()"> Inline data</label>
+      </div>
+      <div id="ve-bst-lib" style="display:${bstType==='lib'?'flex':'none'};gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="ff med"><label>Booster Name</label><input id="ve-bst-name" type="text" value="${esc(p.boosterName||'')}"></div>
+        <div class="ff xnarrow"><label>Count</label><input id="ve-bst-count" type="number" min="1" value="${p.boosterCount||2}"></div>
+      </div>
+      <div id="ve-bst-inline" style="display:${bstType==='inline'?'block':'none'}">
+        <div class="frow">
+          <div class="ff xnarrow"><label>Count</label><input id="ve-bsti-count"  type="number" min="1" value="${p.boosterData?.count||2}"></div>
+          <div class="ff narrow"><label>Dry (kg)</label><input id="ve-bsti-dry"   type="number" value="${p.boosterData?.dry||0}"></div>
+          <div class="ff narrow"><label>Prop (kg)</label><input id="ve-bsti-prop"  type="number" value="${p.boosterData?.prop||0}"></div>
+          <div class="ff narrow"><label>Thrust (kN)</label><input id="ve-bsti-thr" type="number" value="${p.boosterData?.thrust||0}"></div>
+          <div class="ff narrow"><label>Isp (s)</label><input id="ve-bsti-isp"   type="number" value="${p.boosterData?.isp||0}"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Launch Site</div>
+      <div class="frow">
+        <div class="ff narrow"><label>Latitude (°)</label><input id="ve-lat"   type="number" step="0.1" value="${p.site?.lat??28.5}"></div>
+        <div class="ff narrow"><label>Az Min (°)</label><input id="ve-azmin" type="number" value="${p.site?.azMin??37}"></div>
+        <div class="ff narrow"><label>Az Max (°)</label><input id="ve-azmax" type="number" value="${p.site?.azMax??120}"></div>
+      </div>
+    </div>
+
+    <div class="fs">
+      <div class="fs-title">Target Trajectory</div>
+      <div class="rg" style="margin-bottom:8px;">
+        <label><input type="radio" name="ve-mode" value="orbit"  ${mode==='orbit' ?'checked':''} onchange="veModeToggle()"> Orbit</label>
+        <label><input type="radio" name="ve-mode" value="escape" ${mode==='escape'?'checked':''} onchange="veModeToggle()"> Escape / Interplanetary</label>
+      </div>
+      <div id="ve-orbit-wrap" style="display:${mode==='orbit'?'flex':'none'};gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="ff narrow"><label>Perigee (km)</label><input id="ve-perigee" type="number" value="${p.orbit?.perigee??185}"></div>
+        <div class="ff narrow"><label>Apogee (km)</label><input id="ve-apogee"  type="number" value="${p.orbit?.apogee??185}"></div>
+        <div class="ff narrow"><label>Inclination (°)</label><input id="ve-inc" type="number" step="0.1" value="${p.orbit?.inc??28.5}"></div>
+      </div>
+      <div id="ve-escape-wrap" style="display:${mode==='escape'?'flex':'none'};gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="ff narrow"><label>C3 (km²/s²)</label><input id="ve-c3"    type="number" step="0.1" value="${p.escape?.c3??0}"></div>
+        <div class="ff narrow"><label>Declination (°)</label><input id="ve-decl" type="number" step="0.1" value="${p.escape?.decl??0}"></div>
+        <div class="ff narrow"><label>Parking Alt (km)</label><input id="ve-esc-park" type="number" value="${p.escape?.perigee??185}"></div>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn primary" onclick="saveVehicleEdits(${idx})">Save Changes</button>
+      <button class="btn danger"  onclick="deleteVehicle(${idx})">Delete Vehicle</button>
+    </div>`;
+}
+
+/* ─── stage-name row HTML ─── */
+function stageNameRow(name, i) {
+  return `<div class="frow" style="margin-bottom:3px;">
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:5px 0;width:24px;">S${i+1}</div>
+    <div class="ff wide"><input class="ve-sname" type="text" value="${esc(name)}" list="stage-names-dl"></div>
+    <button class="btn sm" style="align-self:flex-end;" onclick="this.closest('.frow').remove();veRenumberSN()">✕</button>
+  </div>`;
+}
+
+/* ─── stage-data row HTML ─── */
+function stageDataRow(s, i) {
+  const s15 = !!s?.s15;
+  return `<tr class="stage-tbl-row">
+    <td style="color:var(--text-dim);font-family:var(--mono);font-size:9px;padding:3px 6px;">S${i+1}</td>
+    <td><input type="number" class="ve-sd-dry"    value="${s?.dry   ||0}"></td>
+    <td><input type="number" class="ve-sd-prop"   value="${s?.prop  ||0}"></td>
+    <td><input type="number" class="ve-sd-thrust" value="${s?.thrust||0}"></td>
+    <td><input type="number" class="ve-sd-isp"    value="${s?.isp   ||0}"></td>
+    <td><input type="number" class="ve-sd-res"    value="${s?.res   ??2}" step="0.1" style="width:48px;"></td>
+    <td><input type="checkbox" class="ve-sd-s15" ${s15?'checked':''} onchange="veToggleS15(this)"></td>
+    <td><button class="btn sm" onclick="veRemoveStageRow(this)">✕</button></td>
+  </tr>
+  <tr class="s15-extra" style="display:${s15?'table-row':'none'};">
+    <td></td>
+    <td colspan="7"><div class="s15-block">
+      <div class="ff xnarrow"><label>Sust Thrust kN</label><input type="number" class="ve-sd-s15t" value="${s?.s15_sust_thrust||0}"></div>
+      <div class="ff xnarrow"><label>Sust Isp s</label><input type="number" class="ve-sd-s15i" value="${s?.s15_sust_isp||0}"></div>
+      <div class="ff xnarrow"><label>Jettison kg</label><input type="number" class="ve-sd-s15j" value="${s?.s15_jet_mass||0}"></div>
+      <div class="ff xnarrow"><label>BECO TWR</label><input type="number" class="ve-sd-s15w" value="${s?.s15_beco_twr||1.2}" step="0.01"></div>
+    </div></td>
+  </tr>`;
+}
+
+/* ─── add/remove rows ─── */
+function veAddStageName() {
+  const list = document.getElementById('ve-sn-list');
+  const i = list.querySelectorAll('.frow').length;
+  list.insertAdjacentHTML('beforeend', stageNameRow('', i));
+}
+function veRenumberSN() {
+  document.querySelectorAll('#ve-sn-list .frow').forEach((row, i) => {
+    row.querySelector('div').textContent = 'S' + (i+1);
+  });
+}
+function veAddStageRow() {
+  const tbody = document.getElementById('ve-sd-tbody');
+  const i = tbody.querySelectorAll('.stage-tbl-row').length;
+  tbody.insertAdjacentHTML('beforeend', stageDataRow(null, i));
+}
+function veRemoveStageRow(btn) {
+  const tr = btn.closest('tr');
+  const next = tr.nextElementSibling;
+  if (next?.classList.contains('s15-extra')) next.remove();
+  tr.remove();
+  // re-number
+  document.querySelectorAll('#ve-sd-tbody .stage-tbl-row').forEach((r, i) => {
+    r.cells[0].textContent = 'S' + (i+1);
+  });
+}
+function veToggleS15(cb) {
+  const next = cb.closest('tr').nextElementSibling;
+  if (next?.classList.contains('s15-extra')) next.style.display = cb.checked ? 'table-row' : 'none';
+}
+
+/* ─── visibility toggles ─── */
+function veToggleStageType() {
+  const t = document.querySelector('input[name="ve-stype"]:checked')?.value;
+  document.getElementById('ve-sn-wrap').style.display = t==='names' ? 'block' : 'none';
+  document.getElementById('ve-sd-wrap').style.display = t==='data'  ? 'block' : 'none';
+}
+function veToggleBst() {
+  const t = document.querySelector('input[name="ve-btype"]:checked')?.value;
+  document.getElementById('ve-bst-lib').style.display    = t==='lib'    ? 'flex'  : 'none';
+  document.getElementById('ve-bst-inline').style.display = t==='inline' ? 'block' : 'none';
+}
+function veModeToggle() {
+  const m = document.querySelector('input[name="ve-mode"]:checked')?.value;
+  document.getElementById('ve-orbit-wrap').style.display  = m==='orbit'  ? 'flex' : 'none';
+  document.getElementById('ve-escape-wrap').style.display = m==='escape' ? 'flex' : 'none';
+}
+
+/* ─── collect stage data ─── */
+function collectStageData() {
+  const rows = [...document.querySelectorAll('#ve-sd-tbody .stage-tbl-row')];
+  return rows.map(row => {
+    const s15cb = row.querySelector('.ve-sd-s15');
+    const obj = {
+      dry:    numR(row, '.ve-sd-dry'),
+      prop:   numR(row, '.ve-sd-prop'),
+      thrust: numR(row, '.ve-sd-thrust'),
+      isp:    numR(row, '.ve-sd-isp'),
+      res:    numR(row, '.ve-sd-res'),
+    };
+    if (s15cb?.checked) {
+      const next = row.nextElementSibling;
+      obj.s15 = true;
+      obj.s15_sust_thrust = numR(next, '.ve-sd-s15t');
+      obj.s15_sust_isp    = numR(next, '.ve-sd-s15i');
+      obj.s15_jet_mass    = numR(next, '.ve-sd-s15j');
+      obj.s15_beco_twr    = numR(next, '.ve-sd-s15w');
+    }
+    return obj;
+  });
+}
+
+/* ─── save vehicle ─── */
+function saveVehicleEdits(idx) {
+  const stageType = document.querySelector('input[name="ve-stype"]:checked')?.value || 'names';
+  const bstType   = document.querySelector('input[name="ve-btype"]:checked')?.value || 'none';
+  const mode      = document.querySelector('input[name="ve-mode"]:checked')?.value  || 'orbit';
+
+  const p = {};
+  p.name  = document.getElementById('ve-name').value.trim();
+  p.tags  = document.getElementById('ve-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  const note = document.getElementById('ve-note').value.trim();
+  if (note) p.note = note;
+
+  p.payload      = numF('ve-payload');
+  p.fairingMass  = numF('ve-fairing-mass');
+  p.fairingJettison = parseInt(document.getElementById('ve-fj').value) || 0;
+
+  if (stageType === 'data') {
+    p.stageData = collectStageData();
+    p.stages = p.stageData.length;
+  } else {
+    p.stageNames = [...document.querySelectorAll('.ve-sname')].map(i => i.value.trim());
+    p.stages = p.stageNames.length;
+  }
+
+  if (bstType === 'lib') {
+    p.boosterName  = document.getElementById('ve-bst-name').value.trim();
+    p.boosterCount = parseInt(document.getElementById('ve-bst-count').value) || 0;
+  } else if (bstType === 'inline') {
+    p.boosterData = {
+      count:  parseInt(document.getElementById('ve-bsti-count').value) || 2,
+      dry:    numF('ve-bsti-dry'),
+      prop:   numF('ve-bsti-prop'),
+      thrust: numF('ve-bsti-thr'),
+      isp:    numF('ve-bsti-isp'),
+    };
+  } else {
+    p.boosterName  = null;
+    p.boosterCount = 0;
+  }
+
+  p.site = {
+    lat:   parseFloat(document.getElementById('ve-lat').value)   || 0,
+    azMin: parseFloat(document.getElementById('ve-azmin').value) || 0,
+    azMax: parseFloat(document.getElementById('ve-azmax').value) || 0,
+  };
+  p.mode = mode;
+  if (mode === 'orbit') {
+    p.orbit = {
+      perigee: numF('ve-perigee'),
+      apogee:  numF('ve-apogee'),
+      inc:     parseFloat(document.getElementById('ve-inc').value) || 0,
+    };
+  } else {
+    p.escape = {
+      c3:      parseFloat(document.getElementById('ve-c3').value)       || 0,
+      decl:    parseFloat(document.getElementById('ve-decl').value)     || 0,
+      perigee: parseFloat(document.getElementById('ve-esc-park').value) || 185,
+    };
+  }
+
+  presets[idx] = p;
+  selVehicle = idx;
+  setDirty(true);
+  renderVehiclesList();
+  renderVehicleEditor(p, idx);
+  showToast('Vehicle saved');
+}
+
+function deleteVehicle(idx) {
+  if (!confirm(`Delete "${presets[idx]?.name||'this vehicle'}"?`)) return;
+  presets.splice(idx, 1);
+  selVehicle = null;
+  setDirty(true);
+  renderVehiclesList();
+  document.getElementById('vehicle-editor').innerHTML = '<div class="placeholder">Select a vehicle to edit</div>';
+}
+
+function addVehicle() {
+  const name = prompt('Vehicle name:', 'New Vehicle');
+  if (!name) return;
+  presets.push({
+    name, payload: 100, fairingMass: 0, fairingJettison: 0,
+    stageNames: [], stages: 1,
+    boosterName: null, boosterCount: 0,
+    site: {lat:28.5, azMin:37, azMax:120},
+    mode: 'orbit', orbit: {perigee:185, apogee:185, inc:28.5},
+    tags: [],
+  });
+  setDirty(true);
+  renderVehiclesList();
+  selectVehicle(presets.length - 1);
+}
+
+// ══════════════════════════════════════════════════════════
+//  UTILITIES
+// ══════════════════════════════════════════════════════════
+function numF(id) { return parseFloat(document.getElementById(id)?.value) || 0; }
+function numR(el, sel) { return parseFloat(el?.querySelector(sel)?.value) || 0; }
+function purgeUndefined(obj) { Object.keys(obj).forEach(k => obj[k] === undefined && delete obj[k]); }
+function esc(s) {
+  return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+let _toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.style.opacity = '0', 2200);
+}
+
+// Ctrl+S to save
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key === 's') { e.preventDefault(); if (!document.getElementById('btn-save').disabled) doSave(); }
+  if ((e.ctrlKey||e.metaKey) && e.key === 'o') { e.preventDefault(); doOpen(); }
+});
+</script>
+</body>
+</html>

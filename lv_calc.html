@@ -9268,8 +9268,36 @@ function progArtUploadFile(input) {
     const artId      = 'art_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const probe      = new Image();
     probe.onload = () => {
-      const entry = { artId, name, dataURL, mimeType: file.type || 'image/png',
-                      width: probe.naturalWidth, height: probe.naturalHeight,
+      // Auto-crop transparent borders
+      let finalURL = dataURL, finalW = probe.naturalWidth, finalH = probe.naturalHeight;
+      if (file.type !== 'image/svg+xml' && finalW && finalH) {
+        try {
+          const tcvs = document.createElement('canvas');
+          tcvs.width = finalW; tcvs.height = finalH;
+          const tctx = tcvs.getContext('2d');
+          tctx.drawImage(probe, 0, 0);
+          const px = tctx.getImageData(0, 0, finalW, finalH).data;
+          let x0 = finalW, y0 = finalH, x1 = -1, y1 = -1;
+          for (let y = 0; y < finalH; y++) {
+            for (let x = 0; x < finalW; x++) {
+              if (px[(y * finalW + x) * 4 + 3] > 0) {
+                if (x < x0) x0 = x; if (x > x1) x1 = x;
+                if (y < y0) y0 = y; if (y > y1) y1 = y;
+              }
+            }
+          }
+          if (x1 >= 0 && (x0 > 0 || y0 > 0 || x1 < finalW - 1 || y1 < finalH - 1)) {
+            const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+            const ccvs = document.createElement('canvas');
+            ccvs.width = cw; ccvs.height = ch;
+            ccvs.getContext('2d').drawImage(probe, x0, y0, cw, ch, 0, 0, cw, ch);
+            finalURL = ccvs.toDataURL(file.type || 'image/png');
+            finalW = cw; finalH = ch;
+          }
+        } catch (_) {}
+      }
+      const entry = { artId, name, dataURL: finalURL, mimeType: file.type || 'image/png',
+                      width: finalW, height: finalH,
                       monochrome: _artSampleMonochrome(probe) };
       PROG_ART_REGISTRY[artId] = entry;
       _progArtPreload(entry);
