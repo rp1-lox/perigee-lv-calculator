@@ -7840,11 +7840,11 @@ function _progNmShowCtxMenu(x, y, items) {
   ).join('');
   menu._items = items;
   menu.style.display = 'block';
-  // Position relative to the nm-view container
-  const view = document.getElementById('prog-nm-view');
-  const vr   = view ? view.getBoundingClientRect() : { left: 0, top: 0 };
-  menu.style.left = (x - vr.left) + 'px';
-  menu.style.top  = (y - vr.top)  + 'px';
+  // Position relative to the menu's offsetParent (the SVG wrapper div)
+  const parent = menu.offsetParent || document.getElementById('prog-nm-view');
+  const pr     = parent.getBoundingClientRect();
+  menu.style.left = (x - pr.left) + 'px';
+  menu.style.top  = (y - pr.top)  + 'px';
 }
 
 function progNmCtxClick(i) {
