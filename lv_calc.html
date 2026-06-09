@@ -1083,6 +1083,18 @@ const BUILTIN_PRESETS=[
    tags:['Historical'],
    note:'Workhorse of the 1960s. LOX/RP-1 + IRFNA/UDMH. Discoverer/Corona recon.'},
 
+  {name:'Atlas B / SCORE',
+   stageData:[{
+     dry:3800, prop:107000, thrust:1590, isp:290, res:1,
+     s15:true, s15_sust_thrust:270, s15_sust_isp:309,
+     s15_jet_mass:1800, s15_beco_twr:0.5
+   }],
+   payload:68, fairingMass:0, fairingJettison:0, boosterName:null, boosterCount:0,
+   site:{lat:28.5,azMin:37,azMax:120},
+   mode:'orbit', orbit:{apogee:1484,perigee:185,inc:32.3},
+   tags:['Historical','Stage-and-a-Half'],
+   note:'Project SCORE (1958). First communications relay satellite. Atlas B with MA-2 propulsion: 2× LR-89 boosters + LR-105 sustainer, all burning from a single LOX/RP-1 tank. Boosters jettisoned at BECO ~130 s. 68 kg to 185×1484 km @ 32.3°.'},
+
   {name:'Atlas-Agena D',
    stageNames:['Atlas SLV-3','Agena D'],
    payload:1700,fairingMass:100,fairingJettison:2,boosterName:null,boosterCount:0,
@@ -1691,7 +1703,12 @@ function loadPreset(p,key){
   const stageData=resolvePresetStages(p);
   const boosterData=resolvePresetBooster(p);
   const numStgs=stageData.length;
-  stageData.forEach((sd,si)=>{stageStore[si]={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};});
+  stageData.forEach((sd,si)=>{
+    const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
+    const orig=(p.stageData||[])[si]||{};
+    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;}
+    stageStore[si]=entry;
+  });
   _suppressUD=true;setStages(numStgs);
   const hasBoosters=!!boosterData;
   setBoosters(hasBoosters);
