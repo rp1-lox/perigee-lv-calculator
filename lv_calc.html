@@ -302,7 +302,7 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .lv-list::-webkit-scrollbar-thumb:hover,
 #case-list::-webkit-scrollbar-thumb:hover,
 .orbit-scroll::-webkit-scrollbar-thumb:hover{background:var(--text-bright);}
-.lib-body,.lv-list,#case-list,.orbit-scroll{scrollbar-width:thin;scrollbar-color:var(--accent) var(--border);}
+.lib-body,.lv-list,#case-list,.orbit-scroll,#comp-body{scrollbar-width:thin;scrollbar-color:var(--accent) var(--border);}
 
 /* ── TOOLTIP ── */
 .info-tip{display:inline-flex;align-items:center;justify-content:center;
@@ -449,7 +449,14 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
         </div>
       </div>
 
-      <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;"></div>
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:2px;overflow:hidden;margin-bottom:4px;">
+        <div style="padding:5px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.18);">
+          <span style="font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--text-dim);text-transform:uppercase;">STAGES</span>
+          <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
+          <span id="comp-stage-count" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);opacity:.55;flex-shrink:0;"></span>
+        </div>
+        <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto;padding:6px;"></div>
+      </div>
       <div id="preset-grid" style="display:none"></div>
     </div>
 
@@ -3277,6 +3284,9 @@ function buildStageComposition(){
   const body=document.getElementById('comp-body');
   if(!body)return;
   body.innerHTML='';
+  // Update count badge
+  const cntEl=document.getElementById('comp-stage-count');
+  if(cntEl){const total=numStages+(useBooster?1:0);cntEl.textContent=total===1?'1 stage':total+' stages';}
 
   function makeCompCard(label,stageName,dry,prop,thrust,isp,stageIdx,isBooster){
     const saved=isBooster?boosterSaved:(stageIdx>=0?stageSaved[stageIdx]:false);
