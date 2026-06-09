@@ -6630,6 +6630,10 @@ function progRenderNodeMap() {
   // Alias for downstream code that still references allNodes
   const allNodes = allActiveNodes;
 
+  // nmAllNodes includes surface nodes (at planet-disc positions) so LAND/ASCENT edge
+  // endpoints always resolve regardless of which nodes are on the active list.
+  const nmAllNodes = [...builtinWithPos, ...customNodes];
+
   // Active path & selection
   const activeEdges = _progNmActiveEdgeIds(allEdges);
   const _selEv = PROG_BAND_STATE?.selId
@@ -6638,6 +6642,11 @@ function progRenderNodeMap() {
   const selEdgeId = _selEv
     ? (allEdges.find(e => e.from === (_selEv.fromNode || '') && e.to === (_selEv.toNode || ''))?.id ?? null)
     : null;
+
+  // Event-derived synthetic edges (LAUNCH, BURN, LAND, ASCENT_SURFACE)
+  const synthEdges = _progNmSynthEdges(prog);
+  // Custom edges that cover a given from→to pair — used to suppress duplicate synth arrows
+  const customPairs = new Set(allEdges.map(e => `${e.from}|${e.to}`));
 
   let s = '';
 
@@ -6651,6 +6660,11 @@ function progRenderNodeMap() {
      + `<path d="M0,0 L0,6 L8,3 z" fill="${nmSelCol}"/></marker>`;
   s += `<marker id="nm-ac" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">`
      + `<path d="M0,0 L0,6 L8,3 z" fill="${nmLunar}" opacity=".8"/></marker>`;
+  // Synth-edge arrowheads — event-type colours from PROG_EV_STYLE
+  s += `<marker id="nm-agreen" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">`
+     + `<path d="M0,0 L0,6 L8,3 z" fill="#98c379" opacity=".85"/></marker>`;
+  s += `<marker id="nm-acyan"  markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">`
+     + `<path d="M0,0 L0,6 L8,3 z" fill="#56b6c2" opacity=".85"/></marker>`;
   s += '</defs>';
 
   // ── Background (fixed — not in world transform) ─────────────────────────────
@@ -6704,11 +6718,50 @@ function progRenderNodeMap() {
     s += `<text x="${b.cx}" y="${b.cy + b.bodyR + 11}" text-anchor="middle" fill="${b.col}" fill-opacity="${.5*blobOp}" font-size="8" font-family="monospace" font-weight="600" letter-spacing="1" style="pointer-events:none">${b.label}</text>`;
   }
 
-  // ── Edges: dim → active → selected ──────────────────────────────────────────
+  // ── Synth edges — event-implied arrows rendered beneath custom edges ─────────
+  // These reflect LAUNCH / BURN / LAND / ASCENT_SURFACE events from the timeline.
+  // Suppressed if a user-drawn custom edge already covers the same from→to pair.
+  for (const se of synthEdges) {
+    if (customPairs.has(`${se.from}|${se.to}`)) continue; // custom edge supersedes
+    const fn = nmAllNodes.find(n => n.id === se.from);
+    const tn = nmAllNodes.find(n => n.id === se.to);
+    if (!fn || !tn) continue;
+
+    const col = se.type === 'LAND'             ? '#56b6c2'
+              : se.type === 'ASCENT_SURFACE'   ? '#98c379'
+              : se.type === 'LAUNCH'           ? '#98c379'
+              : nmEdgeAct;                      // BURN
+    const marker = (se.type === 'LAND') ? 'nm-acyan' : 'nm-agreen';
+    const da = (se.type === 'LAND' || se.type === 'LAUNCH') ? ' stroke-dasharray="6,4"' : '';
+
+    const dx = tn.cx - fn.cx, dy = tn.cy - fn.cy;
+    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+    const x1 = fn.cx + dx/dist * ((fn.r ?? 18) + 3);
+    const y1 = fn.cy + dy/dist * ((fn.r ?? 18) + 3);
+    const x2 = tn.cx - dx/dist * ((tn.r ?? 18) + 8);
+    const y2 = tn.cy - dy/dist * ((tn.r ?? 18) + 8);
+
+    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"` +
+         ` stroke="${col}" stroke-width="1.6" stroke-opacity=".65"${da}` +
+         ` marker-end="url(#${marker})" style="pointer-events:none;"/>`;
+
+    // ΔV pill for burns/launches that have a non-zero dv
+    if (se.dv > 0) {
+      const mx = (fn.cx + tn.cx) / 2, my = (fn.cy + tn.cy) / 2;
+      const dvStr = se.dv >= 1000 ? (se.dv/1000).toFixed(1)+'k' : String(Math.round(se.dv));
+      const lbl   = dvStr + ' m/s';
+      const pw    = lbl.length * 5.4 + 10;
+      s += `<rect x="${mx-pw/2}" y="${my-8}" width="${pw}" height="14" rx="3"` +
+           ` fill="${nmPillBg}" stroke="${col}" stroke-width=".7" opacity=".82"/>`;
+      s += `<text x="${mx}" y="${my+2}" text-anchor="middle" fill="${col}" font-size="8" font-family="monospace">${lbl}</text>`;
+    }
+  }
+
+  // ── Custom edges: dim → active → selected ────────────────────────────────────
   for (const pass of ['dim', 'active', 'sel']) {
     for (const edge of allEdges) {
-      const fn = allNodes.find(n => n.id === edge.from);
-      const tn = allNodes.find(n => n.id === edge.to);
+      const fn = nmAllNodes.find(n => n.id === edge.from);
+      const tn = nmAllNodes.find(n => n.id === edge.to);
       if (!fn || !tn) continue;
 
       const isSel  = edge.id === selEdgeId;
@@ -6871,13 +6924,78 @@ function _progNmActiveEdgeIds(allEdges) {
   const edges = allEdges || [...PROG_NM_EDGES, ...(PROG_ACTIVE_PROGRAM.nodeMapCustomEdges || [])];
   const ids = [];
   for (const ev of (PROG_ACTIVE_PROGRAM.events || [])) {
-    if (ev.type !== 'BURN') continue;
+    // BURN and LAUNCH events both represent node-to-node transitions
+    if (ev.type !== 'BURN' && ev.type !== 'LAUNCH') continue;
     if (ev.fromNode && ev.toNode) {
       const e = edges.find(ed => ed.from === ev.fromNode && ed.to === ev.toNode);
       if (e && !ids.includes(e.id)) ids.push(e.id);
     }
   }
   return ids;
+}
+
+/**
+ * Derive event-implied node-to-node arrows from the program event sequence.
+ * Covers LAUNCH, BURN, LAND, and ASCENT_SURFACE events.
+ * Returns [{id, from, to, type, dv, col}] — one entry per unique (type, from, to) pair.
+ */
+function _progNmSynthEdges(prog) {
+  if (!prog) return [];
+  const SURF = { Earth:'earth-surface', Moon:'moon-surface', Mars:'mars-surface' };
+  const sorted = [...(prog.events || [])].sort((a,b) => (a.tStart??0) - (b.tStart??0));
+
+  const vNode = {};   // vehicleId → current nodeId
+  const raw   = [];
+
+  for (const ev of sorted) {
+    const vid = ev.vehicleId;
+    if (!vid) continue;
+    const cur = vNode[vid] ?? 'earth-surface';
+
+    switch (ev.type) {
+      case 'LAUNCH': {
+        const from = ev.fromNode ?? 'earth-surface';
+        const to   = ev.toNode   ?? 'leo';
+        raw.push({ from, to, type:'LAUNCH', dv: ev.dvTarget ?? 0, eventId: ev.eventId });
+        vNode[vid] = to;
+        break;
+      }
+      case 'BURN': {
+        const from = ev.fromNode ?? cur;
+        const to   = ev.toNode   ?? cur;
+        if (from !== to) raw.push({ from, to, type:'BURN', dv: ev.dvTarget ?? ev.deltaV ?? 0, eventId: ev.eventId });
+        if (ev.toNode) vNode[vid] = ev.toNode;
+        break;
+      }
+      case 'LAND': {
+        const body = ev.body ?? (PROG_ACTIVE_PROGRAM?.vehicles[vid]?.orbitState?.body ?? 'Moon');
+        const to = SURF[body] ?? 'moon-surface';
+        if (cur !== to) raw.push({ from: cur, to, type:'LAND', dv: 0, eventId: ev.eventId });
+        vNode[vid] = to;
+        break;
+      }
+      case 'ASCENT_SURFACE': {
+        const body = ev.body ?? 'Moon';
+        const from = SURF[body] ?? cur;
+        const alt  = ev.targetOrbit?.alt_km ?? 100;
+        let to = 'leo';
+        if      (body === 'Moon') to = alt > 10000 ? 'dro' : 'llo';
+        else if (body === 'Mars') to = 'mars-orbit';
+        raw.push({ from, to, type:'ASCENT_SURFACE', dv: ev.deltaV ?? 0, eventId: ev.eventId });
+        vNode[vid] = to;
+        break;
+      }
+    }
+  }
+
+  // Deduplicate: one arrow per (type, from, to) — accumulate max dv
+  const map = new Map();
+  for (const e of raw) {
+    const key = `${e.type}|${e.from}|${e.to}`;
+    if (!map.has(key)) map.set(key, { ...e, id:`synth-${key}` });
+    else if (e.dv > map.get(key).dv) map.get(key).dv = e.dv;
+  }
+  return [...map.values()];
 }
 
 /** Map a FlightVehicle's current OrbitalState to the nearest canonical node id. */
