@@ -358,6 +358,7 @@ let src      = '';              // raw file text
 let stageLib = {};              // STAGE_LIBRARY  {cat:[{...}]}
 let presets  = [];              // BUILTIN_PRESETS [{...}]
 let _dirty   = false;
+let _fileHandle = null;
 let selStage   = null;          // {cat,idx}
 let selVehicle = null;          // number
 
@@ -368,6 +369,8 @@ function doOpen(input) {
   const file = input.files[0];
   if (!file) return;
   _filename = file.name;
+  _fileHandle = null;
+  clearLocal();
   const reader = new FileReader();
   reader.onload = e => {
     src = e.target.result;
@@ -380,27 +383,51 @@ function doOpen(input) {
     document.getElementById('vehicle-editor').innerHTML = '<div class="placeholder">Select a vehicle to edit</div>';
     setDirty(false);
     showToast('Loaded ' + Object.keys(stageLib).length + ' categories, ' + presets.length + ' vehicles');
-    // Reset input so the same file can be re-opened if needed
     input.value = '';
   };
   reader.readAsText(file);
 }
 
-function doSave() {
+async function doSave() {
   if (!src) return;
   const newSrc = buildNewSource();
-  src = newSrc;
-  const blob = new Blob([newSrc], {type: 'text/html'});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = _filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-  setDirty(false);
-  showToast('Saved — replace the original file with the download ✓');
+  if (window.showSaveFilePicker && !_fileHandle) {
+    try {
+      _fileHandle = await window.showSaveFilePicker({
+        suggestedName: _filename,
+        types: [{ description: 'HTML file', accept: { 'text/html': ['.html'] } }]
+      });
+    } catch (e) {
+      if (e.name !== 'AbortError') console.error(e);
+      return;
+    }
+  }
+  if (_fileHandle) {
+    try {
+      const writable = await _fileHandle.createWritable();
+      await writable.write(newSrc);
+      await writable.close();
+      src = newSrc;
+      clearLocal();
+      setDirty(false);
+      showToast('Saved ✓');
+    } catch (e) {
+      console.error(e);
+      showToast('Save failed: ' + e.message);
+    }
+  } else {
+    // Fallback for browsers without File System Access API
+    src = newSrc;
+    const blob = new Blob([newSrc], {type: 'text/html'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = _filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    clearLocal();
+    setDirty(false);
+    showToast('Saved — replace the original file with the download ✓');
+  }
 }
 
 function setDirty(d) {
@@ -408,6 +435,45 @@ function setDirty(d) {
   document.getElementById('dirty-badge').style.display = d ? 'inline' : 'none';
   const btn = document.getElementById('btn-save');
   if (btn) btn.classList.toggle('primary', d);
+  if (d) persistLocal();
+}
+
+const LS_KEY = 'pm_autosave';
+
+function persistLocal() {
+  if (!src) return;
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      filename: _filename,
+      src,
+      stageLib,
+      presets
+    }));
+  } catch(e) { /* quota exceeded — silently skip */ }
+}
+
+function clearLocal() {
+  localStorage.removeItem(LS_KEY);
+}
+
+function restoreLocal() {
+  let raw;
+  try { raw = localStorage.getItem(LS_KEY); } catch(e) { return; }
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (!saved.src) return;
+    _filename = saved.filename || 'lv_calc.html';
+    src       = saved.src;
+    stageLib  = saved.stageLib  || {};
+    presets   = saved.presets   || [];
+    document.getElementById('fname').textContent = _filename + ' (unsaved draft)';
+    document.getElementById('btn-save').disabled = false;
+    renderStagesList();
+    renderVehiclesList();
+    setDirty(true);
+    showToast('Restored unsaved draft — click Save to write to disk');
+  } catch(e) { clearLocal(); }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2151,6 +2217,8 @@ function luApply() {
 function luSelectAll(state) {
   document.querySelectorAll('#lu-detail .lu-cb').forEach(cb => cb.checked = state);
 }
+
+restoreLocal();
 </script>
 </body>
 </html>
