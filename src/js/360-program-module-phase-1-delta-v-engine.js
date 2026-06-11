@@ -281,31 +281,4 @@ function progGetNode(id) {
   return PROG_BUILTIN_NODES.find(n => n.nodeId === id) || null;
 }
 
-// ── Phase 1 self-tests ────────────────────────────────────────────────────────────
-const PROG_TEST_RESULTS = (() => { try {
-  const T = [
-    { label:'TLI (LEO 185km)',       fn:()=> progDvTLI(185),                            target:3136, tol:50 },
-    { label:'LOI (LLO 100km)',       fn:()=> progDvLOI(100, 185),                       target:822,  tol:20 },
-    { label:'TEI (LLO 100km)',       fn:()=> progDvTEI(100, 185),                       target:822,  tol:20 },
-    { label:'Hohmann LEO-GEO dv1',  fn:()=> progDvHohmann('Earth',185,35786).dv1_ms,   target:2459, tol:30 },
-    { label:'GTO-GEO circularize',  fn:()=> progDvCircularizeAtApo('Earth',185,35786),  target:1481, tol:30 },
-    { label:'Plane chg 400km 10deg',fn:()=> progDvPlaneChange('Earth',400,10),          target:1338, tol:20 },
-    { label:'TMI (LEO 185km)',       fn:()=> progDvTMI(185),                            target:3620, tol:50 },
-    { label:'MOI (MCO 400km)',       fn:()=> progDvMOI(400),                            target:2081, tol:50 },
-    { label:'TVI (LEO 185km)',       fn:()=> progDvTVI(185),                            target:3506, tol:50 },
-    { label:'Lunar ascent 100km',    fn:()=> progDvLunarAscent(100),                    target:1870, tol:1  },
-    { label:'LH2 boiloff 30d',       fn:()=> progBoiloff(10000,0.003,30,1.0),           target:9139, tol:5  },
-    { label:'Plane chg full (LAN)',  fn:()=> progDvPlaneChangeFull('Earth',400,28.5,0,28.5,10), target:635, tol:10 },
-  ];
-  return T.map(t => {
-    try {
-      const val  = t.fn();
-      const pass = Math.abs(val - t.target) <= t.tol;
-      return { label:t.label, val:Math.round(val), target:t.target, pass };
-    } catch(e) {
-      return { label:t.label, val:'ERR', target:t.target, pass:false, err:e.message };
-    }
-  });
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
-
 

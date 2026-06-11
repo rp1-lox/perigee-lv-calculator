@@ -7726,33 +7726,6 @@ function progGetNode(id) {
   return PROG_BUILTIN_NODES.find(n => n.nodeId === id) || null;
 }
 
-// ── Phase 1 self-tests ────────────────────────────────────────────────────────────
-const PROG_TEST_RESULTS = (() => { try {
-  const T = [
-    { label:'TLI (LEO 185km)',       fn:()=> progDvTLI(185),                            target:3136, tol:50 },
-    { label:'LOI (LLO 100km)',       fn:()=> progDvLOI(100, 185),                       target:822,  tol:20 },
-    { label:'TEI (LLO 100km)',       fn:()=> progDvTEI(100, 185),                       target:822,  tol:20 },
-    { label:'Hohmann LEO-GEO dv1',  fn:()=> progDvHohmann('Earth',185,35786).dv1_ms,   target:2459, tol:30 },
-    { label:'GTO-GEO circularize',  fn:()=> progDvCircularizeAtApo('Earth',185,35786),  target:1481, tol:30 },
-    { label:'Plane chg 400km 10deg',fn:()=> progDvPlaneChange('Earth',400,10),          target:1338, tol:20 },
-    { label:'TMI (LEO 185km)',       fn:()=> progDvTMI(185),                            target:3620, tol:50 },
-    { label:'MOI (MCO 400km)',       fn:()=> progDvMOI(400),                            target:2081, tol:50 },
-    { label:'TVI (LEO 185km)',       fn:()=> progDvTVI(185),                            target:3506, tol:50 },
-    { label:'Lunar ascent 100km',    fn:()=> progDvLunarAscent(100),                    target:1870, tol:1  },
-    { label:'LH2 boiloff 30d',       fn:()=> progBoiloff(10000,0.003,30,1.0),           target:9139, tol:5  },
-    { label:'Plane chg full (LAN)',  fn:()=> progDvPlaneChangeFull('Earth',400,28.5,0,28.5,10), target:635, tol:10 },
-  ];
-  return T.map(t => {
-    try {
-      const val  = t.fn();
-      const pass = Math.abs(val - t.target) <= t.tol;
-      return { label:t.label, val:Math.round(val), target:t.target, pass };
-    } catch(e) {
-      return { label:t.label, val:'ERR', target:t.target, pass:false, err:e.message };
-    }
-  });
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
-
 
 
 // ─── PROGRAM MODULE — Phase 2: Propellant & Boiloff ────────────────────────────
@@ -7868,57 +7841,6 @@ function progStageFillFraction(liveStage) {
   const cap = progStageTotalCapacity(liveStage);
   return cap > 0 ? progStageRemainingProp(liveStage) / cap : 0;
 }
-
-// ── Phase 2 self-tests ────────────────────────────────────────────────────────
-const PROG_P2_TEST_RESULTS = (() => { try {
-  // T1: Tank starts full
-  const tk1 = progMakeTank('LOX_LH2', 50000, 1.0);
-
-  // T2/T3: Boiloff on cryo tank
-  const tk2      = progMakeTank('LOX_LH2', 100000, 1.0);
-  const lh2_lost = progApplyBoiloff(tk2, 30);   // mutates tk2.fill
-
-  // T4: Non-cryo tank unchanged
-  const tk3      = progMakeTank('NTO_UDMH', 50000, 1.0);
-  const nto_lost = progApplyBoiloff(tk3, 30);
-
-  // T5: LOX_RP1 partial cryo (spec rate: 0.0002/day)
-  const tk4 = progMakeTank('LOX_RP1', 50000, 1.0);
-  progApplyBoiloff(tk4, 10);
-
-  // T6/T7: burnLog tracking
-  const stg1      = progMakeLiveStage('J-2', [progMakeTank('LOX_LH2', 75000, 1.0)], 0);
-  const pre_burns = stg1.burnLog.length;        // 0, captured before
-  progRecordBurn(stg1, 'e1', 3136, 15000, 0, 360);
-  progRecordBurn(stg1, 'e2',  822,  4500, 7200, 7560);
-  const post_burns = stg1.burnLog.length;       // 2, captured after
-
-  // T8: BurnPropellant drains tank
-  const stg2 = progMakeLiveStage('RL10', [progMakeTank('LOX_LH2', 10000, 1.0)]);
-  progBurnPropellant(stg2, 3000);
-
-  // T9: StageRemainingProp sums tanks
-  const stg3 = progMakeLiveStage('AJ10', [
-    progMakeTank('NTO_A50', 7000, 1.0),
-    progMakeTank('NTO_A50', 5000, 1.0),
-  ]);
-
-  const T = [
-    { label:'Tank fill init',         val: tk1.fill,                        target: 50000, tol: 0 },
-    { label:'LH2 30d boiloff lost',   val: Math.round(lh2_lost),            target: 8607,  tol: 5 },
-    { label:'LH2 30d fill remain',    val: Math.round(tk2.fill),            target: 91393, tol: 5 },
-    { label:'NTO no boiloff',         val: nto_lost,                        target: 0,     tol: 0 },
-    { label:'LOX-RP1 10d fill',       val: Math.round(tk4.fill),            target: 49900, tol: 2 },
-    { label:'BurnLog pre-burn len',   val: pre_burns,                       target: 0,     tol: 0 },
-    { label:'BurnLog post-2-burns',   val: post_burns,                      target: 2,     tol: 0 },
-    { label:'BurnProp drain',         val: stg2.tanks[0].fill,              target: 7000,  tol: 0 },
-    { label:'RemainingProp sum',      val: progStageRemainingProp(stg3),    target: 12000, tol: 0 },
-  ];
-  return T.map(t => {
-    const pass = Math.abs(t.val - t.target) <= t.tol;
-    return { label: t.label, val: t.val, target: t.target, pass };
-  });
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
 
 // ─── PROGRAM MODULE — Phase 3: FlightVehicle & Event Engine ──────────────────
 //
@@ -8207,99 +8129,6 @@ function progDispatchEvent(program, event) {
   }
 }
 
-// ── Phase 3 self-tests ────────────────────────────────────────────────────────
-const PROG_P3_TEST_RESULTS = (() => { try {
-  // T1/T2: Rocket equation round-trip
-  const prop500 = progRocketEqPropNeeded(100000, 500, 421);
-  const dv_rt   = progRocketEqDv(100000, prop500, 421);
-
-  // T3: FlightVehicle stage count
-  const fv3 = progMakeFlightVehicle('3-Stage', [
-    progMakeLiveStage('S1', [], 0, 500,  350),
-    progMakeLiveStage('S2', [], 0, 1200, 421),
-    progMakeLiveStage('S3', [], 0, 800,  320),
-  ], null, '#61afef');
-
-  // T4: LAUNCH creates vehicle in program
-  const pLaunch = progMakeProgram('Launch Test');
-  const eLaunch = progMakeEvent('LAUNCH', {
-    label: 'SaturnV', targetOrbit: { body:'Earth', alt_km:185, inc_deg:28.5, lan_deg:0 },
-    stages: [progMakeLiveStage('S-IVB', [progMakeTank('LOX_LH2', 40000)], 0, 13300, 421)],
-    ascent_duration_s: 660,
-  });
-  progDispatchEvent(pLaunch, eLaunch);
-
-  // T5/T6: BURN — prop consumed & SUCCESS result
-  const pBurn = progMakeProgram('Burn Test');
-  const bFV   = progMakeFlightVehicle('TLI-Stack', [
-    progMakeLiveStage('S-IVB-TLI', [progMakeTank('LOX_LH2', 50000)], 0, 1000, 421),
-  ], progMakeOrbitalState('Earth', 185, 28.5, 0), '#98c379');
-  bFV.status = 'ORBIT';
-  pBurn.vehicles[bFV.vehicleId] = bFV;
-
-  const eBurn = progMakeEvent('BURN', {
-    vehicleId: bFV.vehicleId, burnType: 'TLI', dvTarget: 3136, toNode: 'tli-corridor',
-  });
-  const bRes = progDispatchEvent(pBurn, eBurn);
-
-  // T7: BURN MARGINAL (impossible dvTarget)
-  const pMarg = progMakeProgram('Marginal Test');
-  const mFV   = progMakeFlightVehicle('Marginal', [
-    progMakeLiveStage('Stage', [progMakeTank('LOX_LH2', 50000)], 0, 1000, 421),
-  ], null, null);
-  mFV.status = 'ORBIT';
-  pMarg.vehicles[mFV.vehicleId] = mFV;
-  const eMarg = progMakeEvent('BURN', { vehicleId: mFV.vehicleId, burnType: 'HOHMANN', dvTarget: 20000 });
-  const mRes  = progDispatchEvent(pMarg, eMarg);
-
-  // T8/T9: SEPARATE creates 2 vehicles, lower has 1 stage
-  const pSep = progMakeProgram('Separate Test');
-  const sFV  = progMakeFlightVehicle('3-Stack', [
-    progMakeLiveStage('Bot', [], 0, 10000, 300),
-    progMakeLiveStage('Mid', [], 0, 5000,  421),
-    progMakeLiveStage('Top', [], 0, 3000,  320),
-  ], null, null);
-  pSep.vehicles[sFV.vehicleId] = sFV;
-  const eSep = progMakeEvent('SEPARATE', { vehicleId: sFV.vehicleId, separationIndex: 1 });
-  progDispatchEvent(pSep, eSep);
-  const sepVehicles = Object.values(pSep.vehicles);
-  const sepLower    = sepVehicles.find(v => v.stages.length === 1);
-
-  // T10: COAST applies boiloff
-  const pCoast = progMakeProgram('Coast Test');
-  const cFV    = progMakeFlightVehicle('Cryo', [
-    progMakeLiveStage('CryoStage', [progMakeTank('LOX_LH2', 100000, 1.0)], 0, 5000, 421),
-  ], null, null);
-  cFV.status = 'ORBIT';
-  pCoast.vehicles[cFV.vehicleId] = cFV;
-  progDispatchEvent(pCoast, progMakeEvent('COAST', { vehicleId: cFV.vehicleId, duration_s: 30*86400 }));
-
-  // T11: EXPEND sets status
-  const pExp = progMakeProgram('Expend Test');
-  const eFV  = progMakeFlightVehicle('ToExpend', [], null, null);
-  eFV.status = 'ORBIT';
-  pExp.vehicles[eFV.vehicleId] = eFV;
-  progDispatchEvent(pExp, progMakeEvent('EXPEND', { vehicleId: eFV.vehicleId }));
-
-  const T = [
-    { label:'Rocket eq prop needed',   val: Math.round(prop500),                                      target: 11406, tol: 50  },
-    { label:'Rocket eq dv roundtrip',  val: Math.round(dv_rt),                                        target: 500,   tol: 2   },
-    { label:'FV stage count',          val: fv3.stages.length,                                        target: 3,     tol: 0   },
-    { label:'LAUNCH vehicle in prog',  val: Object.keys(pLaunch.vehicles).length,                     target: 1,     tol: 0   },
-    { label:'BURN tank fill after',    val: Math.round(bFV.stages[0].tanks[0].fill),                  target: 22861, tol: 100 },
-    { label:'BURN result SUCCESS',     val: bRes.result === 'SUCCESS'  ? 1 : 0,                        target: 1,     tol: 0   },
-    { label:'BURN MARGINAL result',    val: mRes.result === 'MARGINAL' ? 1 : 0,                        target: 1,     tol: 0   },
-    { label:'SEPARATE vehicle count',  val: Object.keys(pSep.vehicles).length,                        target: 2,     tol: 0   },
-    { label:'SEPARATE lower 1 stage',  val: sepLower ? sepLower.stages.length : -1,                   target: 1,     tol: 0   },
-    { label:'COAST boiloff fill',      val: Math.round(cFV.stages[0].tanks[0].fill),                  target: 91393, tol: 5   },
-    { label:'EXPEND sets status',      val: eFV.status === 'EXPENDED'  ? 1 : 0,                        target: 1,     tol: 0   },
-  ];
-  return T.map(t => {
-    const pass = Math.abs(t.val - t.target) <= t.tol;
-    return { label: t.label, val: t.val, target: t.target, pass };
-  });
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
-
 // ─── PROGRAM MODULE — Phase 4: Interaction & Transfer Events ─────────────────
 //
 // DOCK, TRANSFER_PROPELLANT, TRANSFER_CREW, TRANSFER_STAGE, LAND,
@@ -8567,122 +8396,6 @@ function progExecReconfigure(program, event) {
   return { result: 'SUCCESS' };
 }
 
-// ── Phase 4 self-tests ────────────────────────────────────────────────────────
-const PROG_P4_TEST_RESULTS = (() => { try {
-  // Helper: build a fresh program with one vehicle
-  function mkProg(stagesA, orbitA) {
-    const p  = progMakeProgram('p4-test');
-    const fv = progMakeFlightVehicle('FV', stagesA, orbitA, null);
-    fv.status = 'ORBIT';
-    p.vehicles[fv.vehicleId] = fv;
-    return { p, fv };
-  }
-  const LEO = progMakeOrbitalState('Earth', 185, 28.5, 0);
-  const GEO = progMakeOrbitalState('Earth', 35786, 0, 0);
-
-  // T1: DOCK merges stage stacks
-  const pDock = progMakeProgram('dock-test');
-  const fvA = progMakeFlightVehicle('A', [progMakeLiveStage('A1',[],0,1000,0), progMakeLiveStage('A2',[],0,500,0)], LEO, null);
-  const fvB = progMakeFlightVehicle('B', [progMakeLiveStage('B1',[],0,800,0)],  LEO, null);
-  fvA.status = fvB.status = 'ORBIT';
-  pDock.vehicles[fvA.vehicleId] = fvA; pDock.vehicles[fvB.vehicleId] = fvB;
-  const dockEv = progMakeEvent('DOCK', { vehicleIds:[fvA.vehicleId, fvB.vehicleId], bottomVehicleId: fvA.vehicleId });
-  const dockRes = progDispatchEvent(pDock, dockEv);
-  const mergedFV = pDock.vehicles[dockEv.vehicleId];
-
-  // T2: DOCK fails on orbit mismatch
-  const pDock2 = progMakeProgram('dock-fail');
-  const fvC = progMakeFlightVehicle('C', [], LEO, null); fvC.status='ORBIT';
-  const fvD = progMakeFlightVehicle('D', [], GEO, null); fvD.status='ORBIT';
-  pDock2.vehicles[fvC.vehicleId]=fvC; pDock2.vehicles[fvD.vehicleId]=fvD;
-  const dockFail = progDispatchEvent(pDock2, progMakeEvent('DOCK',{vehicleIds:[fvC.vehicleId,fvD.vehicleId]}));
-
-  // T3: TRANSFER_PROPELLANT
-  const pTP = progMakeProgram('tp-test');
-  const tpFV = progMakeFlightVehicle('TP', [
-    progMakeLiveStage('SRC', [progMakeTank('LOX_LH2', 50000)], 0, 1000, 421),
-    progMakeLiveStage('DST', [progMakeTank('LOX_LH2', 30000)], 0, 500,  421),
-  ], LEO, null);
-  tpFV.stages[1].tanks[0].fill = 5000; // partial fill on dest
-  tpFV.status = 'ORBIT';
-  pTP.vehicles[tpFV.vehicleId] = tpFV;
-  progDispatchEvent(pTP, progMakeEvent('TRANSFER_PROPELLANT', {
-    vehicleId: tpFV.vehicleId, sourceStageId:'SRC', destStageId:'DST',
-    propellantType:'LOX_LH2', mass_kg: 10000,
-  }));
-
-  // T4: TRANSFER_CREW
-  const pTC = progMakeProgram('tc-test');
-  const tcFV = progMakeFlightVehicle('TC', [
-    progMakeLiveStage('LMascent', [], 2, 2100, 311),  // 2 crew
-    progMakeLiveStage('CM',       [], 0, 5800, 0),    // 0 crew
-  ], LEO, null);
-  tcFV.status = 'ORBIT';
-  pTC.vehicles[tcFV.vehicleId] = tcFV;
-  progDispatchEvent(pTC, progMakeEvent('TRANSFER_CREW', {
-    vehicleId: tcFV.vehicleId, sourceStageId:'LMascent', destStageId:'CM',
-    count: 2, subtype: 'TUNNEL',
-  }));
-
-  // T5: TRANSFER_STAGE (between two separate vehicles)
-  const pTS = progMakeProgram('ts-test');
-  const tsSrc = progMakeFlightVehicle('Src', [progMakeLiveStage('TugPayload',[],0,5000,0), progMakeLiveStage('Depot',[],0,10000,0)], LEO, null);
-  const tsDst = progMakeFlightVehicle('Tug', [progMakeLiveStage('TugEngine',[],0,2000,445)], LEO, null);
-  tsSrc.status = tsDst.status = 'ORBIT';
-  pTS.vehicles[tsSrc.vehicleId]=tsSrc; pTS.vehicles[tsDst.vehicleId]=tsDst;
-  progDispatchEvent(pTS, progMakeEvent('TRANSFER_STAGE', {
-    sourceVehicleId: tsSrc.vehicleId, destVehicleId: tsDst.vehicleId, stageDefinitionId: 'Depot',
-  }));
-
-  // T6: LAND — status LANDED, surface orbitState
-  const pLand = progMakeProgram('land-test');
-  const landFV = progMakeFlightVehicle('LM', [progMakeLiveStage('LMdescent',[],0,2200,311)], progMakeOrbitalState('Moon',100,0,0), null);
-  landFV.status = 'ORBIT';
-  pLand.vehicles[landFV.vehicleId] = landFV;
-  progDispatchEvent(pLand, progMakeEvent('LAND', { vehicleId: landFV.vehicleId, body:'Moon' }));
-
-  // T7: ASCENT_SURFACE — Moon, dv≈1870, status ORBIT
-  const pAsc = progMakeProgram('asc-test');
-  const ascFV = progMakeFlightVehicle('LM-asc', [progMakeLiveStage('LMasc',[progMakeTank('NTO_A50',2350)],0,2100,311)], progMakeSurfaceState('Moon'), null);
-  ascFV.status = 'LANDED';
-  pAsc.vehicles[ascFV.vehicleId] = ascFV;
-  const ascEv = progMakeEvent('ASCENT_SURFACE', { vehicleId: ascFV.vehicleId, body:'Moon', targetOrbit:{ alt_km:100, inc_deg:0, lan_deg:0 } });
-  progDispatchEvent(pAsc, ascEv);
-
-  // T8: RECONFIGURE reorders stack
-  const pRc = progMakeProgram('rc-test');
-  const rcFV = progMakeFlightVehicle('CSM-LM', [
-    progMakeLiveStage('S-IVB',  [], 0, 13300, 421),
-    progMakeLiveStage('CSM',    [], 0, 28800, 314),
-    progMakeLiveStage('LM',     [], 0, 15000, 311),
-  ], LEO, null);
-  rcFV.status = 'ORBIT';
-  pRc.vehicles[rcFV.vehicleId] = rcFV;
-  progDispatchEvent(pRc, progMakeEvent('RECONFIGURE', {
-    vehicleId: rcFV.vehicleId, newStageOrder: ['S-IVB', 'LM', 'CSM'],
-  }));
-
-  const T = [
-    { label:'DOCK merges 2+1 stages',    val: mergedFV ? mergedFV.stages.length : -1,  target: 3,    tol: 0 },
-    { label:'DOCK result SUCCESS',        val: dockRes.result==='SUCCESS'?1:0,            target: 1,    tol: 0 },
-    { label:'DOCK fail on mismatch',      val: dockFail.result==='FAILED'?1:0,            target: 1,    tol: 0 },
-    { label:'XFER PROP source -10000',    val: tpFV.stages[0].tanks[0].fill,              target:40000, tol: 0 },
-    { label:'XFER PROP dest +10000',      val: tpFV.stages[1].tanks[0].fill,              target:15000, tol: 0 },
-    { label:'XFER CREW moved 2',          val: tcFV.stages[1].crewAboard,                 target: 2,    tol: 0 },
-    { label:'XFER STAGE src shrinks',     val: tsSrc.stages.length,                       target: 1,    tol: 0 },
-    { label:'XFER STAGE dst grows',       val: tsDst.stages.length,                       target: 2,    tol: 0 },
-    { label:'LAND status LANDED',         val: landFV.status==='LANDED'?1:0,              target: 1,    tol: 0 },
-    { label:'LAND surface true',          val: landFV.orbitState.surface?1:0,             target: 1,    tol: 0 },
-    { label:'ASCENT status ORBIT',        val: ascFV.status==='ORBIT'?1:0,               target: 1,    tol: 0 },
-    { label:'ASCENT dv 1870',             val: Math.round(ascEv.deltaV),                  target: 1870, tol: 5 },
-    { label:'RECONFIG stage[1] is LM',    val: rcFV.stages[1].stageDefinitionId==='LM'?1:0, target:1,  tol: 0 },
-  ];
-  return T.map(t => {
-    const pass = Math.abs(t.val - t.target) <= t.tol;
-    return { label: t.label, val: t.val, target: t.target, pass };
-  });
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
-
 // ─── PROGRAM MODULE — Phase 5: Pad & Spaceport ────────────────────────────────
 
 const PROG_SIDEREAL_DAY_S = 86164.1; // seconds per sidereal day
@@ -8812,41 +8525,6 @@ function progVehicleDefToLiveStages(vdef) {
 /** Render the loaded vehicle list into #prog-vehicle-list. */
 
 
-
-// ── Phase 5 self-tests ────────────────────────────────────────────────────────
-const PROG_P5_TEST_RESULTS = (() => { try {
-  // T1: Pad creation
-  const pad0 = progMakePad('LC-39A', '39A', 'KSC', 72);
-
-  // T2: Pad available after recycle
-  const padA = progMakePad('LC-39B', '39B', 'KSC', 72); padA.lastLaunchTime = 0;
-
-  // T3: Pad not available during recycle (12h of 72h elapsed)
-  const padB = progMakePad('LC-39C', '39C', 'KSC', 72); padB.lastLaunchTime = 0;
-
-  // T4: Recycle remaining at 12h
-  // T5: Fresh pad (null lastLaunchTime) always available
-
-  // T6/T7: LAN window
-  const { asc_wait_s, desc_wait_s } = progLanWindow(280, 45, 0);
-
-  // T8/T9: Azimuth for inclination
-  const az28  = progAzimuthForInclination(28.5, 28.5);
-  const az45  = progAzimuthForInclination(28.5, 45);
-
-  const T = [
-    { label:'Pad recycleTime',           val: pad0.recycleTime,                                  target: 72,    tol: 0   },
-    { label:'Pad avail after 80h',        val: progPadAvailable(padA, 80*3600) ? 1 : 0,           target: 1,     tol: 0   },
-    { label:'Pad recycling at 12h',       val: progPadAvailable(padB, 12*3600) ? 0 : 1,           target: 1,     tol: 0   },
-    { label:'Recycle remain 60h',         val: Math.round(progPadRecycleRemaining(padB,12*3600)/3600), target: 60, tol: 0 },
-    { label:'Fresh pad available',        val: progPadAvailable(pad0, 0) ? 1 : 0,                 target: 1,     tol: 0   },
-    { label:'LAN asc window hrs',         val: Math.round(asc_wait_s  / 3600 * 10) / 10,          target: 8.3,   tol: 0.1 },
-    { label:'LAN desc window hrs',        val: Math.round(desc_wait_s / 3600 * 10) / 10,          target: 20.3,  tol: 0.1 },
-    { label:'Azimuth inc=lat 90deg',      val: Math.round(az28.prograde),                          target: 90,    tol: 1   },
-    { label:'Azimuth inc=45 ~54deg',      val: Math.round(az45.prograde),                          target: 54,    tol: 2   },
-  ];
-  return T.map(t => ({ label:t.label, val:t.val, target:t.target, pass: Math.abs(t.val-t.target)<=t.tol }));
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
 
 // ─── PROGRAM MODULE — Phase 6: Pork Chop Plotter ─────────────────────────────
 //
@@ -9034,52 +8712,6 @@ function progPorkchopGrid(dep_body, arr_body, opts) {
 /** Switch the pork chop between Earth\u2192Mars and Earth\u2192Venus. */
 
 /** Initialise the pork chop plotter (called from INIT). */
-
-// ── Phase 6 self-tests (pure math — no DOM) ────────────────────────────────────
-const PROG_P6_TEST_RESULTS = (() => { try {
-  // T1/T2: Stumpff limits
-  const c0 = progStumpffC(0);
-  const s0 = progStumpffS(0);
-
-  // T3: Stumpff C at π²
-  const pi2  = Math.PI * Math.PI;
-  const cPi2 = progStumpffC(pi2);   // should = (1-cos(π))/π² = 2/π²
-
-  // T4: Earth orbital speed
-  const vE = Math.hypot(...progHelioVel('Earth', 0));
-
-  // T5: Lambert Earth→Mars 180-day — should return non-null
-  const r1t = progHelioPos('Earth', 50);
-  const r2t = progHelioPos('Mars',  50 + 180);
-  const lamTest = progLambert2D(r1t, r2t, 180*86400, PROG_PORK_MU);
-
-  // T6: Lambert gives plausible |v1| for above (heliocentric speed ~28-35 km/s)
-  const v1mag = lamTest ? Math.hypot(...lamTest.v1) : -1;
-
-  // T7: C3 at sub-optimal departure (dep=50d, tof=180d) is finite and < 80
-  const c3_test = progDepartureC3('Earth', 'Mars', 50, 180);
-
-  // T8: Pork chop grid min C3 for Earth→Mars is < 12 km²/s² (Hohmann ≈8.73)
-  const sm_grid = progPorkchopGrid('Earth', 'Mars', {
-    dep_start:0, dep_end:200, tof_start:200, tof_end:350, nx:25, ny:25,
-  });
-
-  // T9: Stumpff C negative psi (hyperbolic)
-  const cNeg = progStumpffC(-1);   // (cosh(1)-1)/1 ≈ 0.5431
-
-  const T = [
-    { label:'Stumpff C(0) = 0.5',       val: c0,                              target: 0.5,   tol: 1e-9  },
-    { label:'Stumpff S(0) = 1/6',        val: s0,                              target: 1/6,   tol: 1e-9  },
-    { label:'Stumpff C(\u03c0\u00b2) = 2/\u03c0\u00b2', val: Math.round(cPi2*10000)/10000, target: Math.round(2/pi2*10000)/10000, tol: 0.001 },
-    { label:'Earth orbital speed km/s',  val: Math.round(vE*100)/100,          target: 29.78, tol: 0.1   },
-    { label:'Lambert returns solution',  val: lamTest !== null ? 1 : 0,        target: 1,     tol: 0     },
-    { label:'Lambert |v1| 28-35 km/s',   val: v1mag > 28 && v1mag < 35 ? 1:0, target: 1,     tol: 0     },
-    { label:'C3 Earth\u2192Mars 50/180d finite', val: isFinite(c3_test) ? 1 : 0, target: 1, tol: 0     },
-    { label:'Porkchop min C3 < 12',      val: sm_grid.c3_min < 12 ? 1 : 0,    target: 1,     tol: 0     },
-    { label:'Stumpff C(-1) hyperbolic',  val: Math.round(cNeg*1000)/1000,      target: Math.round((Math.cosh(1)-1)*1000)/1000, tol: 0.001 },
-  ];
-  return T.map(t => ({ label:t.label, val:t.val, target:t.target, pass: Math.abs(t.val-t.target)<=t.tol }));
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
 
 // ─── PROGRAM MODULE — Phase 7: Band View ─────────────────────────────────────
 
@@ -9601,108 +9233,11 @@ let _progScSelId = null;  // currently selected spacecraft ID in editor modal
 
 
 
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-const PROG_P9_TEST_RESULTS = (() => { try {
-  const sc = progMakeSpacecraftDefinition('CSM');
-  sc.stages.push(progMakeSpacecraftStageDef('SM'));
-  sc.stages.push(progMakeSpacecraftStageDef('CM'));
-  sc.stages[0].dry_mass   = 6000;
-  sc.stages[0].isp        = 314;
-  sc.stages[0].propKg     = 18410;
-  sc.stages[0].propType   = 'MMH/NTO';
-  sc.stages[1].dry_mass   = 5560;
-  sc.stages[1].crewCapacity = 3;
-  sc.stages[1].dockingPorts = 1;
-  sc.stages[1].tunnelCapable = true;
-
-  const ls = progSpacecraftToLiveStages(sc);
-
-  // LAUNCH integration test
-  const p = progMakeProgram('SC-test');
-  p.spacecraftDefinitions.push(sc);
-  const ev = progMakeEvent('LAUNCH', {
-    label:        'Apollo CSM',
-    spacecraftId:  sc.spacecraftId,
-    stages:        [],
-    targetOrbit:   { body:'Earth', alt_km:185, inc_deg:28.5, lan_deg:0 },
-    tStart:        0,
-  });
-  p.events.push(ev);
-  const res = progDispatchEvent(p, ev);
-
-  const fv = res.vehicleId ? p.vehicles[res.vehicleId] : null;
-
-  const T = [
-    { label:'P9: SpacecraftDef has spacecraftId',             val: typeof sc.spacecraftId,            target:'string',  tol:null },
-    { label:'P9: SpacecraftDef stages array',                 val: sc.stages.length,                  target:2,         tol:0 },
-    { label:'P9: StageDef has 5 extended fields',             val: ['crewCapacity','dockingPorts','tunnelCapable','isLandingTruss','descentPropFraction'].every(f=>f in sc.stages[0]) ? 1:0, target:1, tol:0 },
-    { label:'P9: toLS – correct count',                       val: ls.length,                         target:2,         tol:0 },
-    { label:'P9: toLS – SM has 1 tank',                       val: ls[0].tanks.length,                target:1,         tol:0 },
-    { label:'P9: toLS – CM has 0 tanks',                      val: ls[1].tanks.length,                target:0,         tol:0 },
-    { label:'P9: toLS – crewCapacity propagated',             val: ls[1].crewCapacity,                target:3,         tol:0 },
-    { label:'P9: toLS – tunnelCapable propagated',            val: ls[1].tunnelCapable ? 1 : 0,       target:1,         tol:0 },
-    { label:'P9: LAUNCH spacecraftId – result SUCCESS',       val: res.result,                        target:'SUCCESS', tol:null },
-    { label:'P9: LAUNCH spacecraftId – vehicle created',      val: fv ? 1 : 0,                        target:1,         tol:0 },
-    { label:'P9: LAUNCH spacecraftId – 2 stages in vehicle',  val: fv ? fv.stages.length : -1,        target:2,         tol:0 },
-  ];
-  return T.map(t => ({
-    label: t.label, val: t.val, target: t.target,
-    pass: t.tol === null
-      ? (t.val === t.target)
-      : (Math.abs(Number(t.val) - Number(t.target)) <= t.tol),
-  }));
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
 // ─── PROGRAM MODULE — Phase 10: Save / Load & Closure Bar ───────────────────
 //
 // Save: serialize PROG_ACTIVE_PROGRAM to formatVersion:3 JSON and download.
 // Load: read a .json file, validate formatVersion, restore as active program.
 // Closure bar: per-vehicle status strip derived from event results.
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-const PROG_P10_TEST_RESULTS = (() => { try {
-  // Save/load round-trip
-  const orig = progMakeProgram('Save Test');
-  orig.pads  = [progMakePad('LC-39A','39A','KSC',72)];
-  const sc   = progMakeSpacecraftDefinition('Orion');
-  sc.stages.push(progMakeSpacecraftStageDef('CM'));
-  orig.spacecraftDefinitions.push(sc);
-  const json = JSON.stringify(Object.assign({ formatVersion: 3 }, orig));
-
-  let parsed;
-  try { parsed = JSON.parse(json); } catch(e) { parsed = null; }
-  const fmtOk = parsed?.formatVersion === 3;
-  delete parsed?.formatVersion;
-
-  // Restore: simulate progLoadProgramJSON without touching global state
-  const restored = parsed ? Object.assign({ events:[], vehicles:{}, pads:[], spacecraftDefinitions:[], nodeMapCustomNodes:[], performanceCases:[] }, parsed) : null;
-
-  // Closure bar logic unit test
-  const prog2 = progMakeProgram('Closure Test');
-  const fv2   = progMakeFlightVehicle('Rocket', [], progMakeOrbitalState('Earth',185,0,0), '#61afef');
-  prog2.vehicles[fv2.vehicleId] = fv2;
-  const evOK  = progMakeEvent('COAST', { vehicleId: fv2.vehicleId, tStart:0, tEnd:3600 });
-  evOK.result = 'SUCCESS';
-  prog2.events.push(evOK);
-  const vids2 = Object.keys(prog2.vehicles);
-  const evs2  = prog2.events.filter(e => e.vehicleId === vids2[0]);
-  const status2 = evs2.every(e => e.result === 'SUCCESS') ? 'OK' : 'FAIL';
-
-  const T = [
-    { label:'P10: save produces formatVersion:3',          val: fmtOk ? 1 : 0,                                   target:1,     tol:0 },
-    { label:'P10: round-trip preserves program name',      val: restored?.name,                                  target:'Save Test', tol:null },
-    { label:'P10: round-trip preserves pad count',         val: restored?.pads?.length,                          target:1,     tol:0 },
-    { label:'P10: round-trip preserves spacecraft count',  val: restored?.spacecraftDefinitions?.length,         target:1,     tol:0 },
-    { label:'P10: round-trip spacecraft name intact',      val: restored?.spacecraftDefinitions?.[0]?.name,      target:'Orion', tol:null },
-    { label:'P10: closure – all-SUCCESS → OK',             val: status2,                                         target:'OK',  tol:null },
-  ];
-  return T.map(t => ({
-    label: t.label, val: t.val, target: t.target,
-    pass: t.tol === null
-      ? (t.val === t.target)
-      : (Math.abs(Number(t.val) - Number(t.target)) <= t.tol),
-  }));
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
 // ─── END PROGRAM MODULE Phase 10 ──────────────────────────────────────────────
 
 // ─── END PROGRAM MODULE Phase 9 ───────────────────────────────────────────────

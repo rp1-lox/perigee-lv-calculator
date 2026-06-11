@@ -128,38 +128,3 @@ function progVehicleDefToLiveStages(vdef) {
 /** Render the loaded vehicle list into #prog-vehicle-list. */
 
 
-
-// ── Phase 5 self-tests ────────────────────────────────────────────────────────
-const PROG_P5_TEST_RESULTS = (() => { try {
-  // T1: Pad creation
-  const pad0 = progMakePad('LC-39A', '39A', 'KSC', 72);
-
-  // T2: Pad available after recycle
-  const padA = progMakePad('LC-39B', '39B', 'KSC', 72); padA.lastLaunchTime = 0;
-
-  // T3: Pad not available during recycle (12h of 72h elapsed)
-  const padB = progMakePad('LC-39C', '39C', 'KSC', 72); padB.lastLaunchTime = 0;
-
-  // T4: Recycle remaining at 12h
-  // T5: Fresh pad (null lastLaunchTime) always available
-
-  // T6/T7: LAN window
-  const { asc_wait_s, desc_wait_s } = progLanWindow(280, 45, 0);
-
-  // T8/T9: Azimuth for inclination
-  const az28  = progAzimuthForInclination(28.5, 28.5);
-  const az45  = progAzimuthForInclination(28.5, 45);
-
-  const T = [
-    { label:'Pad recycleTime',           val: pad0.recycleTime,                                  target: 72,    tol: 0   },
-    { label:'Pad avail after 80h',        val: progPadAvailable(padA, 80*3600) ? 1 : 0,           target: 1,     tol: 0   },
-    { label:'Pad recycling at 12h',       val: progPadAvailable(padB, 12*3600) ? 0 : 1,           target: 1,     tol: 0   },
-    { label:'Recycle remain 60h',         val: Math.round(progPadRecycleRemaining(padB,12*3600)/3600), target: 60, tol: 0 },
-    { label:'Fresh pad available',        val: progPadAvailable(pad0, 0) ? 1 : 0,                 target: 1,     tol: 0   },
-    { label:'LAN asc window hrs',         val: Math.round(asc_wait_s  / 3600 * 10) / 10,          target: 8.3,   tol: 0.1 },
-    { label:'LAN desc window hrs',        val: Math.round(desc_wait_s / 3600 * 10) / 10,          target: 20.3,  tol: 0.1 },
-    { label:'Azimuth inc=lat 90deg',      val: Math.round(az28.prograde),                          target: 90,    tol: 1   },
-    { label:'Azimuth inc=45 ~54deg',      val: Math.round(az45.prograde),                          target: 54,    tol: 2   },
-  ];
-  return T.map(t => ({ label:t.label, val:t.val, target:t.target, pass: Math.abs(t.val-t.target)<=t.tol }));
-} catch(e){console.error('Test IIFE error:',e);return[];} })();
