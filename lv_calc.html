@@ -9702,6 +9702,8 @@ let _missionAddEvt = null;   // null = closed; '__menu__' = picker; or a type   
 let _missionSelEvt = null;   // selected event index for event detail panel
 let _missionBridgeMode = false;        // true while user is drawing a maneuver bridge
 let _missionBridgeFrom = null;         // node id chosen as the bridge start
+let _missionNmPos = {};                // nodeId -> [x,y] drag overrides
+let _missionNmDrag = null;             // { missionId, nid } while dragging
 
 function _missionMake(name) {
   return {
@@ -11212,7 +11214,7 @@ function _missionNodeMapHTML(m) {
     'mars-transit':[655,244], 'mars-orbit':[860,129], 'mars-surface':[860,205],
     'venus-transit':[655,366], 'venus-orbit':[848,316],
   };
-  const posOf = n => POS[n.id] || [n.cx || 0, n.cy || 0];
+  const posOf = n => _missionNmPos[n.id] || POS[n.id] || [n.cx || 0, n.cy || 0];
 
   // ── control bar (Draw Maneuver) ──
   let ctrlHTML = `<div class="sl" style="margin-top:8px;display:flex;align-items:center;gap:12px;">
@@ -11256,7 +11258,7 @@ function _missionNodeMapHTML(m) {
     const isSurface = n.orbit && n.orbit.type === 'surface';
     const blob = isSurface ? Object.values(BLOBS).find(b => b.surfId === n.id) : null;
 
-    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}</title>`;
+    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}</title>`;
     if (isSurface && blob) {
       const stroke = isFrom ? 'var(--accent2)' : inPath ? 'var(--accent)' : blob.col;
       const sw = (isFrom || isCurrent) ? 3 : (inPath ? 2.5 : 1.6);
@@ -11276,8 +11278,32 @@ function _missionNodeMapHTML(m) {
     nodesHTML += `</g>`;
   }
 
-  const svgHTML = `<svg viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;background:transparent;border:1px solid var(--border);">${blobsHTML}${edgesHTML}${nodesHTML}</svg>`;
+  const svgHTML = `<svg viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;background:transparent;border:1px solid var(--border);" oncontextmenu="return false;">${blobsHTML}${edgesHTML}${nodesHTML}</svg>`;
   return `<div>${ctrlHTML}${svgHTML}</div>`;
+}
+
+function missionNmNodeDown(e, missionId, nid) {
+  if (e.button !== 2) return;            // right button only; left stays a click
+  e.preventDefault(); e.stopPropagation();
+  _missionNmDrag = { missionId, nid };
+  document.addEventListener('mousemove', missionNmDragMove);
+  document.addEventListener('mouseup', missionNmDragEnd);
+}
+function missionNmDragMove(e) {
+  if (!_missionNmDrag) return;
+  const svg = document.querySelector('.mcc-center-col svg');
+  if (!svg || !svg.getScreenCTM) return;
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  _missionNmPos[_missionNmDrag.nid] = [Math.round(p.x), Math.round(p.y)];
+  const cc = document.querySelector('.mcc-center-col');
+  const m = _missionGet(_missionNmDrag.missionId);
+  if (cc && m) cc.innerHTML = _missionNodeMapHTML(m);   // container persists; doc listeners survive
+}
+function missionNmDragEnd() {
+  document.removeEventListener('mousemove', missionNmDragMove);
+  document.removeEventListener('mouseup', missionNmDragEnd);
+  _missionNmDrag = null;
 }
 
 function missionInit() {
