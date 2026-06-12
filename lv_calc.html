@@ -9909,11 +9909,11 @@ function missionSetOrbit(id, key, val) {
   if (m) m.launchOrbit[key] = val;
 }
 
-function missionExecLaunch(id) {
-  const m = _missionGet(id);
-  if (!m || !m.fleetEntryId) return;
+// ── PURE APPLIER: builds the launch vehicle, runs ascent staging, returns results.
+// Does NOT push to m.log or set m.vehicleId — that is done by missionRecompute.
+function _missionApplyLaunch(m) {
   const entry = _fleetGet(m.fleetEntryId);
-  if (!entry) return;
+  if (!entry) return null;
 
   const lvStages = progVehicleDefToLiveStages(entry);
   let scStages = [];
@@ -9930,11 +9930,11 @@ function missionExecLaunch(id) {
     color:       '#61afef',
   });
   const result = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
-  m.vehicleId = result.vehicleId;
-  m.vehicleIds = [result.vehicleId];
 
   // Ascent staging simulation: stage-by-stage dv delivery
-  const fv           = PROG_ACTIVE_PROGRAM.vehicles[result.vehicleId];
+  const fv = PROG_ACTIVE_PROGRAM.vehicles[result.vehicleId];
+  if (!fv) return null;
+
   const dvRequired   = _missionDvToOrbit(m.launchOrbit.body, m.launchOrbit.alt_km);
   let   dvRemaining  = dvRequired;
   const stagingLog   = [];
@@ -9977,18 +9977,20 @@ function missionExecLaunch(id) {
   };
 
   const payloadMass = m.payloadScIds.reduce((s, scId) => s + _fleetScMassById(scId), 0);
-  m.log.push({
-    type:         'LAUNCH',
-    label:        entry.name,
-    orbit:        { ...m.launchOrbit },
-    vehicleId:    result.vehicleId,
-    stagingResult,
-    payloadMass,
-    payloadNames: m.payloadScIds.map(scId => _scEdSC.find(s => s.spacecraftId === scId)?.name).filter(Boolean),
-  });
+  const payloadNames = m.payloadScIds.map(scId => _scEdSC.find(s => s.spacecraftId === scId)?.name).filter(Boolean);
 
+  return { fv, stagingResult, payloadMass, payloadNames };
+}
+
+function missionExecLaunch(id) {
+  const m = _missionGet(id);
+  if (!m || !m.fleetEntryId) return;
+  const entry = _fleetGet(m.fleetEntryId);
+  if (!entry) return;
+  m.log.push({ type: 'LAUNCH', label: entry.name, orbit: { ...m.launchOrbit } });
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -9998,6 +10000,7 @@ function missionResetLaunch(id) {
   m.log = [];
   m.vehicleId = null;
   m.vehicleIds = [];
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -10063,6 +10066,7 @@ function missionDeleteEvent(id, idx) {
     m.log.splice(idx, 1);
   }
   _missionSelEvt = null;
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -10104,8 +10108,8 @@ function _missionEventDetailHTML(m, idx) {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Name</span><span class="mission-state-val">${e.vehicleName || e.stageName || ''}</span></div>`;
   }
 
-  const isLatestBurn = e.type === 'BURN' && idx === m.log.length - 1 && PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId];
-  const editForm = isLatestBurn ? `
+  const isBurn = e.type === 'BURN';
+  const editForm = isBurn ? `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
           <div class="cfg-item">
@@ -10127,13 +10131,10 @@ function _missionEventDetailHTML(m, idx) {
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyBurnEdit('${id}',${idx})">Apply</button>
       </div>` : '';
 
-  const note = !isLatestBurn && e.type === 'BURN' ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:6px;">// inline editing currently supports the latest burn</div>` : '';
-
   return `<div class="mcc-section-header">EVENT DETAIL</div>
     <div class="mcc-panel-pad">
       <div style="font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:8px;">${e.type}</div>
       <div class="mission-state-grid">${fields}</div>
-      ${note}
       ${editForm}
       <div style="display:flex;gap:6px;margin-top:8px;">
         <button class="act-btn" onclick="missionDeleteEvent('${id}',${idx})">Delete Event</button>
@@ -10386,76 +10387,123 @@ function _missionRestoreState(fv, snap) {
   });
 }
 
+// ── PURE APPLIER: computes burn, dispatches BURN progEvent, updates fv orbit.
+// Does NOT push to m.log — that is done by missionRecompute.
+function _missionApplyBurn(fv, bt, pval, stageId) {
+  let dvTarget, newOrbit, burnLabel;
+  try {
+    ({ dvTarget, newOrbit, burnLabel } = _missionComputeBurn(fv, bt, pval));
+  } catch(e) {
+    return { result: 'FAILED' };
+  }
+
+  const ev = progMakeEvent('BURN', {
+    vehicleId:    fv.vehicleId,
+    stagingStageId: stageId || null,
+    burnType:     bt,
+    dvTarget:     dvTarget,
+  });
+  const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
+
+  if (newOrbit && res.result !== 'FAILED') {
+    fv.orbitState = newOrbit;
+    fv.status = 'ORBIT';
+  }
+
+  return {
+    dvTarget,
+    dv_actual:     res.dv_actual  || 0,
+    prop_consumed: res.prop_consumed || 0,
+    burnLabel,
+    result:        res.result,
+  };
+}
+
+// ── RECOMPUTE ENGINE: tear down & replay the full mission log from scratch ──
+function missionRecompute(m) {
+  if (!m || typeof PROG_ACTIVE_PROGRAM === 'undefined') return;
+  // tear down this mission's runtime vehicles
+  (m.vehicleIds || []).forEach(vid => { if (PROG_ACTIVE_PROGRAM.vehicles[vid]) delete PROG_ACTIVE_PROGRAM.vehicles[vid]; });
+  m.vehicleIds = []; m.vehicleId = null;
+  let active = null;   // current active runtime FlightVehicle
+  let live = [];       // all live runtime FlightVehicles for this mission
+
+  for (const e of m.log) {
+    if (e.type === 'LAUNCH') {
+      const r = _missionApplyLaunch(m);
+      if (!r || !r.fv) { e.result = 'FAILED'; continue; }
+      e.vehicleId = r.fv.vehicleId; e.stagingResult = r.stagingResult;
+      e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
+      active = r.fv; live = [r.fv];
+    } else if (e.type === 'BURN') {
+      if (!active) continue;
+      e.vehicleId = active.vehicleId;
+      const res = _missionApplyBurn(active, e.burnType, e.burnParam, e.stageId);
+      e.dvTarget = res.dvTarget; e.dv_actual = res.dv_actual; e.prop_consumed = res.prop_consumed;
+      e.burnLabel = res.burnLabel; e.result = res.result;
+      e.orbitAfter = active.orbitState ? { ...active.orbitState } : null;
+    } else if (e.type === 'MANEUVER') {
+      if (active) e.vehicleId = active.vehicleId;
+      const r = progNmComputeEdgeDv(e.fromNode, e.toNode); if (r) e.dv = Math.round(r.dv);
+    } else if (e.type === 'SEPARATE' && e.result === 'SUCCESS') {
+      if (!active) continue;
+      const ev = progMakeEvent('SEPARATE', { vehicleId: active.vehicleId, separationIndex: e.sepIndex });
+      const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
+      if (res.result === 'SUCCESS') {
+        const lower = PROG_ACTIVE_PROGRAM.vehicles[res.lowerVehicleId];
+        const upper = PROG_ACTIVE_PROGRAM.vehicles[res.upperVehicleId];
+        e.parentVehicleId = active.vehicleId; e.lowerVehicleId = res.lowerVehicleId; e.upperVehicleId = res.upperVehicleId;
+        e.lowerName = lower ? lower.name : '?'; e.upperName = upper ? upper.name : '?';
+        e.lowerStages = lower ? lower.stages.length : 0; e.upperStages = upper ? upper.stages.length : 0;
+        live = live.filter(v => v !== active); if (lower) live.push(lower); if (upper) live.push(upper);
+        active = upper || lower || null;
+      }
+    } else if (e.type === 'DOCK' && e.result === 'SUCCESS') {
+      const target = live.find(v => v !== active && v.name === e.tName);
+      if (active && target) {
+        const ev = progMakeEvent('DOCK', { vehicleIds: [active.vehicleId, target.vehicleId], bottomVehicleId: target.vehicleId });
+        const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
+        if (res.result === 'SUCCESS') {
+          const merged = PROG_ACTIVE_PROGRAM.vehicles[res.vehicleId];
+          e.aVehId = active.vehicleId; e.tVehId = target.vehicleId; e.mergedVehicleId = res.vehicleId;
+          e.mergedName = merged ? merged.name : '?'; e.mergedStages = merged ? merged.stages.length : 0;
+          live = live.filter(v => v !== active && v !== target); if (merged) live.push(merged);
+          active = merged || null;
+        }
+      }
+    } else if (e.type === 'EXPEND') {
+      const tgt = live.find(v => v.name === (e.vehicleName || e.stageName)) || active;
+      if (tgt) { tgt.status = 'EXPENDED'; e.vehicleId = tgt.vehicleId; if (active === tgt) active = live.find(v => v !== tgt && v.status !== 'EXPENDED') || tgt; }
+    }
+  }
+  m.vehicleIds = live.map(v => v.vehicleId);
+  m.vehicleId = active ? active.vehicleId : (m.vehicleIds[0] || null);
+}
+
 function missionExecBurn(id) {
   const m = _missionGet(id);
   if (!m || !m.vehicleId) return;
   const fv  = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId];
   if (!fv)  return;
-  const os   = fv.orbitState || {};
-  const body = os.body || 'Earth';
-  const apo  = os.apogee  || 0;
-  const peri = os.perigee ?? apo;
-  const inc  = os.inclination || 0;
-  const lan  = os.lan || 0;
   const bt   = document.getElementById('burn-type-' + id)?.value || 'HOHMANN';
   const pval = parseFloat(document.getElementById('burn-param-val-' + id)?.value) || 0;
   const stageId = document.getElementById('burn-stage-' + id)?.value || null;
-
-  const _before = _missionSnapState(fv);
-  let dvTarget, newOrbit, burnLabel;
-  try {
-    ({ dvTarget, newOrbit, burnLabel } = _missionComputeBurn(fv, bt, pval));
-  } catch(e) { alert('Burn compute error: ' + e.message); return; }
-
-  const ev = progMakeEvent('BURN', {
-    vehicleId:    m.vehicleId,
-    stagingStageId: stageId || null,
-    burnType:     bt,
-    dvTarget:     dvTarget,
-  });
-  const result = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
-
-  if (newOrbit && result.result !== 'FAILED') {
-    fv.orbitState = newOrbit;
-    fv.status = 'ORBIT';
-  }
-
-  m.log.push({
-    type:          'BURN',
-    vehicleId:    m.vehicleId,
-    burnLabel,
-    burnType:      bt,
-    burnParam:     pval,
-    stageId,
-    stateBefore:   _before,
-    dvTarget,
-    dv_actual:     result.dv_actual  || 0,
-    prop_consumed: result.prop_consumed || 0,
-    result:        result.result,
-    warnings:      ev.warnings || [],
-    orbitAfter:    fv.orbitState ? { ...fv.orbitState } : null,
-  });
-
+  m.log.push({ type: 'BURN', burnType: bt, burnParam: pval, stageId });
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
 function missionApplyBurnEdit(id, idx) {
   const m = _missionGet(id); if(!m) return;
   const e = m.log[idx]; if(!e || e.type!=='BURN') return;
-  const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId]; if(!fv || !e.stateBefore) return;
   const bt = document.getElementById('edit-burn-type-'+id)?.value || e.burnType;
   const pval = parseFloat(document.getElementById('edit-burn-param-'+id)?.value) || 0;
-  _missionRestoreState(fv, e.stateBefore);
-  let r; try { r = _missionComputeBurn(fv, bt, pval); } catch(err){ return; }
-  const ev = progMakeEvent('BURN', { vehicleId: m.vehicleId, stagingStageId: e.stageId||null, burnType: bt, dvTarget: r.dvTarget });
-  const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
-  if (r.newOrbit && res.result!=='FAILED') { fv.orbitState = r.newOrbit; fv.status='ORBIT'; }
-  e.burnType=bt; e.burnParam=pval; e.dvTarget=r.dvTarget; e.burnLabel=r.burnLabel;
-  e.dv_actual=res.dv_actual||0; e.prop_consumed=res.prop_consumed||0; e.result=res.result;
-  e.orbitAfter = fv.orbitState?{...fv.orbitState}:null;
-  _missionSelEvt = null; missionRenderDetail();
+  e.burnType = bt; e.burnParam = pval;
+  _missionSelEvt = null;
+  missionRecompute(m);
+  missionRenderDetail();
 }
 
 function missionDropStage(missionId, stageDefId) {
@@ -10531,20 +10579,10 @@ function missionExecSeparate(id, sepIndex) {
     missionRenderDetail();
     return;
   }
-  const lower = PROG_ACTIVE_PROGRAM.vehicles[res.lowerVehicleId];
-  const upper = PROG_ACTIVE_PROGRAM.vehicles[res.upperVehicleId];
-  m.vehicleIds = m.vehicleIds.filter(v => v !== m.vehicleId);
-  m.vehicleIds.push(res.lowerVehicleId, res.upperVehicleId);
-  m.vehicleId = res.upperVehicleId;
-  m.log.push({
-    type: 'SEPARATE', result: 'SUCCESS',
-    parentVehicleId: fv.vehicleId, lowerVehicleId: res.lowerVehicleId, upperVehicleId: res.upperVehicleId,
-    parentName: fv.name, sepIndex: idx,
-    lowerName: lower ? lower.name : '?', lowerStages: lower ? lower.stages.length : 0,
-    upperName: upper ? upper.name : '?', upperStages: upper ? upper.stages.length : 0,
-  });
+  m.log.push({ type: 'SEPARATE', result: 'SUCCESS', sepIndex: idx, parentName: fv.name });
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -10562,18 +10600,10 @@ function missionExecDock(id, targetVehId) {
     missionRenderDetail();
     return;
   }
-  const merged = PROG_ACTIVE_PROGRAM.vehicles[res.vehicleId];
-  m.vehicleIds = m.vehicleIds.filter(v => v !== m.vehicleId && v !== targetVehId);
-  m.vehicleIds.push(res.vehicleId);
-  m.vehicleId = res.vehicleId;
-  m.log.push({
-    type: 'DOCK', result: 'SUCCESS', aName, tName,
-    aVehId: activeFV.vehicleId, tVehId: targetVehId, mergedVehicleId: res.vehicleId,
-    mergedName: merged ? merged.name : '?', mergedStages: merged ? merged.stages.length : 0,
-    warnings: ev.warnings || [],
-  });
+  m.log.push({ type: 'DOCK', result: 'SUCCESS', aName, tName });
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -10582,16 +10612,10 @@ function missionExecExpendVehicle(id, vehId) {
   if (!m || !vehId) return;
   const fv = PROG_ACTIVE_PROGRAM.vehicles[vehId];
   if (!fv) return;
-  const name = fv.name;
-  const ev = progMakeEvent('EXPEND', { vehicleId: vehId });
-  const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
-  m.log.push({ type: 'EXPEND', vehicleLevel: true, vehicleId: vehId, vehicleName: name, result: res.result });
-  if (m.vehicleId === vehId) {
-    const next = _missionLiveVehicles(m).find(x => x.id !== vehId && x.fv.status !== 'EXPENDED');
-    m.vehicleId = next ? next.id : vehId;
-  }
+  m.log.push({ type: 'EXPEND', vehicleLevel: true, vehicleName: fv.name });
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
@@ -10716,10 +10740,8 @@ function missionExecManeuver(id, fromId, toId) {
   const lbl = nid => { const n = PROG_NM_NODES.find(x => x.id === nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
   m.log.push({
     type: 'MANEUVER',
-    vehicleId: m.vehicleId,
     fromNode: fromId, toNode: toId,
     fromLabel: lbl(fromId), toLabel: lbl(toId),
-    dv:     res ? Math.round(res.dv) : null,
     note:   res ? res.note : 'No transfer model for this pair',
     method: res ? res.method : null,
   });
@@ -10727,6 +10749,7 @@ function missionExecManeuver(id, fromId, toId) {
   _missionBridgeFrom = null;
   _missionAddEvt = null;
   _missionViewMode = 'nodemap';
+  missionRecompute(m);
   missionRenderDetail();
 }
 
