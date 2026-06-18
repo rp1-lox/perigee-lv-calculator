@@ -10,10 +10,10 @@ const TUTORIALS = [
     <p>This tool has two halves, switched from the top bar:</p>
     <ul>
       <li><b>LV Calculator</b> — design a launch vehicle stage-by-stage and compute its performance. Sub-tabs: <b>Vehicles</b>, <b>Orbits</b>, <b>Results</b>.</li>
-      <li><b>Program Manager</b> — build spacecraft, assemble a fleet, and plan multi-step missions. Sub-tabs: <b>Spacecraft</b>, <b>Fleet</b>, <b>Missions</b>.</li>
+      <li><b>Program Manager</b> — build spacecraft, manage your vehicles, and plan multi-step missions. Sub-tabs: <b>Hangar</b> (a Spacecraft / Vehicle picker) and <b>Missions</b>.</li>
     </ul>
-    <p class="tut-tip">The two halves connect: vehicles you save in the LV Calculator show up in the Fleet's vehicle library, and spacecraft you build become payloads for missions.</p>
-    <p>Pick a topic on the left to learn each area. A typical first run: <b>build a vehicle → save it → add it to a fleet with a payload → plan a mission</b>.</p>` },
+    <p class="tut-tip">The two halves connect: vehicles you save in the LV Calculator show up in the Hangar's <b>Vehicle</b> library, and spacecraft you build become payloads for missions.</p>
+    <p>Pick a topic on the left to learn each area. A typical first run: <b>build a vehicle → save it → in the Hangar give a Vehicle a payload → plan a mission</b>.</p>` },
 
   { id: 'lv', title: 'LV Calculator — build a rocket', body: () => `
     <h3>Designing a launch vehicle</h3>
@@ -24,7 +24,8 @@ const TUTORIALS = [
       <li>Stage-and-a-half (e.g. Atlas): edit a stage (✎ wrench) and enable <b>S1.5</b> to model a booster-engine jettison (BECO).</li>
       <li>Set your <b>payload</b>, <b>target orbit</b> (or escape C3) and <b>launch site</b>, then press <b>Calculate</b> → it jumps to <b>Results</b>.</li>
     </ol>
-    <p class="tut-tip">Save a finished design with <b>Save</b> → it downloads a <b>.vehicle</b> file and adds it to your presets. Use <b>Use in Program ▶</b> or just load it later from the Fleet's vehicle library.</p>` },
+    <p class="tut-tip">Crossfeed / center-throttle tricores: edit the <b>booster</b> (✎ wrench) → <b>Parallel Staging</b> to model UR-700-style crossfeed or Falcon-Heavy throttle-down.</p>
+    <p class="tut-tip">Save a finished design with <b>Save</b> → it downloads a <b>.vehicle</b> file and adds it to your presets. Load it later from the Hangar's <b>Vehicle</b> library.</p>` },
 
   { id: 'orbits', title: 'Orbits', body: () => `
     <h3>Defining and saving orbits</h3>
@@ -34,14 +35,15 @@ const TUTORIALS = [
       <li><b>Save</b> the orbit to a category — it downloads a <b>.orbit</b> file and joins the orbit catalog.</li>
       <li><b>Load Orbit</b> brings a saved <b>.orbit</b> back in.</li>
     </ol>
-    <p class="tut-tip">Saved orbits are reusable: in a Mission's Node Map you can drag orbits from the <b>Orbit Catalog</b> (or upload an .orbit with <b>Load Orbit</b>) to add navigation nodes.</p>` },
+    <p class="tut-tip">Saved orbits are reusable: in a Mission's <b>Orbit Map</b> you can add orbits from the <b>Orbits</b> catalog (or upload an .orbit with <b>Load Orbit</b>) to create navigation nodes.</p>` },
 
   { id: 'spacecraft', title: 'Spacecraft Editor', body: () => `
     <h3>Building spacecraft</h3>
     <ol>
-      <li>Go to <b>Program Manager → Spacecraft</b> and click <b>+ New Spacecraft</b>.</li>
-      <li>Add stages with <b>+ Add Stage</b>. Each stage has dry mass, Isp, propellant, prop type, plus <b>crew capacity</b>, <b>docking ports</b>, tunnel/landing-truss flags, and descent-prop fraction.</li>
+      <li>Go to <b>Program Manager → Hangar → Spacecraft</b> and click <b>+ New Spacecraft</b>.</li>
+      <li>Add stages with <b>+ Add Stage</b>. Each stage has dry mass, Isp, propellant, prop type, plus <b>crew capacity</b> and <b>docking ports</b>.</li>
       <li>The <b>ΔV Breakdown</b> at the bottom updates live.</li>
+      <li><b>Mass simulator:</b> tick it to define the craft as a single total mass (no stages) — handy for stations / cargo like the ISS (≈ 420 t) you don't want to model in detail.</li>
     </ol>
     <h3>Stage Library</h3>
     <ul>
@@ -50,22 +52,21 @@ const TUTORIALS = [
       <li>Click a library card for details; <b>Download</b> exports a <b>.scstage</b> file (Load Stage re-imports it). The library also travels inside saved <b>.program</b> files.</li>
     </ul>` },
 
-  { id: 'fleet', title: 'Fleet — vehicles + payloads', body: () => `
-    <h3>Assembling the fleet</h3>
+  { id: 'fleet', title: 'Hangar — vehicles + payloads', body: () => `
+    <h3>Assembling a vehicle + payload</h3>
     <ol>
-      <li>Go to <b>Program Manager → Fleet</b>. The <b>Vehicle Library</b> panel (under the detail) lists your saved vehicles + built-in presets.</li>
-      <li><b>Drag</b> a vehicle into the fleet list to add it as a new entry, or <b>onto the "Launch Vehicle Configuration" box</b> to swap an entry's rocket.</li>
-      <li>Click a library card for a details popup with an <b>⊕ Add to Fleet</b> button.</li>
-      <li>Assign <b>payloads</b> (your spacecraft) to a fleet entry from its Payload Manifest. The <b>ΔV Budget</b> covers the launch vehicle and each payload's on-orbit ΔV.</li>
+      <li>Go to <b>Program Manager → Hangar → Vehicle</b>. The list holds your saved vehicles + built-in presets; <b>Load Vehicle</b> imports a <b>.vehicle</b> file.</li>
+      <li>Add an entry with <b>+ New Entry</b> or <b>Import Vehicle</b>, or drop a vehicle onto the <b>"Launch Vehicle Configuration"</b> box to swap an entry's rocket.</li>
+      <li>Assign <b>payloads</b> (your spacecraft) to an entry from its Payload Manifest. The <b>ΔV Budget</b> covers the launch vehicle and each payload's on-orbit ΔV.</li>
     </ol>
-    <p class="tut-tip">A fleet entry = one launch vehicle + its payload spacecraft. That's what you pick when you launch a mission.</p>` },
+    <p class="tut-tip">A Vehicle entry = one launch vehicle + its payload spacecraft. That's what you pick when you launch a mission.</p>` },
 
   { id: 'mission-start', title: 'Missions — launch', body: () => `
     <h3>Starting a mission</h3>
     <ol>
       <li>Go to <b>Program Manager → Missions</b>. A mission is auto-created; rename it in the top bar, or <b>+ New</b> in the missions list.</li>
-      <li>In the EVENTS panel (right), click <b>＋ Add Event → Launch</b>. Pick the fleet entry (launch vehicle + payload) and the target orbit, then launch — ascent staging runs automatically (boosters/lower stages are expended).</li>
-      <li><b>Place in Orbit</b> instead drops a spacecraft (e.g. a station) directly into orbit with full tanks, no ascent.</li>
+      <li>In the EVENTS panel (right), click <b>＋ Add Event → Launch</b>. Pick the Hangar entry (launch vehicle + payload) and the target orbit, then launch — ascent staging runs automatically (boosters/lower stages are expended). You're prompted to name the new vehicle.</li>
+      <li><b>Place in Orbit</b> instead drops a spacecraft (e.g. a station) directly into orbit, no ascent. Tick <b>Deploy with empty tanks</b> for a dry depot to refuel later.</li>
     </ol>
     <p class="tut-tip">Every change re-simulates the whole mission from its event log, so editing earlier events ripples forward correctly.</p>` },
 
@@ -73,22 +74,21 @@ const TUTORIALS = [
     <h3>Building the flight plan</h3>
     <p>Use <b>＋ Add Event</b> to append events; each acts on the <b>active vehicle</b>:</p>
     <ul>
-      <li><b>Burn</b> — Hohmann, circularize, TLI/LOI, plane change, or custom ΔV.</li>
-      <li><b>Maneuver</b> — drawn on the Node Map (from one node to another); pick the <b>firing stage</b>.</li>
+      <li><b>Maneuver</b> — pick From/To nodes (or draw a bridge on the <b>Orbit Map</b>). It's a container: build it from ordered <b>Burn</b> / <b>Separate</b> steps (each burn uses a stage's ΔV or its whole tank), or hit <b>⚙ Auto</b> to close the ΔV for you.</li>
       <li><b>Separate / Dock</b> — split a stack into two vehicles, or merge two (orbits must match — rendezvous first).</li>
-      <li><b>Expend</b> — retire a vehicle/stage. <b>Transfer Propellant / Crew</b> — move between stages. <b>Rendezvous, Reenter, Recover</b>.</li>
+      <li><b>Transfer Propellant</b> — move fuel between stages, or fill a separate <b>depot</b> by choosing it as the destination vehicle. <b>Transfer Crew</b>, <b>Expend</b>, <b>Rendezvous</b>, <b>Reenter</b>, <b>Recover</b>.</li>
     </ul>
     <h3>Editing & ordering</h3>
     <ul>
       <li>Each event card has <b>✎ edit</b>, <b>▲▼ move</b>, <b>⤓ send to end</b>, <b>✕ delete</b>. You can also <b>drag a card</b> to reorder — add an event then drag it between two others to insert it.</li>
       <li>Editors show point-in-time state (fuel as it was <i>at that event</i>). Edit lets you re-pick vehicles/stages/orbits for that event.</li>
       <li><b>⤵ "during the previous transfer's coast"</b> places an event mid-maneuver so transport doesn't look instantaneous.</li>
-      <li><b>⊞ Group</b> a run of events and set a <b>repeat</b> count for cycles like refuelling or crew rotation.</li>
+      <li><b>⊞ Loop</b> a run of events and set a <b>repeat</b> count for cycles like refuelling or crew rotation.</li>
     </ul>` },
 
-  { id: 'mission-views', title: 'Missions — band view & node map', body: () => `
+  { id: 'mission-views', title: 'Missions — band view & orbit map', body: () => `
     <h3>Two ways to see a mission</h3>
-    <p>Toggle <b>Band</b> / <b>Node Map</b> in the mission top bar.</p>
+    <p>Toggle <b>Band</b> / <b>Orbit Map</b> in the mission top bar.</p>
     <h3>Band view</h3>
     <ul>
       <li>Horizontal <b>zones</b> (Earth → LEO → GTO → Cislunar → …) with each vehicle drawn as a track that climbs through them. X is event order, not real time.</li>
@@ -116,7 +116,7 @@ const TUTORIALS = [
     <h3>File types</h3>
     <p>Everything is JSON, with a distinguishing extension so files are easy to tell apart:</p>
     <ul>
-      <li><b>.program</b> — the <i>whole</i> program (spacecraft + fleet + missions + stage library). Use <b>Save Program / Load Program</b> in the header (Program Manager only).</li>
+      <li><b>.program</b> — the <i>whole</i> program (spacecraft + vehicles + missions + stage library). Use <b>Save Program / Load Program</b> in the header (Program Manager only).</li>
       <li><b>.vehicle</b> — a launch vehicle from the LV Calculator.</li>
       <li><b>.stage</b> — an LV stage; <b>.scstage</b> — a spacecraft stage.</li>
       <li><b>.orbit</b> — a saved orbit. <b>.spacecraft</b> — a single spacecraft definition.</li>

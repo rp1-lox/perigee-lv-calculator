@@ -204,33 +204,53 @@ function scEdRenderDetail() {
         <div class="cfg-item"><label>Docking Ports</label>
           <input type="number" class="field" min="0" value="${st.dockingPorts || 0}" style="width:70px"
             oninput="scEdStageSet('${id}',${i},'dockingPorts',+this.value)"></div>
-        <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-          <input type="checkbox" id="sc-tc-${id}-${i}" ${st.tunnelCapable ? 'checked' : ''}
-            onchange="scEdStageSet('${id}',${i},'tunnelCapable',this.checked)">
-          <label for="sc-tc-${id}-${i}" style="margin-bottom:0;cursor:pointer;">Tunnel Capable</label></div>
-        <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-          <input type="checkbox" id="sc-lt-${id}-${i}" ${st.isLandingTruss ? 'checked' : ''}
-            onchange="scEdStageSet('${id}',${i},'isLandingTruss',this.checked)">
-          <label for="sc-lt-${id}-${i}" style="margin-bottom:0;cursor:pointer;">Landing Truss</label></div>
-        <div class="cfg-item"><label>Descent Prop Frac.</label>
-          <input type="number" class="field" min="0" max="1" step="0.01" value="${(st.descentPropFraction || 0).toFixed(2)}" style="width:80px"
-            oninput="scEdStageSet('${id}',${i},'descentPropFraction',Math.min(1,Math.max(0,+this.value)))"></div>
       </div>
     </div>`;
   }).join('');
-  el.innerHTML = `
-    <div class="cfg-row" style="margin-bottom:16px;gap:16px;align-items:flex-end;">
-      <div class="cfg-item" style="flex:1;min-width:180px;"><label>Spacecraft Name</label>
-        <input type="text" class="field" style="width:100%;max-width:340px;" value="${sc.name.replace(/"/g,'&quot;')}"
-          oninput="scEdNameSet('${id}',this.value)"></div>
-      <button class="act-btn green" onclick="scEdSaveJSON('${id}')">&#x2B07; Save JSON</button>
+  const massBody = `
+    <div class="sl">Mass Simulator <span style="color:var(--text);font-size:10px;letter-spacing:0;text-transform:none;">(a single inert payload — e.g. a station)</span></div>
+    <div class="cfg-row" style="gap:16px;margin-bottom:8px;">
+      <div class="cfg-item"><label>Total Mass (kg)</label>
+        <input type="number" class="field" min="0" value="${(sc.stages[0] && sc.stages[0].dry_mass) || sc.massSimKg || 0}" style="width:160px"
+          oninput="scEdSetMassSimKg('${id}',+this.value)"></div>
     </div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:24px;">// no propellant, no stages, no crew — pure mass. Use for stations / cargo you don't want to model in detail (e.g. ISS ≈ 420,000 kg).</div>`;
+  const stackBody = `
     <div class="sl">Stage Stack <span style="color:var(--text);font-size:10px;letter-spacing:0;text-transform:none;">(Stage 1 = bottom / fires first)</span></div>
     <div class="sc-ed-detail-grid">${stageCards}</div>
     <div class="fleet-drop-zone" ondragover="fleetDragOver(event)" ondragleave="fleetDragLeave(event)" ondrop="scStageDrop(event)">&#x2295; Drop a library stage here to add it to the stack</div>
     <div style="margin-bottom:24px;"><button class="act-btn" onclick="scEdStageAdd('${id}')">+ Add Stage</button></div>
     <div class="sl">dV Breakdown</div>
-    <div class="panel" style="padding:12px;" id="sc-dv-${id}">${_scEdDvHTML(sc)}</div>
+    <div class="panel" style="padding:12px;" id="sc-dv-${id}">${_scEdDvHTML(sc)}</div>`;
+  el.innerHTML = `
+    <div class="cfg-row" style="margin-bottom:16px;gap:16px;align-items:flex-end;">
+      <div class="cfg-item" style="flex:1;min-width:180px;"><label>Spacecraft Name</label>
+        <input type="text" class="field" style="width:100%;max-width:340px;" value="${sc.name.replace(/"/g,'&quot;')}"
+          oninput="scEdNameSet('${id}',this.value)"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);cursor:pointer;white-space:nowrap;padding-bottom:6px;"><input type="checkbox" style="accent-color:var(--accent);" ${sc.massSim ? 'checked' : ''} onchange="scEdSetMassSim('${id}',this.checked)"> Mass simulator</label>
+      <button class="act-btn green" onclick="scEdSaveJSON('${id}')">&#x2B07; Save JSON</button>
+    </div>
+    ${sc.massSim ? massBody : stackBody}
     ${_scStageLibPanelHTML()}`;
+}
+
+// Toggle "mass simulator" — collapse the spacecraft to one inert stage (its total mass) so it
+// can be added like a station without modelling stages; un-toggling keeps that single stage.
+function scEdSetMassSim(id, on) {
+  const sc = _scEdGet(id); if (!sc) return;
+  if (on) {
+    const total = sc.massSimKg || sc.stages.reduce((s, st) => s + (+st.dry_mass || 0) + (+st.propKg || 0), 0) || 0;
+    sc.massSim = true; sc.massSimKg = total;
+    sc.stages = [{ stageId: progUUID(), name: sc.name || 'Mass', dry_mass: total, isp: 0, propKg: 0,
+      propType: 'NTO_A50', crewCapacity: 0, dockingPorts: 0, tunnelCapable: false, isLandingTruss: false, descentPropFraction: 0 }];
+  } else {
+    sc.massSim = false;
+  }
+  scEdRenderDetail();
+}
+function scEdSetMassSimKg(id, val) {
+  const sc = _scEdGet(id); if (!sc) return;
+  sc.massSimKg = Math.max(0, +val || 0);
+  if (sc.stages && sc.stages[0]) sc.stages[0].dry_mass = sc.massSimKg;
 }
 

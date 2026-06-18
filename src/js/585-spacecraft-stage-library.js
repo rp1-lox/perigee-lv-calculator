@@ -112,11 +112,6 @@ function scStageLibOpenNew(editLibId) {
     <div class="cfg-row" style="gap:16px;padding-top:8px;border-top:1px solid var(--border);flex-wrap:wrap;">
       <div class="cfg-item"><label>Crew Capacity</label><input type="number" id="scn-crew" class="field" min="0" value="${v.crewCapacity}" style="width:80px"></div>
       <div class="cfg-item"><label>Docking Ports</label><input type="number" id="scn-dock" class="field" min="0" value="${v.dockingPorts}" style="width:80px"></div>
-      <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-        <input type="checkbox" id="scn-tunnel" ${v.tunnelCapable ? 'checked' : ''}><label for="scn-tunnel" style="margin-bottom:0;cursor:pointer;">Tunnel Capable</label></div>
-      <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-        <input type="checkbox" id="scn-truss" ${v.isLandingTruss ? 'checked' : ''}><label for="scn-truss" style="margin-bottom:0;cursor:pointer;">Landing Truss</label></div>
-      <div class="cfg-item"><label>Descent Prop Frac.</label><input type="number" id="scn-dpf" class="field" min="0" max="1" step="0.01" value="${v.descentPropFraction}" style="width:90px"></div>
     </div>`;
   const title = document.getElementById('scstage-new-title');
   if (title) title.textContent = editLibId ? 'Edit Stage' : 'New Stage';
@@ -133,9 +128,9 @@ function scStageLibSaveNew() {
     propType:            g('scn-ptype')?.value || 'NTO_A50',
     crewCapacity:        +g('scn-crew')?.value || 0,
     dockingPorts:        +g('scn-dock')?.value || 0,
-    tunnelCapable:       !!g('scn-tunnel')?.checked,
-    isLandingTruss:      !!g('scn-truss')?.checked,
-    descentPropFraction: Math.min(1, Math.max(0, +g('scn-dpf')?.value || 0)),
+    tunnelCapable:       false,
+    isLandingTruss:      false,
+    descentPropFraction: 0,
   });
   if (_scStageEditId) {
     const e = _scStageLib.find(x => x.libId === _scStageEditId);
@@ -167,9 +162,6 @@ function scStageLibInfo(libId) {
     ${row('Stage ΔV (alone)', dv > 0 ? Math.round(dv).toLocaleString() + ' m/s' : '—')}
     ${row('Crew capacity', s.crewCapacity || 0)}
     ${row('Docking ports', s.dockingPorts || 0)}
-    ${row('Tunnel capable', s.tunnelCapable ? 'Yes' : 'No')}
-    ${row('Landing truss', s.isLandingTruss ? 'Yes' : 'No')}
-    ${row('Descent prop frac.', (s.descentPropFraction || 0).toFixed(2))}
   </tbody></table>`;
   openModal('modal-scstage-info');
 }

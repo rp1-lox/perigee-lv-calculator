@@ -87,13 +87,13 @@ function missionOpenGroupModal(id, start, end, gid) {
     <input type="hidden" id="mgroup-end" value="${end}">
     <input type="hidden" id="mgroup-gid" value="${gid || ''}">
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;">${n} event${n!==1?'s':''} — repeated as one block during the simulation.</div>
-    <label class="cfg-label">Group name</label>
-    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Cycle').replace(/"/g,'&quot;')}" maxlength="40">
+    <label class="cfg-label">Loop name</label>
+    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Loop').replace(/"/g,'&quot;')}" maxlength="40">
     <label class="cfg-label">Repeat (×)</label>
     <input id="mgroup-rep" type="number" class="field" min="1" max="99" value="${g.repeat||2}" style="width:90px;margin-bottom:12px;">
     <div style="display:flex;justify-content:flex-end;gap:8px;">
       <button class="act-btn" onclick="closeModal('modal-mission-group')">Cancel</button>
-      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Group'}</button>
+      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Loop'}</button>
     </div>`;
   openModal('modal-mission-group');
   setTimeout(() => { const el = document.getElementById('mgroup-name'); if (el) { el.focus(); el.select(); } }, 30);
@@ -104,7 +104,7 @@ function missionGroupSave() {
   const start = parseInt(document.getElementById('mgroup-start')?.value, 10);
   const end = parseInt(document.getElementById('mgroup-end')?.value, 10);
   let gid = document.getElementById('mgroup-gid')?.value || '';
-  const name = (document.getElementById('mgroup-name')?.value || 'Cycle').trim().slice(0, 40);
+  const name = (document.getElementById('mgroup-name')?.value || 'Loop').trim().slice(0, 40);
   const repeat = Math.max(1, Math.min(99, parseInt(document.getElementById('mgroup-rep')?.value, 10) || 1));
   m.groups = m.groups || {};
   if (!gid) {
@@ -134,6 +134,10 @@ let _missionSelEvt = null;   // selected event index for event detail panel
 // Maneuver add-form draft: the composite step program being built (BURN / SEPARATE steps).
 // [] = a single full burn from the default stage. Reset whenever the maneuver form opens.
 let _missionAddMv = { from: null, to: null, steps: [] };
+// Prop-transfer add-form: origin key of the chosen DESTINATION vehicle (null = the active
+// vehicle, i.e. an intra-vehicle transfer). Lets you fill a separately-deployed depot.
+let _missionXferDest = null;
+function missionXferSetDest(id, key) { _missionXferDest = key || null; missionRenderDetail(); }
 
 // Collapse every event card except the last one (used after adding an event so the
 // newest is shown expanded). Cards use `_expanded` (default falsy = collapsed/compact).
@@ -319,7 +323,7 @@ function missionRenderDetail() {
         if (!inner) { i = j; continue; }   // whole group filtered out
         logHTML += `<div class="mcc-group">
           <div class="mcc-group-hdr">
-            <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Group'}</span>
+            <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Loop'}</span>
             <span class="mcc-group-rep">repeat
               <button class="act-btn mevt-ctl" onclick="missionGroupRepeat('${id}','${gid}',-1)">−</button>
               <b style="color:var(--accent3)">${g.repeat || 1}×</b>
@@ -389,7 +393,7 @@ function missionRenderDetail() {
         <div class="mcc-events-header" style="display:flex;align-items:center;gap:8px;">
           <span style="color:var(--accent3);">EVENTS</span>
           ${m.log.length ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${m.log.length}</span>` : ''}
-          ${m.log.length >= 1 ? `<button class="act-btn" style="margin-left:auto;padding:1px 8px;font-size:9px;${_missionGroupMode?'background:var(--accent);color:#000;':''}" onclick="missionToggleGroupMode('${id}')">${_missionGroupMode ? (_missionGroupStart==null?'⊞ pick start…':'⊞ pick end…') : '⊞ Group'}</button>${_missionGroupMode?`<button class="act-btn" style="padding:1px 8px;font-size:9px;" onclick="missionToggleGroupMode('${id}')">✕</button>`:''}` : ''}
+          ${m.log.length >= 1 ? `<button class="act-btn" style="margin-left:auto;padding:1px 8px;font-size:9px;${_missionGroupMode?'background:var(--accent);color:#000;':''}" onclick="missionToggleGroupMode('${id}')">${_missionGroupMode ? (_missionGroupStart==null?'⊞ pick start…':'⊞ pick end…') : '⊞ Loop'}</button>${_missionGroupMode?`<button class="act-btn" style="padding:1px 8px;font-size:9px;" onclick="missionToggleGroupMode('${id}')">✕</button>`:''}` : ''}
         </div>
         ${filterRow}
         <div class="mcc-events-list">${logHTML}</div>
@@ -635,6 +639,8 @@ function _missionApplyDeploy(m, e) {
   const sc = _scEdSC.find(s => s.spacecraftId === e.spacecraftId);
   if (!sc) return null;
   const allStages = progSpacecraftToLiveStages(sc);
+  // Optionally deploy with EMPTY tanks (a dry depot to be filled by prop transfer later).
+  if (e.emptyTanks) allStages.forEach(st => (st.tanks || []).forEach(t => { t.fill = 0; }));
   const o = e.orbit || m.launchOrbit || {};
   const orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
   const fv = progMakeFlightVehicle(sc.name, allStages, orbitState, '#e5c07b');
@@ -663,7 +669,8 @@ function missionExecDeploy(id, scId) {
   if (!m) return;
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (!sc) return;
-  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit } });
+  const empty = !!document.getElementById('addev-deploy-empty-' + id)?.checked;
+  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit }, emptyTanks: empty });
   _missionAddEvt = null;
   _missionExpandLast(m);
   missionRecompute(m); missionRenderDetail();
@@ -697,7 +704,7 @@ function _missionLogCardHTML(entry, id, idx) {
   if (entry.type === 'TRANSFER_PROPELLANT') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">PROP XFER</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.transferred||0).toLocaleString()} kg</div>
-    ${(entry.fromName||entry.toName) ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">${entry.fromName||'?'} → ${entry.toName||'?'}${entry.vehName ? ' · ' + entry.vehName : ''}</div>` : ''}
+    ${(entry.fromName||entry.toName) ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">${entry.fromName||'?'}${entry.vehName ? ' ['+entry.vehName+']' : ''} → ${entry.toName||'?'}${(entry.destVehName && entry.destVehName !== entry.vehName) ? ' ['+entry.destVehName+']' : ''}</div>` : ''}
     ${(entry.warnings||[]).map(w => `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);">${w}</div>`).join('')}
   </div>`;
   if (entry.type === 'TRANSFER_CREW') return `<div class="mission-log-card" style="padding:8px 14px;">
@@ -917,33 +924,37 @@ function _missionEventDetailHTML(m, idx) {
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Spacecraft</label>
           <select id="edit-deploy-sc-${id}" class="mcc-field-select">${o}</select></div>
+        <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="edit-deploy-empty-${id}" style="accent-color:var(--accent);"${e.emptyTanks?' checked':''}> Deploy with empty tanks (depot)</label>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// orbit follows the Launch Orbit set in the left panel</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyDeployEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'TRANSFER_PROPELLANT') {
-    // stage list + propellant come from the vehicle's state AT THIS EVENT (snapshot),
-    // so the indices line up with the real transfer and amounts are point-in-time.
-    const tStages = _missionPreSnapStages(m, idx, e.activeKey, e.vehicleId);
-    if (tStages.length) {
-      const nameCnt = {}; tStages.forEach(s => { nameCnt[s.name] = (nameCnt[s.name] || 0) + 1; });
-      const lblOf = s => {
-        if (nameCnt[s.name] <= 1) return s.name;
-        const same = tStages.filter(x => x.name === s.name);
-        const parents = [...new Set(same.map(x => x.parent || ''))];
-        if (s.parent && parents.length > 1) return `${s.name} (${s.parent})`;
-        const kids = [...new Set(same.map(x => String(x.parentKid)))];
-        const inst = kids.indexOf(String(s.parentKid)) + 1;
-        return s.parent ? `${s.name} (${s.parent} #${inst})` : `${s.name} (${inst})`;
+    // stage lists + propellant come from each vehicle's state AT THIS EVENT (snapshot), so the
+    // indices line up with the real transfer and amounts are point-in-time. Source is the active
+    // vehicle; destination may be a separate vehicle (a depot) when destVehicleKey is set.
+    const srcStages = _missionPreSnapStages(m, idx, e.activeKey, e.vehicleId);
+    const dstStages = e.destVehicleKey ? _missionPreSnapStages(m, idx, e.destVehicleKey, e.destVehicleId) : srcStages;
+    if (srcStages.length && dstStages.length) {
+      const optsFor = (list, sel) => {
+        const cnt = {}; list.forEach(s => { cnt[s.name] = (cnt[s.name] || 0) + 1; });
+        return list.map((s, i) => {
+          let lbl = s.name;
+          if (cnt[s.name] > 1) {
+            const same = list.filter(x => x.name === s.name);
+            const parents = [...new Set(same.map(x => x.parent || ''))];
+            if (s.parent && parents.length > 1) lbl = `${s.name} (${s.parent})`;
+            else { const kids = [...new Set(same.map(x => String(x.parentKid)))]; lbl = `${s.name} (${s.parent ? s.parent + ' #' : ''}${kids.indexOf(String(s.parentKid)) + 1})`; }
+          }
+          return `<option value="${i}"${i === sel ? ' selected' : ''}>${lbl} — ${(s.prop || 0).toLocaleString()} kg</option>`;
+        }).join('');
       };
-      const opt = (sel) => tStages.map((s, i) =>
-        `<option value="${i}"${i === sel ? ' selected' : ''}>${lblOf(s)} — ${(s.prop || 0).toLocaleString()} kg</option>`
-      ).join('');
+      const destNote = e.destVehicleKey ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">// destination vehicle: ${e.destName || e.destVehName || '?'}</div>` : '';
       editForm = `
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
           <label class="cfg-label">Source Stage</label>
-          <select id="edit-xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${opt(e.sourceIndex)}</select>
-          <label class="cfg-label">Destination Stage</label>
-          <select id="edit-xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${opt(e.destIndex)}</select>
+          <select id="edit-xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${optsFor(srcStages, e.sourceIndex)}</select>
+          ${destNote}<label class="cfg-label">Destination Stage</label>
+          <select id="edit-xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${optsFor(dstStages, e.destIndex)}</select>
           <label class="cfg-label">Mass (kg)</label>
           <div style="display:flex;gap:6px;margin-bottom:8px;"><input type="number" id="edit-xfer-mass-${id}" class="field" value="${e.mass_kg||0}" style="flex:1;"><button class="act-btn" style="flex-shrink:0;" onclick="missionPropXferEditMax('${id}',${idx})">Max</button></div>
           <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyPropTransferEdit('${id}',${idx})">Apply</button>
@@ -1696,9 +1707,22 @@ function missionRecompute(m) {
     else if (e.type === 'TRANSFER_PROPELLANT') {
       active = resolveActive(e);
       if (active) {
-        const r = _missionResolveXferStages(m, e, active, e.sourceIndex, e.destIndex);
-        e.sourceIndex = r.si; e.destIndex = r.di;
-        e.vehicleId = active.vehicleId; _missionApplyPropTransfer(active, e);
+        // resolve the destination vehicle: another live vehicle (a depot) if set, else active
+        let dstFv = active;
+        if (e.destVehicleKey) {
+          const dk = e._clone ? _missionRescopeOriginKey(e.destVehicleKey, _missionGroupRange(m, e.groupId), e._rep) : e.destVehicleKey;
+          dstFv = live.find(v => v._originKey === dk) || live.find(v => v._originKey === e.destVehicleKey) || active;
+        }
+        if (dstFv === active) {
+          const r = _missionResolveXferStages(m, e, active, e.sourceIndex, e.destIndex);
+          e.sourceIndex = r.si; e.destIndex = r.di;
+        } else {
+          // cross-vehicle: clamp each index to its own vehicle's stage list
+          e.sourceIndex = Math.min(Math.max(0, e.sourceIndex || 0), active.stages.length - 1);
+          e.destIndex   = Math.min(Math.max(0, e.destIndex   || 0), dstFv.stages.length - 1);
+        }
+        e.vehicleId = active.vehicleId; e.destVehicleId = dstFv.vehicleId;
+        _missionApplyPropTransfer(active, dstFv, e);
       }
     }
     else if (e.type === 'TRANSFER_CREW') {
@@ -1827,6 +1851,8 @@ function missionApplyDeployEdit(id, idx) {
   const scId = document.getElementById('edit-deploy-sc-'+id)?.value;
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (sc) { e.spacecraftId = scId; e.label = sc.name; }
+  const emptyEl = document.getElementById('edit-deploy-empty-'+id);
+  if (emptyEl) e.emptyTanks = emptyEl.checked;
   closeModal('modal-mission-evt');
   missionRecompute(m);
   missionRenderDetail();
@@ -2187,29 +2213,39 @@ function _missionStageNameAt(fv, idx) {
   return _missionStageDisambig(fv, fv.stages[idx], idx);
 }
 
-function _missionApplyPropTransfer(fv, e) {
-  const src = (e.sourceIndex != null) ? fv.stages[e.sourceIndex] : fv.stages.find(s => s.stageDefinitionId === e.sourceStageId);
-  const dst = (e.destIndex != null) ? fv.stages[e.destIndex] : fv.stages.find(s => s.stageDefinitionId === e.destStageId);
+function _missionApplyPropTransfer(srcFv, dstFv, e) {
+  dstFv = dstFv || srcFv;
+  const src = (e.sourceIndex != null) ? srcFv.stages[e.sourceIndex] : srcFv.stages.find(s => s.stageDefinitionId === e.sourceStageId);
+  const dst = (e.destIndex != null) ? dstFv.stages[e.destIndex] : dstFv.stages.find(s => s.stageDefinitionId === e.destStageId);
   if (!src || !dst || src === dst) { e.result = 'FAILED'; e.transferred = 0; e.warnings = ['Pick two different stages']; return; }
-  if (e.sourceIndex != null) e.fromName = _missionStageNameAt(fv, e.sourceIndex);
-  if (e.destIndex != null) e.toName = _missionStageNameAt(fv, e.destIndex);
-  e.vehName = _missionVehicleDisplayName(fv);
+  if (e.sourceIndex != null) e.fromName = _missionStageNameAt(srcFv, e.sourceIndex);
+  if (e.destIndex != null) e.toName = _missionStageNameAt(dstFv, e.destIndex);
+  e.vehName = _missionVehicleDisplayName(srcFv);
+  e.destVehName = _missionVehicleDisplayName(dstFv);
   const pt = e.propellantType;
-  const matches = t => !pt || t.propellantType === pt;
+  const srcMatch = t => !pt || t.propellantType === pt;
+  // A destination tank accepts the transfer if it already holds this propellant OR is EMPTY
+  // (a dry depot tank adopts the incoming propellant type) — fixes mixed-fuel / empty-depot fills.
+  const dstMatch = t => !pt || t.propellantType === pt || (t.fill || 0) <= 0;
   // Only move what the SOURCE has AND the DESTINATION can hold, so propellant is
   // conserved — never drained into the void when the dest is full.
-  const srcAvail = src.tanks.reduce((s, t) => s + (matches(t) ? t.fill : 0), 0);
-  const dstSpace = dst.tanks.reduce((s, t) => s + (matches(t) ? (t.capacity - t.fill) : 0), 0);
+  const srcAvail = src.tanks.reduce((s, t) => s + (srcMatch(t) ? t.fill : 0), 0);
+  const dstSpace = dst.tanks.reduce((s, t) => s + (dstMatch(t) ? (t.capacity - t.fill) : 0), 0);
   const want = e.mass_kg ?? 0;
   const amount = Math.max(0, Math.min(want, srcAvail, dstSpace));
   let toTake = amount;
-  for (const t of src.tanks) { if (!matches(t)) continue; const d = Math.min(t.fill, toTake); t.fill -= d; toTake -= d; if (toTake <= 0) break; }
+  for (const t of src.tanks) { if (!srcMatch(t)) continue; const d = Math.min(t.fill, toTake); t.fill -= d; toTake -= d; if (toTake <= 0) break; }
   let toFill = amount;
-  for (const t of dst.tanks) { if (!matches(t)) continue; const f = Math.min(t.capacity - t.fill, toFill); t.fill += f; toFill -= f; if (toFill <= 0) break; }
+  for (const t of dst.tanks) { if (!dstMatch(t)) continue; const room = t.capacity - t.fill; const f = Math.min(room, toFill); if (f > 0) { if ((t.fill || 0) <= 0 && pt) t.propellantType = pt; t.fill += f; toFill -= f; } if (toFill <= 0) break; }
   const warns = [];
   if (amount < want) {
     if (dstSpace < want && dstSpace <= srcAvail) warns.push('⚠ Destination only had room for ' + Math.round(dstSpace).toLocaleString() + ' kg');
     else warns.push('⚠ Source only had ' + Math.round(srcAvail).toLocaleString() + ' kg');
+  }
+  // cross-vehicle transfer needs the two to be co-located (rendezvous/dock) — warn, don't block
+  if (srcFv !== dstFv && typeof progOrbitalStateMatch === 'function' && srcFv.orbitState && dstFv.orbitState
+      && !progOrbitalStateMatch(srcFv.orbitState, dstFv.orbitState)) {
+    warns.push('⚠ Vehicles not in a matching orbit — rendezvous/dock for a real transfer');
   }
   e.result = 'SUCCESS'; e.transferred = amount; e.warnings = warns;
 }
@@ -2230,10 +2266,15 @@ function missionExecPropTransfer(id) {
   const srcI = parseInt(document.getElementById('xfer-src-' + id)?.value, 10);
   const dstI = parseInt(document.getElementById('xfer-dst-' + id)?.value, 10);
   const mass = parseFloat(document.getElementById('xfer-mass-' + id)?.value) || 0;
+  const destKey = document.getElementById('xfer-destveh-' + id)?.value || fv._originKey;
+  const sameVeh = !destKey || destKey === fv._originKey;
+  const destFv = sameVeh ? fv : (_missionVehByKey(m, destKey) || fv);
   const ss = fv.stages[srcI];
   const pt = (ss && ss.tanks && ss.tanks[0]) ? ss.tanks[0].propellantType : null;
-  m.log.push({ type: 'TRANSFER_PROPELLANT', sourceIndex: srcI, destIndex: dstI, propellantType: pt, mass_kg: mass, activeKey: fv._originKey, activeName: _missionVehicleDisplayName(fv) });
-  _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
+  m.log.push({ type: 'TRANSFER_PROPELLANT', sourceIndex: srcI, destIndex: dstI, propellantType: pt, mass_kg: mass,
+    activeKey: fv._originKey, activeName: _missionVehicleDisplayName(fv),
+    destVehicleKey: sameVeh ? null : destKey, destName: sameVeh ? null : _missionVehicleDisplayName(destFv) });
+  _missionAddEvt = null; _missionXferDest = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
 }
 function missionExecCrewTransfer(id) {
   const m = _missionGet(id); if (!m) return;
@@ -2937,6 +2978,7 @@ function _missionBandOpenEvent(id, idx) {
 function missionSetAddEvt(id, type) {
   _missionAddEvt = (type === _missionAddEvt) ? null : type;
   _missionAddMv = { from: null, to: null, steps: [] };   // fresh maneuver step draft each open
+  _missionXferDest = null;                                // fresh prop-transfer destination each open
   if (_missionAddEvt === 'maneuver') {
     _missionViewMode = 'nodemap';        // node map for drawing maneuvers
     _missionBridgeMode = true;           // auto-enter Draw Maneuver mode
@@ -2985,6 +3027,7 @@ function _missionAddEventHTML(m) {
         <select id="addev-deploy-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
         <label class="cfg-label">Target Orbit</label>
         <div style="margin-bottom:8px;">${_missionOrbitFieldsHTML(m)}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="addev-deploy-empty-${id}" style="accent-color:var(--accent);"> Deploy with empty tanks (depot to be refuelled)</label>
         <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecDeploy('${id}',document.getElementById('addev-deploy-${id}').value)">⊕ Place in Orbit</button>`;
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no spacecraft defined — add one in the Spacecraft tab</div>`;
   } else if (_missionAddEvt === 'burn') {
@@ -3035,14 +3078,24 @@ function _missionAddEventHTML(m) {
         <button class="act-btn" style="width:100%;" onclick="missionExecRendezvous('${id}',document.getElementById('addev-rend-${id}').value)">Rendezvous</button>`;
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// need another live vehicle</div>`;
   } else if (_missionAddEvt === 'proptransfer') {
-    if (fv && fv.stages.length >= 2) {
-      const so = _missionStageOptions(fv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
-      form = `<label class="cfg-label">Source Stage</label><select id="xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${so}</select>
-        <label class="cfg-label">Destination Stage</label><select id="xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${so}</select>
+    const canIntra = fv && fv.stages.length >= 2;
+    const others = fv ? live.filter(x => x.fv !== fv) : [];
+    if (fv && fv.stages.length >= 1 && (canIntra || others.length)) {
+      // destination can be the active vehicle OR another live vehicle (e.g. a deployed depot)
+      const destKey = _missionXferDest || fv._originKey;
+      const destEntry = live.find(x => x.fv._originKey === destKey);
+      const destFv = destEntry ? destEntry.fv : fv;
+      const srcOpts = _missionStageOptions(fv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
+      const vehOpts = live.map(x => `<option value="${x.fv._originKey}"${x.fv._originKey === destKey ? ' selected' : ''}>${_missionVehicleDisplayName(x.fv)}${x.fv === fv ? ' (active)' : ''}</option>`).join('');
+      const dstOpts = _missionStageOptions(destFv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
+      form = `<label class="cfg-label">Source Stage <span style="color:var(--text-dim);">(active vehicle)</span></label><select id="xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${srcOpts}</select>
+        <label class="cfg-label">Destination Vehicle</label><select id="xfer-destveh-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionXferSetDest('${id}',this.value)">${vehOpts}</select>
+        <label class="cfg-label">Destination Stage</label><select id="xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${dstOpts}</select>
         <label class="cfg-label">Mass (kg)</label>
         <div style="display:flex;gap:6px;margin-bottom:6px;"><input type="number" id="xfer-mass-${id}" class="field" value="1000" style="flex:1;"><button class="act-btn" style="flex-shrink:0;" onclick="missionPropXferMax('${id}')" title="Use the source stage's full remaining propellant">Max</button></div>
-        <button class="act-btn" style="width:100%;" onclick="missionExecPropTransfer('${id}')">Transfer Propellant</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// dock first — transfer needs ≥2 stages</div>`;
+        <button class="act-btn" style="width:100%;" onclick="missionExecPropTransfer('${id}')">Transfer Propellant</button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// fill a deployed depot directly, or move propellant between two stages of one (docked) vehicle</div>`;
+    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// transfer needs a second stage (dock) or another vehicle / depot in orbit</div>`;
   } else if (_missionAddEvt === 'crewtransfer') {
     if (fv && fv.stages.length >= 2) {
       const so = _missionStageOptions(fv, s => `${s.crewAboard || 0} crew`);

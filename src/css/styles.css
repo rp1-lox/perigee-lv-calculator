@@ -427,11 +427,10 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .mcc-band-placeholder{display:flex;align-items:center;justify-content:center;height:100%;font-family:var(--mono);font-size:12px;color:var(--text-dim);letter-spacing:.06em;}
 .mcc-field-select{width:100%;background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:5px 8px;}
 .mcc-field-input{background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;}
-/* Force the OS-drawn dropdown popup (and its hover highlight) to dark mode so no
-   <select> ever opens with a white option list / invisible text — add and edit alike. */
-#page-program select,.modal select{color-scheme:dark;}
-#page-program select option,#page-program select optgroup{background:var(--input);color:var(--text-bright);}
-.modal select option{background:var(--input);color:var(--text-bright);}
+/* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
+   none ever opens with a white option list / invisible text — anywhere in the app. */
+select{color-scheme:dark;}
+select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .lv-item.selected{background:rgba(136,198,87,.14);box-shadow:inset 3px 0 0 var(--accent);}
 .lv-item.selected .lv-item-btn span{color:var(--accent3)!important;}
 
@@ -1035,4 +1034,8 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
       button/input/select/textarea at the project font instead of the
       browser default. Explicit class fonts win by specificity. */
 button,input,select,textarea{font-family:inherit;}
+
+/* Persistent support plug under the theme/tutorials row in the header. */
+.perigee-plug{font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--text-dim);text-decoration:none;white-space:nowrap;}
+.perigee-plug:hover{color:var(--accent);text-decoration:underline;}
 

@@ -434,11 +434,10 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .mcc-band-placeholder{display:flex;align-items:center;justify-content:center;height:100%;font-family:var(--mono);font-size:12px;color:var(--text-dim);letter-spacing:.06em;}
 .mcc-field-select{width:100%;background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:5px 8px;}
 .mcc-field-input{background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;}
-/* Force the OS-drawn dropdown popup (and its hover highlight) to dark mode so no
-   <select> ever opens with a white option list / invisible text — add and edit alike. */
-#page-program select,.modal select{color-scheme:dark;}
-#page-program select option,#page-program select optgroup{background:var(--input);color:var(--text-bright);}
-.modal select option{background:var(--input);color:var(--text-bright);}
+/* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
+   none ever opens with a white option list / invisible text — anywhere in the app. */
+select{color-scheme:dark;}
+select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .lv-item.selected{background:rgba(136,198,87,.14);box-shadow:inset 3px 0 0 var(--accent);}
 .lv-item.selected .lv-item-btn span{color:var(--accent3)!important;}
 
@@ -1043,6 +1042,10 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
       browser default. Explicit class fonts win by specificity. */
 button,input,select,textarea{font-family:inherit;}
 
+/* Persistent support plug under the theme/tutorials row in the header. */
+.perigee-plug{font-family:var(--mono);font-size:9px;letter-spacing:.04em;color:var(--text-dim);text-decoration:none;white-space:nowrap;}
+.perigee-plug:hover{color:var(--accent);text-decoration:underline;}
+
 </style>
 </head>
 <body>
@@ -1069,18 +1072,19 @@ button,input,select,textarea{font-family:inherit;}
       <input type="file" accept=".program,.json" style="display:none" onchange="loadProgramFile(this)">
     </label>
   </div>
-  <div class="theme-wrap">
-    <button class="th-btn" onclick="openTutorials()" title="How to use Rocket Playground">? Tutorials</button>
-    <label>Theme</label>
-    <select id="theme-select" onchange="applyTheme(this.value)">
-      <option value="perigee" selected>Perigee</option>
-      <option value="default">Default (Dark)</option>
-      <option value="spacex">SpaceX</option>
-      <option value="blueorigin">Blue Origin</option>
-    </select>
-    <button class="th-btn" onclick="openThemeEditor()">EDIT</button>
-    <button class="th-btn g" onclick="saveTheme()">SAVE Theme</button>
-    <label class="th-btn" style="cursor:pointer;">LOAD<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
+  <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+    <div class="theme-wrap" style="margin-left:0;">
+      <button class="th-btn" onclick="openTutorials()" title="How to use Rocket Playground">? Tutorials</button>
+      <label>Theme</label>
+      <select id="theme-select" onchange="applyTheme(this.value)">
+        <option value="perigee" selected>Perigee</option>
+        <option value="default">Default (Dark)</option>
+      </select>
+      <button class="th-btn" onclick="openThemeEditor()">EDIT</button>
+      <button class="th-btn g" onclick="saveTheme()">SAVE Theme</button>
+      <label class="th-btn" style="cursor:pointer;">LOAD<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
+    </div>
+    <a class="perigee-plug" href="https://perigeeaero.shop" target="_blank" rel="noopener">Enjoying Rocket Playground? Support it — buy a model at perigeeaero.shop &#x2197;</a>
   </div>
 </header>
 
@@ -1088,10 +1092,10 @@ button,input,select,textarea{font-family:inherit;}
 <div id="page-vehicles" class="page active">
 
   <!-- BEGINNER VIEW: Composition + Library -->
-  <div id="vehicles-beginner" style="display:grid;grid-template-columns:200px 2fr 2fr;gap:14px;align-items:stretch;margin-bottom:14px;">
+  <div id="vehicles-beginner" style="display:grid;grid-template-columns:2fr 2fr;gap:14px;align-items:stretch;margin-bottom:14px;">
 
-    <!-- ART PANEL: rocket canvas -->
-    <div class="lib-panel" id="veh-art-panel" style="margin-top:0;min-width:0;padding:10px;display:flex;flex-direction:column;">
+    <!-- ART PANEL: rocket canvas — hidden for now -->
+    <div class="lib-panel" id="veh-art-panel" style="display:none;margin-top:0;min-width:0;padding:10px;flex-direction:column;">
       <!-- Header -->
       <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;flex-shrink:0;">
         <span class="sl" style="margin-bottom:0;flex:1;font-size:9px;">Rocket</span>
@@ -1176,7 +1180,7 @@ button,input,select,textarea{font-family:inherit;}
           <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
           <span id="comp-stage-count" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);opacity:.55;flex-shrink:0;"></span>
         </div>
-        <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;flex:1;min-height:0;overflow-y:auto;padding:6px;max-height:min(340px,calc(100vh - 360px));"></div>
+        <div id="comp-body" style="display:flex;flex-direction:column;gap:5px;flex:1;min-height:0;overflow-y:auto;padding:6px;"></div>
       </div>
       <div id="preset-grid" style="display:none"></div>
     </div>
@@ -2532,10 +2536,10 @@ const TUTORIALS = [
     <p>This tool has two halves, switched from the top bar:</p>
     <ul>
       <li><b>LV Calculator</b> — design a launch vehicle stage-by-stage and compute its performance. Sub-tabs: <b>Vehicles</b>, <b>Orbits</b>, <b>Results</b>.</li>
-      <li><b>Program Manager</b> — build spacecraft, assemble a fleet, and plan multi-step missions. Sub-tabs: <b>Spacecraft</b>, <b>Fleet</b>, <b>Missions</b>.</li>
+      <li><b>Program Manager</b> — build spacecraft, manage your vehicles, and plan multi-step missions. Sub-tabs: <b>Hangar</b> (a Spacecraft / Vehicle picker) and <b>Missions</b>.</li>
     </ul>
-    <p class="tut-tip">The two halves connect: vehicles you save in the LV Calculator show up in the Fleet's vehicle library, and spacecraft you build become payloads for missions.</p>
-    <p>Pick a topic on the left to learn each area. A typical first run: <b>build a vehicle → save it → add it to a fleet with a payload → plan a mission</b>.</p>` },
+    <p class="tut-tip">The two halves connect: vehicles you save in the LV Calculator show up in the Hangar's <b>Vehicle</b> library, and spacecraft you build become payloads for missions.</p>
+    <p>Pick a topic on the left to learn each area. A typical first run: <b>build a vehicle → save it → in the Hangar give a Vehicle a payload → plan a mission</b>.</p>` },
 
   { id: 'lv', title: 'LV Calculator — build a rocket', body: () => `
     <h3>Designing a launch vehicle</h3>
@@ -2546,7 +2550,8 @@ const TUTORIALS = [
       <li>Stage-and-a-half (e.g. Atlas): edit a stage (✎ wrench) and enable <b>S1.5</b> to model a booster-engine jettison (BECO).</li>
       <li>Set your <b>payload</b>, <b>target orbit</b> (or escape C3) and <b>launch site</b>, then press <b>Calculate</b> → it jumps to <b>Results</b>.</li>
     </ol>
-    <p class="tut-tip">Save a finished design with <b>Save</b> → it downloads a <b>.vehicle</b> file and adds it to your presets. Use <b>Use in Program ▶</b> or just load it later from the Fleet's vehicle library.</p>` },
+    <p class="tut-tip">Crossfeed / center-throttle tricores: edit the <b>booster</b> (✎ wrench) → <b>Parallel Staging</b> to model UR-700-style crossfeed or Falcon-Heavy throttle-down.</p>
+    <p class="tut-tip">Save a finished design with <b>Save</b> → it downloads a <b>.vehicle</b> file and adds it to your presets. Load it later from the Hangar's <b>Vehicle</b> library.</p>` },
 
   { id: 'orbits', title: 'Orbits', body: () => `
     <h3>Defining and saving orbits</h3>
@@ -2556,14 +2561,15 @@ const TUTORIALS = [
       <li><b>Save</b> the orbit to a category — it downloads a <b>.orbit</b> file and joins the orbit catalog.</li>
       <li><b>Load Orbit</b> brings a saved <b>.orbit</b> back in.</li>
     </ol>
-    <p class="tut-tip">Saved orbits are reusable: in a Mission's Node Map you can drag orbits from the <b>Orbit Catalog</b> (or upload an .orbit with <b>Load Orbit</b>) to add navigation nodes.</p>` },
+    <p class="tut-tip">Saved orbits are reusable: in a Mission's <b>Orbit Map</b> you can add orbits from the <b>Orbits</b> catalog (or upload an .orbit with <b>Load Orbit</b>) to create navigation nodes.</p>` },
 
   { id: 'spacecraft', title: 'Spacecraft Editor', body: () => `
     <h3>Building spacecraft</h3>
     <ol>
-      <li>Go to <b>Program Manager → Spacecraft</b> and click <b>+ New Spacecraft</b>.</li>
-      <li>Add stages with <b>+ Add Stage</b>. Each stage has dry mass, Isp, propellant, prop type, plus <b>crew capacity</b>, <b>docking ports</b>, tunnel/landing-truss flags, and descent-prop fraction.</li>
+      <li>Go to <b>Program Manager → Hangar → Spacecraft</b> and click <b>+ New Spacecraft</b>.</li>
+      <li>Add stages with <b>+ Add Stage</b>. Each stage has dry mass, Isp, propellant, prop type, plus <b>crew capacity</b> and <b>docking ports</b>.</li>
       <li>The <b>ΔV Breakdown</b> at the bottom updates live.</li>
+      <li><b>Mass simulator:</b> tick it to define the craft as a single total mass (no stages) — handy for stations / cargo like the ISS (≈ 420 t) you don't want to model in detail.</li>
     </ol>
     <h3>Stage Library</h3>
     <ul>
@@ -2572,22 +2578,21 @@ const TUTORIALS = [
       <li>Click a library card for details; <b>Download</b> exports a <b>.scstage</b> file (Load Stage re-imports it). The library also travels inside saved <b>.program</b> files.</li>
     </ul>` },
 
-  { id: 'fleet', title: 'Fleet — vehicles + payloads', body: () => `
-    <h3>Assembling the fleet</h3>
+  { id: 'fleet', title: 'Hangar — vehicles + payloads', body: () => `
+    <h3>Assembling a vehicle + payload</h3>
     <ol>
-      <li>Go to <b>Program Manager → Fleet</b>. The <b>Vehicle Library</b> panel (under the detail) lists your saved vehicles + built-in presets.</li>
-      <li><b>Drag</b> a vehicle into the fleet list to add it as a new entry, or <b>onto the "Launch Vehicle Configuration" box</b> to swap an entry's rocket.</li>
-      <li>Click a library card for a details popup with an <b>⊕ Add to Fleet</b> button.</li>
-      <li>Assign <b>payloads</b> (your spacecraft) to a fleet entry from its Payload Manifest. The <b>ΔV Budget</b> covers the launch vehicle and each payload's on-orbit ΔV.</li>
+      <li>Go to <b>Program Manager → Hangar → Vehicle</b>. The list holds your saved vehicles + built-in presets; <b>Load Vehicle</b> imports a <b>.vehicle</b> file.</li>
+      <li>Add an entry with <b>+ New Entry</b> or <b>Import Vehicle</b>, or drop a vehicle onto the <b>"Launch Vehicle Configuration"</b> box to swap an entry's rocket.</li>
+      <li>Assign <b>payloads</b> (your spacecraft) to an entry from its Payload Manifest. The <b>ΔV Budget</b> covers the launch vehicle and each payload's on-orbit ΔV.</li>
     </ol>
-    <p class="tut-tip">A fleet entry = one launch vehicle + its payload spacecraft. That's what you pick when you launch a mission.</p>` },
+    <p class="tut-tip">A Vehicle entry = one launch vehicle + its payload spacecraft. That's what you pick when you launch a mission.</p>` },
 
   { id: 'mission-start', title: 'Missions — launch', body: () => `
     <h3>Starting a mission</h3>
     <ol>
       <li>Go to <b>Program Manager → Missions</b>. A mission is auto-created; rename it in the top bar, or <b>+ New</b> in the missions list.</li>
-      <li>In the EVENTS panel (right), click <b>＋ Add Event → Launch</b>. Pick the fleet entry (launch vehicle + payload) and the target orbit, then launch — ascent staging runs automatically (boosters/lower stages are expended).</li>
-      <li><b>Place in Orbit</b> instead drops a spacecraft (e.g. a station) directly into orbit with full tanks, no ascent.</li>
+      <li>In the EVENTS panel (right), click <b>＋ Add Event → Launch</b>. Pick the Hangar entry (launch vehicle + payload) and the target orbit, then launch — ascent staging runs automatically (boosters/lower stages are expended). You're prompted to name the new vehicle.</li>
+      <li><b>Place in Orbit</b> instead drops a spacecraft (e.g. a station) directly into orbit, no ascent. Tick <b>Deploy with empty tanks</b> for a dry depot to refuel later.</li>
     </ol>
     <p class="tut-tip">Every change re-simulates the whole mission from its event log, so editing earlier events ripples forward correctly.</p>` },
 
@@ -2595,22 +2600,21 @@ const TUTORIALS = [
     <h3>Building the flight plan</h3>
     <p>Use <b>＋ Add Event</b> to append events; each acts on the <b>active vehicle</b>:</p>
     <ul>
-      <li><b>Burn</b> — Hohmann, circularize, TLI/LOI, plane change, or custom ΔV.</li>
-      <li><b>Maneuver</b> — drawn on the Node Map (from one node to another); pick the <b>firing stage</b>.</li>
+      <li><b>Maneuver</b> — pick From/To nodes (or draw a bridge on the <b>Orbit Map</b>). It's a container: build it from ordered <b>Burn</b> / <b>Separate</b> steps (each burn uses a stage's ΔV or its whole tank), or hit <b>⚙ Auto</b> to close the ΔV for you.</li>
       <li><b>Separate / Dock</b> — split a stack into two vehicles, or merge two (orbits must match — rendezvous first).</li>
-      <li><b>Expend</b> — retire a vehicle/stage. <b>Transfer Propellant / Crew</b> — move between stages. <b>Rendezvous, Reenter, Recover</b>.</li>
+      <li><b>Transfer Propellant</b> — move fuel between stages, or fill a separate <b>depot</b> by choosing it as the destination vehicle. <b>Transfer Crew</b>, <b>Expend</b>, <b>Rendezvous</b>, <b>Reenter</b>, <b>Recover</b>.</li>
     </ul>
     <h3>Editing & ordering</h3>
     <ul>
       <li>Each event card has <b>✎ edit</b>, <b>▲▼ move</b>, <b>⤓ send to end</b>, <b>✕ delete</b>. You can also <b>drag a card</b> to reorder — add an event then drag it between two others to insert it.</li>
       <li>Editors show point-in-time state (fuel as it was <i>at that event</i>). Edit lets you re-pick vehicles/stages/orbits for that event.</li>
       <li><b>⤵ "during the previous transfer's coast"</b> places an event mid-maneuver so transport doesn't look instantaneous.</li>
-      <li><b>⊞ Group</b> a run of events and set a <b>repeat</b> count for cycles like refuelling or crew rotation.</li>
+      <li><b>⊞ Loop</b> a run of events and set a <b>repeat</b> count for cycles like refuelling or crew rotation.</li>
     </ul>` },
 
-  { id: 'mission-views', title: 'Missions — band view & node map', body: () => `
+  { id: 'mission-views', title: 'Missions — band view & orbit map', body: () => `
     <h3>Two ways to see a mission</h3>
-    <p>Toggle <b>Band</b> / <b>Node Map</b> in the mission top bar.</p>
+    <p>Toggle <b>Band</b> / <b>Orbit Map</b> in the mission top bar.</p>
     <h3>Band view</h3>
     <ul>
       <li>Horizontal <b>zones</b> (Earth → LEO → GTO → Cislunar → …) with each vehicle drawn as a track that climbs through them. X is event order, not real time.</li>
@@ -2638,7 +2642,7 @@ const TUTORIALS = [
     <h3>File types</h3>
     <p>Everything is JSON, with a distinguishing extension so files are easy to tell apart:</p>
     <ul>
-      <li><b>.program</b> — the <i>whole</i> program (spacecraft + fleet + missions + stage library). Use <b>Save Program / Load Program</b> in the header (Program Manager only).</li>
+      <li><b>.program</b> — the <i>whole</i> program (spacecraft + vehicles + missions + stage library). Use <b>Save Program / Load Program</b> in the header (Program Manager only).</li>
       <li><b>.vehicle</b> — a launch vehicle from the LV Calculator.</li>
       <li><b>.stage</b> — an LV stage; <b>.scstage</b> — a spacecraft stage.</li>
       <li><b>.orbit</b> — a saved orbit. <b>.spacecraft</b> — a single spacecraft definition.</li>
@@ -3760,7 +3764,7 @@ document.addEventListener('click',e=>{if(e.target.classList.contains('modal-over
 // ─── THEMES ─────────────────────────────────────
 const BUILTIN_THEMES={
   default:{name:'Default (Dark)',
-    '--bg':'#0a0c10','--panel':'#0f1318','--border':'#1e2530','--border-bright':'#2e3d50',
+    '--bg':'#0a0c10','--panel':'#0f1318','--input':'#0b0e13','--border':'#1e2530','--border-bright':'#2e3d50',
     '--accent':'#00c8ff','--accent2':'#ff6b35','--accent3':'#7fff6b',
     '--text':'#c8d8e8','--text-dim':'#5a7080','--text-bright':'#e8f4ff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
@@ -3769,7 +3773,7 @@ const BUILTIN_THEMES={
     '--nm-label':'#5a7080','--nm-pill-bg':'#0f1318','--nm-pill-bd':'#1e2530','--nm-pill-text':'#5a7080',
     '--nm-pal-bg':'#070910','--nm-pal-hdr':'#060709','--nm-pal-item':'#0f1318','--nm-pal-item-act':'#081210','--nm-ghost':'#1e2530'},
   perigee:{name:'Perigee',
-    '--bg':'#3b393a','--panel':'#2e2c2d','--border':'#524f50','--border-bright':'#6e6b6c',
+    '--bg':'#3b393a','--panel':'#2e2c2d','--input':'#3a3739','--border':'#524f50','--border-bright':'#6e6b6c',
     '--accent':'#88c657','--accent2':'#c6a057','--accent3':'#b0e080',
     '--text':'#e7e8ea','--text-dim':'#a7a6a4','--text-bright':'#ffffff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
@@ -3777,24 +3781,6 @@ const BUILTIN_THEMES={
     '--nm-edge':'#5a5758','--nm-edge-act':'#88c657','--nm-node-fill':'#2e2c2d',
     '--nm-label':'#a7a6a4','--nm-pill-bg':'#2e2c2d','--nm-pill-bd':'#524f50','--nm-pill-text':'#a7a6a4',
     '--nm-pal-bg':'#252325','--nm-pal-hdr':'#1e1c1e','--nm-pal-item':'#2e2c2d','--nm-pal-item-act':'#1e2419','--nm-ghost':'#524f50'},
-  spacex:{name:'SpaceX',
-    '--bg':'#849199','--panel':'#6e7a82','--border':'#9aaab4','--border-bright':'#b8c8d4',
-    '--accent':'#015289','--accent2':'#ffffff','--accent3':'#ffffff',
-    '--text':'#ffffff','--text-dim':'#d0dde5','--text-bright':'#ffffff',
-    '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
-    '--nm-bg':'#7a8890','--nm-earth':'#2a7040','--nm-lunar':'#3850a0','--nm-interp':'#903028',
-    '--nm-edge':'#9aaab4','--nm-edge-act':'#015289','--nm-node-fill':'#6e7a82',
-    '--nm-label':'#d0dde5','--nm-pill-bg':'#6e7a82','--nm-pill-bd':'#9aaab4','--nm-pill-text':'#d0dde5',
-    '--nm-pal-bg':'#7a8890','--nm-pal-hdr':'#6e7a82','--nm-pal-item':'#849199','--nm-pal-item-act':'#6e8878','--nm-ghost':'#9aaab4'},
-  blueorigin:{name:'Blue Origin',
-    '--bg':'#0000fe','--panel':'#ffffff','--border':'#99aaff','--border-bright':'#0000fe',
-    '--accent':'#0000fe','--accent2':'#3333cc','--accent3':'#0000cc',
-    '--text':'#00008b','--text-dim':'#4444cc','--text-bright':'#000080',
-    '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
-    '--nm-bg':'#0000e0','--nm-earth':'#44cc66','--nm-lunar':'#aabbff','--nm-interp':'#ff6644',
-    '--nm-edge':'#6677ff','--nm-edge-act':'#ffffff','--nm-node-fill':'#ffffff',
-    '--nm-label':'#0000aa','--nm-pill-bg':'#ffffff','--nm-pill-bd':'#0000fe','--nm-pill-text':'#0000aa',
-    '--nm-pal-bg':'#0000d0','--nm-pal-hdr':'#0000b8','--nm-pal-item':'#ffffff','--nm-pal-item-act':'#ccffcc','--nm-ghost':'#9999ff'},
 };;
 let customThemes={};
 let activeThemeKey='perigee';
@@ -10678,13 +10664,13 @@ function missionOpenGroupModal(id, start, end, gid) {
     <input type="hidden" id="mgroup-end" value="${end}">
     <input type="hidden" id="mgroup-gid" value="${gid || ''}">
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;">${n} event${n!==1?'s':''} — repeated as one block during the simulation.</div>
-    <label class="cfg-label">Group name</label>
-    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Cycle').replace(/"/g,'&quot;')}" maxlength="40">
+    <label class="cfg-label">Loop name</label>
+    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Loop').replace(/"/g,'&quot;')}" maxlength="40">
     <label class="cfg-label">Repeat (×)</label>
     <input id="mgroup-rep" type="number" class="field" min="1" max="99" value="${g.repeat||2}" style="width:90px;margin-bottom:12px;">
     <div style="display:flex;justify-content:flex-end;gap:8px;">
       <button class="act-btn" onclick="closeModal('modal-mission-group')">Cancel</button>
-      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Group'}</button>
+      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Loop'}</button>
     </div>`;
   openModal('modal-mission-group');
   setTimeout(() => { const el = document.getElementById('mgroup-name'); if (el) { el.focus(); el.select(); } }, 30);
@@ -10695,7 +10681,7 @@ function missionGroupSave() {
   const start = parseInt(document.getElementById('mgroup-start')?.value, 10);
   const end = parseInt(document.getElementById('mgroup-end')?.value, 10);
   let gid = document.getElementById('mgroup-gid')?.value || '';
-  const name = (document.getElementById('mgroup-name')?.value || 'Cycle').trim().slice(0, 40);
+  const name = (document.getElementById('mgroup-name')?.value || 'Loop').trim().slice(0, 40);
   const repeat = Math.max(1, Math.min(99, parseInt(document.getElementById('mgroup-rep')?.value, 10) || 1));
   m.groups = m.groups || {};
   if (!gid) {
@@ -10725,6 +10711,10 @@ let _missionSelEvt = null;   // selected event index for event detail panel
 // Maneuver add-form draft: the composite step program being built (BURN / SEPARATE steps).
 // [] = a single full burn from the default stage. Reset whenever the maneuver form opens.
 let _missionAddMv = { from: null, to: null, steps: [] };
+// Prop-transfer add-form: origin key of the chosen DESTINATION vehicle (null = the active
+// vehicle, i.e. an intra-vehicle transfer). Lets you fill a separately-deployed depot.
+let _missionXferDest = null;
+function missionXferSetDest(id, key) { _missionXferDest = key || null; missionRenderDetail(); }
 
 // Collapse every event card except the last one (used after adding an event so the
 // newest is shown expanded). Cards use `_expanded` (default falsy = collapsed/compact).
@@ -10910,7 +10900,7 @@ function missionRenderDetail() {
         if (!inner) { i = j; continue; }   // whole group filtered out
         logHTML += `<div class="mcc-group">
           <div class="mcc-group-hdr">
-            <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Group'}</span>
+            <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Loop'}</span>
             <span class="mcc-group-rep">repeat
               <button class="act-btn mevt-ctl" onclick="missionGroupRepeat('${id}','${gid}',-1)">−</button>
               <b style="color:var(--accent3)">${g.repeat || 1}×</b>
@@ -10980,7 +10970,7 @@ function missionRenderDetail() {
         <div class="mcc-events-header" style="display:flex;align-items:center;gap:8px;">
           <span style="color:var(--accent3);">EVENTS</span>
           ${m.log.length ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${m.log.length}</span>` : ''}
-          ${m.log.length >= 1 ? `<button class="act-btn" style="margin-left:auto;padding:1px 8px;font-size:9px;${_missionGroupMode?'background:var(--accent);color:#000;':''}" onclick="missionToggleGroupMode('${id}')">${_missionGroupMode ? (_missionGroupStart==null?'⊞ pick start…':'⊞ pick end…') : '⊞ Group'}</button>${_missionGroupMode?`<button class="act-btn" style="padding:1px 8px;font-size:9px;" onclick="missionToggleGroupMode('${id}')">✕</button>`:''}` : ''}
+          ${m.log.length >= 1 ? `<button class="act-btn" style="margin-left:auto;padding:1px 8px;font-size:9px;${_missionGroupMode?'background:var(--accent);color:#000;':''}" onclick="missionToggleGroupMode('${id}')">${_missionGroupMode ? (_missionGroupStart==null?'⊞ pick start…':'⊞ pick end…') : '⊞ Loop'}</button>${_missionGroupMode?`<button class="act-btn" style="padding:1px 8px;font-size:9px;" onclick="missionToggleGroupMode('${id}')">✕</button>`:''}` : ''}
         </div>
         ${filterRow}
         <div class="mcc-events-list">${logHTML}</div>
@@ -11226,6 +11216,8 @@ function _missionApplyDeploy(m, e) {
   const sc = _scEdSC.find(s => s.spacecraftId === e.spacecraftId);
   if (!sc) return null;
   const allStages = progSpacecraftToLiveStages(sc);
+  // Optionally deploy with EMPTY tanks (a dry depot to be filled by prop transfer later).
+  if (e.emptyTanks) allStages.forEach(st => (st.tanks || []).forEach(t => { t.fill = 0; }));
   const o = e.orbit || m.launchOrbit || {};
   const orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
   const fv = progMakeFlightVehicle(sc.name, allStages, orbitState, '#e5c07b');
@@ -11254,7 +11246,8 @@ function missionExecDeploy(id, scId) {
   if (!m) return;
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (!sc) return;
-  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit } });
+  const empty = !!document.getElementById('addev-deploy-empty-' + id)?.checked;
+  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit }, emptyTanks: empty });
   _missionAddEvt = null;
   _missionExpandLast(m);
   missionRecompute(m); missionRenderDetail();
@@ -11288,7 +11281,7 @@ function _missionLogCardHTML(entry, id, idx) {
   if (entry.type === 'TRANSFER_PROPELLANT') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">PROP XFER</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.transferred||0).toLocaleString()} kg</div>
-    ${(entry.fromName||entry.toName) ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">${entry.fromName||'?'} → ${entry.toName||'?'}${entry.vehName ? ' · ' + entry.vehName : ''}</div>` : ''}
+    ${(entry.fromName||entry.toName) ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">${entry.fromName||'?'}${entry.vehName ? ' ['+entry.vehName+']' : ''} → ${entry.toName||'?'}${(entry.destVehName && entry.destVehName !== entry.vehName) ? ' ['+entry.destVehName+']' : ''}</div>` : ''}
     ${(entry.warnings||[]).map(w => `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);">${w}</div>`).join('')}
   </div>`;
   if (entry.type === 'TRANSFER_CREW') return `<div class="mission-log-card" style="padding:8px 14px;">
@@ -11508,33 +11501,37 @@ function _missionEventDetailHTML(m, idx) {
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Spacecraft</label>
           <select id="edit-deploy-sc-${id}" class="mcc-field-select">${o}</select></div>
+        <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="edit-deploy-empty-${id}" style="accent-color:var(--accent);"${e.emptyTanks?' checked':''}> Deploy with empty tanks (depot)</label>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// orbit follows the Launch Orbit set in the left panel</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyDeployEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'TRANSFER_PROPELLANT') {
-    // stage list + propellant come from the vehicle's state AT THIS EVENT (snapshot),
-    // so the indices line up with the real transfer and amounts are point-in-time.
-    const tStages = _missionPreSnapStages(m, idx, e.activeKey, e.vehicleId);
-    if (tStages.length) {
-      const nameCnt = {}; tStages.forEach(s => { nameCnt[s.name] = (nameCnt[s.name] || 0) + 1; });
-      const lblOf = s => {
-        if (nameCnt[s.name] <= 1) return s.name;
-        const same = tStages.filter(x => x.name === s.name);
-        const parents = [...new Set(same.map(x => x.parent || ''))];
-        if (s.parent && parents.length > 1) return `${s.name} (${s.parent})`;
-        const kids = [...new Set(same.map(x => String(x.parentKid)))];
-        const inst = kids.indexOf(String(s.parentKid)) + 1;
-        return s.parent ? `${s.name} (${s.parent} #${inst})` : `${s.name} (${inst})`;
+    // stage lists + propellant come from each vehicle's state AT THIS EVENT (snapshot), so the
+    // indices line up with the real transfer and amounts are point-in-time. Source is the active
+    // vehicle; destination may be a separate vehicle (a depot) when destVehicleKey is set.
+    const srcStages = _missionPreSnapStages(m, idx, e.activeKey, e.vehicleId);
+    const dstStages = e.destVehicleKey ? _missionPreSnapStages(m, idx, e.destVehicleKey, e.destVehicleId) : srcStages;
+    if (srcStages.length && dstStages.length) {
+      const optsFor = (list, sel) => {
+        const cnt = {}; list.forEach(s => { cnt[s.name] = (cnt[s.name] || 0) + 1; });
+        return list.map((s, i) => {
+          let lbl = s.name;
+          if (cnt[s.name] > 1) {
+            const same = list.filter(x => x.name === s.name);
+            const parents = [...new Set(same.map(x => x.parent || ''))];
+            if (s.parent && parents.length > 1) lbl = `${s.name} (${s.parent})`;
+            else { const kids = [...new Set(same.map(x => String(x.parentKid)))]; lbl = `${s.name} (${s.parent ? s.parent + ' #' : ''}${kids.indexOf(String(s.parentKid)) + 1})`; }
+          }
+          return `<option value="${i}"${i === sel ? ' selected' : ''}>${lbl} — ${(s.prop || 0).toLocaleString()} kg</option>`;
+        }).join('');
       };
-      const opt = (sel) => tStages.map((s, i) =>
-        `<option value="${i}"${i === sel ? ' selected' : ''}>${lblOf(s)} — ${(s.prop || 0).toLocaleString()} kg</option>`
-      ).join('');
+      const destNote = e.destVehicleKey ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">// destination vehicle: ${e.destName || e.destVehName || '?'}</div>` : '';
       editForm = `
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
           <label class="cfg-label">Source Stage</label>
-          <select id="edit-xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${opt(e.sourceIndex)}</select>
-          <label class="cfg-label">Destination Stage</label>
-          <select id="edit-xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${opt(e.destIndex)}</select>
+          <select id="edit-xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${optsFor(srcStages, e.sourceIndex)}</select>
+          ${destNote}<label class="cfg-label">Destination Stage</label>
+          <select id="edit-xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${optsFor(dstStages, e.destIndex)}</select>
           <label class="cfg-label">Mass (kg)</label>
           <div style="display:flex;gap:6px;margin-bottom:8px;"><input type="number" id="edit-xfer-mass-${id}" class="field" value="${e.mass_kg||0}" style="flex:1;"><button class="act-btn" style="flex-shrink:0;" onclick="missionPropXferEditMax('${id}',${idx})">Max</button></div>
           <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyPropTransferEdit('${id}',${idx})">Apply</button>
@@ -12287,9 +12284,22 @@ function missionRecompute(m) {
     else if (e.type === 'TRANSFER_PROPELLANT') {
       active = resolveActive(e);
       if (active) {
-        const r = _missionResolveXferStages(m, e, active, e.sourceIndex, e.destIndex);
-        e.sourceIndex = r.si; e.destIndex = r.di;
-        e.vehicleId = active.vehicleId; _missionApplyPropTransfer(active, e);
+        // resolve the destination vehicle: another live vehicle (a depot) if set, else active
+        let dstFv = active;
+        if (e.destVehicleKey) {
+          const dk = e._clone ? _missionRescopeOriginKey(e.destVehicleKey, _missionGroupRange(m, e.groupId), e._rep) : e.destVehicleKey;
+          dstFv = live.find(v => v._originKey === dk) || live.find(v => v._originKey === e.destVehicleKey) || active;
+        }
+        if (dstFv === active) {
+          const r = _missionResolveXferStages(m, e, active, e.sourceIndex, e.destIndex);
+          e.sourceIndex = r.si; e.destIndex = r.di;
+        } else {
+          // cross-vehicle: clamp each index to its own vehicle's stage list
+          e.sourceIndex = Math.min(Math.max(0, e.sourceIndex || 0), active.stages.length - 1);
+          e.destIndex   = Math.min(Math.max(0, e.destIndex   || 0), dstFv.stages.length - 1);
+        }
+        e.vehicleId = active.vehicleId; e.destVehicleId = dstFv.vehicleId;
+        _missionApplyPropTransfer(active, dstFv, e);
       }
     }
     else if (e.type === 'TRANSFER_CREW') {
@@ -12418,6 +12428,8 @@ function missionApplyDeployEdit(id, idx) {
   const scId = document.getElementById('edit-deploy-sc-'+id)?.value;
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (sc) { e.spacecraftId = scId; e.label = sc.name; }
+  const emptyEl = document.getElementById('edit-deploy-empty-'+id);
+  if (emptyEl) e.emptyTanks = emptyEl.checked;
   closeModal('modal-mission-evt');
   missionRecompute(m);
   missionRenderDetail();
@@ -12778,29 +12790,39 @@ function _missionStageNameAt(fv, idx) {
   return _missionStageDisambig(fv, fv.stages[idx], idx);
 }
 
-function _missionApplyPropTransfer(fv, e) {
-  const src = (e.sourceIndex != null) ? fv.stages[e.sourceIndex] : fv.stages.find(s => s.stageDefinitionId === e.sourceStageId);
-  const dst = (e.destIndex != null) ? fv.stages[e.destIndex] : fv.stages.find(s => s.stageDefinitionId === e.destStageId);
+function _missionApplyPropTransfer(srcFv, dstFv, e) {
+  dstFv = dstFv || srcFv;
+  const src = (e.sourceIndex != null) ? srcFv.stages[e.sourceIndex] : srcFv.stages.find(s => s.stageDefinitionId === e.sourceStageId);
+  const dst = (e.destIndex != null) ? dstFv.stages[e.destIndex] : dstFv.stages.find(s => s.stageDefinitionId === e.destStageId);
   if (!src || !dst || src === dst) { e.result = 'FAILED'; e.transferred = 0; e.warnings = ['Pick two different stages']; return; }
-  if (e.sourceIndex != null) e.fromName = _missionStageNameAt(fv, e.sourceIndex);
-  if (e.destIndex != null) e.toName = _missionStageNameAt(fv, e.destIndex);
-  e.vehName = _missionVehicleDisplayName(fv);
+  if (e.sourceIndex != null) e.fromName = _missionStageNameAt(srcFv, e.sourceIndex);
+  if (e.destIndex != null) e.toName = _missionStageNameAt(dstFv, e.destIndex);
+  e.vehName = _missionVehicleDisplayName(srcFv);
+  e.destVehName = _missionVehicleDisplayName(dstFv);
   const pt = e.propellantType;
-  const matches = t => !pt || t.propellantType === pt;
+  const srcMatch = t => !pt || t.propellantType === pt;
+  // A destination tank accepts the transfer if it already holds this propellant OR is EMPTY
+  // (a dry depot tank adopts the incoming propellant type) — fixes mixed-fuel / empty-depot fills.
+  const dstMatch = t => !pt || t.propellantType === pt || (t.fill || 0) <= 0;
   // Only move what the SOURCE has AND the DESTINATION can hold, so propellant is
   // conserved — never drained into the void when the dest is full.
-  const srcAvail = src.tanks.reduce((s, t) => s + (matches(t) ? t.fill : 0), 0);
-  const dstSpace = dst.tanks.reduce((s, t) => s + (matches(t) ? (t.capacity - t.fill) : 0), 0);
+  const srcAvail = src.tanks.reduce((s, t) => s + (srcMatch(t) ? t.fill : 0), 0);
+  const dstSpace = dst.tanks.reduce((s, t) => s + (dstMatch(t) ? (t.capacity - t.fill) : 0), 0);
   const want = e.mass_kg ?? 0;
   const amount = Math.max(0, Math.min(want, srcAvail, dstSpace));
   let toTake = amount;
-  for (const t of src.tanks) { if (!matches(t)) continue; const d = Math.min(t.fill, toTake); t.fill -= d; toTake -= d; if (toTake <= 0) break; }
+  for (const t of src.tanks) { if (!srcMatch(t)) continue; const d = Math.min(t.fill, toTake); t.fill -= d; toTake -= d; if (toTake <= 0) break; }
   let toFill = amount;
-  for (const t of dst.tanks) { if (!matches(t)) continue; const f = Math.min(t.capacity - t.fill, toFill); t.fill += f; toFill -= f; if (toFill <= 0) break; }
+  for (const t of dst.tanks) { if (!dstMatch(t)) continue; const room = t.capacity - t.fill; const f = Math.min(room, toFill); if (f > 0) { if ((t.fill || 0) <= 0 && pt) t.propellantType = pt; t.fill += f; toFill -= f; } if (toFill <= 0) break; }
   const warns = [];
   if (amount < want) {
     if (dstSpace < want && dstSpace <= srcAvail) warns.push('⚠ Destination only had room for ' + Math.round(dstSpace).toLocaleString() + ' kg');
     else warns.push('⚠ Source only had ' + Math.round(srcAvail).toLocaleString() + ' kg');
+  }
+  // cross-vehicle transfer needs the two to be co-located (rendezvous/dock) — warn, don't block
+  if (srcFv !== dstFv && typeof progOrbitalStateMatch === 'function' && srcFv.orbitState && dstFv.orbitState
+      && !progOrbitalStateMatch(srcFv.orbitState, dstFv.orbitState)) {
+    warns.push('⚠ Vehicles not in a matching orbit — rendezvous/dock for a real transfer');
   }
   e.result = 'SUCCESS'; e.transferred = amount; e.warnings = warns;
 }
@@ -12821,10 +12843,15 @@ function missionExecPropTransfer(id) {
   const srcI = parseInt(document.getElementById('xfer-src-' + id)?.value, 10);
   const dstI = parseInt(document.getElementById('xfer-dst-' + id)?.value, 10);
   const mass = parseFloat(document.getElementById('xfer-mass-' + id)?.value) || 0;
+  const destKey = document.getElementById('xfer-destveh-' + id)?.value || fv._originKey;
+  const sameVeh = !destKey || destKey === fv._originKey;
+  const destFv = sameVeh ? fv : (_missionVehByKey(m, destKey) || fv);
   const ss = fv.stages[srcI];
   const pt = (ss && ss.tanks && ss.tanks[0]) ? ss.tanks[0].propellantType : null;
-  m.log.push({ type: 'TRANSFER_PROPELLANT', sourceIndex: srcI, destIndex: dstI, propellantType: pt, mass_kg: mass, activeKey: fv._originKey, activeName: _missionVehicleDisplayName(fv) });
-  _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
+  m.log.push({ type: 'TRANSFER_PROPELLANT', sourceIndex: srcI, destIndex: dstI, propellantType: pt, mass_kg: mass,
+    activeKey: fv._originKey, activeName: _missionVehicleDisplayName(fv),
+    destVehicleKey: sameVeh ? null : destKey, destName: sameVeh ? null : _missionVehicleDisplayName(destFv) });
+  _missionAddEvt = null; _missionXferDest = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
 }
 function missionExecCrewTransfer(id) {
   const m = _missionGet(id); if (!m) return;
@@ -13528,6 +13555,7 @@ function _missionBandOpenEvent(id, idx) {
 function missionSetAddEvt(id, type) {
   _missionAddEvt = (type === _missionAddEvt) ? null : type;
   _missionAddMv = { from: null, to: null, steps: [] };   // fresh maneuver step draft each open
+  _missionXferDest = null;                                // fresh prop-transfer destination each open
   if (_missionAddEvt === 'maneuver') {
     _missionViewMode = 'nodemap';        // node map for drawing maneuvers
     _missionBridgeMode = true;           // auto-enter Draw Maneuver mode
@@ -13576,6 +13604,7 @@ function _missionAddEventHTML(m) {
         <select id="addev-deploy-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
         <label class="cfg-label">Target Orbit</label>
         <div style="margin-bottom:8px;">${_missionOrbitFieldsHTML(m)}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="addev-deploy-empty-${id}" style="accent-color:var(--accent);"> Deploy with empty tanks (depot to be refuelled)</label>
         <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecDeploy('${id}',document.getElementById('addev-deploy-${id}').value)">⊕ Place in Orbit</button>`;
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no spacecraft defined — add one in the Spacecraft tab</div>`;
   } else if (_missionAddEvt === 'burn') {
@@ -13626,14 +13655,24 @@ function _missionAddEventHTML(m) {
         <button class="act-btn" style="width:100%;" onclick="missionExecRendezvous('${id}',document.getElementById('addev-rend-${id}').value)">Rendezvous</button>`;
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// need another live vehicle</div>`;
   } else if (_missionAddEvt === 'proptransfer') {
-    if (fv && fv.stages.length >= 2) {
-      const so = _missionStageOptions(fv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
-      form = `<label class="cfg-label">Source Stage</label><select id="xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${so}</select>
-        <label class="cfg-label">Destination Stage</label><select id="xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${so}</select>
+    const canIntra = fv && fv.stages.length >= 2;
+    const others = fv ? live.filter(x => x.fv !== fv) : [];
+    if (fv && fv.stages.length >= 1 && (canIntra || others.length)) {
+      // destination can be the active vehicle OR another live vehicle (e.g. a deployed depot)
+      const destKey = _missionXferDest || fv._originKey;
+      const destEntry = live.find(x => x.fv._originKey === destKey);
+      const destFv = destEntry ? destEntry.fv : fv;
+      const srcOpts = _missionStageOptions(fv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
+      const vehOpts = live.map(x => `<option value="${x.fv._originKey}"${x.fv._originKey === destKey ? ' selected' : ''}>${_missionVehicleDisplayName(x.fv)}${x.fv === fv ? ' (active)' : ''}</option>`).join('');
+      const dstOpts = _missionStageOptions(destFv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
+      form = `<label class="cfg-label">Source Stage <span style="color:var(--text-dim);">(active vehicle)</span></label><select id="xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${srcOpts}</select>
+        <label class="cfg-label">Destination Vehicle</label><select id="xfer-destveh-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionXferSetDest('${id}',this.value)">${vehOpts}</select>
+        <label class="cfg-label">Destination Stage</label><select id="xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${dstOpts}</select>
         <label class="cfg-label">Mass (kg)</label>
         <div style="display:flex;gap:6px;margin-bottom:6px;"><input type="number" id="xfer-mass-${id}" class="field" value="1000" style="flex:1;"><button class="act-btn" style="flex-shrink:0;" onclick="missionPropXferMax('${id}')" title="Use the source stage's full remaining propellant">Max</button></div>
-        <button class="act-btn" style="width:100%;" onclick="missionExecPropTransfer('${id}')">Transfer Propellant</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// dock first — transfer needs ≥2 stages</div>`;
+        <button class="act-btn" style="width:100%;" onclick="missionExecPropTransfer('${id}')">Transfer Propellant</button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// fill a deployed depot directly, or move propellant between two stages of one (docked) vehicle</div>`;
+    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// transfer needs a second stage (dock) or another vehicle / depot in orbit</div>`;
   } else if (_missionAddEvt === 'crewtransfer') {
     if (fv && fv.stages.length >= 2) {
       const so = _missionStageOptions(fv, s => `${s.crewAboard || 0} crew`);
@@ -14619,34 +14658,54 @@ function scEdRenderDetail() {
         <div class="cfg-item"><label>Docking Ports</label>
           <input type="number" class="field" min="0" value="${st.dockingPorts || 0}" style="width:70px"
             oninput="scEdStageSet('${id}',${i},'dockingPorts',+this.value)"></div>
-        <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-          <input type="checkbox" id="sc-tc-${id}-${i}" ${st.tunnelCapable ? 'checked' : ''}
-            onchange="scEdStageSet('${id}',${i},'tunnelCapable',this.checked)">
-          <label for="sc-tc-${id}-${i}" style="margin-bottom:0;cursor:pointer;">Tunnel Capable</label></div>
-        <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-          <input type="checkbox" id="sc-lt-${id}-${i}" ${st.isLandingTruss ? 'checked' : ''}
-            onchange="scEdStageSet('${id}',${i},'isLandingTruss',this.checked)">
-          <label for="sc-lt-${id}-${i}" style="margin-bottom:0;cursor:pointer;">Landing Truss</label></div>
-        <div class="cfg-item"><label>Descent Prop Frac.</label>
-          <input type="number" class="field" min="0" max="1" step="0.01" value="${(st.descentPropFraction || 0).toFixed(2)}" style="width:80px"
-            oninput="scEdStageSet('${id}',${i},'descentPropFraction',Math.min(1,Math.max(0,+this.value)))"></div>
       </div>
     </div>`;
   }).join('');
-  el.innerHTML = `
-    <div class="cfg-row" style="margin-bottom:16px;gap:16px;align-items:flex-end;">
-      <div class="cfg-item" style="flex:1;min-width:180px;"><label>Spacecraft Name</label>
-        <input type="text" class="field" style="width:100%;max-width:340px;" value="${sc.name.replace(/"/g,'&quot;')}"
-          oninput="scEdNameSet('${id}',this.value)"></div>
-      <button class="act-btn green" onclick="scEdSaveJSON('${id}')">&#x2B07; Save JSON</button>
+  const massBody = `
+    <div class="sl">Mass Simulator <span style="color:var(--text);font-size:10px;letter-spacing:0;text-transform:none;">(a single inert payload — e.g. a station)</span></div>
+    <div class="cfg-row" style="gap:16px;margin-bottom:8px;">
+      <div class="cfg-item"><label>Total Mass (kg)</label>
+        <input type="number" class="field" min="0" value="${(sc.stages[0] && sc.stages[0].dry_mass) || sc.massSimKg || 0}" style="width:160px"
+          oninput="scEdSetMassSimKg('${id}',+this.value)"></div>
     </div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:24px;">// no propellant, no stages, no crew — pure mass. Use for stations / cargo you don't want to model in detail (e.g. ISS ≈ 420,000 kg).</div>`;
+  const stackBody = `
     <div class="sl">Stage Stack <span style="color:var(--text);font-size:10px;letter-spacing:0;text-transform:none;">(Stage 1 = bottom / fires first)</span></div>
     <div class="sc-ed-detail-grid">${stageCards}</div>
     <div class="fleet-drop-zone" ondragover="fleetDragOver(event)" ondragleave="fleetDragLeave(event)" ondrop="scStageDrop(event)">&#x2295; Drop a library stage here to add it to the stack</div>
     <div style="margin-bottom:24px;"><button class="act-btn" onclick="scEdStageAdd('${id}')">+ Add Stage</button></div>
     <div class="sl">dV Breakdown</div>
-    <div class="panel" style="padding:12px;" id="sc-dv-${id}">${_scEdDvHTML(sc)}</div>
+    <div class="panel" style="padding:12px;" id="sc-dv-${id}">${_scEdDvHTML(sc)}</div>`;
+  el.innerHTML = `
+    <div class="cfg-row" style="margin-bottom:16px;gap:16px;align-items:flex-end;">
+      <div class="cfg-item" style="flex:1;min-width:180px;"><label>Spacecraft Name</label>
+        <input type="text" class="field" style="width:100%;max-width:340px;" value="${sc.name.replace(/"/g,'&quot;')}"
+          oninput="scEdNameSet('${id}',this.value)"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);cursor:pointer;white-space:nowrap;padding-bottom:6px;"><input type="checkbox" style="accent-color:var(--accent);" ${sc.massSim ? 'checked' : ''} onchange="scEdSetMassSim('${id}',this.checked)"> Mass simulator</label>
+      <button class="act-btn green" onclick="scEdSaveJSON('${id}')">&#x2B07; Save JSON</button>
+    </div>
+    ${sc.massSim ? massBody : stackBody}
     ${_scStageLibPanelHTML()}`;
+}
+
+// Toggle "mass simulator" — collapse the spacecraft to one inert stage (its total mass) so it
+// can be added like a station without modelling stages; un-toggling keeps that single stage.
+function scEdSetMassSim(id, on) {
+  const sc = _scEdGet(id); if (!sc) return;
+  if (on) {
+    const total = sc.massSimKg || sc.stages.reduce((s, st) => s + (+st.dry_mass || 0) + (+st.propKg || 0), 0) || 0;
+    sc.massSim = true; sc.massSimKg = total;
+    sc.stages = [{ stageId: progUUID(), name: sc.name || 'Mass', dry_mass: total, isp: 0, propKg: 0,
+      propType: 'NTO_A50', crewCapacity: 0, dockingPorts: 0, tunnelCapable: false, isLandingTruss: false, descentPropFraction: 0 }];
+  } else {
+    sc.massSim = false;
+  }
+  scEdRenderDetail();
+}
+function scEdSetMassSimKg(id, val) {
+  const sc = _scEdGet(id); if (!sc) return;
+  sc.massSimKg = Math.max(0, +val || 0);
+  if (sc.stages && sc.stages[0]) sc.stages[0].dry_mass = sc.massSimKg;
 }
 
 
@@ -14763,11 +14822,6 @@ function scStageLibOpenNew(editLibId) {
     <div class="cfg-row" style="gap:16px;padding-top:8px;border-top:1px solid var(--border);flex-wrap:wrap;">
       <div class="cfg-item"><label>Crew Capacity</label><input type="number" id="scn-crew" class="field" min="0" value="${v.crewCapacity}" style="width:80px"></div>
       <div class="cfg-item"><label>Docking Ports</label><input type="number" id="scn-dock" class="field" min="0" value="${v.dockingPorts}" style="width:80px"></div>
-      <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-        <input type="checkbox" id="scn-tunnel" ${v.tunnelCapable ? 'checked' : ''}><label for="scn-tunnel" style="margin-bottom:0;cursor:pointer;">Tunnel Capable</label></div>
-      <div class="cfg-item" style="flex-direction:row;align-items:center;gap:6px;padding-top:14px;">
-        <input type="checkbox" id="scn-truss" ${v.isLandingTruss ? 'checked' : ''}><label for="scn-truss" style="margin-bottom:0;cursor:pointer;">Landing Truss</label></div>
-      <div class="cfg-item"><label>Descent Prop Frac.</label><input type="number" id="scn-dpf" class="field" min="0" max="1" step="0.01" value="${v.descentPropFraction}" style="width:90px"></div>
     </div>`;
   const title = document.getElementById('scstage-new-title');
   if (title) title.textContent = editLibId ? 'Edit Stage' : 'New Stage';
@@ -14784,9 +14838,9 @@ function scStageLibSaveNew() {
     propType:            g('scn-ptype')?.value || 'NTO_A50',
     crewCapacity:        +g('scn-crew')?.value || 0,
     dockingPorts:        +g('scn-dock')?.value || 0,
-    tunnelCapable:       !!g('scn-tunnel')?.checked,
-    isLandingTruss:      !!g('scn-truss')?.checked,
-    descentPropFraction: Math.min(1, Math.max(0, +g('scn-dpf')?.value || 0)),
+    tunnelCapable:       false,
+    isLandingTruss:      false,
+    descentPropFraction: 0,
   });
   if (_scStageEditId) {
     const e = _scStageLib.find(x => x.libId === _scStageEditId);
@@ -14818,9 +14872,6 @@ function scStageLibInfo(libId) {
     ${row('Stage ΔV (alone)', dv > 0 ? Math.round(dv).toLocaleString() + ' m/s' : '—')}
     ${row('Crew capacity', s.crewCapacity || 0)}
     ${row('Docking ports', s.dockingPorts || 0)}
-    ${row('Tunnel capable', s.tunnelCapable ? 'Yes' : 'No')}
-    ${row('Landing truss', s.isLandingTruss ? 'Yes' : 'No')}
-    ${row('Descent prop frac.', (s.descentPropFraction || 0).toFixed(2))}
   </tbody></table>`;
   openModal('modal-scstage-info');
 }
@@ -15100,7 +15151,7 @@ document.addEventListener('mousemove',e=>{
 <div class="modal-overlay" id="modal-mission-group" style="display:none">
   <div class="modal" style="max-width:380px;">
     <div class="modal-header">
-      <span class="modal-title">Event Group</span>
+      <span class="modal-title">Event Loop</span>
       <button class="modal-close" onclick="closeModal('modal-mission-group')">✕</button>
     </div>
     <div class="modal-body" id="mgroup-body" style="padding:14px;"></div>
