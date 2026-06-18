@@ -16,3 +16,22 @@ _*.txt
 ~$*
 *.exe
 extracted_docx/
+# Human-made docs / mockups / dev scripts / sample data — kept locally, not in the repo
+CLAUDE.md
+CREDITS.md
+adding_presets.md
+check_js.wsf
+check_syntax.js
+conops_mockups.html
+dev_notes.md
+human-authored-program-outline.docx
+implementation_onboarding.md
+init
+juno_v_upper_stage_stage.json
+lv_calc_58.html
+mission_page_layouts.html
+preset_manager.html
+program_architecture.md
+program_math_reference.md
+program_ui_mockups.html
+saturn_lcus_stage.json
