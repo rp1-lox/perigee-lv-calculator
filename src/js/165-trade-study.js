@@ -266,6 +266,68 @@ function tsAddCompareVehicle(){
   tsRenderCompareChips();
 }
 
+// Resolve a CSS custom-property color reference (e.g. "var(--accent)") to a
+// concrete hex/rgb string for use as an <input type="color"> value. Resolved
+// lazily at render time (per spec) so theme changes are picked up naturally.
+function _tsResolveCssColor(cssVal){
+  if(!cssVal)return '#ffffff';
+  if(!/^var\(/.test(cssVal))return cssVal;
+  const m=/^var\((--[\w-]+)\)$/.exec(cssVal.trim());
+  if(!m)return '#ffffff';
+  const raw=getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim();
+  return _tsColorToHex(raw)||'#ffffff';
+}
+
+// Best-effort convert an arbitrary CSS color (hex/rgb/rgba/named) to a #rrggbb
+// hex string, since <input type="color"> only accepts that format.
+function _tsColorToHex(raw){
+  if(!raw)return null;
+  if(/^#([0-9a-f]{6})$/i.test(raw))return raw;
+  if(/^#([0-9a-f]{3})$/i.test(raw)){
+    return '#'+raw.slice(1).split('').map(c=>c+c).join('');
+  }
+  const m=/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(raw);
+  if(m){
+    const toHex=n=>Math.max(0,Math.min(255,parseInt(n))).toString(16).padStart(2,'0');
+    return '#'+toHex(m[1])+toHex(m[2])+toHex(m[3]);
+  }
+  // Fallback: let the browser resolve named colors via a throwaway element.
+  try{
+    const probe=document.createElement('span');
+    probe.style.color=raw;
+    document.body.appendChild(probe);
+    const computed=getComputedStyle(probe).color;
+    document.body.removeChild(probe);
+    return _tsColorToHex(computed)||_tsRgbStringToHex(computed);
+  }catch(_){return null;}
+}
+function _tsRgbStringToHex(s){
+  const m=/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(s||'');
+  if(!m)return null;
+  const toHex=n=>Math.max(0,Math.min(255,parseInt(n))).toString(16).padStart(2,'0');
+  return '#'+toHex(m[1])+toHex(m[2])+toHex(m[3]);
+}
+
+// Return the chip's chosen color, resolving+caching the palette default lazily.
+function _tsChipColor(cv,i){
+  if(!cv.color)cv.color=_tsResolveCssColor(TS_SERIES_COLORS[i%TS_SERIES_COLORS.length]);
+  return cv.color;
+}
+
+// User changed a chip's color swatch: store it, then re-render whatever's on
+// screen from _tsResult WITHOUT re-running the sweep.
+function tsSetCompareColor(i,hex){
+  const cv=_tsCompareVehicles[i];
+  if(!cv)return;
+  cv.color=hex;
+  tsRenderCompareChips();
+  if(_tsResult&&_tsResult.series&&_tsResult.series[i]){
+    _tsResult.series[i].color=hex;
+    tsRenderChart(_tsResult);
+    tsRenderTable(_tsResult);
+  }
+}
+
 function tsRemoveCompareVehicle(i){
   _tsCompareVehicles.splice(i,1);
   tsRenderCompareChips();
@@ -276,10 +338,10 @@ function tsRenderCompareChips(){
   if(!wrap)return;
   let html='';
   _tsCompareVehicles.forEach((cv,i)=>{
-    const color=TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
+    const color=_tsChipColor(cv,i);
     const label=cv.kind==='worksheet'?_tsWorksheetLabel():cv.name;
     html+=`<span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--text-bright);border:1px solid var(--border-bright);padding:3px 8px;">
-      <span style="width:9px;height:9px;background:${color};display:inline-block;"></span>${_tsEsc(label)}
+      <input type="color" value="${color}" title="Series color" style="width:14px;height:14px;padding:0;border:none;background:none;cursor:pointer;" oninput="tsSetCompareColor(${i},this.value)">${_tsEsc(label)}
       <span style="cursor:pointer;color:var(--text-dim);" onclick="tsRemoveCompareVehicle(${i})">✕</span></span>`;
   });
   wrap.innerHTML=html||'<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">No vehicles selected.</span>';
@@ -404,9 +466,9 @@ function tsRunSweep(){
   }
   const metricDef=TS_METRICS[metric];
 
-  const seriesDefs=_tsCompareVehicles.map(cv=>{
+  const seriesDefs=_tsCompareVehicles.map((cv,i)=>{
     const base=_tsResolveBase(cv);
-    return base?{name:_tsResolveLabel(cv),base}:null;
+    return base?{name:_tsResolveLabel(cv),base,color:_tsChipColor(cv,i)}:null;
   }).filter(Boolean);
   if(!seriesDefs.length){_tsSetError('Add at least one vehicle.');return;}
 
@@ -435,7 +497,7 @@ function tsRunSweep(){
   const sharedParkingAlt=seriesDefs[0].base.parkingAlt;
 
   const progEl=document.getElementById('ts-progress');
-  const series=seriesDefs.map(sd=>({name:sd.name,points:[]}));
+  const series=seriesDefs.map(sd=>({name:sd.name,points:[],color:sd.color}));
   let si=0,i=0;
 
   function chunk(){
@@ -495,9 +557,9 @@ function tsRunDestinationSweep(){
   const metric=_tsSelectedMetric();
   const metricDef=TS_METRICS[metric];
 
-  const seriesDefs=_tsCompareVehicles.map(cv=>{
+  const seriesDefs=_tsCompareVehicles.map((cv,i)=>{
     const base=_tsResolveBase(cv);
-    return base?{name:_tsResolveLabel(cv),base}:null;
+    return base?{name:_tsResolveLabel(cv),base,color:_tsChipColor(cv,i)}:null;
   }).filter(Boolean);
   if(!seriesDefs.length){_tsSetError('Add at least one vehicle.');return;}
 
@@ -509,7 +571,7 @@ function tsRunDestinationSweep(){
   if(noteEl)noteEl.textContent=`Varies: destination (per ORBIT_CATEGORIES). Metric: ${metricDef.label} (margin/T:W/ΔV/burn-time metrics evaluated at each vehicle's current payload input). Holds constant: all stage masses, booster, fairing per vehicle. On-orbit ΔV per destination computed via the pinned pure destOnOrbitDV() (145-dest-dv.js) — same math as the main calculator. Impossible C3 (below escape minimum for the parking perigee) shows a blank/zero value.`;
 
   const progEl=document.getElementById('ts-progress');
-  const series=seriesDefs.map(sd=>({name:sd.name,points:[]}));
+  const series=seriesDefs.map(sd=>({name:sd.name,points:[],color:sd.color}));
   let si=0,i=0;
 
   function chunk(){
@@ -584,7 +646,8 @@ function _tsPerturbBase(base,path,mult){
 function tsRunSensitivitySweep(){
   if(!_tsCompareVehicles.length){_tsSetError('Add at least one vehicle.');return;}
   const vIdx=parseInt(document.getElementById('ts-sens-vehicle')?.value);
-  const cv=_tsCompareVehicles[Number.isFinite(vIdx)?vIdx:0];
+  const cvIdx=Number.isFinite(vIdx)?vIdx:0;
+  const cv=_tsCompareVehicles[cvIdx];
   if(!cv){_tsSetError('Add at least one vehicle.');return;}
   const base=_tsResolveBase(cv);
   if(!base){_tsSetError('Selected vehicle could not be resolved.');return;}
@@ -631,7 +694,7 @@ function tsRunSensitivitySweep(){
       if(progEl)progEl.textContent='';
       rows.forEach(r=>{r.swing=Math.abs(r.high-r.low);});
       rows.sort((a,b)=>b.swing-a.swing);
-      _tsResult={type:'tornado',xLabel:'Parameter',xUnit:'',yLabel:metricDef.label,yUnit:metricDef.unit,baseline:baselineY,rows,vehicleName:_tsResolveLabel(cv),pct};
+      _tsResult={type:'tornado',xLabel:'Parameter',xUnit:'',yLabel:metricDef.label,yUnit:metricDef.unit,baseline:baselineY,rows,vehicleName:_tsResolveLabel(cv),color:_tsChipColor(cv,cvIdx),pct};
       tsRenderChart(_tsResult);
       tsRenderTable(_tsResult);
       if(csvBtn)csvBtn.disabled=false;
@@ -658,7 +721,7 @@ function tsRenderTable(res){
     rows+=`<tr>${row}</tr>`;
   }
   const unitSuffix=res.yUnit?` (${res.yUnit})`:'';
-  const headCols=res.series.map((s,i)=>`<th style="text-align:left;padding:2px 8px;color:${TS_SERIES_COLORS[i%TS_SERIES_COLORS.length]};border-bottom:1px solid var(--border-bright);">${_tsEsc(s.name)} — ${res.yLabel}${unitSuffix}</th>`).join('');
+  const headCols=res.series.map((s,i)=>`<th style="text-align:left;padding:2px 8px;color:${s.color||TS_SERIES_COLORS[i%TS_SERIES_COLORS.length]};border-bottom:1px solid var(--border-bright);">${_tsEsc(s.name)} — ${res.yLabel}${unitSuffix}</th>`).join('');
   const xUnitSuffix=res.xUnit?` (${res.xUnit})`:'';
   wrap.innerHTML=`<table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:9px;color:var(--text-bright);">
     <thead><tr><th style="text-align:left;padding:2px 8px;color:var(--text-dim);border-bottom:1px solid var(--border-bright);">${res.xLabel}${xUnitSuffix}</th>${headCols}</tr></thead>
@@ -729,9 +792,9 @@ function tsRenderLineChart(res){
   const renderSeries=res.series.map(s=>{
     if(res.clip){
       const {clipped,terminus}=_tsClipSeriesAtZero(s.points);
-      return {name:s.name,points:clipped,terminus};
+      return {name:s.name,points:clipped,terminus,color:s.color};
     }
-    return {name:s.name,points:s.points,terminus:null};
+    return {name:s.name,points:s.points,terminus:null,color:s.color};
   });
 
   const allPts=res.series.flatMap(s=>s.points);
@@ -765,7 +828,7 @@ function tsRenderLineChart(res){
   const zero=(res.zeroLine||res.clip)?`<line x1="${ML}" y1="${yToPx(0)}" x2="${ML+plotW}" y2="${yToPx(0)}" stroke="var(--border-bright)" stroke-width="1.5" stroke-dasharray="4,3"/>`:'';
 
   const polylines=renderSeries.map((s,i)=>{
-    const color=TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
+    const color=s.color||TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
     const linePts=s.terminus?[...s.points,s.terminus]:s.points;
     const pts=linePts.map(p=>`${xToPx(p.x)},${yToPx(p.y)}`).join(' ');
     const line=`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.75"/>`;
@@ -774,7 +837,7 @@ function tsRenderLineChart(res){
   }).join('');
 
   const legend=res.series.map((s,i)=>{
-    const color=TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
+    const color=s.color||TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
     return `<span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-right:14px;"><span style="width:10px;height:10px;background:${color};display:inline-block;"></span>${_tsEsc(s.name)}</span>`;
   }).join('');
 
@@ -857,7 +920,7 @@ function tsRenderBarChart(res){
     xLabels+=`<text x="${gx+groupW/2}" y="${MT+plotH+14}" font-size="9" fill="var(--text-dim)" text-anchor="end" font-family="var(--mono)" transform="rotate(-40 ${gx+groupW/2} ${MT+plotH+14})">${_tsEsc(String(dests[g]).length>16?String(dests[g]).slice(0,15)+'…':dests[g])}</text>`;
     for(let si=0;si<nSeries;si++){
       const p=res.series[si].points[g];
-      const color=TS_SERIES_COLORS[si%TS_SERIES_COLORS.length];
+      const color=res.series[si].color||TS_SERIES_COLORS[si%TS_SERIES_COLORS.length];
       const bx=gx+barPad+si*barW;
       const by=Math.min(yToPx(p.y),zeroPx);
       const bh=Math.abs(yToPx(p.y)-zeroPx);
@@ -868,7 +931,7 @@ function tsRenderBarChart(res){
   }
 
   const legend=res.series.map((s,i)=>{
-    const color=TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
+    const color=s.color||TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
     return `<span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-right:14px;"><span style="width:10px;height:10px;background:${color};display:inline-block;"></span>${_tsEsc(s.name)}</span>`;
   }).join('');
 
@@ -919,7 +982,7 @@ function tsRenderTornadoChart(res){
     const cy=padTop+i*rowH+rowH/2;
     const bh=rowH*0.55;
     const lowPx=xToPx(Math.min(r.low,r.high)), highPx=xToPx(Math.max(r.low,r.high));
-    const color=TS_SERIES_COLORS[0];
+    const color=res.color||TS_SERIES_COLORS[0];
     const title=`${_tsEsc(r.param)}: −${res.pct}%=${_tsFmt(r.low)}, baseline=${_tsFmt(res.baseline)}, +${res.pct}%=${_tsFmt(r.high)}`;
     bars+=`<g><title>${title}</title><rect x="${lowPx}" y="${cy-bh/2}" width="${Math.max(highPx-lowPx,0.5)}" height="${bh}" fill="${color}" opacity="0.85"/></g>`;
     labels+=`<text x="${ML-8}" y="${cy+3}" font-size="9" fill="var(--text-bright)" text-anchor="end" font-family="var(--mono)">${_tsEsc(r.param)}</text>`;

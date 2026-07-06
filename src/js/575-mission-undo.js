@@ -34,6 +34,7 @@ function _missionUndoSerialize(m) {
     name: m.name,
     fleetEntryId: m.fleetEntryId,
     payloadScIds: m.payloadScIds || [],
+    laneColors: m.laneColors || {},
   });
 }
 
@@ -57,6 +58,7 @@ function _missionUndoApply(m, snapStr) {
   m.name = data.name;
   m.fleetEntryId = data.fleetEntryId;
   m.payloadScIds = data.payloadScIds;
+  m.laneColors = data.laneColors || {};
   _missionUndoRestoring = true;
   try {
     missionRecompute(m);

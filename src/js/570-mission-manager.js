@@ -3003,8 +3003,34 @@ function _missionAltToYFrac(alt) {
 // payload and the launch vehicle. Built from the per-event snapshots. Separations
 // just let owners continue on their own rows; docking puts two owners in one vehicle
 // so their lines run side by side (a "docked" tie connects them).
+const _MISSION_BAND_PALETTE = ['#61afef','#e5c07b','#98c379','#c678dd','#56b6c2','#e06c75','#d19a66'];
+
+// Resolve a lane's display color: user override (keyed by stable owner LABEL,
+// stored on the mission so it survives save/load + autosave) beats the
+// index-based palette default. `fallbackIdx` is the owner's insertion order
+// within this replay (ownerKey embeds per-replay kid indices and regenerates,
+// so labels — not keys — are the stable, human-meaningful storage key).
+function _missionLaneColor(m, label, fallbackIdx, palette) {
+  const pal = palette || _MISSION_BAND_PALETTE;
+  if (m && m.laneColors && m.laneColors[label]) return m.laneColors[label];
+  return pal[fallbackIdx % pal.length];
+}
+
+// User picked a custom color for a band-view lane (by owner label). Persists
+// on the mission object (survives save/load + autosave), captures undo, and
+// re-renders the detail view (band redraw needs the model rebuilt with the new color).
+function missionSetLaneColor(missionId, label, hex) {
+  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  if (!m) return;
+  m.laneColors = m.laneColors || {};
+  m.laneColors[label] = hex;
+  if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
+  if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
+  missionRenderDetail();
+}
+
 function _missionBandModel(m) {
-  const palette = ['#61afef','#e5c07b','#98c379','#c678dd','#56b6c2','#e06c75','#d19a66'];
+  const palette = _MISSION_BAND_PALETTE;
   const log = (m._expanded && m._expanded.length) ? m._expanded : m.log;
   // colOf: normal events advance a column; sameTimeAsPrev share the prev column;
   // midCoast events ALSO share the prev column but sit at a fractional x-offset, so
@@ -3029,7 +3055,11 @@ function _missionBandModel(m) {
     return 'Launch Vehicle';
   };
   const ensure = key => {
-    if (!owners.has(key)) owners.set(key, { key, name: ownerName(key), color: palette[colorIdx++ % palette.length], birth: birth++, points: [], endCol: null, expended: false, _ended: false });
+    if (!owners.has(key)) {
+      const name = ownerName(key);
+      const idx = colorIdx++;
+      owners.set(key, { key, name, color: _missionLaneColor(m, name, idx, palette), birth: birth++, points: [], endCol: null, expended: false, _ended: false });
+    }
     return owners.get(key);
   };
 
@@ -3574,7 +3604,8 @@ function _missionBandViewHTML(m) {
     <button class="act-btn" style="padding:0 7px;" onclick="missionBandZoom('${id}',1)">+</button></span>`;
   for (const lane of model.lanes) {
     const dimmed = lane.expended;
-    legendHTML += `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:${dimmed ? 'var(--text-dim)' : 'var(--text-bright)'};opacity:${dimmed ? '0.5' : '1'}"><span style="display:inline-block;width:8px;height:8px;background:${lane.color};border-radius:2px;"></span>${lane.name}${dimmed ? ' (expended)' : ''}</span>`;
+    const labelJs = lane.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    legendHTML += `<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:${dimmed ? 'var(--text-dim)' : 'var(--text-bright)'};opacity:${dimmed ? '0.5' : '1'}"><input type="color" value="${lane.color}" title="Lane color" style="width:12px;height:12px;padding:0;border:none;background:none;cursor:pointer;border-radius:2px;" onchange="missionSetLaneColor('${id}','${labelJs}',this.value)">${lane.name}${dimmed ? ' (expended)' : ''}</span>`;
   }
   legendHTML += '</div>';
 
