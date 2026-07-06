@@ -8,8 +8,9 @@
  * error from this approximation is small (< 5 % for typical Atlas-class vehicles).
  *
  * @param {object} s  - stage record with {dry, prop, isp, thrust,
- *                      s15_sust_thrust, s15_sust_isp, s15_jet_mass, s15_beco_twr}
- * @returns {object}  - {prop_ph1, prop_ph2, isp_ph1, isp_ph2, dry_ph2} or {error}
+ *                      s15_sust_thrust, s15_sust_isp, s15_jet_mass, s15_beco_twr,
+ *                      s15_boost_isp}
+ * @returns {object}  - {prop_ph1, prop_ph2, isp_ph1, isp_ph2, dry_ph2, boostIspUsed} or {error}
  */
 function _s15BecoSplit(s) {
   const F_sust   = (s.s15_sust_thrust || 0) * 1000;   // N
@@ -38,12 +39,29 @@ function _s15BecoSplit(s) {
 
   if (prop_ph2 <= 0) return { error: 'No propellant left for Phase 2 — lower BECO TWR or add more propellant' };
 
+  // Optional mass-flow-blended Phase-1 Isp: thrust-weighted harmonic mean of the
+  // booster engines' Isp and the sustainer's Isp, since both burn together in Phase 1.
+  // Isp_eff = F_tot / (F_boost/Isp_boost + F_sust/Isp_sust), F_boost = F_tot - F_sust.
+  const authoredIsp = parseFloat(s.isp) || 1;
+  const boostIsp     = s.s15_boost_isp > 0 ? s.s15_boost_isp : 0;
+  let isp_ph1 = authoredIsp;
+  let boostIspUsed = null;
+  if (boostIsp > 0) {
+    const F_tot   = (parseFloat(s.thrust) || 0) * 1000;   // N
+    const F_boost = F_tot - F_sust;                       // guarded > 0 above
+    if (F_boost > 0) {
+      isp_ph1 = F_tot / (F_boost / boostIsp + F_sust / isp_ph2);
+      boostIspUsed = boostIsp;
+    }
+  }
+
   return {
     prop_ph1,
     prop_ph2,
-    isp_ph1:  parseFloat(s.isp) || 1,
+    isp_ph1,
     isp_ph2,
     dry_ph2:  dry - jet,
+    boostIspUsed,
   };
 }
 

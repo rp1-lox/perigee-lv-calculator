@@ -300,6 +300,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     s15_sust_isp: 309,
     s15_jet_mass: 3050,
     s15_beco_twr: 1.2,
+    s15_boost_isp: 282,   // mirrors the library entry's added field (2026-07-06)
   };
   const upperStage = { dry: 1000, prop: 6577, thrust: 71, isp: 309, res: 2 }; // Atlas-Agena-ish
 
@@ -314,6 +315,28 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     approx('_s15BecoSplit: dry_ph2 == dry - s15_jet_mass',
       split.dry_ph2, atlasD.dry - atlasD.s15_jet_mass, 1e-6);
   }
+
+  // ── _s15BecoSplit: mass-flow-blended Phase-1 Isp (s15_boost_isp) ────────
+  // (a) blend formula: isp_ph1 == F_tot/((F_tot-F_sust)/Isp_boost + F_sust/Isp_sust)
+  {
+    const F_tot   = atlasD.thrust * 1000;
+    const F_sust  = atlasD.s15_sust_thrust * 1000;
+    const F_boost = F_tot - F_sust;
+    const expectedIspPh1 = F_tot / (F_boost / atlasD.s15_boost_isp + F_sust / atlasD.s15_sust_isp);
+    approx('_s15BecoSplit: blended isp_ph1 matches thrust-weighted harmonic-mean formula',
+      split.isp_ph1, expectedIspPh1, 1e-9);
+  }
+  // (b) absence regression: without s15_boost_isp, isp_ph1 == authored isp exactly
+  {
+    const { s15_boost_isp, ...atlasNoBoostIsp } = atlasD;
+    const splitNoBlend = _s15BecoSplit(atlasNoBoostIsp);
+    ok('_s15BecoSplit: without s15_boost_isp, isp_ph1 == authored isp exactly (regression)',
+      !splitNoBlend.error && splitNoBlend.isp_ph1 === atlasD.isp);
+  }
+  // (c) blended isp_ph1 lies strictly between the two engines' Isps
+  ok('_s15BecoSplit: blended isp_ph1 lies strictly between min and max of booster/sustainer Isp',
+    split.isp_ph1 > Math.min(atlasD.s15_boost_isp, atlasD.s15_sust_isp) &&
+    split.isp_ph1 < Math.max(atlasD.s15_boost_isp, atlasD.s15_sust_isp));
 
   // ── _s15BecoSplit error path: nonsense stage (zero sustainer thrust) ────
   const badAtlas = { ...atlasD, s15_sust_thrust: 0 };
@@ -353,10 +376,14 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     testParkingAlt, testOnOrbitDV, testSiteLat, testAzMin, testAzMax
   );
   // Golden value captured from the CURRENT implementation as a regression
-  // baseline (2026-07-06). If a future physics refactor changes this value,
-  // re-evaluate deliberately — do not silently update the number.
+  // baseline (2026-07-06, UPDATED same day: added s15_boost_isp:282 mass-flow
+  // blend for Phase-1 Isp — was 2280.24 kg with the unblended authored isp
+  // verbatim; the harmonic-mean blend of booster (282s) + sustainer (309s)
+  // Isp raised Phase-1 Isp slightly, increasing max payload).
+  // If a future physics refactor changes this value, re-evaluate deliberately
+  // — do not silently update the number.
   approx('S1.5: golden max-payload snapshot (expanded Atlas D Sust. + upper stage)',
-    s15MaxPay, 2280.24, 1);
+    s15MaxPay, 2329.83, 1);
 
   // ── UNexpanded stage must give a DIFFERENT max payload ──────────────────
   // Feeding the raw (unsplit) S1.5 stage directly into lvPerformance/

@@ -98,6 +98,8 @@ function openEditStageModal(stageIdx,isBooster,extraIdx){
     document.getElementById('stg-s15-isp').value    = sd.s15_sust_isp   || '';
     document.getElementById('stg-s15-jet').value    = sd.s15_jet_mass   || '';
     document.getElementById('stg-s15-twr').value    = sd.s15_beco_twr != null ? sd.s15_beco_twr : 1.2;
+    const boostIspEl = document.getElementById('stg-s15-boost-isp');
+    if (boostIspEl) boostIspEl.value = sd.s15_boost_isp || '';
     toggleS15Fields(on);
     _s15UpdatePreview(stageIdx);
   }
@@ -141,15 +143,17 @@ function _s15UpdatePreview(_stageIdx) {
   const sIsp    = parseFloat(document.getElementById('stg-s15-isp')?.value)    || isp;
   const jetM    = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
   const twr     = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
+  const boostIsp = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
   const split   = _s15BecoSplit({ dry, prop, isp, thrust,
-    s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr });
+    s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr, s15_boost_isp: boostIsp });
   if (split.error) { pre.textContent = '// ' + split.error; pre.style.color='var(--accent2)'; return; }
   pre.style.color = 'var(--text-dim)';
   const fM = v => Math.round(v).toLocaleString() + ' kg';
   pre.textContent =
     `Ph.1 → Ph.2 prop split:  ${fM(split.prop_ph1)}  →  ${fM(split.prop_ph2)}`+
     `   |   dry after BECO: ${fM(dry - jetM)}`+
-    `   |   booster thrust: ${(thrust - sThrust).toFixed(1)} kN`;
+    `   |   booster thrust: ${(thrust - sThrust).toFixed(1)} kN`+
+    (split.boostIspUsed ? `   |   Ph.1 Isp (blended): ${split.isp_ph1.toFixed(1)} s` : '');
 }
 
 function doEditStage(){
@@ -221,6 +225,7 @@ function doEditStage(){
       stageStore[stageIdx].s15_sust_isp   = parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0;
       stageStore[stageIdx].s15_jet_mass   = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
       stageStore[stageIdx].s15_beco_twr   = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
+      stageStore[stageIdx].s15_boost_isp  = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
     } else {
       // Clear any previous s15 data
       delete stageStore[stageIdx].s15;
@@ -228,6 +233,7 @@ function doEditStage(){
       delete stageStore[stageIdx].s15_sust_isp;
       delete stageStore[stageIdx].s15_jet_mass;
       delete stageStore[stageIdx].s15_beco_twr;
+      delete stageStore[stageIdx].s15_boost_isp;
     }
     const wasUGC=isUGCStage(currentStageNames[stageIdx]);
     currentStageNames[stageIdx]=name;

@@ -128,7 +128,7 @@ function applyLVObject(obj){
   // ── Vehicle config ──
   if(obj.stageData)obj.stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
-    if(sd.s15){entry.s15=true;entry.s15_sust_thrust=sd.s15_sust_thrust||0;entry.s15_sust_isp=sd.s15_sust_isp||0;entry.s15_jet_mass=sd.s15_jet_mass||0;entry.s15_beco_twr=sd.s15_beco_twr||1.2;}
+    if(sd.s15){entry.s15=true;entry.s15_sust_thrust=sd.s15_sust_thrust||0;entry.s15_sust_isp=sd.s15_sust_isp||0;entry.s15_jet_mass=sd.s15_jet_mass||0;entry.s15_beco_twr=sd.s15_beco_twr||1.2;entry.s15_boost_isp=sd.s15_boost_isp||0;}
     stageStore[si]=entry;
   });
   // Resolve stage names if present (new format)
@@ -138,7 +138,7 @@ function applyLVObject(obj){
       const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
       // Carry over s15 fields from the original stageData if present
       const orig=(obj.stageData||[])[si]||{};
-      if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;}
+      if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
       stageStore[si]=entry;
     });
     _suppressUD=true;setStages(resolved.length);

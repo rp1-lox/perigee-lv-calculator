@@ -97,7 +97,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:670,prop:6497,thrust:71,isp:291,res:2}
     ],
@@ -125,7 +126,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:1800,prop:9000,thrust:133,isp:428,res:2}
     ],
@@ -465,7 +467,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:600,prop:5500,thrust:53.5,isp:357,res:2}
     ],

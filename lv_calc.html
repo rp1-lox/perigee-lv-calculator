@@ -1646,6 +1646,10 @@ button,input,select,textarea{font-family:inherit;}
                 <label>BECO Sustainer TWR <span class="info-tip" onclick="event.stopPropagation()">i<span class="tip-text" style="white-space:normal;max-width:220px;line-height:1.6;">Jettison when sustainer thrust ÷ remaining stage weight ≥ this value. Stage-mass approximation — upper stages and payload not included. Typical value: 1.0–1.5.</span></span></label>
                 <input type="number" id="stg-s15-twr" value="1.2" min="0.1" step="0.1" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
               </div>
+              <div style="grid-column:1/-1;">
+                <label>Booster-engine Isp (s), optional — blends Phase-1 Isp by mass flow <span class="info-tip" onclick="event.stopPropagation()">i<span class="tip-text" style="white-space:normal;max-width:260px;line-height:1.6;">If set, Phase-1 Isp is computed as the thrust-weighted harmonic mean of this booster-engine Isp and the sustainer Isp (both burn together in Phase 1), instead of using the stage's authored Isp verbatim. Leave blank to keep today's behavior.</span></span></label>
+                <input type="number" id="stg-s15-boost-isp" placeholder="(blank = use stage Isp)" min="1" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
+              </div>
             </div>
             <div id="stg-s15-preview" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:8px;padding:6px 8px;background:rgba(0,0,0,.25);border:1px solid var(--border);letter-spacing:.04em;"></div>
           </div>
@@ -1896,7 +1900,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:670,prop:6497,thrust:71,isp:291,res:2}
     ],
@@ -1924,7 +1929,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:1800,prop:9000,thrust:133,isp:428,res:2}
     ],
@@ -2264,7 +2270,8 @@ const BUILTIN_PRESETS=[
         s15_sust_thrust:270,
         s15_sust_isp:309,
         s15_jet_mass:1800,
-        s15_beco_twr:0.5
+        s15_beco_twr:0.5,
+        s15_boost_isp:282
       },
       {dry:600,prop:5500,thrust:53.5,isp:357,res:2}
     ],
@@ -3007,7 +3014,7 @@ function loadPreset(p,key){
   stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
     const orig=(p.stageData||[])[si]||{};
-    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;}
+    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
     stageStore[si]=entry;
   });
   _suppressUD=true;setStages(numStgs);
@@ -3454,7 +3461,7 @@ function collectVehicle(){
     const sd=stageStore[s]||{};
     const st={dry:mathValue(sd.dry,0),prop:mathValue(sd.prop,0),thrust:mathValue(sd.thrust,0),isp:parseFloat(sd.isp)||1,res:mathValue(sd.res,0)};
     // Persist S1.5 fields so they survive save/load
-    if(sd.s15){st.s15=true;st.s15_sust_thrust=sd.s15_sust_thrust||0;st.s15_sust_isp=sd.s15_sust_isp||0;st.s15_jet_mass=sd.s15_jet_mass||0;st.s15_beco_twr=sd.s15_beco_twr||1.2;}
+    if(sd.s15){st.s15=true;st.s15_sust_thrust=sd.s15_sust_thrust||0;st.s15_sust_isp=sd.s15_sust_isp||0;st.s15_jet_mass=sd.s15_jet_mass||0;st.s15_beco_twr=sd.s15_beco_twr||1.2;st.s15_boost_isp=sd.s15_boost_isp||0;}
     stages.push(st);
   }
   const groups=lvBoosterGroups();
@@ -3525,8 +3532,9 @@ function destOnOrbitDV(dest, siteLat){
  * error from this approximation is small (< 5 % for typical Atlas-class vehicles).
  *
  * @param {object} s  - stage record with {dry, prop, isp, thrust,
- *                      s15_sust_thrust, s15_sust_isp, s15_jet_mass, s15_beco_twr}
- * @returns {object}  - {prop_ph1, prop_ph2, isp_ph1, isp_ph2, dry_ph2} or {error}
+ *                      s15_sust_thrust, s15_sust_isp, s15_jet_mass, s15_beco_twr,
+ *                      s15_boost_isp}
+ * @returns {object}  - {prop_ph1, prop_ph2, isp_ph1, isp_ph2, dry_ph2, boostIspUsed} or {error}
  */
 function _s15BecoSplit(s) {
   const F_sust   = (s.s15_sust_thrust || 0) * 1000;   // N
@@ -3555,12 +3563,29 @@ function _s15BecoSplit(s) {
 
   if (prop_ph2 <= 0) return { error: 'No propellant left for Phase 2 — lower BECO TWR or add more propellant' };
 
+  // Optional mass-flow-blended Phase-1 Isp: thrust-weighted harmonic mean of the
+  // booster engines' Isp and the sustainer's Isp, since both burn together in Phase 1.
+  // Isp_eff = F_tot / (F_boost/Isp_boost + F_sust/Isp_sust), F_boost = F_tot - F_sust.
+  const authoredIsp = parseFloat(s.isp) || 1;
+  const boostIsp     = s.s15_boost_isp > 0 ? s.s15_boost_isp : 0;
+  let isp_ph1 = authoredIsp;
+  let boostIspUsed = null;
+  if (boostIsp > 0) {
+    const F_tot   = (parseFloat(s.thrust) || 0) * 1000;   // N
+    const F_boost = F_tot - F_sust;                       // guarded > 0 above
+    if (F_boost > 0) {
+      isp_ph1 = F_tot / (F_boost / boostIsp + F_sust / isp_ph2);
+      boostIspUsed = boostIsp;
+    }
+  }
+
   return {
     prop_ph1,
     prop_ph2,
-    isp_ph1:  parseFloat(s.isp) || 1,
+    isp_ph1,
     isp_ph2,
     dry_ph2:  dry - jet,
+    boostIspUsed,
   };
 }
 
@@ -4187,7 +4212,7 @@ function _tsResolveLabel(cv){return cv.kind==='worksheet'?_tsWorksheetLabel():cv
 // orbit params so curves stay comparable (see tsRunSweep).
 function _tsVehicleToBase(vehObj){
   const stages=resolvePresetStages(vehObj).map(sd=>({dry:sd.dry,prop:sd.prop,thrust:sd.thrust,isp:sd.isp,res:sd.res??2,
-    ...(sd.s15?{s15:true,s15_sust_thrust:sd.s15_sust_thrust||0,s15_sust_isp:sd.s15_sust_isp||0,s15_jet_mass:sd.s15_jet_mass||0,s15_beco_twr:sd.s15_beco_twr||1.2}:{})}));
+    ...(sd.s15?{s15:true,s15_sust_thrust:sd.s15_sust_thrust||0,s15_sust_isp:sd.s15_sust_isp||0,s15_jet_mass:sd.s15_jet_mass||0,s15_beco_twr:sd.s15_beco_twr||1.2,s15_boost_isp:sd.s15_boost_isp||0}:{})}));
   // boosterGroups (array, Group 2+) takes precedence like the live-DOM assembler (lvBoosterGroups);
   // fall back to a single resolved boosterData/boosterName group.
   let boosterArg=null;
@@ -5215,7 +5240,7 @@ function applyLVObject(obj){
   // ── Vehicle config ──
   if(obj.stageData)obj.stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
-    if(sd.s15){entry.s15=true;entry.s15_sust_thrust=sd.s15_sust_thrust||0;entry.s15_sust_isp=sd.s15_sust_isp||0;entry.s15_jet_mass=sd.s15_jet_mass||0;entry.s15_beco_twr=sd.s15_beco_twr||1.2;}
+    if(sd.s15){entry.s15=true;entry.s15_sust_thrust=sd.s15_sust_thrust||0;entry.s15_sust_isp=sd.s15_sust_isp||0;entry.s15_jet_mass=sd.s15_jet_mass||0;entry.s15_beco_twr=sd.s15_beco_twr||1.2;entry.s15_boost_isp=sd.s15_boost_isp||0;}
     stageStore[si]=entry;
   });
   // Resolve stage names if present (new format)
@@ -5225,7 +5250,7 @@ function applyLVObject(obj){
       const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
       // Carry over s15 fields from the original stageData if present
       const orig=(obj.stageData||[])[si]||{};
-      if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;}
+      if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
       stageStore[si]=entry;
     });
     _suppressUD=true;setStages(resolved.length);
@@ -5654,7 +5679,8 @@ const STAGE_LIBRARY={
       s15_sust_thrust:362,
       s15_sust_isp:309,
       s15_jet_mass:3050,
-      s15_beco_twr:1.2
+      s15_beco_twr:1.2,
+      s15_boost_isp:282
     },
     {
       name:'Atlas SLV-3',
@@ -7355,12 +7381,14 @@ function applyStageData(stageIdx,stage){
     stageStore[stageIdx].s15_sust_isp=stage.s15_sust_isp||0;
     stageStore[stageIdx].s15_jet_mass=stage.s15_jet_mass||0;
     stageStore[stageIdx].s15_beco_twr=stage.s15_beco_twr||1.2;
+    stageStore[stageIdx].s15_boost_isp=stage.s15_boost_isp||0;
   } else {
     delete stageStore[stageIdx].s15;
     delete stageStore[stageIdx].s15_sust_thrust;
     delete stageStore[stageIdx].s15_sust_isp;
     delete stageStore[stageIdx].s15_jet_mass;
     delete stageStore[stageIdx].s15_beco_twr;
+    delete stageStore[stageIdx].s15_boost_isp;
   }
   currentStageNames[stageIdx]=stage.name||null;
   stageSaved[stageIdx]=false;
@@ -9669,6 +9697,8 @@ function openEditStageModal(stageIdx,isBooster,extraIdx){
     document.getElementById('stg-s15-isp').value    = sd.s15_sust_isp   || '';
     document.getElementById('stg-s15-jet').value    = sd.s15_jet_mass   || '';
     document.getElementById('stg-s15-twr').value    = sd.s15_beco_twr != null ? sd.s15_beco_twr : 1.2;
+    const boostIspEl = document.getElementById('stg-s15-boost-isp');
+    if (boostIspEl) boostIspEl.value = sd.s15_boost_isp || '';
     toggleS15Fields(on);
     _s15UpdatePreview(stageIdx);
   }
@@ -9712,15 +9742,17 @@ function _s15UpdatePreview(_stageIdx) {
   const sIsp    = parseFloat(document.getElementById('stg-s15-isp')?.value)    || isp;
   const jetM    = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
   const twr     = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
+  const boostIsp = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
   const split   = _s15BecoSplit({ dry, prop, isp, thrust,
-    s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr });
+    s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr, s15_boost_isp: boostIsp });
   if (split.error) { pre.textContent = '// ' + split.error; pre.style.color='var(--accent2)'; return; }
   pre.style.color = 'var(--text-dim)';
   const fM = v => Math.round(v).toLocaleString() + ' kg';
   pre.textContent =
     `Ph.1 → Ph.2 prop split:  ${fM(split.prop_ph1)}  →  ${fM(split.prop_ph2)}`+
     `   |   dry after BECO: ${fM(dry - jetM)}`+
-    `   |   booster thrust: ${(thrust - sThrust).toFixed(1)} kN`;
+    `   |   booster thrust: ${(thrust - sThrust).toFixed(1)} kN`+
+    (split.boostIspUsed ? `   |   Ph.1 Isp (blended): ${split.isp_ph1.toFixed(1)} s` : '');
 }
 
 function doEditStage(){
@@ -9792,6 +9824,7 @@ function doEditStage(){
       stageStore[stageIdx].s15_sust_isp   = parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0;
       stageStore[stageIdx].s15_jet_mass   = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
       stageStore[stageIdx].s15_beco_twr   = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
+      stageStore[stageIdx].s15_boost_isp  = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
     } else {
       // Clear any previous s15 data
       delete stageStore[stageIdx].s15;
@@ -9799,6 +9832,7 @@ function doEditStage(){
       delete stageStore[stageIdx].s15_sust_isp;
       delete stageStore[stageIdx].s15_jet_mass;
       delete stageStore[stageIdx].s15_beco_twr;
+      delete stageStore[stageIdx].s15_boost_isp;
     }
     const wasUGC=isUGCStage(currentStageNames[stageIdx]);
     currentStageNames[stageIdx]=name;
@@ -9902,7 +9936,7 @@ function resolvePresetStages(p){
     const s=findStageByName(name);
     if(!s)return {dry:0,prop:0,thrust:0,isp:300,res:2,_missing:name};
     const entry={dry:s.dry,prop:s.prop,thrust:s.thrust,isp:s.isp,res:s.res??2};
-    if(s.s15){entry.s15=true;entry.s15_sust_thrust=s.s15_sust_thrust||0;entry.s15_sust_isp=s.s15_sust_isp||0;entry.s15_jet_mass=s.s15_jet_mass||0;entry.s15_beco_twr=s.s15_beco_twr||1.2;}
+    if(s.s15){entry.s15=true;entry.s15_sust_thrust=s.s15_sust_thrust||0;entry.s15_sust_isp=s.s15_sust_isp||0;entry.s15_jet_mass=s.s15_jet_mass||0;entry.s15_beco_twr=s.s15_beco_twr||1.2;entry.s15_boost_isp=s.s15_boost_isp||0;}
     return entry;
   });
 }
@@ -12413,6 +12447,7 @@ function _fleetStageCopy(s) {
     o.s15_sust_isp    = s.s15_sust_isp    || 0;
     o.s15_jet_mass    = s.s15_jet_mass    || 0;
     o.s15_beco_twr    = s.s15_beco_twr    || 1.2;
+    o.s15_boost_isp   = s.s15_boost_isp   || 0;
   }
   return o;
 }
@@ -12660,7 +12695,7 @@ function fleetSnapshotCurrent() {
   for (let s = 0; s < (typeof numStages !== 'undefined' ? numStages : 0); s++) {
     const st = stageStore[s] || {};
     stages.push(_fleetStageCopy({ dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2,
-      s15: st.s15, s15_sust_thrust: st.s15_sust_thrust, s15_sust_isp: st.s15_sust_isp, s15_jet_mass: st.s15_jet_mass, s15_beco_twr: st.s15_beco_twr }));
+      s15: st.s15, s15_sust_thrust: st.s15_sust_thrust, s15_sust_isp: st.s15_sust_isp, s15_jet_mass: st.s15_jet_mass, s15_beco_twr: st.s15_beco_twr, s15_boost_isp: st.s15_boost_isp }));
     names.push((typeof currentStageNames !== 'undefined' && currentStageNames[s]) ? currentStageNames[s] : ('Stage ' + (s+1)));
   }
   if (!stages.length) { alert('No stages in LV Calc — configure a vehicle on the Vehicles page first.'); return; }

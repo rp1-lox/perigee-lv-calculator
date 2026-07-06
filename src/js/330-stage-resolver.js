@@ -19,7 +19,7 @@ function resolvePresetStages(p){
     const s=findStageByName(name);
     if(!s)return {dry:0,prop:0,thrust:0,isp:300,res:2,_missing:name};
     const entry={dry:s.dry,prop:s.prop,thrust:s.thrust,isp:s.isp,res:s.res??2};
-    if(s.s15){entry.s15=true;entry.s15_sust_thrust=s.s15_sust_thrust||0;entry.s15_sust_isp=s.s15_sust_isp||0;entry.s15_jet_mass=s.s15_jet_mass||0;entry.s15_beco_twr=s.s15_beco_twr||1.2;}
+    if(s.s15){entry.s15=true;entry.s15_sust_thrust=s.s15_sust_thrust||0;entry.s15_sust_isp=s.s15_sust_isp||0;entry.s15_jet_mass=s.s15_jet_mass||0;entry.s15_beco_twr=s.s15_beco_twr||1.2;entry.s15_boost_isp=s.s15_boost_isp||0;}
     return entry;
   });
 }

@@ -133,7 +133,7 @@ function loadPreset(p,key){
   stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
     const orig=(p.stageData||[])[si]||{};
-    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;}
+    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
     stageStore[si]=entry;
   });
   _suppressUD=true;setStages(numStgs);
