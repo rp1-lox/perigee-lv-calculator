@@ -6,6 +6,14 @@ function openAddStageModal(){
   document.getElementById('stg-res').value=2;
   document.getElementById('stg-is-booster').checked=false;
   document.getElementById('stg-new-cat-wrap').style.display='none';
+  {
+    const s15Sec=document.getElementById('stg-s15-section');
+    if(s15Sec)s15Sec.style.display='';
+    const s15El=document.getElementById('stg-s15'); if(s15El)s15El.checked=false;
+    ['stg-s15-thrust','stg-s15-isp','stg-s15-jet','stg-s15-boost-isp'].forEach(id=>{const el=document.getElementById(id); if(el)el.value='';});
+    const twrEl=document.getElementById('stg-s15-twr'); if(twrEl)twrEl.value=1.2;
+    if(typeof toggleS15Fields==='function')toggleS15Fields(false);
+  }
   // Populate category dropdown
   const sel=document.getElementById('stg-category');
   while(sel.options.length>5)sel.remove(4);
@@ -80,6 +88,20 @@ function onBaseStageChange(val){
   const catSel=document.getElementById('stg-category');
   if([...catSel.options].some(o=>o.value===cat))catSel.value=cat;
   onStageCatChange(catSel.value);
+  // S1.5 fields — mirror the base stage's stage-and-a-half config if present
+  const s15Sec=document.getElementById('stg-s15-section');
+  if(s15Sec&&!found.isBooster){
+    const on=!!found.s15;
+    const s15El=document.getElementById('stg-s15'); if(s15El)s15El.checked=on;
+    const setV=(id,v)=>{const el=document.getElementById(id); if(el)el.value=v;};
+    setV('stg-s15-thrust', found.s15_sust_thrust||'');
+    setV('stg-s15-isp',    found.s15_sust_isp||'');
+    setV('stg-s15-jet',    found.s15_jet_mass||'');
+    setV('stg-s15-twr',    found.s15_beco_twr!=null?found.s15_beco_twr:1.2);
+    setV('stg-s15-boost-isp', found.s15_boost_isp||'');
+    if(typeof toggleS15Fields==='function')toggleS15Fields(on);
+    if(typeof _s15UpdatePreview==='function')_s15UpdatePreview();
+  }
 }
 
 function onStageCatChange(val){
@@ -106,6 +128,15 @@ function doAddStage(andSave){
     isBooster:document.getElementById('stg-is-booster').checked,
     _category:cat,
   };
+  const s15On=document.getElementById('stg-s15')?.checked??false;
+  if(s15On&&!stage.isBooster){
+    stage.s15=true;
+    stage.s15_sust_thrust=parseFloat(document.getElementById('stg-s15-thrust')?.value)||0;
+    stage.s15_sust_isp   =parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0;
+    stage.s15_jet_mass   =parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0;
+    stage.s15_beco_twr   =parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2;
+    stage.s15_boost_isp  =parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0;
+  }
   if(!userStagesByCategory[cat])userStagesByCategory[cat]=[];
   userStagesByCategory[cat].unshift(stage); // prepend so new stages appear first
   if(andSave){

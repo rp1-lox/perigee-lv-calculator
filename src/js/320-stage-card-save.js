@@ -24,6 +24,14 @@ function saveStageCardAsFile(stageIdx,isBooster){
       res:mathValue(store.res,2),
       _userGenerated:true,
     };
+    if(store.s15){
+      stage.s15=true;
+      stage.s15_sust_thrust=store.s15_sust_thrust||0;
+      stage.s15_sust_isp   =store.s15_sust_isp   ||0;
+      stage.s15_jet_mass   =store.s15_jet_mass   ||0;
+      stage.s15_beco_twr   =store.s15_beco_twr   ||1.2;
+      stage.s15_boost_isp  =store.s15_boost_isp  ||0;
+    }
     stageSaved[stageIdx]=true;
   }
   const fname=stage.name.replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'.stage';

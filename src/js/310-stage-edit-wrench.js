@@ -240,7 +240,16 @@ function doEditStage(){
     stageSaved[stageIdx]=false;
     // If UGC, update library entry directly
     if(wasUGC){
-      updateUGCStage(currentStageNames[stageIdx]||name,{name,dry,prop,thrust,isp,res,engines,note,tags,_userGenerated:true,_category:cat});
+      const newStage={name,dry,prop,thrust,isp,res,engines,note,tags,_userGenerated:true,_category:cat};
+      if(stageStore[stageIdx].s15){
+        newStage.s15=true;
+        newStage.s15_sust_thrust=stageStore[stageIdx].s15_sust_thrust||0;
+        newStage.s15_sust_isp   =stageStore[stageIdx].s15_sust_isp   ||0;
+        newStage.s15_jet_mass   =stageStore[stageIdx].s15_jet_mass   ||0;
+        newStage.s15_beco_twr   =stageStore[stageIdx].s15_beco_twr   ||1.2;
+        newStage.s15_boost_isp  =stageStore[stageIdx].s15_boost_isp  ||0;
+      }
+      updateUGCStage(currentStageNames[stageIdx]||name,newStage);
     }
   }
   _editSlot=null;
