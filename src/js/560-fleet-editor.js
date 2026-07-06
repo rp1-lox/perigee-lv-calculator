@@ -1,48 +1,9 @@
 
 // ─── FLEET EDITOR ────────────────────────────────────────────────────────────
 
-const _PROG_LV_PRESETS = [
-  { name: 'Saturn V', stageNames: ['S-IC', 'S-II', 'S-IVB'], boosterName: null, boosterData: null,
-    stageData: [
-      { dry: 131000,  prop: 2077000, isp: 304, thrust: 34020, res: 2 },
-      { dry: 36200,   prop: 444000,  isp: 421, thrust: 4400,  res: 2 },
-      { dry: 10000,   prop: 106000,  isp: 421, thrust: 1000,  res: 2 },
-    ]},
-  { name: 'Falcon 9 Block 5', stageNames: ['First Stage', 'Second Stage'], boosterName: null, boosterData: null,
-    stageData: [
-      { dry: 22200,  prop: 395700, isp: 339, thrust: 7607, res: 10 },
-      { dry: 4500,   prop: 92670,  isp: 348, thrust: 934,  res: 2  },
-    ]},
-  { name: 'SLS Block 1', stageNames: ['Core Stage', 'ICPS'], boosterName: 'SRBs',
-    boosterData: { dry: 100000, prop: 628000, isp: 269, thrust: 16000, count: 2 },
-    stageData: [
-      { dry: 85275,  prop: 978340, isp: 452, thrust: 7440, res: 2 },
-      { dry: 3490,   prop: 27220,  isp: 451, thrust: 110,  res: 2 },
-    ]},
-  { name: 'Vulcan Centaur', stageNames: ['First Stage', 'Centaur V'], boosterName: 'SRBs',
-    boosterData: { dry: 4500, prop: 42000, isp: 279, thrust: 1680, count: 2 },
-    stageData: [
-      { dry: 20000,  prop: 220000, isp: 360, thrust: 4400, res: 3 },
-      { dry: 2780,   prop: 35400,  isp: 454, thrust: 220,  res: 2 },
-    ]},
-];
-
 let _fleetEntries = [];   // FleetEntry[]
 let _fleetSel     = null; // selected fleetId
 let _fleetLibQuery = '';  // search text for the inline Vehicle Library panel
-
-function _fleetClonePreset(p) {
-  return {
-    fleetId: progUUID(),
-    name: p.name,
-    stageNames: [...(p.stageNames || [])],
-    stageData: p.stageData.map(s => ({ ...s })),
-    boosterName: p.boosterName || null,
-    boosterData: p.boosterData ? { ...p.boosterData } : null,
-    boosterGroups: Array.isArray(p.boosterGroups) ? p.boosterGroups.map(g => ({ ...g })) : null,
-    payloads: [],
-  };
-}
 
 function fleetOpenImportModal() {
   document.getElementById('fleet-import-search').value = '';
@@ -295,8 +256,8 @@ function fleetVehInfoAdd() {
 }
 
 function fleetInit() {
-  _fleetEntries = _PROG_LV_PRESETS.map(_fleetClonePreset);
-  _fleetSel = _fleetEntries[0]?.fleetId ?? null;
+  _fleetEntries = [];
+  _fleetSel = null;
   fleetRender();
 }
 

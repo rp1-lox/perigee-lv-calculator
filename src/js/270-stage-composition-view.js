@@ -117,12 +117,6 @@ function updatePerfPanel() {
   </table>`;
 }
 
-// ── Art-page stubs: the dedicated art page was not restored in this merge.
-// These keep the LV stage-composition / library code from throwing on its
-// art-slot refresh calls. Restore the real art system later if wanted.
-function artPageRebuildSlots(){}
-function _progArtRebuildManagerList(){}
-
 function buildStageComposition(){
   const body=document.getElementById('comp-body');
   if(!body)return;
@@ -313,6 +307,5 @@ function buildStageComposition(){
   }
   vehCanvasOnStagesChanged();
   vehBuildAssignStrip();
-  artPageRebuildSlots();
   updatePerfPanel();
 }

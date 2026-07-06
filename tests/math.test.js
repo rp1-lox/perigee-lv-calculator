@@ -24,6 +24,7 @@ const FILES = [
   'src/js/010-constants.js',
   'src/js/140-physics.js',
   'src/js/145-dest-dv.js',
+  'src/js/150-stage-and-a-half.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
 ];
 
@@ -63,6 +64,7 @@ const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc,
+  _s15BecoSplit,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES })', sandbox);
@@ -278,6 +280,106 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok(`all builtin preset stage/booster names resolve (${presets.length} presets)` +
        (missing.length ? ' — MISSING: ' + missing.join('; ') : ''), missing.length === 0);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Stage-and-a-Half (S1.5) — _s15BecoSplit + expansion regression
+//
+// Uses the real 'Atlas D Sust.' library entry (src/js/210-stage-library.js)
+// as a representative S1.5 first stage, paired with a simple upper stage.
+// The expansion loop below MIRRORS _fleetExpandStages() in
+// src/js/560-fleet-editor.js (which itself mirrors calculateWithS15() in
+// src/js/150-stage-and-a-half.js) — kept here as a tiny inline replica so we
+// don't need to load the heavy DOM-dependent 560/165 modules just for this.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const atlasD = {
+    dry: 5657, prop: 90000, thrust: 1800, isp: 282, res: 2,
+    s15: true,
+    s15_sust_thrust: 362,
+    s15_sust_isp: 309,
+    s15_jet_mass: 3050,
+    s15_beco_twr: 1.2,
+  };
+  const upperStage = { dry: 1000, prop: 6577, thrust: 71, isp: 309, res: 2 }; // Atlas-Agena-ish
+
+  // ── _s15BecoSplit sanity ────────────────────────────────────────────────
+  const split = _s15BecoSplit(atlasD);
+  ok('_s15BecoSplit: Atlas D Sust. splits without error', !split.error);
+  if (!split.error) {
+    approx('_s15BecoSplit: prop_ph1 + prop_ph2 == authored prop',
+      split.prop_ph1 + split.prop_ph2, atlasD.prop, 1e-6);
+    ok('_s15BecoSplit: Phase 2 dry < authored dry (jettison of booster pack)',
+      split.dry_ph2 < atlasD.dry);
+    approx('_s15BecoSplit: dry_ph2 == dry - s15_jet_mass',
+      split.dry_ph2, atlasD.dry - atlasD.s15_jet_mass, 1e-6);
+  }
+
+  // ── _s15BecoSplit error path: nonsense stage (zero sustainer thrust) ────
+  const badAtlas = { ...atlasD, s15_sust_thrust: 0 };
+  let badThrew = false, badResult;
+  try { badResult = _s15BecoSplit(badAtlas); } catch (e) { badThrew = true; }
+  ok('_s15BecoSplit: nonsense stage (sustainer thrust 0) returns error, does not throw',
+    !badThrew && !!(badResult && badResult.error));
+
+  // ── Expansion: mirrors _fleetExpandStages() (src/js/560-fleet-editor.js) ──
+  function expandStages(stageData) {
+    const out = [];
+    (stageData || []).forEach((st, i) => {
+      if (st.s15) {
+        const sp = _s15BecoSplit(st);
+        if (sp.error) { out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i, _err: sp.error }); return; }
+        out.push({ dry: st.dry||0,  prop: sp.prop_ph1, thrust: st.thrust||0,          isp: sp.isp_ph1, res: st.res||2, _src: i, _phase: 'Ph.1' });
+        out.push({ dry: sp.dry_ph2, prop: sp.prop_ph2, thrust: st.s15_sust_thrust||0, isp: sp.isp_ph2, res: st.res||2, _src: i, _phase: 'Ph.2' });
+      } else {
+        out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i });
+      }
+    });
+    return out;
+  }
+
+  const expanded = expandStages([atlasD, upperStage]);
+  ok('S1.5 expansion: 3 virtual stages produced (Ph.1 + Ph.2 + upper stage)', expanded.length === 3);
+  ok('S1.5 expansion: first two phases both trace back to source stage 0',
+    expanded[0]._src === 0 && expanded[1]._src === 0 && expanded[0]._phase === 'Ph.1' && expanded[1]._phase === 'Ph.2');
+  approx('S1.5 expansion: expanded prop_ph1 + prop_ph2 == authored prop',
+    expanded[0].prop + expanded[1].prop, atlasD.prop, 1e-6);
+  ok('S1.5 expansion: expanded Ph.2 dry < authored dry (jettison)', expanded[1].dry < atlasD.dry);
+
+  // ── Golden max-payload regression: EXPANDED (S1.5-aware) vehicle ────────
+  // Same test-vehicle envelope params used elsewhere in this file.
+  const s15MaxPay = lvMaxPayload(
+    expanded, null, testFairingMass, testFairingJ,
+    testParkingAlt, testOnOrbitDV, testSiteLat, testAzMin, testAzMax
+  );
+  // Golden value captured from the CURRENT implementation as a regression
+  // baseline (2026-07-06). If a future physics refactor changes this value,
+  // re-evaluate deliberately — do not silently update the number.
+  approx('S1.5: golden max-payload snapshot (expanded Atlas D Sust. + upper stage)',
+    s15MaxPay, 2280.24, 1);
+
+  // ── UNexpanded stage must give a DIFFERENT max payload ──────────────────
+  // Feeding the raw (unsplit) S1.5 stage directly into lvPerformance/
+  // lvMaxPayload ignores the BECO jettison entirely — the authored {dry,prop,
+  // thrust,isp} is the FULL booster+sustainer stage but its isp (282s) is the
+  // blended full-stage figure, not the higher sustainer-only isp (309s) used
+  // in Phase 2 after the booster pack drops away. Carrying the dead booster
+  // mass through the whole burn (never jettisoning it) makes the single-stage
+  // rocket-equation math WORSE than the properly-staged Ph.1/Ph.2 split, so
+  // the unexpanded vehicle underperforms — this is why expansion is
+  // mandatory before calling calculate() on an S1.5 vehicle: the unexpanded
+  // path is not just wrong, it is asymmetrically wrong (no free lunch either
+  // way — it just misses the fidelity of the actual staging event).
+  const unexpandedStages = [
+    { dry: atlasD.dry, prop: atlasD.prop, thrust: atlasD.thrust, isp: atlasD.isp, res: atlasD.res },
+    upperStage,
+  ];
+  const unexpandedMaxPay = lvMaxPayload(
+    unexpandedStages, null, testFairingMass, testFairingJ,
+    testParkingAlt, testOnOrbitDV, testSiteLat, testAzMin, testAzMax
+  );
+  ok(`S1.5: unexpanded stage gives a DIFFERENT max payload than expanded (expanded=${s15MaxPay.toFixed(2)}, unexpanded=${unexpandedMaxPay.toFixed(2)})`,
+    Math.abs(unexpandedMaxPay - s15MaxPay) > 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

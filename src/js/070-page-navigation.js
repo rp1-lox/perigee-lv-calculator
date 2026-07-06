@@ -17,7 +17,7 @@ function showPage(p){
   const pg=document.getElementById('page-'+target);
   if(!pg) return;
   pg.classList.add('active');
-  pg.style.display=(target==='program'||target==='art')?'flex':'block';
+  pg.style.display=(target==='program')?'flex':'block';
 
   // top-level nav highlight
   document.querySelectorAll('.nav-btn').forEach(el=>el.classList.remove('active'));
@@ -28,7 +28,6 @@ function showPage(p){
 
   const vvw=document.getElementById('veh-view-wrap');
   if(vvw){vvw.style.display=(target==='vehicles')?'flex':'none';}
-  if(target==='art'){ _progArtRebuildManagerList(); artPageRebuildSlots(); }
   if(target==='trades'){ tsEnsureRendered(); }
   if(target==='spacecraft'){ scEdRenderList(); scEdRenderDetail(); if(typeof scLibSetMode==='function') scLibSetMode(_scLibMode||'mine'); }
   if(target==='orbits' && typeof orbVehRenderSelectorBar==='function'){ orbVehRenderSelectorBar(); }

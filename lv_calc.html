@@ -352,8 +352,6 @@ header h1{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spac
 .page.active{display:block;}
 #page-program{flex-direction:column;}
 #page-program.active{display:flex;flex-direction:column;padding:0;flex:1;min-height:0;}
-#page-art{flex-direction:column;padding:0;}
-#page-art.active{display:flex;flex:1;min-height:0;}
 .two-col{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;}
 .two-col>div{min-width:0;}
 
@@ -2658,7 +2656,7 @@ function showPage(p){
   const pg=document.getElementById('page-'+target);
   if(!pg) return;
   pg.classList.add('active');
-  pg.style.display=(target==='program'||target==='art')?'flex':'block';
+  pg.style.display=(target==='program')?'flex':'block';
 
   // top-level nav highlight
   document.querySelectorAll('.nav-btn').forEach(el=>el.classList.remove('active'));
@@ -2669,7 +2667,6 @@ function showPage(p){
 
   const vvw=document.getElementById('veh-view-wrap');
   if(vvw){vvw.style.display=(target==='vehicles')?'flex':'none';}
-  if(target==='art'){ _progArtRebuildManagerList(); artPageRebuildSlots(); }
   if(target==='trades'){ tsEnsureRendered(); }
   if(target==='spacecraft'){ scEdRenderList(); scEdRenderDetail(); if(typeof scLibSetMode==='function') scLibSetMode(_scLibMode||'mine'); }
   if(target==='orbits' && typeof orbVehRenderSelectorBar==='function'){ orbVehRenderSelectorBar(); }
@@ -9131,12 +9128,6 @@ function updatePerfPanel() {
   </table>`;
 }
 
-// ── Art-page stubs: the dedicated art page was not restored in this merge.
-// These keep the LV stage-composition / library code from throwing on its
-// art-slot refresh calls. Restore the real art system later if wanted.
-function artPageRebuildSlots(){}
-function _progArtRebuildManagerList(){}
-
 function buildStageComposition(){
   const body=document.getElementById('comp-body');
   if(!body)return;
@@ -9327,7 +9318,6 @@ function buildStageComposition(){
   }
   vehCanvasOnStagesChanged();
   vehBuildAssignStrip();
-  artPageRebuildSlots();
   updatePerfPanel();
 }
 
@@ -9510,7 +9500,6 @@ function vehArtAssign(artId) {
   vehBuildAssignStrip();
   // Refresh canvas if auto-layout was used (re-run to pick up new assignment)
   if (vehicleCanvasItems.length === 0 || vehicleCanvasItems.every(i => i._auto)) vehCanvasAutoLayout();
-  artPageRebuildSlots();
 }
 
 // Track booster name
@@ -12357,48 +12346,9 @@ if (document.readyState === 'interactive' || document.readyState === 'complete')
 
 // ─── FLEET EDITOR ────────────────────────────────────────────────────────────
 
-const _PROG_LV_PRESETS = [
-  { name: 'Saturn V', stageNames: ['S-IC', 'S-II', 'S-IVB'], boosterName: null, boosterData: null,
-    stageData: [
-      { dry: 131000,  prop: 2077000, isp: 304, thrust: 34020, res: 2 },
-      { dry: 36200,   prop: 444000,  isp: 421, thrust: 4400,  res: 2 },
-      { dry: 10000,   prop: 106000,  isp: 421, thrust: 1000,  res: 2 },
-    ]},
-  { name: 'Falcon 9 Block 5', stageNames: ['First Stage', 'Second Stage'], boosterName: null, boosterData: null,
-    stageData: [
-      { dry: 22200,  prop: 395700, isp: 339, thrust: 7607, res: 10 },
-      { dry: 4500,   prop: 92670,  isp: 348, thrust: 934,  res: 2  },
-    ]},
-  { name: 'SLS Block 1', stageNames: ['Core Stage', 'ICPS'], boosterName: 'SRBs',
-    boosterData: { dry: 100000, prop: 628000, isp: 269, thrust: 16000, count: 2 },
-    stageData: [
-      { dry: 85275,  prop: 978340, isp: 452, thrust: 7440, res: 2 },
-      { dry: 3490,   prop: 27220,  isp: 451, thrust: 110,  res: 2 },
-    ]},
-  { name: 'Vulcan Centaur', stageNames: ['First Stage', 'Centaur V'], boosterName: 'SRBs',
-    boosterData: { dry: 4500, prop: 42000, isp: 279, thrust: 1680, count: 2 },
-    stageData: [
-      { dry: 20000,  prop: 220000, isp: 360, thrust: 4400, res: 3 },
-      { dry: 2780,   prop: 35400,  isp: 454, thrust: 220,  res: 2 },
-    ]},
-];
-
 let _fleetEntries = [];   // FleetEntry[]
 let _fleetSel     = null; // selected fleetId
 let _fleetLibQuery = '';  // search text for the inline Vehicle Library panel
-
-function _fleetClonePreset(p) {
-  return {
-    fleetId: progUUID(),
-    name: p.name,
-    stageNames: [...(p.stageNames || [])],
-    stageData: p.stageData.map(s => ({ ...s })),
-    boosterName: p.boosterName || null,
-    boosterData: p.boosterData ? { ...p.boosterData } : null,
-    boosterGroups: Array.isArray(p.boosterGroups) ? p.boosterGroups.map(g => ({ ...g })) : null,
-    payloads: [],
-  };
-}
 
 function fleetOpenImportModal() {
   document.getElementById('fleet-import-search').value = '';
@@ -12651,8 +12601,8 @@ function fleetVehInfoAdd() {
 }
 
 function fleetInit() {
-  _fleetEntries = _PROG_LV_PRESETS.map(_fleetClonePreset);
-  _fleetSel = _fleetEntries[0]?.fleetId ?? null;
+  _fleetEntries = [];
+  _fleetSel = null;
   fleetRender();
 }
 

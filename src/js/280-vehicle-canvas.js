@@ -178,7 +178,6 @@ function vehArtAssign(artId) {
   vehBuildAssignStrip();
   // Refresh canvas if auto-layout was used (re-run to pick up new assignment)
   if (vehicleCanvasItems.length === 0 || vehicleCanvasItems.every(i => i._auto)) vehCanvasAutoLayout();
-  artPageRebuildSlots();
 }
 
 // Track booster name
