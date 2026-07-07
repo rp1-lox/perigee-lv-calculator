@@ -369,7 +369,8 @@ function missionRenderDetail() {
             <div class="mcc-panel-pad"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
               Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) on the right to bring a vehicle into the mission.
             </div></div>`}
-            ${m.vehicleId ? _missionMultiVehicleHTML(m) : ''}`}
+            ${m.vehicleId ? _missionMultiVehicleHTML(m) : ''}
+            ${(m.log.length && typeof _missionChecksBoxHTML === 'function') ? _missionChecksBoxHTML(m) : ''}`}
       </div>
 
       <!-- CENTER COLUMN — node map / band view -->
@@ -386,6 +387,7 @@ function missionRenderDetail() {
             <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo==='function'&&_missionUndoCanUndo())?'':' disabled'}>&#x21B6;</button>
             <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo==='function'&&_missionUndoCanRedo())?'':' disabled'}>&#x21B7;</button>
           </div>
+          ${(m.log.length && typeof _missionChecksToolbarChipHTML === 'function') ? `<div class="mcc-toolbar-sep"></div>${_missionChecksToolbarChipHTML(m)}` : ''}
           <div class="mcc-toolbar-sep"></div>
           <div class="mcc-export-wrap">
             <button class="act-btn" onclick="_missionToggleExportMenu(event)" title="File options">File &#x25BE;</button>
@@ -1783,7 +1785,19 @@ function missionRecompute(m) {
         live = live.filter(v => v !== active); if (lower) live.push(lower); if (upper) live.push(upper);
         active = upper || lower || null;
       }
-    } else if (e.type === 'DOCK' && e.result === 'SUCCESS') {
+    } else if (e.type === 'DOCK') {
+      // NOTE: re-attempted on EVERY replay regardless of the authored/previous
+      // e.result — the gate used to be `e.result === 'SUCCESS'`, which read the
+      // STALE value from a prior recompute (or the optimistic value set at
+      // authoring time in missionExecDock) and never re-ran progDispatchEvent
+      // once that gate failed to match. That meant a dock broken by editing an
+      // earlier maneuver stayed silently "SUCCESS" (stale merged-vehicle info,
+      // both vehicles left un-merged) instead of flipping to FAILED, and a dock
+      // fixed by editing the maneuver back could never re-succeed. Docking is a
+      // physical feasibility check (progOrbitalStateMatch) re-evaluated fresh
+      // from replayed state every time, like BURN/MANEUVER/SEPARATE — there is
+      // no "user deliberately deleted this dock" concept distinct from deleting
+      // the log entry itself, so always re-attempting is correct here.
       const dockActor = resolveActive(e); if (dockActor) active = dockActor;   // editable: which vehicle docks
       // target by stable key first (so a persistent depot is found again every repetition),
       // then by internal name. The merged vehicle inherits the target's identity + owner tags.
@@ -1796,6 +1810,7 @@ function missionRecompute(m) {
         e.aDisp = _missionVehicleBaseName(active); e.tDisp = _missionVehicleBaseName(target);   // clean names for the card
         const ev = progMakeEvent('DOCK', { vehicleIds: [active.vehicleId, target.vehicleId], bottomVehicleId: target.vehicleId });
         const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
+        e.result = res.result;
         if (res.result === 'SUCCESS') {
           const merged = PROG_ACTIVE_PROGRAM.vehicles[res.vehicleId];
           if (merged) {
@@ -1808,7 +1823,12 @@ function missionRecompute(m) {
           e.mergedName = merged ? _missionVehicleDisplayName(merged) : '?'; e.mergedStages = merged ? merged.stages.length : 0;
           live = live.filter(v => v !== active && v !== target); if (merged) live.push(merged);
           active = merged || null;
+        } else {
+          e.warnings = res.warnings || ev.warnings || ['Orbits do not match'];
         }
+      } else {
+        e.result = 'FAILED';
+        e.warnings = ['Target vehicle not found'];
       }
     } else if (e.type === 'EXPEND') {
       const tgt = findVehE(e, e.targetKey, e.vehicleName || e.stageName) || active;
@@ -1896,6 +1916,10 @@ function missionRecompute(m) {
   m.vehicleId = active ? active.vehicleId : (m.vehicleIds[0] || null);
   if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
   if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
+  // Flight Readiness checks are derived state — computed LAST, after autosave has
+  // already scheduled its save and undo has already captured its snapshot, so
+  // neither persistence path can pick them up (see 572-mission-checks.js header).
+  if (typeof missionRunChecks === 'function') missionRunChecks(m);
 }
 
 // Rename an on-orbit vehicle via an in-app modal (no browser prompt). Persists by
@@ -2290,6 +2314,12 @@ function missionExecDock(id, targetVehId) {
   const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
   if (res.result !== 'SUCCESS') {
     m.log.push({ type: 'DOCK', result: 'FAILED', warnings: ev.warnings || [], aName, tName, targetKey });
+    // Recompute even on the immediate-authoring failure path so m._expanded and
+    // Flight Readiness checks (572) see this event right away, matching the
+    // SUCCESS path below — previously this skipped recompute entirely, so a
+    // freshly-authored failed DOCK wouldn't show up as a check finding until
+    // some unrelated later mutation happened to trigger a recompute.
+    _missionExpandLast(m); missionRecompute(m);
     missionRenderDetail();
     return;
   }

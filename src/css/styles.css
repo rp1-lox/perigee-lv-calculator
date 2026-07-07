@@ -242,6 +242,21 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-band-placeholder{display:flex;align-items:center;justify-content:center;height:100%;font-family:var(--mono);font-size:12px;color:var(--text-dim);letter-spacing:.06em;}
 .mcc-field-select{width:100%;max-width:100%;min-width:0;box-sizing:border-box;text-overflow:ellipsis;background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:5px 8px;}
 .mcc-field-input{background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;}
+
+/* ── Flight Readiness checks panel + toolbar chip ────────────────────────── */
+.mcc-check-badge{font-family:var(--mono);font-size:9px;letter-spacing:.08em;padding:1px 6px;border:1px solid var(--border-bright);color:var(--text-dim);}
+.mcc-check-badge.mcc-check-go{color:var(--accent3);border-color:var(--accent3);}
+.mcc-check-row{display:flex;gap:8px;padding:6px 0;border-top:1px solid var(--border);}
+.mcc-check-row:first-of-type{border-top:none;}
+.mcc-check-row[onclick]{cursor:pointer;}
+.mcc-check-row[onclick]:hover{background:rgba(255,255,255,.04);}
+.mcc-check-icon{flex-shrink:0;font-size:10px;line-height:1.6;width:12px;text-align:center;}
+.mcc-check-body{min-width:0;flex:1;}
+.mcc-check-title{font-family:var(--mono);font-size:10px;color:var(--text-bright);font-weight:600;}
+.mcc-check-detail{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.4;word-break:break-word;}
+.mcc-check-more{font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;padding:6px 0 2px;border-top:1px solid var(--border);}
+.mcc-check-more:hover{color:var(--text-bright);}
+.mcc-check-chip{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:4px 9px;border:1px solid var(--border-bright);background:transparent;white-space:nowrap;}
 /* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
    none ever opens with a white option list / invisible text — anywhere in the app. */
 select{color-scheme:dark;}
