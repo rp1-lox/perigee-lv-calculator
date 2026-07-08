@@ -39,10 +39,134 @@ function applyTheme(key){
   if(sel){for(const o of sel.options){if(o.value===key){sel.value=key;break;}}}
   if(typeof progRenderNodeMap==='function')progRenderNodeMap();
   if(typeof artUpdateInvertFilter==='function')artUpdateInvertFilter();
+  if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
 }
 function rebuildThemeSelect(){
   const sel=document.getElementById('theme-select');const cur=sel.value;sel.innerHTML='';
   Object.entries(BUILTIN_THEMES).forEach(([k,t])=>{const o=document.createElement('option');o.value=k;o.textContent=t.name;sel.appendChild(o);});
   Object.entries(customThemes).forEach(([k,t])=>{const o=document.createElement('option');o.value=k;o.textContent=(t.name||k)+' (custom)';sel.appendChild(o);});
   sel.value=(cur in BUILTIN_THEMES||cur in customThemes)?cur:'perigee';
+}
+
+// ─── COLOR MATH HELPERS (hex <-> HSL, mixing) ───────────────────────
+// Small, dependency-free helpers used by themeFromSeeds() to derive a full
+// theme from just a handful of "core" seed colors.
+function _hexToRgb(hex){
+  hex=(hex||'#000000').replace('#','');
+  if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
+  const n=parseInt(hex,16);
+  return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};
+}
+function _rgbToHex({r,g,b}){
+  const h=v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0');
+  return '#'+h(r)+h(g)+h(b);
+}
+function _rgbToHsl({r,g,b}){
+  r/=255;g/=255;b/=255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b);
+  let h=0,s=0;const l=(max+min)/2;
+  const d=max-min;
+  if(d!==0){
+    s=l>0.5?d/(2-max-min):d/(max+min);
+    switch(max){
+      case r:h=((g-b)/d+(g<b?6:0));break;
+      case g:h=((b-r)/d+2);break;
+      case b:h=((r-g)/d+4);break;
+    }
+    h*=60;
+  }
+  return {h,s,l};
+}
+function _hslToRgb({h,s,l}){
+  h=((h%360)+360)%360;
+  if(s===0){const v=l*255;return {r:v,g:v,b:v};}
+  const q=l<0.5?l*(1+s):l+s-l*s;
+  const p=2*l-q;
+  const hk=h/360;
+  const t=[hk+1/3,hk,hk-1/3].map(x=>{
+    if(x<0)x+=1;if(x>1)x-=1;
+    if(x<1/6)return p+(q-p)*6*x;
+    if(x<1/2)return q;
+    if(x<2/3)return p+(q-p)*(2/3-x)*6;
+    return p;
+  });
+  return {r:t[0]*255,g:t[1]*255,b:t[2]*255};
+}
+/** Mix two hex colors; amt = fraction of hex2 (0..1). */
+function hexMix(hex1,hex2,amt){
+  const a=_hexToRgb(hex1),b=_hexToRgb(hex2);
+  return _rgbToHex({r:a.r+(b.r-a.r)*amt,g:a.g+(b.g-a.g)*amt,b:a.b+(b.b-a.b)*amt});
+}
+/** Lighten (amt>0) or darken (amt<0) a hex color by shifting HSL lightness. */
+function hexLighten(hex,amt){
+  const hsl=_rgbToHsl(_hexToRgb(hex));
+  hsl.l=Math.max(0,Math.min(1,hsl.l+amt));
+  return _rgbToHex(_hslToRgb(hsl));
+}
+/** Rotate hue by deg degrees, optionally nudging saturation/lightness. */
+function hexHueRotate(hex,deg,dl){
+  const hsl=_rgbToHsl(_hexToRgb(hex));
+  hsl.h+=deg;
+  if(dl)hsl.l=Math.max(0,Math.min(1,hsl.l+dl));
+  return _rgbToHex(_hslToRgb(hsl));
+}
+/** Lighten a color toward a target (e.g. panel toward text) by fraction. */
+function hexTowards(hex,target,amt){return hexMix(hex,target,amt);}
+
+/**
+ * Derive a full theme object from just the 4 "core" seeds:
+ *   { bg, panel, accent, text, name? }
+ * Everything else (borders, input, accent2/3, text-dim/bright, danger/warn,
+ * and the full nm-* node-map palette) is computed with sensible defaults.
+ * Callers can override any individual derived value afterward — this just
+ * gives a coherent starting point.
+ */
+function themeFromSeeds(core){
+  const bg=core.bg||'#0a0c10';
+  const panel=core.panel||'#0f1318';
+  const accent=core.accent||'#00c8ff';
+  const text=core.text||'#c8d8e8';
+  const fallback=BUILTIN_THEMES.default;
+
+  const border=hexTowards(panel,text,0.15);
+  const borderBright=hexTowards(panel,text,0.30);
+  const input=hexMix(bg,panel,0.5);
+  const textDim=hexMix(text,bg,0.55);
+  const textBright=hexTowards(text,'#ffffff',0.6);
+  const accent2=core.accent2||hexHueRotate(accent,40);
+  const accent3=core.accent3||hexLighten(accent,0.20);
+  const danger=core.danger||fallback['--danger'];
+  const warn=core.warn||fallback['--warn'];
+
+  // Node-map palette — derived from bg/panel/accent, matching what each
+  // builtin theme's nm-* set looks like relative to its own bg/panel/accent.
+  const nmBg=hexLighten(bg,-0.02);
+  const nmEarth=core['--nm-earth']||hexHueRotate(accent,-90,0.05);
+  const nmLunar=core['--nm-lunar']||hexHueRotate(accent,140,0.05);
+  const nmInterp=core['--nm-interp']||hexHueRotate(accent,150,-0.05);
+  const nmEdge=hexTowards(panel,text,0.20);
+  const nmEdgeAct=accent;
+  const nmNodeFill=panel;
+  const nmLabel=textDim;
+  const nmPillBg=panel;
+  const nmPillBd=border;
+  const nmPillText=textDim;
+  const nmPalBg=hexLighten(bg,-0.03);
+  const nmPalHdr=hexLighten(bg,-0.04);
+  const nmPalItem=panel;
+  const nmPalItemAct=hexMix(panel,accent,0.10);
+  const nmGhost=border;
+
+  return {
+    name:core.name||'Custom Theme',
+    '--bg':bg,'--panel':panel,'--input':input,'--border':border,'--border-bright':borderBright,
+    '--accent':accent,'--accent2':accent2,'--accent3':accent3,
+    '--danger':danger,'--warn':warn,
+    '--text':text,'--text-dim':textDim,'--text-bright':textBright,
+    '--mono':core['--mono']||"'JetBrains Mono',monospace",'--sans':core['--sans']||"'Outfit',sans-serif",
+    '--nm-bg':nmBg,'--nm-earth':nmEarth,'--nm-lunar':nmLunar,'--nm-interp':nmInterp,
+    '--nm-edge':nmEdge,'--nm-edge-act':nmEdgeAct,'--nm-node-fill':nmNodeFill,
+    '--nm-label':nmLabel,'--nm-pill-bg':nmPillBg,'--nm-pill-bd':nmPillBd,'--nm-pill-text':nmPillText,
+    '--nm-pal-bg':nmPalBg,'--nm-pal-hdr':nmPalHdr,'--nm-pal-item':nmPalItem,'--nm-pal-item-act':nmPalItemAct,'--nm-ghost':nmGhost,
+  };
 }

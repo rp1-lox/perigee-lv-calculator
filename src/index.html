@@ -31,9 +31,7 @@
         <option value="perigee" selected>Perigee</option>
         <option value="default">Default (Dark)</option>
       </select>
-      <button class="th-btn" onclick="openThemeEditor()">EDIT</button>
-      <button class="th-btn g" onclick="saveTheme()">SAVE Theme</button>
-      <label class="th-btn" style="cursor:pointer;">LOAD<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
+      <button class="th-btn" onclick="openThemesModal()">Themes&#x2026;</button>
     </div>
     <a class="perigee-plug" href="https://perigeeaero.shop" target="_blank" rel="noopener">Enjoying Rocket Playground? Support it — buy a model at perigeeaero.shop &#x2197;</a>
   </div>
@@ -569,48 +567,151 @@
   </div>
 </div>
 
-<!-- ── MODAL: Theme editor ── -->
-<div class="modal-overlay" id="modal-theme" style="display:none">
-  <div class="modal" style="max-width:480px;">
+<!-- ── MODAL: Themes ── -->
+<div class="modal-overlay" id="modal-themes" style="display:none">
+  <div class="modal" style="max-width:720px;">
     <div class="modal-header">
-      <span class="modal-title">Theme Editor</span>
-      <button class="modal-close" onclick="closeModal('modal-theme')">✕</button>
+      <span class="modal-title">Themes</span>
+      <button class="modal-close" onclick="closeModal('modal-themes')">&#x2715;</button>
     </div>
-    <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+    <div class="modal-body" style="max-height:76vh;overflow-y:auto;">
 
-      <!-- Presets -->
-      <div class="te-section">Presets</div>
-      <div class="te-preset-row" id="te-preset-row"></div>
-
-      <!-- Colors -->
-      <div class="te-section">Colors</div>
-      <div id="te-color-rows"></div>
-
-      <!-- Fonts -->
-      <div class="te-section">Fonts</div>
-      <div class="te-row">
-        <span class="te-label">Display (sans)</span>
-        <input class="te-font-input" id="te-font-sans" placeholder="Outfit, sans-serif"
-          oninput="teApplyLive()">
-      </div>
-      <div class="te-row">
-        <span class="te-label">Monospace</span>
-        <input class="te-font-input" id="te-font-mono" placeholder="JetBrains Mono, monospace"
-          oninput="teApplyLive()">
+      <!-- Gallery -->
+      <div class="te-section">Gallery</div>
+      <div class="te-gallery" id="te-gallery"></div>
+      <div class="te-row" style="margin-top:10px;">
+        <button class="modal-btn" onclick="teNewTheme()">+ New theme</button>
       </div>
 
-      <!-- Name -->
-      <div class="te-section">Save Custom Theme</div>
+      <!-- Customize (hidden until New theme / Edit copy) -->
+      <div id="te-customize" style="display:none;">
+        <div class="te-section">Customize <span id="te-customize-label" class="te-customize-sub"></span></div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Base</div>
+          <div class="te-row"><span class="te-label">Background</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-bg"></div>
+              <input type="color" id="te-picker-bg" oninput="teSeedChanged('--bg',this.value)"></button>
+            <input class="te-hex" id="te-hex-bg" maxlength="7" oninput="teHexChanged('--bg',this.value)"></div>
+          <div class="te-row"><span class="te-label">Panel</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-panel"></div>
+              <input type="color" id="te-picker-panel" oninput="teSeedChanged('--panel',this.value)"></button>
+            <input class="te-hex" id="te-hex-panel" maxlength="7" oninput="teHexChanged('--panel',this.value)"></div>
+          <div class="te-row"><span class="te-label">Input</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-input"></div>
+              <input type="color" id="te-picker-input" oninput="teSeedChanged('--input',this.value)"></button>
+            <input class="te-hex" id="te-hex-input" maxlength="7" oninput="teHexChanged('--input',this.value)"></div>
+          <div class="te-row"><span class="te-label">Border</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-border"></div>
+              <input type="color" id="te-picker-border" oninput="teSeedChanged('--border',this.value)"></button>
+            <input class="te-hex" id="te-hex-border" maxlength="7" oninput="teHexChanged('--border',this.value)"></div>
+          <div class="te-row"><span class="te-label">Border (bright)</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-border-bright"></div>
+              <input type="color" id="te-picker-border-bright" oninput="teSeedChanged('--border-bright',this.value)"></button>
+            <input class="te-hex" id="te-hex-border-bright" maxlength="7" oninput="teHexChanged('--border-bright',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Accents</div>
+          <div class="te-row"><span class="te-label">Primary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent"></div>
+              <input type="color" id="te-picker-accent" oninput="teSeedChanged('--accent',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent" maxlength="7" oninput="teHexChanged('--accent',this.value)">
+            <button class="modal-btn" style="margin:0;" onclick="teDerive()" title="Recompute everything else from Background / Panel / Primary Accent / Body Text">Derive</button></div>
+          <div class="te-row"><span class="te-label">Secondary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent2"></div>
+              <input type="color" id="te-picker-accent2" oninput="teSeedChanged('--accent2',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent2" maxlength="7" oninput="teHexChanged('--accent2',this.value)"></div>
+          <div class="te-row"><span class="te-label">Tertiary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent3"></div>
+              <input type="color" id="te-picker-accent3" oninput="teSeedChanged('--accent3',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent3" maxlength="7" oninput="teHexChanged('--accent3',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Text</div>
+          <div class="te-row"><span class="te-label">Body</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text"></div>
+              <input type="color" id="te-picker-text" oninput="teSeedChanged('--text',this.value)"></button>
+            <input class="te-hex" id="te-hex-text" maxlength="7" oninput="teHexChanged('--text',this.value)"></div>
+          <div class="te-row"><span class="te-label">Dim</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text-dim"></div>
+              <input type="color" id="te-picker-text-dim" oninput="teSeedChanged('--text-dim',this.value)"></button>
+            <input class="te-hex" id="te-hex-text-dim" maxlength="7" oninput="teHexChanged('--text-dim',this.value)"></div>
+          <div class="te-row"><span class="te-label">Bright</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text-bright"></div>
+              <input type="color" id="te-picker-text-bright" oninput="teSeedChanged('--text-bright',this.value)"></button>
+            <input class="te-hex" id="te-hex-text-bright" maxlength="7" oninput="teHexChanged('--text-bright',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Status</div>
+          <div class="te-row"><span class="te-label">Danger</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-danger"></div>
+              <input type="color" id="te-picker-danger" oninput="teSeedChanged('--danger',this.value)"></button>
+            <input class="te-hex" id="te-hex-danger" maxlength="7" oninput="teHexChanged('--danger',this.value)"></div>
+          <div class="te-row"><span class="te-label">Warn</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-warn"></div>
+              <input type="color" id="te-picker-warn" oninput="teSeedChanged('--warn',this.value)"></button>
+            <input class="te-hex" id="te-hex-warn" maxlength="7" oninput="teHexChanged('--warn',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title te-collapsible" onclick="teToggleNM()">Node map colors <span id="te-nm-caret">&#9656;</span></div>
+          <div id="te-nm-rows" style="display:none;"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Fonts</div>
+          <div class="te-row">
+            <span class="te-label">Display (sans)</span>
+            <input class="te-font-input" id="te-font-sans" placeholder="Outfit, sans-serif" oninput="teFontChanged()">
+          </div>
+          <div class="te-row">
+            <span class="te-label">Monospace</span>
+            <input class="te-font-input" id="te-font-mono" placeholder="JetBrains Mono, monospace" oninput="teFontChanged()">
+          </div>
+        </div>
+
+        <!-- Live preview -->
+        <div class="te-section">Live Preview</div>
+        <div id="te-preview" class="te-preview">
+          <div class="te-preview-panel">
+            <div class="te-preview-hdr">Preview Panel</div>
+            <button class="act-btn" style="margin:6px 0;">Action Button</button>
+            <div class="te-preview-list">
+              <div class="te-preview-row">Regular row</div>
+              <div class="te-preview-row te-preview-row-hl">Highlighted row</div>
+            </div>
+            <div class="te-preview-error">// Error: something needs attention</div>
+            <table class="te-preview-table">
+              <tr><th>Stage</th><th>Isp</th></tr>
+              <tr><td>S-IC</td><td>263 s</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="te-row" style="margin-top:12px;">
+          <span class="te-label">Theme Name</span>
+          <input class="te-font-input" id="te-theme-name" placeholder="My Theme" style="width:200px;flex:none;">
+        </div>
+        <div class="te-row" style="justify-content:flex-end;gap:8px;">
+          <button class="modal-btn" onclick="teCancelCustomize()">Cancel</button>
+          <button class="modal-btn" onclick="teApplyWorking()">Apply</button>
+          <button class="modal-btn primary" onclick="teSaveCustom()">Save theme</button>
+        </div>
+      </div>
+
+      <!-- File row -->
+      <div class="te-section">File</div>
       <div class="te-row">
-        <span class="te-label">Theme Name</span>
-        <input class="te-font-input" id="te-theme-name" placeholder="My Theme" style="width:160px;flex:none;">
-        <button class="modal-btn primary" onclick="teSaveCustom()" style="margin:0;">Save</button>
+        <button class="modal-btn" onclick="exportActiveTheme()">Export theme</button>
+        <label class="modal-btn" style="cursor:pointer;margin:0;">Import theme<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
       </div>
 
     </div>
     <div class="modal-footer">
-      <button class="modal-btn" onclick="closeModal('modal-theme')">Close</button>
-      <button class="modal-btn" onclick="teExportJSON()">Export JSON</button>
+      <button class="modal-btn" onclick="closeModal('modal-themes')">Close</button>
     </div>
   </div>
 </div>

@@ -133,19 +133,6 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 /* Stage detail modal body */
 /* Booster column highlight */
 
-/* ── VISUAL THEME EDITOR ── */
-.te-section{font-family:var(--mono);font-size:9px;letter-spacing:.15em;text-transform:uppercase;
-  color:var(--text-dim);margin:14px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border);}
-.te-swatch{width:26px;height:26px;border:1px solid var(--border-bright);cursor:pointer;
-  padding:0;background:none;flex-shrink:0;position:relative;overflow:hidden;}
-.te-swatch input[type=color]{position:absolute;inset:-4px;width:calc(100%+8px);
-  height:calc(100%+8px);border:none;cursor:pointer;opacity:0;}
-.te-hex{font-family:var(--mono);font-size:10px;background:transparent;
-  border:1px solid var(--border);color:var(--text-bright);padding:4px 6px;width:78px;flex-shrink:0;}
-.te-preset-btn{font-family:var(--mono);font-size:9px;padding:5px 10px;background:transparent;
-  border:1px solid var(--border-bright);color:var(--text-dim);cursor:pointer;transition:all .15s;}
-.te-font-input{font-family:var(--mono);font-size:10px;background:transparent;
-  border:1px solid var(--border);color:var(--text-bright);padding:4px 8px;flex:1;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
 /* ─── Spacecraft Editor ────────────────────────────────────────────────────── */
 .sc-ed-toolbar{display:flex;align-items:center;padding:8px 14px;gap:8px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;}
@@ -790,6 +777,39 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .te-preset-btn:hover,.te-preset-btn.active{border-color:var(--accent);color:var(--accent);}
 .te-font-input{font-family:var(--mono);font-size:10px;background:transparent;
   border:1px solid var(--border);color:var(--text-bright);padding:4px 8px;flex:1;}
+.te-customize-sub{font-family:var(--mono);font-size:9px;text-transform:none;letter-spacing:0;color:var(--text-dim);opacity:.8;}
+
+/* Gallery */
+.te-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
+.te-card{border:1px solid var(--border);background:var(--panel);padding:8px;cursor:pointer;transition:border-color .12s;}
+.te-card:hover{border-color:var(--border-bright);}
+.te-card.active{border-color:var(--accent);}
+.te-card-swatches{display:flex;gap:2px;height:20px;margin-bottom:6px;overflow:hidden;}
+.te-card-sw{flex:1;height:100%;}
+.te-card-name{font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.te-card-actions{display:flex;gap:4px;}
+.te-card-btn{font-family:var(--mono);font-size:8px;padding:3px 6px;background:transparent;border:1px solid var(--border);color:var(--text-dim);cursor:pointer;flex:1;}
+.te-card-btn:hover{border-color:var(--accent);color:var(--accent);}
+.te-card-del{flex:none;color:var(--danger);}
+.te-card-del:hover{border-color:var(--danger);color:var(--danger);}
+
+/* Customize seed groups */
+.te-seed-group{margin-bottom:14px;}
+.te-seed-group-title{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+.te-collapsible{cursor:pointer;user-select:none;}
+.te-collapsible:hover{color:var(--accent);}
+
+/* Live preview */
+.te-preview{border:1px solid var(--border);padding:10px;background:var(--bg);}
+.te-preview-panel{background:var(--panel);border:1px solid var(--border);padding:10px;font-family:var(--sans);}
+.te-preview-hdr{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-bright);margin-bottom:6px;}
+.te-preview-list{margin:6px 0;}
+.te-preview-row{font-family:var(--mono);font-size:10px;color:var(--text);padding:4px 6px;}
+.te-preview-row-hl{background:var(--accent-tint-soft);border-left:2px solid var(--accent);color:var(--accent);}
+.te-preview-error{font-family:var(--mono);font-size:10px;color:var(--danger-bright);background:var(--danger-tint);padding:4px 6px;margin:6px 0;}
+.te-preview-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:9px;color:var(--text);}
+.te-preview-table th,.te-preview-table td{border:1px solid var(--border);padding:3px 6px;text-align:left;}
+.te-preview-table th{color:var(--text-dim);}
 #vehicles-advanced{padding:16px 20px;background:var(--panel);border:1px solid var(--border);margin-bottom:14px;}
 #vehicles-stage-params{padding:0 4px;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}

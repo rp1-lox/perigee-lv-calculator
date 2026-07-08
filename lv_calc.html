@@ -140,19 +140,6 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 /* Stage detail modal body */
 /* Booster column highlight */
 
-/* ── VISUAL THEME EDITOR ── */
-.te-section{font-family:var(--mono);font-size:9px;letter-spacing:.15em;text-transform:uppercase;
-  color:var(--text-dim);margin:14px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--border);}
-.te-swatch{width:26px;height:26px;border:1px solid var(--border-bright);cursor:pointer;
-  padding:0;background:none;flex-shrink:0;position:relative;overflow:hidden;}
-.te-swatch input[type=color]{position:absolute;inset:-4px;width:calc(100%+8px);
-  height:calc(100%+8px);border:none;cursor:pointer;opacity:0;}
-.te-hex{font-family:var(--mono);font-size:10px;background:transparent;
-  border:1px solid var(--border);color:var(--text-bright);padding:4px 6px;width:78px;flex-shrink:0;}
-.te-preset-btn{font-family:var(--mono);font-size:9px;padding:5px 10px;background:transparent;
-  border:1px solid var(--border-bright);color:var(--text-dim);cursor:pointer;transition:all .15s;}
-.te-font-input{font-family:var(--mono);font-size:10px;background:transparent;
-  border:1px solid var(--border);color:var(--text-bright);padding:4px 8px;flex:1;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
 /* ─── Spacecraft Editor ────────────────────────────────────────────────────── */
 .sc-ed-toolbar{display:flex;align-items:center;padding:8px 14px;gap:8px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0;}
@@ -797,6 +784,39 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .te-preset-btn:hover,.te-preset-btn.active{border-color:var(--accent);color:var(--accent);}
 .te-font-input{font-family:var(--mono);font-size:10px;background:transparent;
   border:1px solid var(--border);color:var(--text-bright);padding:4px 8px;flex:1;}
+.te-customize-sub{font-family:var(--mono);font-size:9px;text-transform:none;letter-spacing:0;color:var(--text-dim);opacity:.8;}
+
+/* Gallery */
+.te-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
+.te-card{border:1px solid var(--border);background:var(--panel);padding:8px;cursor:pointer;transition:border-color .12s;}
+.te-card:hover{border-color:var(--border-bright);}
+.te-card.active{border-color:var(--accent);}
+.te-card-swatches{display:flex;gap:2px;height:20px;margin-bottom:6px;overflow:hidden;}
+.te-card-sw{flex:1;height:100%;}
+.te-card-name{font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.te-card-actions{display:flex;gap:4px;}
+.te-card-btn{font-family:var(--mono);font-size:8px;padding:3px 6px;background:transparent;border:1px solid var(--border);color:var(--text-dim);cursor:pointer;flex:1;}
+.te-card-btn:hover{border-color:var(--accent);color:var(--accent);}
+.te-card-del{flex:none;color:var(--danger);}
+.te-card-del:hover{border-color:var(--danger);color:var(--danger);}
+
+/* Customize seed groups */
+.te-seed-group{margin-bottom:14px;}
+.te-seed-group-title{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;}
+.te-collapsible{cursor:pointer;user-select:none;}
+.te-collapsible:hover{color:var(--accent);}
+
+/* Live preview */
+.te-preview{border:1px solid var(--border);padding:10px;background:var(--bg);}
+.te-preview-panel{background:var(--panel);border:1px solid var(--border);padding:10px;font-family:var(--sans);}
+.te-preview-hdr{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-bright);margin-bottom:6px;}
+.te-preview-list{margin:6px 0;}
+.te-preview-row{font-family:var(--mono);font-size:10px;color:var(--text);padding:4px 6px;}
+.te-preview-row-hl{background:var(--accent-tint-soft);border-left:2px solid var(--accent);color:var(--accent);}
+.te-preview-error{font-family:var(--mono);font-size:10px;color:var(--danger-bright);background:var(--danger-tint);padding:4px 6px;margin:6px 0;}
+.te-preview-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:9px;color:var(--text);}
+.te-preview-table th,.te-preview-table td{border:1px solid var(--border);padding:3px 6px;text-align:left;}
+.te-preview-table th{color:var(--text-dim);}
 #vehicles-advanced{padding:16px 20px;background:var(--panel);border:1px solid var(--border);margin-bottom:14px;}
 #vehicles-stage-params{padding:0 4px;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
@@ -988,9 +1008,7 @@ button,input,select,textarea{font-family:inherit;}
         <option value="perigee" selected>Perigee</option>
         <option value="default">Default (Dark)</option>
       </select>
-      <button class="th-btn" onclick="openThemeEditor()">EDIT</button>
-      <button class="th-btn g" onclick="saveTheme()">SAVE Theme</button>
-      <label class="th-btn" style="cursor:pointer;">LOAD<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
+      <button class="th-btn" onclick="openThemesModal()">Themes&#x2026;</button>
     </div>
     <a class="perigee-plug" href="https://perigeeaero.shop" target="_blank" rel="noopener">Enjoying Rocket Playground? Support it — buy a model at perigeeaero.shop &#x2197;</a>
   </div>
@@ -1526,48 +1544,151 @@ button,input,select,textarea{font-family:inherit;}
   </div>
 </div>
 
-<!-- ── MODAL: Theme editor ── -->
-<div class="modal-overlay" id="modal-theme" style="display:none">
-  <div class="modal" style="max-width:480px;">
+<!-- ── MODAL: Themes ── -->
+<div class="modal-overlay" id="modal-themes" style="display:none">
+  <div class="modal" style="max-width:720px;">
     <div class="modal-header">
-      <span class="modal-title">Theme Editor</span>
-      <button class="modal-close" onclick="closeModal('modal-theme')">✕</button>
+      <span class="modal-title">Themes</span>
+      <button class="modal-close" onclick="closeModal('modal-themes')">&#x2715;</button>
     </div>
-    <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+    <div class="modal-body" style="max-height:76vh;overflow-y:auto;">
 
-      <!-- Presets -->
-      <div class="te-section">Presets</div>
-      <div class="te-preset-row" id="te-preset-row"></div>
-
-      <!-- Colors -->
-      <div class="te-section">Colors</div>
-      <div id="te-color-rows"></div>
-
-      <!-- Fonts -->
-      <div class="te-section">Fonts</div>
-      <div class="te-row">
-        <span class="te-label">Display (sans)</span>
-        <input class="te-font-input" id="te-font-sans" placeholder="Outfit, sans-serif"
-          oninput="teApplyLive()">
-      </div>
-      <div class="te-row">
-        <span class="te-label">Monospace</span>
-        <input class="te-font-input" id="te-font-mono" placeholder="JetBrains Mono, monospace"
-          oninput="teApplyLive()">
+      <!-- Gallery -->
+      <div class="te-section">Gallery</div>
+      <div class="te-gallery" id="te-gallery"></div>
+      <div class="te-row" style="margin-top:10px;">
+        <button class="modal-btn" onclick="teNewTheme()">+ New theme</button>
       </div>
 
-      <!-- Name -->
-      <div class="te-section">Save Custom Theme</div>
+      <!-- Customize (hidden until New theme / Edit copy) -->
+      <div id="te-customize" style="display:none;">
+        <div class="te-section">Customize <span id="te-customize-label" class="te-customize-sub"></span></div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Base</div>
+          <div class="te-row"><span class="te-label">Background</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-bg"></div>
+              <input type="color" id="te-picker-bg" oninput="teSeedChanged('--bg',this.value)"></button>
+            <input class="te-hex" id="te-hex-bg" maxlength="7" oninput="teHexChanged('--bg',this.value)"></div>
+          <div class="te-row"><span class="te-label">Panel</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-panel"></div>
+              <input type="color" id="te-picker-panel" oninput="teSeedChanged('--panel',this.value)"></button>
+            <input class="te-hex" id="te-hex-panel" maxlength="7" oninput="teHexChanged('--panel',this.value)"></div>
+          <div class="te-row"><span class="te-label">Input</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-input"></div>
+              <input type="color" id="te-picker-input" oninput="teSeedChanged('--input',this.value)"></button>
+            <input class="te-hex" id="te-hex-input" maxlength="7" oninput="teHexChanged('--input',this.value)"></div>
+          <div class="te-row"><span class="te-label">Border</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-border"></div>
+              <input type="color" id="te-picker-border" oninput="teSeedChanged('--border',this.value)"></button>
+            <input class="te-hex" id="te-hex-border" maxlength="7" oninput="teHexChanged('--border',this.value)"></div>
+          <div class="te-row"><span class="te-label">Border (bright)</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-border-bright"></div>
+              <input type="color" id="te-picker-border-bright" oninput="teSeedChanged('--border-bright',this.value)"></button>
+            <input class="te-hex" id="te-hex-border-bright" maxlength="7" oninput="teHexChanged('--border-bright',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Accents</div>
+          <div class="te-row"><span class="te-label">Primary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent"></div>
+              <input type="color" id="te-picker-accent" oninput="teSeedChanged('--accent',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent" maxlength="7" oninput="teHexChanged('--accent',this.value)">
+            <button class="modal-btn" style="margin:0;" onclick="teDerive()" title="Recompute everything else from Background / Panel / Primary Accent / Body Text">Derive</button></div>
+          <div class="te-row"><span class="te-label">Secondary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent2"></div>
+              <input type="color" id="te-picker-accent2" oninput="teSeedChanged('--accent2',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent2" maxlength="7" oninput="teHexChanged('--accent2',this.value)"></div>
+          <div class="te-row"><span class="te-label">Tertiary</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-accent3"></div>
+              <input type="color" id="te-picker-accent3" oninput="teSeedChanged('--accent3',this.value)"></button>
+            <input class="te-hex" id="te-hex-accent3" maxlength="7" oninput="teHexChanged('--accent3',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Text</div>
+          <div class="te-row"><span class="te-label">Body</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text"></div>
+              <input type="color" id="te-picker-text" oninput="teSeedChanged('--text',this.value)"></button>
+            <input class="te-hex" id="te-hex-text" maxlength="7" oninput="teHexChanged('--text',this.value)"></div>
+          <div class="te-row"><span class="te-label">Dim</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text-dim"></div>
+              <input type="color" id="te-picker-text-dim" oninput="teSeedChanged('--text-dim',this.value)"></button>
+            <input class="te-hex" id="te-hex-text-dim" maxlength="7" oninput="teHexChanged('--text-dim',this.value)"></div>
+          <div class="te-row"><span class="te-label">Bright</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-text-bright"></div>
+              <input type="color" id="te-picker-text-bright" oninput="teSeedChanged('--text-bright',this.value)"></button>
+            <input class="te-hex" id="te-hex-text-bright" maxlength="7" oninput="teHexChanged('--text-bright',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Status</div>
+          <div class="te-row"><span class="te-label">Danger</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-danger"></div>
+              <input type="color" id="te-picker-danger" oninput="teSeedChanged('--danger',this.value)"></button>
+            <input class="te-hex" id="te-hex-danger" maxlength="7" oninput="teHexChanged('--danger',this.value)"></div>
+          <div class="te-row"><span class="te-label">Warn</span>
+            <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-warn"></div>
+              <input type="color" id="te-picker-warn" oninput="teSeedChanged('--warn',this.value)"></button>
+            <input class="te-hex" id="te-hex-warn" maxlength="7" oninput="teHexChanged('--warn',this.value)"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title te-collapsible" onclick="teToggleNM()">Node map colors <span id="te-nm-caret">&#9656;</span></div>
+          <div id="te-nm-rows" style="display:none;"></div>
+        </div>
+
+        <div class="te-seed-group">
+          <div class="te-seed-group-title">Fonts</div>
+          <div class="te-row">
+            <span class="te-label">Display (sans)</span>
+            <input class="te-font-input" id="te-font-sans" placeholder="Outfit, sans-serif" oninput="teFontChanged()">
+          </div>
+          <div class="te-row">
+            <span class="te-label">Monospace</span>
+            <input class="te-font-input" id="te-font-mono" placeholder="JetBrains Mono, monospace" oninput="teFontChanged()">
+          </div>
+        </div>
+
+        <!-- Live preview -->
+        <div class="te-section">Live Preview</div>
+        <div id="te-preview" class="te-preview">
+          <div class="te-preview-panel">
+            <div class="te-preview-hdr">Preview Panel</div>
+            <button class="act-btn" style="margin:6px 0;">Action Button</button>
+            <div class="te-preview-list">
+              <div class="te-preview-row">Regular row</div>
+              <div class="te-preview-row te-preview-row-hl">Highlighted row</div>
+            </div>
+            <div class="te-preview-error">// Error: something needs attention</div>
+            <table class="te-preview-table">
+              <tr><th>Stage</th><th>Isp</th></tr>
+              <tr><td>S-IC</td><td>263 s</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="te-row" style="margin-top:12px;">
+          <span class="te-label">Theme Name</span>
+          <input class="te-font-input" id="te-theme-name" placeholder="My Theme" style="width:200px;flex:none;">
+        </div>
+        <div class="te-row" style="justify-content:flex-end;gap:8px;">
+          <button class="modal-btn" onclick="teCancelCustomize()">Cancel</button>
+          <button class="modal-btn" onclick="teApplyWorking()">Apply</button>
+          <button class="modal-btn primary" onclick="teSaveCustom()">Save theme</button>
+        </div>
+      </div>
+
+      <!-- File row -->
+      <div class="te-section">File</div>
       <div class="te-row">
-        <span class="te-label">Theme Name</span>
-        <input class="te-font-input" id="te-theme-name" placeholder="My Theme" style="width:160px;flex:none;">
-        <button class="modal-btn primary" onclick="teSaveCustom()" style="margin:0;">Save</button>
+        <button class="modal-btn" onclick="exportActiveTheme()">Export theme</button>
+        <label class="modal-btn" style="cursor:pointer;margin:0;">Import theme<input type="file" accept=".json" style="display:none" onchange="loadThemeFile(this)"></label>
       </div>
 
     </div>
     <div class="modal-footer">
-      <button class="modal-btn" onclick="closeModal('modal-theme')">Close</button>
-      <button class="modal-btn" onclick="teExportJSON()">Export JSON</button>
+      <button class="modal-btn" onclick="closeModal('modal-themes')">Close</button>
     </div>
   </div>
 </div>
@@ -5381,6 +5502,7 @@ function applyTheme(key){
   if(sel){for(const o of sel.options){if(o.value===key){sel.value=key;break;}}}
   if(typeof progRenderNodeMap==='function')progRenderNodeMap();
   if(typeof artUpdateInvertFilter==='function')artUpdateInvertFilter();
+  if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
 }
 function rebuildThemeSelect(){
   const sel=document.getElementById('theme-select');const cur=sel.value;sel.innerHTML='';
@@ -5388,86 +5510,271 @@ function rebuildThemeSelect(){
   Object.entries(customThemes).forEach(([k,t])=>{const o=document.createElement('option');o.value=k;o.textContent=(t.name||k)+' (custom)';sel.appendChild(o);});
   sel.value=(cur in BUILTIN_THEMES||cur in customThemes)?cur:'perigee';
 }
-// ─── VISUAL THEME EDITOR ──────────────────────
-const TE_VARS=[
-  {key:'--bg',        label:'Page Background'},
-  {key:'--panel',     label:'Panel / Card'},
-  {key:'--border',    label:'Border'},
+
+// ─── COLOR MATH HELPERS (hex <-> HSL, mixing) ───────────────────────
+// Small, dependency-free helpers used by themeFromSeeds() to derive a full
+// theme from just a handful of "core" seed colors.
+function _hexToRgb(hex){
+  hex=(hex||'#000000').replace('#','');
+  if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
+  const n=parseInt(hex,16);
+  return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};
+}
+function _rgbToHex({r,g,b}){
+  const h=v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0');
+  return '#'+h(r)+h(g)+h(b);
+}
+function _rgbToHsl({r,g,b}){
+  r/=255;g/=255;b/=255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b);
+  let h=0,s=0;const l=(max+min)/2;
+  const d=max-min;
+  if(d!==0){
+    s=l>0.5?d/(2-max-min):d/(max+min);
+    switch(max){
+      case r:h=((g-b)/d+(g<b?6:0));break;
+      case g:h=((b-r)/d+2);break;
+      case b:h=((r-g)/d+4);break;
+    }
+    h*=60;
+  }
+  return {h,s,l};
+}
+function _hslToRgb({h,s,l}){
+  h=((h%360)+360)%360;
+  if(s===0){const v=l*255;return {r:v,g:v,b:v};}
+  const q=l<0.5?l*(1+s):l+s-l*s;
+  const p=2*l-q;
+  const hk=h/360;
+  const t=[hk+1/3,hk,hk-1/3].map(x=>{
+    if(x<0)x+=1;if(x>1)x-=1;
+    if(x<1/6)return p+(q-p)*6*x;
+    if(x<1/2)return q;
+    if(x<2/3)return p+(q-p)*(2/3-x)*6;
+    return p;
+  });
+  return {r:t[0]*255,g:t[1]*255,b:t[2]*255};
+}
+/** Mix two hex colors; amt = fraction of hex2 (0..1). */
+function hexMix(hex1,hex2,amt){
+  const a=_hexToRgb(hex1),b=_hexToRgb(hex2);
+  return _rgbToHex({r:a.r+(b.r-a.r)*amt,g:a.g+(b.g-a.g)*amt,b:a.b+(b.b-a.b)*amt});
+}
+/** Lighten (amt>0) or darken (amt<0) a hex color by shifting HSL lightness. */
+function hexLighten(hex,amt){
+  const hsl=_rgbToHsl(_hexToRgb(hex));
+  hsl.l=Math.max(0,Math.min(1,hsl.l+amt));
+  return _rgbToHex(_hslToRgb(hsl));
+}
+/** Rotate hue by deg degrees, optionally nudging saturation/lightness. */
+function hexHueRotate(hex,deg,dl){
+  const hsl=_rgbToHsl(_hexToRgb(hex));
+  hsl.h+=deg;
+  if(dl)hsl.l=Math.max(0,Math.min(1,hsl.l+dl));
+  return _rgbToHex(_hslToRgb(hsl));
+}
+/** Lighten a color toward a target (e.g. panel toward text) by fraction. */
+function hexTowards(hex,target,amt){return hexMix(hex,target,amt);}
+
+/**
+ * Derive a full theme object from just the 4 "core" seeds:
+ *   { bg, panel, accent, text, name? }
+ * Everything else (borders, input, accent2/3, text-dim/bright, danger/warn,
+ * and the full nm-* node-map palette) is computed with sensible defaults.
+ * Callers can override any individual derived value afterward — this just
+ * gives a coherent starting point.
+ */
+function themeFromSeeds(core){
+  const bg=core.bg||'#0a0c10';
+  const panel=core.panel||'#0f1318';
+  const accent=core.accent||'#00c8ff';
+  const text=core.text||'#c8d8e8';
+  const fallback=BUILTIN_THEMES.default;
+
+  const border=hexTowards(panel,text,0.15);
+  const borderBright=hexTowards(panel,text,0.30);
+  const input=hexMix(bg,panel,0.5);
+  const textDim=hexMix(text,bg,0.55);
+  const textBright=hexTowards(text,'#ffffff',0.6);
+  const accent2=core.accent2||hexHueRotate(accent,40);
+  const accent3=core.accent3||hexLighten(accent,0.20);
+  const danger=core.danger||fallback['--danger'];
+  const warn=core.warn||fallback['--warn'];
+
+  // Node-map palette — derived from bg/panel/accent, matching what each
+  // builtin theme's nm-* set looks like relative to its own bg/panel/accent.
+  const nmBg=hexLighten(bg,-0.02);
+  const nmEarth=core['--nm-earth']||hexHueRotate(accent,-90,0.05);
+  const nmLunar=core['--nm-lunar']||hexHueRotate(accent,140,0.05);
+  const nmInterp=core['--nm-interp']||hexHueRotate(accent,150,-0.05);
+  const nmEdge=hexTowards(panel,text,0.20);
+  const nmEdgeAct=accent;
+  const nmNodeFill=panel;
+  const nmLabel=textDim;
+  const nmPillBg=panel;
+  const nmPillBd=border;
+  const nmPillText=textDim;
+  const nmPalBg=hexLighten(bg,-0.03);
+  const nmPalHdr=hexLighten(bg,-0.04);
+  const nmPalItem=panel;
+  const nmPalItemAct=hexMix(panel,accent,0.10);
+  const nmGhost=border;
+
+  return {
+    name:core.name||'Custom Theme',
+    '--bg':bg,'--panel':panel,'--input':input,'--border':border,'--border-bright':borderBright,
+    '--accent':accent,'--accent2':accent2,'--accent3':accent3,
+    '--danger':danger,'--warn':warn,
+    '--text':text,'--text-dim':textDim,'--text-bright':textBright,
+    '--mono':core['--mono']||"'JetBrains Mono',monospace",'--sans':core['--sans']||"'Outfit',sans-serif",
+    '--nm-bg':nmBg,'--nm-earth':nmEarth,'--nm-lunar':nmLunar,'--nm-interp':nmInterp,
+    '--nm-edge':nmEdge,'--nm-edge-act':nmEdgeAct,'--nm-node-fill':nmNodeFill,
+    '--nm-label':nmLabel,'--nm-pill-bg':nmPillBg,'--nm-pill-bd':nmPillBd,'--nm-pill-text':nmPillText,
+    '--nm-pal-bg':nmPalBg,'--nm-pal-hdr':nmPalHdr,'--nm-pal-item':nmPalItem,'--nm-pal-item-act':nmPalItemAct,'--nm-ghost':nmGhost,
+  };
+}
+
+// ─── THEMES MODAL (gallery + customize + preview) ──────────────
+
+// All seed vars a theme carries (core group first, then node-map group).
+const TE_CORE_VARS=[
+  {key:'--bg',           label:'Background'},
+  {key:'--panel',        label:'Panel'},
+  {key:'--input',        label:'Input'},
+  {key:'--border',       label:'Border'},
   {key:'--border-bright',label:'Border (highlight)'},
-  {key:'--accent',    label:'Primary Accent'},
-  {key:'--accent2',   label:'Secondary Accent'},
-  {key:'--accent3',   label:'Accent Glow'},
-  {key:'--text-dim',  label:'Text (dim)'},
-  {key:'--text-bright',label:'Text (bright)'},
+  {key:'--accent',       label:'Primary Accent'},
+  {key:'--accent2',      label:'Secondary Accent'},
+  {key:'--accent3',      label:'Tertiary Accent'},
+  {key:'--text',         label:'Text (body)'},
+  {key:'--text-dim',     label:'Text (dim)'},
+  {key:'--text-bright',  label:'Text (bright)'},
+  {key:'--danger',       label:'Danger'},
+  {key:'--warn',         label:'Warn'},
 ];
-function teGetCurrent(){
-  const style=document.documentElement.style;
-  const computed=getComputedStyle(document.documentElement);
-  const out={};
-  TE_VARS.forEach(({key})=>{
-    out[key]=(style.getPropertyValue(key)||computed.getPropertyValue(key)).trim();
-  });
-  out['--sans']=(style.getPropertyValue('--sans')||computed.getPropertyValue('--sans')).trim();
-  out['--mono']=(style.getPropertyValue('--mono')||computed.getPropertyValue('--mono')).trim();
-  return out;
+const TE_NM_VARS=[
+  {key:'--nm-bg',          label:'Node-map background'},
+  {key:'--nm-earth',       label:'Earth marker'},
+  {key:'--nm-lunar',       label:'Lunar marker'},
+  {key:'--nm-interp',      label:'Interplanetary marker'},
+  {key:'--nm-edge',        label:'Edge'},
+  {key:'--nm-edge-act',    label:'Edge (active)'},
+  {key:'--nm-node-fill',   label:'Node fill'},
+  {key:'--nm-label',       label:'Label text'},
+  {key:'--nm-pill-bg',     label:'Pill background'},
+  {key:'--nm-pill-bd',     label:'Pill border'},
+  {key:'--nm-pill-text',   label:'Pill text'},
+  {key:'--nm-pal-bg',      label:'Palette background'},
+  {key:'--nm-pal-hdr',     label:'Palette header'},
+  {key:'--nm-pal-item',    label:'Palette item'},
+  {key:'--nm-pal-item-act',label:'Palette item (active)'},
+  {key:'--nm-ghost',       label:'Ghost'},
+];
+const TE_ALL_VARS=TE_CORE_VARS.concat(TE_NM_VARS);
+const TE_SWATCH_KEYS=['--bg','--panel','--accent','--accent2','--accent3','--text','--danger'];
+
+// Working copy state while the Customize panel is open.
+let _teWorking=null;   // {name, --bg, ..., --sans, --mono}
+let _teBaseKey=null;   // key of the theme this copy was seeded from (for label only)
+let _teEditingKey=null;// if editing an existing custom theme in place (Save overwrites), else null = new
+
+function openThemesModal(){
+  teRenderGallery();
+  document.getElementById('te-customize').style.display='none';
+  openModal('modal-themes');
 }
-function teApplyLive(){
-  TE_VARS.forEach(({key})=>{
-    const hex=document.getElementById('te-hex-'+key.slice(2))?.value||'';
-    if(/^#[0-9a-f]{3,8}$/i.test(hex))
-      document.documentElement.style.setProperty(key,hex);
-  });
-  const sans=document.getElementById('te-font-sans').value.trim();
-  const mono=document.getElementById('te-font-mono').value.trim();
-  if(sans)document.documentElement.style.setProperty('--sans',`'${sans.replace(/'/g,'')}'`);
-  if(mono)document.documentElement.style.setProperty('--mono',`'${mono.replace(/'/g,'')}'`);
+
+function teRenderGallery(){
+  const g=document.getElementById('te-gallery');
+  g.innerHTML='';
+  const addCard=(key,t,isCustom)=>{
+    const card=document.createElement('div');
+    card.className='te-card'+(key===activeThemeKey?' active':'');
+    const safeHex=v=>(/^#[0-9a-f]{3,8}$/i.test(v||''))?v:'#000000';
+    const swatches=TE_SWATCH_KEYS.map(k=>`<span class="te-card-sw" style="background:${safeHex(t[k])}"></span>`).join('');
+    const safeName=String(t.name||key).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    card.innerHTML=`
+      <div class="te-card-swatches">${swatches}</div>
+      <div class="te-card-name">${safeName}</div>
+      <div class="te-card-actions">
+        <button class="te-card-btn" data-act="use">Use</button>
+        <button class="te-card-btn" data-act="copy">Edit copy</button>
+        ${isCustom?'<button class="te-card-btn te-card-del" data-act="del" title="Delete">&#x2715;</button>':''}
+      </div>`;
+    card.querySelector('[data-act="use"]').onclick=()=>{applyTheme(key);teRenderGallery();};
+    card.addEventListener('click',(e)=>{if(e.target.closest('.te-card-actions'))return;applyTheme(key);teRenderGallery();});
+    card.querySelector('[data-act="copy"]').onclick=(e)=>{e.stopPropagation();teOpenCustomize(key,false);};
+    if(isCustom){
+      card.querySelector('[data-act="del"]').onclick=(e)=>{
+        e.stopPropagation();
+        showConfirm('Delete Theme','Delete theme "'+(t.name||key)+'"? This cannot be undone.',()=>{
+          delete customThemes[key];
+          if(activeThemeKey===key)applyTheme('perigee');
+          rebuildThemeSelect();
+          teRenderGallery();
+          if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
+        },'Delete');
+      };
+    }
+    g.appendChild(card);
+  };
+  Object.entries(BUILTIN_THEMES).forEach(([k,t])=>addCard(k,t,false));
+  Object.entries(customThemes).forEach(([k,t])=>addCard(k,t,true));
 }
-function teSwatchUpdate(key,hexVal){
-  document.getElementById('te-fill-'+key.slice(2)).style.background=hexVal;
-  document.getElementById('te-hex-'+key.slice(2)).value=hexVal;
-  teApplyLive();
+
+function teNewTheme(){
+  teOpenCustomize(activeThemeKey,true);
 }
-function openThemeEditor(){
-  // Build preset buttons
-  const pr=document.getElementById('te-preset-row');
-  pr.innerHTML='';
-  Object.entries(BUILTIN_THEMES).forEach(([k,t])=>{
-    const btn=document.createElement('button');
-    btn.className='te-preset-btn'+(k===activeThemeKey?' active':'');
-    btn.textContent=t.name;
-    btn.onclick=()=>{
-      applyTheme(k);
-      document.querySelectorAll('.te-preset-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      tePopulate();
-    };
-    pr.appendChild(btn);
-  });
-  // Build color rows
-  const cr=document.getElementById('te-color-rows');
-  cr.innerHTML='';
-  TE_VARS.forEach(({key,label})=>{
+
+// Open the Customize panel seeded from an existing theme (builtin or custom).
+// Always edits a COPY — builtins are never mutated in place.
+function teOpenCustomize(seedKey,isNew){
+  const src=getTheme(seedKey);
+  _teWorking=Object.assign({},src);
+  _teBaseKey=seedKey;
+  _teEditingKey=(!isNew && customThemes[seedKey])?seedKey:null;
+  document.getElementById('te-customize-label').textContent=
+    isNew?'(new theme, from '+ (src.name||seedKey) +')':'(editing copy of '+(src.name||seedKey)+')';
+  document.getElementById('te-theme-name').value=
+    _teEditingKey? (src.name||'') : ('Custom '+(src.name||seedKey));
+  teBuildNMRows();
+  tePopulate();
+  document.getElementById('te-customize').style.display='block';
+  document.getElementById('te-customize').scrollIntoView({block:'nearest'});
+}
+
+function teCancelCustomize(){
+  _teWorking=null;_teEditingKey=null;
+  document.getElementById('te-customize').style.display='none';
+}
+
+function teBuildNMRows(){
+  const wrap=document.getElementById('te-nm-rows');
+  wrap.innerHTML='';
+  TE_NM_VARS.forEach(({key,label})=>{
     const id=key.slice(2);
     const row=document.createElement('div');row.className='te-row';
     row.innerHTML=`
       <span class="te-label">${label}</span>
-      <button class="te-swatch" title="Pick colour">
-        <div class="te-swatch-fill" id="te-fill-${id}"></div>
-        <input type="color" id="te-picker-${id}"
-          oninput="teSwatchUpdate('${key}',this.value);document.getElementById('te-hex-${id}').value=this.value;">
-      </button>
-      <input class="te-hex" id="te-hex-${id}" maxlength="7" placeholder="#000000"
-        oninput="if(/^#[0-9a-f]{6}$/i.test(this.value)){document.getElementById('te-picker-${id}').value=this.value;document.getElementById('te-fill-${id}').style.background=this.value;teApplyLive();}">`;
-    cr.appendChild(row);
+      <button class="te-swatch"><div class="te-swatch-fill" id="te-fill-${id}"></div>
+        <input type="color" id="te-picker-${id}" oninput="teSeedChanged('${key}',this.value)"></button>
+      <input class="te-hex" id="te-hex-${id}" maxlength="7" oninput="teHexChanged('${key}',this.value)">`;
+    wrap.appendChild(row);
   });
-  tePopulate();
-  openModal('modal-theme');
 }
+function teToggleNM(){
+  const rows=document.getElementById('te-nm-rows');
+  const caret=document.getElementById('te-nm-caret');
+  const open=rows.style.display!=='none';
+  rows.style.display=open?'none':'block';
+  caret.innerHTML=open?'&#9656;':'&#9662;';
+}
+
 function tePopulate(){
-  const cur=teGetCurrent();
-  TE_VARS.forEach(({key})=>{
+  if(!_teWorking)return;
+  TE_ALL_VARS.forEach(({key})=>{
     const id=key.slice(2);
-    const val=cur[key]||'#000000';
+    const val=_teWorking[key]||'#000000';
     const hex=val.startsWith('#')?val:'#000000';
     const fill=document.getElementById('te-fill-'+id);
     const picker=document.getElementById('te-picker-'+id);
@@ -5476,38 +5783,123 @@ function tePopulate(){
     if(picker)picker.value=hex;
     if(hexEl)hexEl.value=hex;
   });
-  // Fonts — strip quotes for display
-  const stripQ=v=>v.replace(/['"]/g,'').split(',')[0].trim();
-  document.getElementById('te-font-sans').value=stripQ(cur['--sans']||'Outfit');
-  document.getElementById('te-font-mono').value=stripQ(cur['--mono']||'JetBrains Mono');
+  const stripQ=v=>(v||'').replace(/['"]/g,'').split(',')[0].trim();
+  document.getElementById('te-font-sans').value=stripQ(_teWorking['--sans']||'Outfit');
+  document.getElementById('te-font-mono').value=stripQ(_teWorking['--mono']||'JetBrains Mono');
+  tePreviewRender();
 }
-function teSaveCustom(){
-  const name=document.getElementById('te-theme-name').value.trim()||'Custom Theme';
-  const t={name};
-  TE_VARS.forEach(({key})=>{
-    const val=document.getElementById('te-hex-'+key.slice(2))?.value||'#000000';
-    t[key]=val;
+
+function teSeedChanged(key,hex){
+  if(!_teWorking)return;
+  _teWorking[key]=hex;
+  const id=key.slice(2);
+  const fill=document.getElementById('te-fill-'+id);
+  const hexEl=document.getElementById('te-hex-'+id);
+  if(fill)fill.style.background=hex;
+  if(hexEl)hexEl.value=hex;
+  tePreviewRender();
+}
+function teHexChanged(key,val){
+  if(!_teWorking)return;
+  if(!/^#[0-9a-f]{6}$/i.test(val))return;
+  _teWorking[key]=val;
+  const id=key.slice(2);
+  const fill=document.getElementById('te-fill-'+id);
+  const picker=document.getElementById('te-picker-'+id);
+  if(fill)fill.style.background=val;
+  if(picker)picker.value=val;
+  tePreviewRender();
+}
+function teFontChanged(){
+  if(!_teWorking)return;
+  const sans=document.getElementById('te-font-sans').value.trim();
+  const mono=document.getElementById('te-font-mono').value.trim();
+  if(sans)_teWorking['--sans']="'"+sans.replace(/'/g,'')+"',sans-serif";
+  if(mono)_teWorking['--mono']="'"+mono.replace(/'/g,'')+"',monospace";
+  tePreviewRender();
+}
+
+// Recompute everything from the 4 core seeds (bg, panel, accent, text).
+// Individual pickers remain editable afterward.
+function teDerive(){
+  if(!_teWorking)return;
+  const core={
+    bg:_teWorking['--bg'],panel:_teWorking['--panel'],
+    accent:_teWorking['--accent'],text:_teWorking['--text'],
+    name:_teWorking.name,
+  };
+  const derived=themeFromSeeds(core);
+  // Preserve name/fonts the user may have already set.
+  derived.name=_teWorking.name||derived.name;
+  derived['--sans']=_teWorking['--sans']||derived['--sans'];
+  derived['--mono']=_teWorking['--mono']||derived['--mono'];
+  _teWorking=derived;
+  tePopulate();
+}
+
+// Render the live preview using CANDIDATE values scoped to the preview
+// container only (inline style props) — never touches documentElement.
+function tePreviewRender(){
+  const el=document.getElementById('te-preview');
+  if(!el||!_teWorking)return;
+  TE_ALL_VARS.forEach(({key})=>{
+    if(_teWorking[key])el.style.setProperty(key,_teWorking[key]);
   });
-  t['--sans']="'"+document.getElementById('te-font-sans').value.replace(/'/g,'')+"',sans-serif";
-  t['--mono']="'"+document.getElementById('te-font-mono').value.replace(/'/g,'')+"',monospace";
-  const key='custom_'+name.replace(/\s+/g,'_').toLowerCase();
+  if(_teWorking['--sans'])el.style.setProperty('--sans',_teWorking['--sans']);
+  if(_teWorking['--mono'])el.style.setProperty('--mono',_teWorking['--mono']);
+  // Derived tint vars mirror styles.css's :root formulas so the preview
+  // matches what Apply will actually produce app-wide.
+  el.style.setProperty('--accent-tint-soft','color-mix(in srgb, '+(_teWorking['--accent']||'#00c8ff')+' 7%, transparent)');
+  el.style.setProperty('--danger-tint','color-mix(in srgb, '+(_teWorking['--danger']||'#ff4444')+' 15%, transparent)');
+  el.style.setProperty('--danger-bright','color-mix(in srgb, '+(_teWorking['--danger']||'#ff4444')+' 70%, '+(_teWorking['--text-bright']||'#fff')+')');
+}
+
+function teApplyWorking(){
+  if(!_teWorking)return;
+  const tempKey='__preview_working__';
+  customThemes[tempKey]=Object.assign({},_teWorking,{name:_teWorking.name||'(unsaved)'});
+  applyTheme(tempKey);
+  // Don't let the temp key linger in menus/gallery.
+  delete customThemes[tempKey];
+  rebuildThemeSelect();
+  teRenderGallery();
+}
+
+function teSaveCustom(){
+  if(!_teWorking)return;
+  const name=document.getElementById('te-theme-name').value.trim()||'Custom Theme';
+  const t=Object.assign({},_teWorking,{name});
+  const key=_teEditingKey||('custom_'+name.replace(/\s+/g,'_').toLowerCase()+'_'+Date.now().toString(36));
   customThemes[key]=t;
   rebuildThemeSelect();
   applyTheme(key);
-  document.querySelectorAll('.te-preset-btn').forEach(b=>b.classList.remove('active'));
+  teRenderGallery();
+  document.getElementById('te-customize').style.display='none';
+  _teWorking=null;_teEditingKey=null;
+  if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
 }
-function teExportJSON(){
-  const name=document.getElementById('te-theme-name').value.trim()||'custom';
-  const t={name};
-  TE_VARS.forEach(({key})=>{t[key]=document.getElementById('te-hex-'+key.slice(2))?.value||'';});
-  t['--sans']="'"+document.getElementById('te-font-sans').value.replace(/'/g,'')+"',sans-serif";
-  t['--mono']="'"+document.getElementById('te-font-mono').value.replace(/'/g,'')+"',monospace";
-  downloadJSON(t,name.replace(/\s+/g,'_').toLowerCase()+'_theme.json');
-}
-function saveThemeFromEditor(){const txt=document.getElementById('theme-editor').value;try{const t=JSON.parse(txt);downloadJSON(t,(t.name||'theme').replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'_theme.json');}catch(e){document.getElementById('theme-error').textContent='// JSON parse error: '+e.message;document.getElementById('theme-error').style.display='block';}}
-function saveTheme(){const t=getTheme(activeThemeKey);downloadJSON(t,(t.name||activeThemeKey).replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'_theme.json');}
-function loadThemeFile(input){const file=input.files[0];if(!file)return;const reader=new FileReader();reader.onload=e=>{try{const t=JSON.parse(e.target.result);const key='custom_'+(t.name||'theme').replace(/\s+/g,'_').toLowerCase();customThemes[key]=t;rebuildThemeSelect();applyTheme(key);}catch(err){showAlert('Invalid theme JSON: '+err.message,'Invalid File');}};reader.readAsText(file);input.value='';}
 
+function exportActiveTheme(){
+  const t=getTheme(activeThemeKey);
+  downloadJSON(t,(t.name||activeThemeKey).replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'_theme.json');
+}
+function loadThemeFile(input){
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const t=JSON.parse(e.target.result);
+      const key='custom_'+(t.name||'theme').replace(/\s+/g,'_').toLowerCase()+'_'+Date.now().toString(36);
+      customThemes[key]=t;
+      rebuildThemeSelect();
+      applyTheme(key);
+      teRenderGallery();
+      if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
+    }catch(err){showAlert('Invalid theme JSON: '+err.message,'Invalid File');}
+  };
+  reader.readAsText(file);
+  input.value='';
+}
 
 // ─── LIBRARY TAG SCHEMA ───────────────────────
 // Single source of truth for the 4 structured browse dimensions used by the
@@ -12259,6 +12651,8 @@ function _buildSessionObject() {
     userLVs: (typeof userLVs !== 'undefined') ? safeCopy(userLVs) : null,
     userStagesByCategory: (typeof userStagesByCategory !== 'undefined') ? safeCopy(userStagesByCategory) : null,
     userOrbitsByCategory: (typeof userOrbitsByCategory !== 'undefined') ? safeCopy(userOrbitsByCategory) : null,
+    customThemes: (typeof customThemes !== 'undefined') ? safeCopy(customThemes) : null,
+    activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
   };
 }
 
@@ -12297,6 +12691,16 @@ function _applySessionObject(blob) {
     if (blob.userOrbitsByCategory && typeof userOrbitsByCategory !== 'undefined') {
       userOrbitsByCategory = blob.userOrbitsByCategory;
       if (typeof buildOrbitCategories === 'function') buildOrbitCategories();
+    }
+    // ── Themes (guarded — legacy blobs predate this field) ──
+    if (blob.customThemes && typeof customThemes !== 'undefined') {
+      customThemes = blob.customThemes;
+    }
+    if (typeof rebuildThemeSelect === 'function') rebuildThemeSelect();
+    if (blob.activeThemeKey && typeof applyTheme === 'function') {
+      applyTheme(blob.activeThemeKey);
+    } else if (typeof rebuildThemeSelect === 'function' && typeof applyTheme === 'function' && typeof activeThemeKey !== 'undefined') {
+      applyTheme(activeThemeKey);
     }
     // ── Program + current LV ──
     if (blob.program && typeof applyProgramObject === 'function') {

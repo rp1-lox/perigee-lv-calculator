@@ -41,6 +41,8 @@ function _buildSessionObject() {
     userLVs: (typeof userLVs !== 'undefined') ? safeCopy(userLVs) : null,
     userStagesByCategory: (typeof userStagesByCategory !== 'undefined') ? safeCopy(userStagesByCategory) : null,
     userOrbitsByCategory: (typeof userOrbitsByCategory !== 'undefined') ? safeCopy(userOrbitsByCategory) : null,
+    customThemes: (typeof customThemes !== 'undefined') ? safeCopy(customThemes) : null,
+    activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
   };
 }
 
@@ -79,6 +81,16 @@ function _applySessionObject(blob) {
     if (blob.userOrbitsByCategory && typeof userOrbitsByCategory !== 'undefined') {
       userOrbitsByCategory = blob.userOrbitsByCategory;
       if (typeof buildOrbitCategories === 'function') buildOrbitCategories();
+    }
+    // ── Themes (guarded — legacy blobs predate this field) ──
+    if (blob.customThemes && typeof customThemes !== 'undefined') {
+      customThemes = blob.customThemes;
+    }
+    if (typeof rebuildThemeSelect === 'function') rebuildThemeSelect();
+    if (blob.activeThemeKey && typeof applyTheme === 'function') {
+      applyTheme(blob.activeThemeKey);
+    } else if (typeof rebuildThemeSelect === 'function' && typeof applyTheme === 'function' && typeof activeThemeKey !== 'undefined') {
+      applyTheme(activeThemeKey);
     }
     // ── Program + current LV ──
     if (blob.program && typeof applyProgramObject === 'function') {
