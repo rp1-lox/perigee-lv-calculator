@@ -63,7 +63,7 @@ function approx(desc, actual, expected, tol) {
 const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
-  progVcirc,
+  progVcirc, progHohmannTOF, progTransferTOF,
   _s15BecoSplit,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES } =
@@ -407,6 +407,33 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   );
   ok(`S1.5: unexpanded stage gives a DIFFERENT max payload than expanded (expanded=${s15MaxPay.toFixed(2)}, unexpanded=${unexpandedMaxPay.toFixed(2)})`,
     Math.abs(unexpandedMaxPay - s15MaxPay) > 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T1 mission time core — progHohmannTOF / progTransferTOF goldens
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Earth 185 -> GEO(35786) Hohmann half-ellipse: analytically ~5.25 hours.
+  const tofGeo = progHohmannTOF('Earth', 185, 35786);
+  approx('progHohmannTOF: Earth 185->35786 km (~5.2-5.3 h)', tofGeo / 3600, 5.254, 0.05);
+
+  // Transit-corridor convention (MATH.md critique 16e): the coast is charged
+  // ONCE, on the leg EXITING the corridor. LEO -> TLC is the impulsive
+  // injection (0 s); TLC -> LLO carries the ~5-day translunar half-ellipse
+  // (known overestimate vs. real free-return ~3 days — critique 16a).
+  const nodeLeo = { orbit: { type: 'circular', body: 'Earth', perigee: 185, apogee: 185 } };
+  const nodeTlc = { orbit: { type: 'transit', body: 'Earth', destination: 'Moon' } };
+  const nodeLlo = { orbit: { type: 'circular', body: 'Moon', perigee: 100, apogee: 100 } };
+  ok('progTransferTOF: LEO -> TLC (entering corridor) = 0 — injection is impulsive',
+    progTransferTOF(nodeLeo, nodeTlc) === 0);
+  const tofLlo = progTransferTOF(nodeTlc, nodeLlo);
+  ok(`progTransferTOF: TLC -> LLO carries the translunar TOF in [4,5.5] days (got ${(tofLlo/86400).toFixed(2)}d)`,
+    tofLlo / 86400 >= 4 && tofLlo / 86400 <= 5.5);
+
+  // Degenerate: same orbit -> 0 TOF.
+  const nodeLeoA = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
+  const nodeLeoB = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
+  ok('progTransferTOF: same orbit -> 0 (degenerate)', progTransferTOF(nodeLeoA, nodeLeoB) === 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

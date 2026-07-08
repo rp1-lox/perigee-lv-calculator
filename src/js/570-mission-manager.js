@@ -9,6 +9,97 @@ let _missionBandScrub = null;
 let _missionBandSpacing = 90;          // px per timeline column (user-configurable)
 let _missionBandZoom = 1;              // band-view zoom factor (scales rendered SVG)
 
+// ── T1: mission time core — display + override plumbing ─────────────────────
+// _metFmt(sec) → "T+MM:SS" (<1h), "T+HH:MM" (<1d), "T+Nd HH:MM" (>=1d).
+// Annotation only — never affects layout or physics, see missionRecompute.
+function _metFmt(sec) {
+  if (sec == null || !isFinite(sec)) return '';
+  const s = Math.max(0, Math.round(sec));
+  const days = Math.floor(s / 86400);
+  const hrs  = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (days >= 1) return `T+${days}d ${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
+  if (hrs  >= 1) return `T+${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
+  return `T+${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+}
+
+// Duration unit conversion for the override input (d/h/min/s → seconds and back).
+const _MISSION_DURATION_UNITS = { d: 86400, h: 3600, min: 60, s: 1 };
+function _missionDurationToSeconds(val, unit) { return (parseFloat(val) || 0) * (_MISSION_DURATION_UNITS[unit] || 1); }
+// Pick a "natural" display unit for an auto seconds value (used to preload the edit form).
+function _missionNaturalDurationUnit(sec) {
+  if (sec == null) return 's';
+  if (sec >= 86400) return 'd';
+  if (sec >= 3600)  return 'h';
+  if (sec >= 60)    return 'min';
+  return 's';
+}
+function _missionSecondsToUnitValue(sec, unit) { return sec == null ? 0 : +(sec / (_MISSION_DURATION_UNITS[unit] || 1)).toFixed(4); }
+
+// Apply a duration override typed in the event modal (BURN/MANEUVER only).
+function missionApplyDurationOverride(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  const val = document.getElementById('edit-dur-val-' + id)?.value;
+  const unit = document.getElementById('edit-dur-unit-' + id)?.value || 's';
+  if (val === '' || val == null) delete e.durationOverride;
+  else e.durationOverride = _missionDurationToSeconds(val, unit);
+  missionRecompute(m);
+  missionOpenEventModal(id, idx);   // refresh the modal in place so the (auto)/(custom) hint updates
+  missionRenderDetail();
+}
+function missionResetDurationOverride(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  delete e.durationOverride;
+  missionRecompute(m);
+  missionOpenEventModal(id, idx);
+  missionRenderDetail();
+}
+// Apply a ΔV override typed in the event modal (MANEUVER only).
+function missionApplyDvOverride(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'MANEUVER') return;
+  const val = document.getElementById('edit-dv-override-' + id)?.value;
+  if (val === '' || val == null) delete e.dvOverride;
+  else e.dvOverride = parseFloat(val) || 0;
+  missionRecompute(m);
+  missionOpenEventModal(id, idx);
+  missionRenderDetail();
+}
+function missionResetDvOverride(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  delete e.dvOverride;
+  missionRecompute(m);
+  missionOpenEventModal(id, idx);
+  missionRenderDetail();
+}
+// Shared duration-override sub-form for the BURN/MANEUVER edit modal.
+function _missionDurationOverrideHTML(id, idx, e) {
+  const auto = e.durationAuto;
+  const hasOverride = e.durationOverride != null;
+  const unit = _missionNaturalDurationUnit(hasOverride ? e.durationOverride : auto);
+  const val = hasOverride ? _missionSecondsToUnitValue(e.durationOverride, unit) : '';
+  const autoHint = auto != null ? `auto: ${_metFmt(auto)}` : 'auto: n/a';
+  const _selStyle = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
+  return `
+    <div class="cfg-item"><label class="cfg-label">Duration ${hasOverride ? '<span style="color:var(--accent3)">(custom)</span>' : ''}</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="number" id="edit-dur-val-${id}" class="field" placeholder="${autoHint}" value="${val}" style="width:100px;" onchange="missionApplyDurationOverride('${id}',${idx})">
+        <select id="edit-dur-unit-${id}" style="${_selStyle}" onchange="missionApplyDurationOverride('${id}',${idx})">
+          <option value="d"${unit==='d'?' selected':''}>days</option>
+          <option value="h"${unit==='h'?' selected':''}>hours</option>
+          <option value="min"${unit==='min'?' selected':''}>min</option>
+          <option value="s"${unit==='s'?' selected':''}>sec</option>
+        </select>
+        ${hasOverride ? `<button class="act-btn" style="padding:3px 8px;" onclick="missionResetDurationOverride('${id}',${idx})" title="Reset to auto">↺</button>` : ''}
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">${autoHint}</div>
+    </div>`;
+}
+
 function missionBandSpacing(id, dir) {
   _missionBandSpacing = Math.max(45, Math.min(260, _missionBandSpacing + dir * 20));
   missionRenderDetail();
@@ -302,6 +393,7 @@ function missionRenderDetail() {
       <div class="mevt-head" onclick="${onclick}">
         <span class="mevt-caret">${grpSel ? grpMark : (expanded ? '▾' : '▸')}</span>
         <span class="mission-log-type">${e.type}</span>
+        ${e.metStart!=null?`<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${_metFmt(e.metStart)}</span>`:''}
         <span class="mevt-sub">${sub}</span>
         ${grpSel ? '' : ctl}
       </div>
@@ -697,6 +789,7 @@ function _missionApplyLaunch(m, e) {
     dvAvailable: perf ? Math.round(perf.tDV) : null,
     dvMargin:    perf ? Math.round(perf.margin) : null,
     maxPayload:  maxPayload != null ? Math.round(maxPayload) : null,
+    burnTime:    perf ? perf.tBT : null,   // seconds — T1 mission-clock ascent duration
   };
 
   return { fv, stagingResult, payloadMass, payloadNames };
@@ -957,7 +1050,8 @@ function _missionEventDetailHTML(m, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Target ΔV</span><span class="mission-state-val">${Math.round(e.dvTarget||0).toLocaleString()} m/s</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Actual ΔV</span><span class="mission-state-val">${Math.round(e.dv_actual||0).toLocaleString()} m/s</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Prop Consumed</span><span class="mission-state-val">${Math.round(e.prop_consumed||0).toLocaleString()} kg</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Result</span><span class="mission-state-val">${e.result||''}</span></div>`;
+      <div class="mission-state-kv"><span class="mission-state-key">Result</span><span class="mission-state-val">${e.result||''}</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}${e.durationOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>`;
   } else if (e.type === 'DEPLOY') {
     const o = e.orbit || {};
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Spacecraft</span><span class="mission-state-val">${e.label||''}</span></div>
@@ -965,9 +1059,10 @@ function _missionEventDetailHTML(m, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${(o.alt_km||0).toLocaleString()} km${o.apo_km&&o.apo_km!==o.alt_km?' × '+o.apo_km.toLocaleString():''}</span></div>`;
   } else if (e.type === 'MANEUVER') {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Route</span><span class="mission-state-val">${e.fromLabel||''} → ${e.toLabel||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${e.dv!=null?e.dv.toLocaleString()+' m/s':'n/a'}</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${e.dv!=null?e.dv.toLocaleString()+' m/s':'n/a'}${e.dvOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>
       ${e.prop_consumed?`<div class="mission-state-kv"><span class="mission-state-key">Prop used</span><span class="mission-state-val">${Math.round(e.prop_consumed).toLocaleString()} kg</span></div>`:''}
-      ${(e.firingStageId||e.firedStageId)?`<div class="mission-state-kv"><span class="mission-state-key">Firing stage</span><span class="mission-state-val">${_missionStageLabelById(e.firingStageId||e.firedStageId)}</span></div>`:''}`;
+      ${(e.firingStageId||e.firedStageId)?`<div class="mission-state-kv"><span class="mission-state-key">Firing stage</span><span class="mission-state-val">${_missionStageLabelById(e.firingStageId||e.firedStageId)}</span></div>`:''}
+      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}${e.durationOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>`;
   } else if (e.type === 'SEPARATE') {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">From</span><span class="mission-state-val">${e.parentName||''}</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Lower</span><span class="mission-state-val">${e.lowerName||''}</span></div>
@@ -1006,6 +1101,9 @@ function _missionEventDetailHTML(m, idx) {
           </div>
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyBurnEdit('${id}',${idx})">Apply</button>
+        <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-start;margin-top:10px;">
+          ${_missionDurationOverrideHTML(id, idx, e)}
+        </div>
       </div>`;
   } else if (e.type === 'MANEUVER') {
     const _nm  = _missionNmNodes();
@@ -1021,6 +1119,16 @@ function _missionEventDetailHTML(m, idx) {
         </div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// edit the burn/separate steps on the maneuver card itself</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyManeuverEdit('${id}',${idx})">Apply</button>
+        <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-start;margin-top:10px;">
+          ${_missionDurationOverrideHTML(id, idx, e)}
+          <div class="cfg-item"><label class="cfg-label">&Delta;V (m/s) ${e.dvOverride!=null?'<span style="color:var(--accent3)">(custom)</span>':''}</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-dv-override-${id}" class="field" placeholder="auto: ${e.dvAuto!=null?e.dvAuto.toLocaleString():'n/a'}" value="${e.dvOverride!=null?e.dvOverride:''}" style="width:100px;" onchange="missionApplyDvOverride('${id}',${idx})">
+              ${e.dvOverride!=null?`<button class="act-btn" style="padding:3px 8px;" onclick="missionResetDvOverride('${id}',${idx})" title="Reset to auto">↺</button>`:''}
+            </div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">auto: ${e.dvAuto!=null?e.dvAuto.toLocaleString()+' m/s':'n/a'}</div>
+          </div>
+        </div>
       </div>`;
   } else if (e.type === 'DEPLOY') {
     const scs = _scEdSC || [];
@@ -1733,9 +1841,28 @@ function missionRecompute(m) {
   const expanded = _missionEffectiveLog(m);
   m._expanded = expanded;
 
+  // ── T1: mission time core ────────────────────────────────────────────────
+  // Time is DERIVED from the replay, never stored as position. metClock walks
+  // forward in seconds as each expanded event is processed; T-0 is the FIRST
+  // LAUNCH (events authored before it sit at T+0). Per-event duration:
+  //   LAUNCH    = ascent burn time (perf.tBT, cached on stagingResult.burnTime)
+  //   BURN      = TOF for the underlying transfer (Hohmann/TLI/LOI legs; 0 for
+  //               impulsive-only burn types with no separate coast — CIRC/
+  //               PLANE_CHANGE/CUSTOM)
+  //   MANEUVER  = progTransferTOF(fromNode, toNode) — the coast, not the burn
+  //   everything else = 0 (COAST doesn't exist yet — T2)
+  // `durationOverride` (seconds, authored on the log entry) replaces the auto
+  // value when present. Cached onto both the expanded event and the authored
+  // entry (metStart/durationUsed/durationAuto), mirroring existing caches like
+  // e.stagingResult so undo/autosave round-trip them for free (they're on m.log).
+  let metClock = 0;
+  let sawLaunch = false;
+
   for (let evIdx = 0; evIdx < expanded.length; evIdx++) {
     const e = expanded[evIdx];
     const kid = e._authIdx + (e._rep ? ':' + e._rep : '');   // stable per authored-event + repetition
+    const authEntry = (e._authIdx != null && m.log[e._authIdx]) ? m.log[e._authIdx] : null;
+    let durationAuto = 0;
     if (e.type === 'LAUNCH') {
       const r = _missionApplyLaunch(m, e);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
@@ -1744,6 +1871,8 @@ function missionRecompute(m) {
       e.vehicleId = r.fv.vehicleId; e.stagingResult = r.stagingResult;
       e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
       live.push(r.fv); active = r.fv;
+      durationAuto = (r.stagingResult && r.stagingResult.burnTime) || 0;
+      if (!sawLaunch) { metClock = 0; sawLaunch = true; }   // T-0 = first LAUNCH
     } else if (e.type === 'DEPLOY') {
       const r = _missionApplyDeploy(m, e);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
@@ -1755,14 +1884,25 @@ function missionRecompute(m) {
       active = resolveActive(e);
       if (!active) continue;
       e.vehicleId = active.vehicleId;
+      const osBefore = active.orbitState ? { ...active.orbitState } : null;
       const res = _missionApplyBurn(active, e.burnType, e.burnParam, e.stageId);
       e.dvTarget = res.dvTarget; e.dv_actual = res.dv_actual; e.prop_consumed = res.prop_consumed;
       e.burnLabel = res.burnLabel; e.result = res.result;
       e.orbitAfter = active.orbitState ? { ...active.orbitState } : null;
+      // TOF for the underlying transfer type — Hohmann/TLI/LOI legs have a coast;
+      // CIRC (apoapsis burn, no leg of its own) / PLANE_CHANGE / CUSTOM are impulsive.
+      if (osBefore && (e.burnType === 'HOHMANN' || e.burnType === 'TLI' || e.burnType === 'LOI')) {
+        const body = osBefore.body || 'Earth';
+        const altA = osBefore.perigee ?? osBefore.apogee ?? 0;
+        if (e.burnType === 'HOHMANN') durationAuto = progHohmannTOF(body, altA, e.burnParam || altA);
+        else if (e.burnType === 'TLI') durationAuto = progHohmannTOF('Earth', altA, PROG_MOON_ORBIT_R - PROG_BODIES.Earth.R);
+        else if (e.burnType === 'LOI') durationAuto = 0;   // arrival burn at end of an already-counted TLI coast
+      }
     } else if (e.type === 'MANEUVER') {
       active = resolveActive(e);
       if (active) e.vehicleId = active.vehicleId;
       _missionApplyManeuver(active, e);
+      durationAuto = progTransferTOF(_missionNmNodeById(e.fromNode), _missionNmNodeById(e.toNode));
     } else if (e.type === 'SEPARATE' && e.result === 'SUCCESS') {
       const sepActor = resolveActive(e); if (sepActor) active = sepActor;   // editable: which vehicle separates
       if (!active) continue;
@@ -1882,11 +2022,22 @@ function missionRecompute(m) {
       if (tgt) { tgt.status = 'RECOVERED'; e.vehicleId = tgt.vehicleId; e.vehicleName = _missionVehicleDisplayName(tgt);
         if (active === tgt) active = live.find(v => v !== tgt && v.status !== 'EXPENDED' && v.status !== 'RECOVERED') || tgt; }
     }
+    // ── T1: MET bookkeeping — durationOverride (authored, seconds) wins over the
+    //    computed auto value; both are cached so the UI can show "(custom)". Events
+    //    before the first LAUNCH sit at T+0 (metClock hasn't started advancing yet). ──
+    const overrideSec = authEntry && authEntry.durationOverride != null ? authEntry.durationOverride : null;
+    const durationUsed = overrideSec != null ? overrideSec : durationAuto;
+    e.metStart = metClock;
+    e.durationAuto = durationAuto;
+    e.durationUsed = durationUsed;
+    if (authEntry) { authEntry.metStart = metClock; authEntry.durationAuto = durationAuto; authEntry.durationUsed = durationUsed; }
+    if (sawLaunch) metClock += durationUsed;
     // per-event snapshot: state of every live vehicle AFTER this event (the band
     // monitor reads this so scrubbing shows the exact state at that point in time).
     e.snapshot = _missionCaptureSnapshot(live, baseOf);
     e.activeOriginKey = active ? (active._originKey || null) : null;
   }
+  m._metTotal = metClock;
   // ── resolve display names: custom rename (by stable origin key) + #N for duplicates,
   //    numbered by stable BIRTH order so a vehicle's # never shifts as docks/separates
   //    reorder the live array. ──
@@ -2551,8 +2702,9 @@ function _missionMultiVehicleHTML(m) {
       </div>`;
 
     const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
+    const metSuffix = entry.metStart != null ? ` <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>` : '';
     return `<div class="mcc-box">
-        <div class="mcc-box-hdr">Vehicles &amp; Mission State — at ${evLabel}</div>
+        <div class="mcc-box-hdr">Vehicles &amp; Mission State — at ${evLabel}${metSuffix}</div>
         ${rows}
         ${totals}
       </div>`;
@@ -2595,6 +2747,7 @@ function _missionMultiVehicleHTML(m) {
       <span>Prop consumed: <span style="color:var(--text-bright)">${b.propConsumed.toLocaleString()} kg</span></span>
       <span>&Delta;V left (active): <span style="color:${capColor}">${b.dvCapacityRemaining.toLocaleString()} m/s</span></span>
       <span>Payload: <span style="color:var(--text-bright)">${b.payloadMass.toLocaleString()} kg</span></span>
+      <span>Duration: <span style="color:var(--text-bright)">${_metFmt(m._metTotal)}</span></span>
     </div>`;
 
   // Separate & Dock are done via ＋ Add Event; this panel is the vehicle list plus
@@ -2703,7 +2856,12 @@ function _missionManeuverSteps(active, e, fullDv) {
 
 function _missionApplyManeuver(active, e) {
   const r = progNmComputeEdgeDv(e.fromNode, e.toNode);
-  const fullDv = r ? r.dv : 0;
+  const autoDv = r ? r.dv : 0;
+  // dvOverride (m/s, authored) replaces the physics-derived requirement BEFORE
+  // propellant computation, so the rocket equation consumes the custom ΔV. Badged
+  // in the UI as "(custom)" — see missionApplyManeuverEdit / the maneuver card.
+  const fullDv = (e.dvOverride != null) ? e.dvOverride : autoDv;
+  e.dvAuto = autoDv ? Math.round(autoDv) : null;
   e.dvRequired = fullDv ? Math.round(fullDv) : null;
   e.note = r ? r.note : 'No transfer model for this pair';
   e.method = r ? r.method : null;
@@ -3120,7 +3278,7 @@ function _missionBandModel(m) {
     let label = e.type;
     if (e.type === 'BURN') label = e.burnLabel || 'BURN';
     else if (e.type === 'MANEUVER') label = '→ ' + (e.toLabel || e.toNode || '');
-    events.push({ index: i, type: e.type, col: c, label });
+    events.push({ index: i, type: e.type, col: c, label, met: e.metStart });
   });
 
   const lanes = [...owners.values()];
@@ -3600,7 +3758,8 @@ function _missionBandViewHTML(m) {
     const ev = model.events[n.index];
     const dead = n.status === 'EXPENDED' || n.status === 'RECOVERED';
     const rDot = n.ascent ? 3.5 : (n.frac ? 3.5 : 5);
-    lanesHTML += `<circle cx="${n.x}" cy="${n.y}" r="${rDot}" fill="${n.frac ? 'var(--input)' : n.rep.color}" stroke="${n.rep.color}" stroke-width="${n.frac ? 2 : 1}" opacity="${dead ? '0.5' : '1'}" style="cursor:pointer" onclick="missionBandPickVehicle('${id}','${n.vid}',${n.index})"><title>${n.ascent ? 'Liftoff from Earth' : (ev ? (n.frac ? 'mid-coast: ' : '') + ev.label : '')}${n.ascent ? '' : ' — ' + Math.round(n.alt).toLocaleString() + ' km'} — ${n.rep.name}</title></circle>`;
+    const metTitle = ev && ev.met != null ? ` [${_metFmt(ev.met)}]` : '';
+    lanesHTML += `<circle cx="${n.x}" cy="${n.y}" r="${rDot}" fill="${n.frac ? 'var(--input)' : n.rep.color}" stroke="${n.rep.color}" stroke-width="${n.frac ? 2 : 1}" opacity="${dead ? '0.5' : '1'}" style="cursor:pointer" onclick="missionBandPickVehicle('${id}','${n.vid}',${n.index})"><title>${n.ascent ? 'Liftoff from Earth' : (ev ? (n.frac ? 'mid-coast: ' : '') + ev.label : '')}${n.ascent ? '' : ' — ' + Math.round(n.alt).toLocaleString() + ' km'} — ${n.rep.name}${metTitle}</title></circle>`;
     if (!n.ascent) lanesHTML += `<text x="${n.x}" y="${n.y - 8}" text-anchor="middle" font-family="var(--mono)" font-size="7px" fill="var(--text-dim)" style="pointer-events:none">${fmtAlt(n.alt)}</text>`;
   }
   // start labels (nodes with no incoming edge) + "+" affordance at live track ends
@@ -3621,7 +3780,8 @@ function _missionBandViewHTML(m) {
   const scrubX = X(scrubCol);
   let scrubberHTML = `<line x1="${scrubX}" y1="${topPad - 2}" x2="${scrubX}" y2="${topPad + plotH}" stroke="var(--accent)" stroke-width="1.5" opacity="0.75"/>`;
   const scrubEv = model.events[scrub];
-  scrubberHTML += `<text x="${scrubX}" y="${topPad - 9}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="var(--accent)">${scrubEv ? scrubEv.label : ''}</text>`;
+  const scrubMet = (scrubEv && scrubEv.met != null) ? ` (${_metFmt(scrubEv.met)})` : '';
+  scrubberHTML += `<text x="${scrubX}" y="${topPad - 9}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="var(--accent)">${scrubEv ? scrubEv.label + scrubMet : ''}</text>`;
 
   // controls (spacing) + legend
   let legendHTML = '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 10px 6px;">';

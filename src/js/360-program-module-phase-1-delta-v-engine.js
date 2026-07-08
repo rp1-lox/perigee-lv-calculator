@@ -243,6 +243,79 @@ function progDvMarsAscent(mco_alt_km) {
   return BASE_DV * (v_h / v_ref);
 }
 
+// ── Time-of-flight (TOF) estimates ─────────────────────────────────────────
+// Pure, position-independent duration helpers for the mission clock (T2 core).
+// All return SECONDS. These are annotation-only inputs to the replay's MET
+// accumulation — they never affect ΔV or propellant math.
+
+/** Half-ellipse Hohmann transfer time, seconds.
+ *  a = (r1+r2)/2 (km); period T = 2π√(a³/μ); TOF = T/2. */
+function progHohmannTOF(body, alt1_km, alt2_km) {
+  const b  = PROG_BODIES[body];
+  if (!b) return 0;
+  const r1 = b.R + alt1_km, r2 = b.R + alt2_km;
+  const a  = (r1 + r2) / 2;
+  return Math.PI * Math.sqrt((a * a * a) / b.mu);
+}
+
+/**
+ * Estimated transfer time between two node-map nodes, seconds.
+ * Mirrors _nmDvPhysics's node-shape assumptions (node.orbit: type/body/perigee/
+ * apogee/c3/destination) but only needs to classify same-body vs. transit legs —
+ * it does not need the full ΔV case analysis.
+ *   - Same-body orbit→orbit (both circular/elliptic, or surface as alt=0):
+ *     Hohmann half-ellipse between their (average) altitudes.
+ *   - Earth → Moon transit destinations (TLC corridor / LLO / lunar surface):
+ *     translunar half-ellipse using PROG_MOON_ORBIT_R as the outer radius.
+ *   - Earth → Mars/Venus/other interplanetary transit: heliocentric Hohmann TOF
+ *     via PROG_HELIO_R/PROG_MU_SUN, UNLESS the active program has a selected
+ *     Lambert launch-window (PROG_ACTIVE_PROGRAM.launchWindow.tof_days), which
+ *     is authoritative when present (porkchop solutions are non-Hohmann).
+ *   - Anything else (surface-to-surface, unmodeled pairs): 0 (unknown/instant).
+ */
+function progTransferTOF(fromNode, toNode) {
+  const oa = fromNode && fromNode.orbit, ob = toNode && toNode.orbit;
+  if (!oa || !ob) return 0;
+
+  // Transit-corridor convention: the coast is charged ONCE, on the leg that
+  // EXITS the corridor (TLC→LLO, mars-transit→MCO). The leg that ENTERS a
+  // corridor (LEO→TLC) is just the injection burn — impulsive, 0 s — otherwise
+  // a two-leg route (LEO→TLC→LLO) double-counts the ~5-day translunar coast.
+  if (ob.type === 'transit') return 0;
+
+  // Same body: Hohmann half-ellipse between average altitudes (keeps the model
+  // simple for elliptical endpoints — see MATH.md critique on TOF fidelity).
+  if (oa.body === ob.body && (ob.type === 'circular' || ob.type === 'elliptic' || ob.type === 'surface')
+      && (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
+    const altA = oa.type === 'surface' ? 0 : ((oa.perigee ?? oa.apogee ?? 0) + (oa.apogee ?? oa.perigee ?? 0)) / 2;
+    const altB = ob.type === 'surface' ? 0 : ((ob.perigee ?? ob.apogee ?? 0) + (ob.apogee ?? ob.perigee ?? 0)) / 2;
+    if (Math.abs(altA - altB) < 1) return 0;   // degenerate: same orbit
+    return progHohmannTOF(oa.body, altA, altB);
+  }
+
+  // Earth → lunar transit / LLO / lunar surface: translunar half-ellipse.
+  const lunarDest = (ob.body === 'Moon') || (ob.type === 'transit' && ob.destination === 'Moon');
+  if ((oa.body === 'Earth' || oa.type === 'transit') && lunarDest) {
+    const altA = oa.type === 'surface' ? 0 : (oa.type === 'transit' ? 185 : ((oa.perigee ?? oa.apogee ?? 185)));
+    return progHohmannTOF('Earth', altA, PROG_MOON_ORBIT_R - PROG_BODIES.Earth.R);
+  }
+
+  // Interplanetary transit (Mars/Venus/other heliocentric destinations).
+  const dest = ob.destination || (ob.type === 'transit' ? ob.destination : null) ||
+    (ob.body && PROG_HELIO_R[ob.body] ? ob.body : null);
+  if (dest && PROG_HELIO_R[dest] && (oa.body === 'Earth' || oa.type === 'transit')) {
+    // A selected Lambert launch window overrides the Hohmann estimate when present.
+    const lw = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && PROG_ACTIVE_PROGRAM.launchWindow) || null;
+    if (lw && lw.tof_days != null && (lw.destination === dest || !lw.destination)) return lw.tof_days * 86400;
+    const r_E = PROG_HELIO_R.Earth, r_D = PROG_HELIO_R[dest];
+    const a   = (r_E + r_D) / 2;
+    return Math.PI * Math.sqrt((a * a * a) / PROG_MU_SUN);
+  }
+
+  // Unknown / surface-to-surface / unmodeled pair: instantaneous by convention.
+  return 0;
+}
+
 // ── Boiloff ──────────────────────────────────────────────────────────────────
 
 /** Propellant remaining after cryo boiloff, kg.

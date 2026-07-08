@@ -47,9 +47,11 @@ function _mrEventRow(e, i) {
     veh = _mrEsc(e.vehicleName || e.activeName || e.targetName || '');
   }
   const rep = e.groupId ? ' <span class="mr-tag">grp</span>' : '';
+  const met = (typeof _metFmt === 'function' && e.metStart != null) ? _metFmt(e.metStart) : '—';
   return `<tr>
     <td class="mr-num">${i + 1}</td>
     <td>${type}${rep}</td>
+    <td class="mr-num" style="font-family:monospace;">${_mrEsc(met)}</td>
     <td>${desc}</td>
     <td>${veh}</td>
     <td class="mr-num">${dv}</td>
@@ -93,7 +95,7 @@ function missionReportHTML(m) {
   const ver = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '';
 
   const eventRows = log.map((e, i) => _mrEventRow(e, i)).join('') ||
-    `<tr><td colspan="6" class="mr-empty">No events.</td></tr>`;
+    `<tr><td colspan="7" class="mr-empty">No events.</td></tr>`;
 
   const stageRows = sr ? (sr.stages || []).map(_mrStageRow).join('') : '';
 
@@ -181,7 +183,7 @@ function missionReportHTML(m) {
   <h2>Event Log</h2>
   <table>
     <thead><tr>
-      <th class="mr-num">#</th><th>Type</th><th>Description</th><th>Vehicle</th>
+      <th class="mr-num">#</th><th>Type</th><th class="mr-num">T+</th><th>Description</th><th>Vehicle</th>
       <th class="mr-num">&#916;V (m/s)</th><th class="mr-num">Prop (kg)</th>
     </tr></thead>
     <tbody>${eventRows}</tbody>

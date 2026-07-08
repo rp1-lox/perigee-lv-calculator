@@ -99,6 +99,22 @@ plus a declination plane-change penalty `2·Vc·sin(Δ/2·...)` when |siteLat| e
 
 **Maneuvers** use the node-map physics (below) for required ΔV, then `progRocketEqDv/PropNeeded` against the active vehicle's stage stack. **Docking** requires `progOrbitalStateMatch`: same body, apogee/perigee within 1 km, inclination within 0.1°, LAN within 1°.
 
+**Mission time (T1 — `missionRecompute`, 570)**: time is DERIVED from the replay, never authored as position. A mission clock (seconds) walks `m._expanded` in order; T-0 is the FIRST LAUNCH event (anything authored before it sits at T+0). Duration rules per event type:
+
+| Event | Auto duration |
+|---|---|
+| LAUNCH | Ascent burn time — `lvPerformance`'s `tBT` (sum of per-stage burn times), cached onto `stagingResult.burnTime` |
+| BURN (HOHMANN) | `progHohmannTOF(body, periBefore, burnParam)` — the Hohmann coast this burn initiates |
+| BURN (TLI) | `progHohmannTOF('Earth', periBefore, PROG_MOON_ORBIT_R − R_Earth)` — the translunar coast |
+| BURN (LOI) | 0 — arrival burn at the end of an already-counted TLI coast |
+| BURN (CIRC / PLANE_CHANGE / CUSTOM) | 0 — treated as impulsive with no separate coast leg |
+| MANEUVER | `progTransferTOF(fromNode, toNode)` — the coast, not the (impulsive) burn itself |
+| everything else (DEPLOY, SEPARATE, DOCK, EXPEND, RENDEZVOUS, transfers, REENTER, RECOVER) | 0 — COAST as its own event type doesn't exist yet (T2) |
+
+`progHohmannTOF(body, alt1_km, alt2_km)` = half-ellipse period `π·√(a³/μ)`, `a=(r1+r2)/2`. `progTransferTOF(fromNode, toNode)` classifies the node pair (mirrors `_nmDvPhysics`'s node shape): same-body circular/elliptic/surface → Hohmann half-ellipse between average altitudes; Earth → lunar transit/LLO/lunar-surface → translunar half-ellipse to `PROG_MOON_ORBIT_R`; Earth → interplanetary transit (Mars/Venus/…) → heliocentric Hohmann TOF via `PROG_HELIO_R`/`PROG_MU_SUN`, UNLESS the program has a selected Lambert launch window (`PROG_ACTIVE_PROGRAM.launchWindow.tof_days`), which is authoritative when present; anything else (surface↔surface, unmodeled pairs) → 0.
+
+**Overrides**: each log entry may carry `durationOverride` (seconds) and, for MANEUVER, `dvOverride` (m/s) — both authored fields that ride undo/autosave for free since they live on `m.log`. `durationOverride` replaces the auto duration in the clock accumulation. `dvOverride` replaces the node-map-computed ΔV requirement **before** propellant computation in `_missionApplyManeuver`, so the rocket equation (and everything downstream — flight-readiness checks, state-panel numbers) consumes the custom value consistently; there is no separate override-aware code path to keep in sync. Both are cached alongside the auto value (`e.durationAuto`/`e.durationUsed`, `e.dvAuto`/`e.dvRequired`) so the UI can badge overridden events "(custom)" and offer "reset to auto". `_metFmt(sec)` renders the running clock as `T+MM:SS` / `T+HH:MM` / `T+Nd HH:MM`; display only, never fed back into layout or physics.
+
 ## 6. Node-map ΔV physics (360 + 430)
 
 `progNmComputeEdgeDv(from, to)` → `_nmDvPhysics`: same-body transfers compose Hohmann legs (`progDvHohmann`, vis-viva exact), plane changes (`progDvPlaneChange = 2v·sin(θ/2)`; `progDvPlaneChangeFull` gets the true angle between planes from the spherical law of cosines `cosθ = cos i1·cos i2 + sin i1·sin i2·cos ΔLAN`; `progDvCombined` vector-adds a plane change with a coplanar burn), and apoapsis circularization (GTO→GEO). Cross-body transfers are **patched conics with impulsive burns**:
@@ -148,6 +164,13 @@ All sweeps evaluate the SAME pure pipeline per point: assemble vehicle (workshee
 14. Docking tolerance windows (1 km, 0.1°, 1° LAN) are arbitrary, and `epoch`/phasing is entirely ignored — co-orbital ≠ co-located.
 15. Lunar/Mars ascent = scaled constants; no TWR sensitivity, no plane targeting from launch site latitude on those bodies.
 16. Boiloff: constant fractional rate, insulation as a linear multiplier in the exponent; no tank thermal state, no ullage/pressurization losses.
+
+**Mission time (T1)**
+16a. Hohmann-model TOF ≠ real trajectories: the translunar half-ellipse estimate lands ~5 days vs. Apollo's actual ~3-day free-return trajectory — the model doesn't know about faster non-Hohmann transfers, and overrides are the intended escape hatch for any mission that needs an accurate date.
+16b. All burns (BURN and MANEUVER) are treated as impulsive/instantaneous in the clock — only the COAST/transfer between them accumulates time. A long low-thrust burn would in reality itself take meaningful time; not modeled.
+16c. Interplanetary TOF ignores launch-window phasing (planets aren't actually where a Hohmann departure needs them) unless the mission has a specific porkchop-selected Lambert window (`PROG_ACTIVE_PROGRAM.launchWindow`) — absent that, the number is a generic Hohmann estimate, not a real date.
+16d. `durationOverride`/`dvOverride` intentionally bypass the physics by design — they exist so the user can substitute a known real value (e.g. actual Apollo TOF/ΔV) for the model's estimate. The UI badges overridden events "(custom)" so this is never silently confused with the computed value, but nothing prevents an override that's physically inconsistent with the vehicle's actual propellant/ΔV budget beyond the normal margin checks.
+16e. Transit-corridor convention: a coast is charged once, on the leg EXITING the corridor node (TLC→LLO carries the ~5 d translunar TOF; LEO→TLC is the impulsive injection, 0 s). Found the hard way: the first implementation charged both legs and doubled every corridor transit.
 
 **Trade studies**
 17. Inclination/altitude sweeps use the minimal circular-orbit ΔV replica (clearly labeled) — fine for trends, not for elliptical or escape comparisons.
