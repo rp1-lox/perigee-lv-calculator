@@ -918,6 +918,11 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">RECOVER</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${entry.vehicleName||'?'} recovered</div>
   </div>`;
+  if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
+    <span class="mission-log-type">COAST</span>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.days||0).toLocaleString()} d${entry.label ? ' — ' + entry.label : ''}${entry.metStart!=null?` <span style="color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>`:''}</div>
+    ${entry.boiloffKg > 0 ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:2px;">boiloff &minus;${Math.round(entry.boiloffKg).toLocaleString()} kg</div>` : ''}
+  </div>`;
   if (entry.type === 'DEPLOY') return `<div class="mission-log-card"><div class="mission-log-header"><span class="mission-log-type">DEPLOY</span><span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.label||''}</span></div><div class="mission-state-grid"><div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${(entry.orbit&&entry.orbit.alt_km||0).toLocaleString()} km${entry.orbit&&entry.orbit.apo_km&&entry.orbit.apo_km!==entry.orbit.alt_km?' × '+entry.orbit.apo_km.toLocaleString():''}</span></div><div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${entry.orbit&&entry.orbit.body||'Earth'}</span></div></div></div>`;
   if (entry.type !== 'LAUNCH') return '';
   const o  = entry.orbit;
@@ -1073,6 +1078,10 @@ function _missionEventDetailHTML(m, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Merged</span><span class="mission-state-val">${e.mergedName||''}</span></div>`;
   } else if (e.type === 'EXPEND') {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Name</span><span class="mission-state-val">${e.vehicleName || e.stageName || ''}</span></div>`;
+  } else if (e.type === 'COAST') {
+    fields = `<div class="mission-state-kv"><span class="mission-state-key">Days</span><span class="mission-state-val">${(e.days||0).toLocaleString()}</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}</span></div>
+      ${e.boiloffKg > 0 ? `<div class="mission-state-kv"><span class="mission-state-key">Boiloff</span><span class="mission-state-val" style="color:var(--accent2);">&minus;${Math.round(e.boiloffKg).toLocaleString()} kg</span></div>` : ''}`;
   }
 
   const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
@@ -1140,6 +1149,15 @@ function _missionEventDetailHTML(m, idx) {
         <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="edit-deploy-empty-${id}" style="accent-color:var(--accent);"${e.emptyTanks?' checked':''}> Deploy with empty tanks (depot)</label>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// orbit follows the Launch Orbit set in the left panel</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyDeployEdit('${id}',${idx})">Apply</button>
+      </div>`;
+  } else if (e.type === 'COAST') {
+    editForm = `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Days</label>
+          <input type="number" id="edit-coast-days-${id}" class="field" value="${e.days||0}" min="0" step="any" style="width:140px;"></div>
+        <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Label</label>
+          <input type="text" id="edit-coast-label-${id}" class="field" value="${(e.label||'').replace(/"/g,'&quot;')}" style="width:100%;" maxlength="60"></div>
+        <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyCoastEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'TRANSFER_PROPELLANT') {
     // stage lists + propellant come from each vehicle's state AT THIS EVENT (snapshot), so the
@@ -1791,6 +1809,37 @@ function missionRecompute(m) {
       (name && !(ev && ev._clone) && live.find(v => _missionVehicleDisplayName(v) === name)) ||
       (name && !(ev && ev._clone) && live.find(v => v.name === name)) || null;
   };
+  // ── T2: boiloff on clock advancement ────────────────────────────────────────
+  // Apply progApplyStageBoiloff (370) to every stage of every LIVE (not EXPENDED/
+  // RECOVERED) vehicle for a Δt in DAYS. Cryo tanks lose mass per PROG_PROPELLANT_TYPES'
+  // boiloff_rate; non-cryo/unknown propTypes (incl. LV stages, whose progVehicleDefToLiveStages
+  // always assigns a valid LOX_* type — see MATH.md §5) lose nothing. Returns total kg lost
+  // across the whole mission (summed onto the caller's event for the "boiloff −N kg" badge).
+  // Per-vehicle cumulative boiloff, keyed by stable origin key (survives dock/separate
+  // identity changes well enough for a mission-level readiness summary — see check #boiloff-losses,
+  // 572). Reset each recompute since the whole log is replayed from scratch.
+  m._boiloffByVehicle = {};
+  m._initialPropByVehicle = {};   // originKey -> initial total propellant capacity, kg (set at LAUNCH/DEPLOY)
+  const applyMissionBoiloff = (deltaDays) => {
+    if (!(deltaDays > 0)) return 0;
+    let totalLost = 0;
+    live.forEach(fv => {
+      if (!fv || fv.status === 'EXPENDED' || fv.status === 'RECOVERED') return;
+      let vehLost = 0;
+      (fv.stages || []).forEach(st => { vehLost += progApplyStageBoiloff(st, deltaDays); });
+      if (vehLost > 0 && fv._originKey) {
+        m._boiloffByVehicle[fv._originKey] = (m._boiloffByVehicle[fv._originKey] || 0) + vehLost;
+        // best-effort initial cap: a vehicle born from a dock/separate (no LAUNCH/DEPLOY of
+        // its own) won't have one cached — fall back to its CURRENT capacity so the % is a
+        // (conservative, slightly understated) estimate rather than a divide-by-zero.
+        if (m._initialPropByVehicle[fv._originKey] == null) {
+          m._initialPropByVehicle[fv._originKey] = fv.stages.reduce((s, st) => s + progStageTotalCapacity(st), 0);
+        }
+      }
+      totalLost += vehLost;
+    });
+    return totalLost;
+  };
   // base name resolver (custom rename by origin key, else computed base) — shared by
   // the per-event snapshots and the final display-name pass.
   m.vehicleNames = m.vehicleNames || {};
@@ -1871,8 +1920,15 @@ function missionRecompute(m) {
       e.vehicleId = r.fv.vehicleId; e.stagingResult = r.stagingResult;
       e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
       live.push(r.fv); active = r.fv;
+      r.fv._initialPropCap = r.fv.stages.reduce((s, st) => s + progStageTotalCapacity(st), 0);
+      m._initialPropByVehicle[r.fv._originKey] = r.fv._initialPropCap;
       durationAuto = (r.stagingResult && r.stagingResult.burnTime) || 0;
       if (!sawLaunch) { metClock = 0; sawLaunch = true; }   // T-0 = first LAUNCH
+      // T2: ascent burn time is minutes — boiloff over that span is negligible, so
+      // ordering vs. the ascent burn itself doesn't matter; applied after for simplicity
+      // (see MATH.md §5 T2 note). Only affects OTHER live vehicles (this one has no
+      // propellant history yet) unless a depot etc. is already on-orbit.
+      e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
     } else if (e.type === 'DEPLOY') {
       const r = _missionApplyDeploy(m, e);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
@@ -1880,6 +1936,8 @@ function missionRecompute(m) {
       tagOwners(r.fv, kid, (m.vehicleNames && m.vehicleNames['deploy:' + kid]) || e.label || 'Vehicle'); markBirth(r.fv);
       e.vehicleId = r.fv.vehicleId; e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
       live.push(r.fv); active = r.fv;
+      r.fv._initialPropCap = r.fv.stages.reduce((s, st) => s + progStageTotalCapacity(st), 0);
+      m._initialPropByVehicle[r.fv._originKey] = r.fv._initialPropCap;
     } else if (e.type === 'BURN') {
       active = resolveActive(e);
       if (!active) continue;
@@ -1898,11 +1956,26 @@ function missionRecompute(m) {
         else if (e.burnType === 'TLI') durationAuto = progHohmannTOF('Earth', altA, PROG_MOON_ORBIT_R - PROG_BODIES.Earth.R);
         else if (e.burnType === 'LOI') durationAuto = 0;   // arrival burn at end of an already-counted TLI coast
       }
+      // T2: this BURN's own coast is the leg it INITIATES (HOHMANN/TLI depart now, arrive
+      // later) — the burn itself is impulsive, so boiloff for the coast is charged AFTER
+      // the burn's propellant is spent (ordering is immaterial for the burn's own tank
+      // here since the burn already completed; it matters for OTHER live vehicles idling
+      // through the same span, e.g. a docked depot).
+      e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
     } else if (e.type === 'MANEUVER') {
       active = resolveActive(e);
       if (active) e.vehicleId = active.vehicleId;
-      _missionApplyManeuver(active, e);
+      // T2 ordering devil: this MANEUVER's duration is the COAST that PRECEDES it
+      // (transit-corridor convention, critique 16e — the coast is charged on the leg
+      // EXITING a corridor, and the maneuver's burn is the arrival burn at the END of
+      // that coast, e.g. LOI ending a TLC->LLO leg). So boiloff for the full coast is
+      // applied to every live vehicle BEFORE the maneuver's own propellant burn runs,
+      // meaning the burn draws from POST-boiloff tanks — a coast that eats enough cryo
+      // propellant correctly starves the arrival burn, and the existing burn-overdraw
+      // check (572 #2) catches the resulting shortfall for free.
       durationAuto = progTransferTOF(_missionNmNodeById(e.fromNode), _missionNmNodeById(e.toNode));
+      e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
+      _missionApplyManeuver(active, e);
     } else if (e.type === 'SEPARATE' && e.result === 'SUCCESS') {
       const sepActor = resolveActive(e); if (sepActor) active = sepActor;   // editable: which vehicle separates
       if (!active) continue;
@@ -2022,6 +2095,13 @@ function missionRecompute(m) {
       if (tgt) { tgt.status = 'RECOVERED'; e.vehicleId = tgt.vehicleId; e.vehicleName = _missionVehicleDisplayName(tgt);
         if (active === tgt) active = live.find(v => v !== tgt && v.status !== 'EXPENDED' && v.status !== 'RECOVERED') || tgt; }
     }
+    else if (e.type === 'COAST') {
+      // T2: the ONLY event type where the user authors time directly ("loiter 30 days in
+      // NRHO"). durationOverride is NOT needed here — e.days IS the authored duration.
+      durationAuto = Math.max(0, e.days || 0) * 86400;
+      e.result = 'SUCCESS';
+      e.boiloffKg = applyMissionBoiloff(Math.max(0, e.days || 0));
+    }
     // ── T1: MET bookkeeping — durationOverride (authored, seconds) wins over the
     //    computed auto value; both are cached so the UI can show "(custom)". Events
     //    before the first LAUNCH sit at T+0 (metClock hasn't started advancing yet). ──
@@ -2030,7 +2110,7 @@ function missionRecompute(m) {
     e.metStart = metClock;
     e.durationAuto = durationAuto;
     e.durationUsed = durationUsed;
-    if (authEntry) { authEntry.metStart = metClock; authEntry.durationAuto = durationAuto; authEntry.durationUsed = durationUsed; }
+    if (authEntry) { authEntry.metStart = metClock; authEntry.durationAuto = durationAuto; authEntry.durationUsed = durationUsed; authEntry.boiloffKg = e.boiloffKg; }
     if (sawLaunch) metClock += durationUsed;
     // per-event snapshot: state of every live vehicle AFTER this event (the band
     // monitor reads this so scrubbing shows the exact state at that point in time).
@@ -2596,6 +2676,25 @@ function missionExecRecover(id, vehId) {
   const fv = PROG_ACTIVE_PROGRAM.vehicles[vehId];
   m.log.push({ type: 'RECOVER', targetKey: fv ? fv._originKey : null, vehicleName: fv ? _missionVehicleDisplayName(fv) : '?' });
   _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
+}
+// T2: COAST — the only event type where the user authors time directly.
+function missionExecCoast(id) {
+  const m = _missionGet(id); if (!m) return;
+  const days = parseFloat(document.getElementById('addev-coast-days-' + id)?.value);
+  if (!(days > 0)) return;
+  const label = (document.getElementById('addev-coast-label-' + id)?.value || '').trim();
+  m.log.push({ type: 'COAST', days, label: label || null });
+  _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
+}
+function missionApplyCoastEdit(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx]) return;
+  const e = m.log[idx];
+  const days = parseFloat(document.getElementById('edit-coast-days-' + id)?.value);
+  if (days > 0) e.days = days;
+  e.label = (document.getElementById('edit-coast-label-' + id)?.value || '').trim() || null;
+  missionRecompute(m);
+  missionOpenEventModal(id, idx);
+  missionRenderDetail();
 }
 
 function _missionSeparateLogCardHTML(entry) {
@@ -3451,7 +3550,7 @@ function _missionAddEventHTML(m) {
   if (_missionAddEvt == null) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
-  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
+  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -3527,6 +3626,13 @@ function _missionAddEventHTML(m) {
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
+  } else if (_missionAddEvt === 'coast') {
+    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// advance the mission clock without a burn (e.g. "loiter 30 days in NRHO") — boiloff applies to every live vehicle's cryo tanks over this span</div>
+      <label class="cfg-label">Days</label>
+      <input type="number" id="addev-coast-days-${id}" class="field" value="30" min="0" step="any" style="width:100%;margin-bottom:6px;">
+      <label class="cfg-label">Label <span style="color:var(--text-dim);">(optional)</span></label>
+      <input type="text" id="addev-coast-label-${id}" class="field" placeholder="e.g. Station-keeping" style="width:100%;margin-bottom:8px;" maxlength="60">
+      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecCoast('${id}')">⏳ Add Coast</button>`;
   } else if (_missionAddEvt === 'rendezvous') {
     const others = live.filter(x => x.id !== m.vehicleId);
     if (others.length) {
@@ -3572,7 +3678,7 @@ function _missionAddEventHTML(m) {
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no vehicles yet</div>`;
   }
   // forms that already have their own vehicle dropdown don't need the global Active Vehicle selector
-  const ownsVehiclePicker = ['expend', 'recover'].includes(_missionAddEvt);
+  const ownsVehiclePicker = ['expend', 'recover', 'coast'].includes(_missionAddEvt);
   return `${header}${(_missionAddEvt!=='__menu__'&&_missionAddEvt!=='burn'&&!ownsVehiclePicker)?vehSel:''}${form}`;
 }
 

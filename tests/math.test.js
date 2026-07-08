@@ -63,7 +63,7 @@ function approx(desc, actual, expected, tol) {
 const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
-  progVcirc, progHohmannTOF, progTransferTOF,
+  progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
   _s15BecoSplit,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES } =
@@ -434,6 +434,28 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   const nodeLeoA = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
   const nodeLeoB = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
   ok('progTransferTOF: same orbit -> 0 (degenerate)', progTransferTOF(nodeLeoA, nodeLeoB) === 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T2 mission time / boiloff — progBoiloff goldens
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // 10,000 kg at 0.3%/day (LOX_LH2 baseline) for 30 days, baseline insulation (1.0):
+  // 10000 * e^(-0.003*1.0*30) = 10000 * e^(-0.09) ~= 9139.3 kg.
+  const b1 = progBoiloff(10000, 0.003, 30, 1.0);
+  approx('progBoiloff: 10,000 kg @ 0.3%/day, 30 d, baseline insulation -> ~9139.3 kg', b1, 9139.312, 0.01);
+
+  // Halved insulation factor halves the exponent: e^(-0.003*0.5*30) = e^(-0.045).
+  const b2 = progBoiloff(10000, 0.003, 30, 0.5);
+  approx('progBoiloff: insulation factor 0.5 halves the exponent -> ~9559.97 kg', b2, 9559.975, 0.01);
+
+  // Zero rate (non-cryo / storable propellant) -> unchanged.
+  const b3 = progBoiloff(10000, 0, 30, 1.0);
+  approx('progBoiloff: zero rate -> unchanged', b3, 10000, 1e-9);
+
+  // Zero elapsed time -> unchanged regardless of rate.
+  const b4 = progBoiloff(10000, 0.003, 0, 1.0);
+  approx('progBoiloff: zero elapsed days -> unchanged', b4, 10000, 1e-9);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

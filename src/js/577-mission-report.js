@@ -21,6 +21,7 @@ function _mrNum(v, digits) {
 // Event description line, reusing the same field-precedence the on-screen
 // event cards use (sub = burnLabel || toLabel || vehicleName || label || targetName).
 function _mrEventDesc(e) {
+  if (e.type === 'COAST') return e.label || 'Coast';
   return e.burnLabel || e.toLabel || e.vehicleName || e.label || e.targetName || '';
 }
 
@@ -43,6 +44,8 @@ function _mrEventRow(e, i) {
     veh = _mrEsc(e.vehicleName || e.targetName || '');
   } else if (e.type === 'EXPEND') {
     veh = _mrEsc(e.vehicleLevel ? e.vehicleName : e.stageName);
+  } else if (e.type === 'COAST') {
+    veh = _mrEsc((e.days||0).toLocaleString() + ' d' + (e.boiloffKg > 0 ? ' — boiloff ' + Math.round(e.boiloffKg).toLocaleString() + ' kg' : ''));
   } else {
     veh = _mrEsc(e.vehicleName || e.activeName || e.targetName || '');
   }

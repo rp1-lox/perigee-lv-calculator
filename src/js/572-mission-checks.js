@@ -129,7 +129,12 @@ function missionRunChecks(m) {
     // distinct from #1's FAILED handling. We fold #2 into a MARGINAL-shortfall
     // check here (still its own catalog id) rather than skip it outright.
     if ((e.type === 'BURN' || e.type === 'MANEUVER') && e.result !== 'FAILED') {
-      const target = e.dvTarget != null ? e.dvTarget : null;
+      // BURN caches its target on e.dvTarget; MANEUVER caches it on e.dvRequired
+      // (dvOverride-aware — see _missionApplyManeuver, 570) — read whichever the
+      // event type actually populates rather than only the BURN field (pre-T2 bug:
+      // this check silently never fired for MANEUVER shortfalls before T2 surfaced
+      // it via boiloff-starved arrival burns).
+      const target = e.type === 'MANEUVER' ? (e.dvRequired != null ? e.dvRequired : null) : (e.dvTarget != null ? e.dvTarget : null);
       const actual = e.dv_actual != null ? e.dv_actual : null;
       if (target != null && actual != null && actual < target - 1 && target > 0) {
         const pct = Math.round((1 - actual / target) * 100);
@@ -229,6 +234,29 @@ function missionRunChecks(m) {
         push('ends-in-transfer', 'info', 'Mission ends mid-transfer',
           `${_mcEscape(_missionVehicleDisplayName(fv))} ends the mission in ${_mcEscape(node.label || nodeId)}, a transfer corridor.`, null);
       }
+    });
+
+    // #boiloff-losses (T2): cumulative boiloff over the mission vs. that vehicle's
+    // initial total propellant. INFO above 1%, AMBER above 10%. m._boiloffByVehicle /
+    // m._initialPropByVehicle are populated by missionRecompute's applyMissionBoiloff
+    // (570) — keyed by stable origin key, reset every recompute. A burn that fails
+    // because boiloff already ate its propellant is caught by the existing #1/#2
+    // failed/shortfall checks above; this is purely an informational summary.
+    const boiloffMap = m._boiloffByVehicle || {};
+    Object.keys(boiloffMap).forEach(originKey => {
+      const lostKg = boiloffMap[originKey];
+      if (!(lostKg > 0)) return;
+      const initCap = (m._initialPropByVehicle || {})[originKey] || 0;
+      if (!(initCap > 0)) return;
+      const pct = lostKg / initCap;
+      if (pct < 0.01) return;
+      const fv = (m.vehicleIds || []).map(vid => PROG_ACTIVE_PROGRAM.vehicles[vid]).find(v => v && v._originKey === originKey);
+      const name = fv ? _missionVehicleDisplayName(fv) : (m._ownerLabels && m._ownerLabels[originKey]) || originKey;
+      const sev = pct > 0.10 ? 'amber' : 'info';
+      const totalDays = (m._metTotal || 0) / 86400;
+      push('boiloff-losses', sev, 'Boiloff losses — ' + _mcEscape(name),
+        `${Math.round(lostKg).toLocaleString()} kg (${Math.round(pct * 100)}%) of initial propellant lost to boiloff over ${totalDays.toFixed(0)} d.`,
+        null);
     });
 
     // #9 INFO payload-never-freed: m.payloadScIds non-empty but no
