@@ -268,7 +268,7 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
    none ever opens with a white option list / invisible text — anywhere in the app. */
 select{color-scheme:dark;}
 select option,select optgroup{background:var(--input);color:var(--text-bright);}
-.lv-item.selected{background:rgba(136,198,87,.14);box-shadow:inset 3px 0 0 var(--accent);}
+.lv-item.selected{background:var(--accent-tint-strongest);box-shadow:inset 3px 0 0 var(--accent);}
 .lv-item.selected .lv-item-btn span{color:var(--accent3)!important;}
 
 /* event cards: always-visible clickable header strip + (when expanded) a full-width body */
@@ -319,12 +319,12 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .mcc-orbit-cat .nm-orbit-scroll{flex:1;min-height:0;max-height:calc(100vh - 230px);overflow-y:auto;padding:6px 8px;}
 /* Add-Event dock: visibly "activates" (accent border + tint) when the panel is open */
 .mcc-addevt-dock{border-top:1px solid var(--border);transition:background .12s,border-color .12s;}
-.mcc-addevt-dock.open{border-top:2px solid var(--accent);background:rgba(136,198,87,.07);}
+.mcc-addevt-dock.open{border-top:2px solid var(--accent);background:var(--accent-tint-soft);}
 .mcc-addevt-btn:hover{filter:brightness(1.08);}
 /* ORBITS catalog rows — LV-calculator orbits, colour-coded by body */
 .orbit-body-lbl{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin:9px 0 4px;}
 .orbit-row{display:flex;align-items:baseline;gap:8px;padding:5px 7px;margin-bottom:3px;background:var(--panel);border:1px solid var(--border);cursor:grab;font-family:var(--mono);}
-.orbit-row:hover{border-color:var(--accent);background:rgba(136,198,87,.07);}
+.orbit-row:hover{border-color:var(--accent);background:var(--accent-tint-soft);}
 .orbit-row:active{cursor:grabbing;}
 .orbit-row-name{font-size:10px;color:var(--text-bright);flex-shrink:0;}
 .orbit-row-sub{font-size:9px;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;}
@@ -338,7 +338,17 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 
 /* ===== RESTORED LV CALCULATOR CSS (from backup) ===== */
 
-:root{--bg:#3b393a;--panel:#2e2c2d;--border:#524f50;--border-bright:#6e6b6c;--accent:#88c657;--accent2:#c6a057;--accent3:#b0e080;--text:#e7e8ea;--text-dim:#a7a6a4;--text-bright:#ffffff;--mono:'JetBrains Mono',monospace;--sans:'Outfit',sans-serif;--nm-bg:#282628;--nm-earth:#5db877;--nm-lunar:#8890bc;--nm-interp:#b85848;--nm-edge:#5a5758;--nm-edge-act:#88c657;--nm-node-fill:#2e2c2d;--nm-label:#a7a6a4;--nm-pill-bg:#2e2c2d;--nm-pill-bd:#524f50;--nm-pill-text:#a7a6a4;--nm-pal-bg:#252325;--nm-pal-hdr:#1e1c1e;--nm-pal-item:#2e2c2d;--nm-pal-item-act:#1e2419;--nm-ghost:#524f50;}
+:root{--bg:#3b393a;--panel:#2e2c2d;--border:#524f50;--border-bright:#6e6b6c;--accent:#88c657;--accent2:#c6a057;--accent3:#b0e080;--danger:#b8564a;--warn:#c6a057;--text:#e7e8ea;--text-dim:#a7a6a4;--text-bright:#ffffff;--mono:'JetBrains Mono',monospace;--sans:'Outfit',sans-serif;--nm-bg:#282628;--nm-earth:#5db877;--nm-lunar:#8890bc;--nm-interp:#b85848;--nm-edge:#5a5758;--nm-edge-act:#88c657;--nm-node-fill:#2e2c2d;--nm-label:#a7a6a4;--nm-pill-bg:#2e2c2d;--nm-pill-bd:#524f50;--nm-pill-text:#a7a6a4;--nm-pal-bg:#252325;--nm-pal-hdr:#1e1c1e;--nm-pal-item:#2e2c2d;--nm-pal-item-act:#1e2419;--nm-ghost:#524f50;
+  /* Derived tints — track theme seeds via color-mix so custom themes flow through chrome */
+  --accent-tint-faint: color-mix(in srgb, var(--accent) 6%, transparent);
+  --accent-tint-soft: color-mix(in srgb, var(--accent) 7%, transparent);
+  --accent-tint: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-tint-med: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-tint-strong: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-tint-strongest: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger-tint: color-mix(in srgb, var(--danger) 15%, transparent);
+  --danger-bright: color-mix(in srgb, var(--danger) 70%, var(--text-bright));
+}
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
 #rp-root{background:var(--bg);color:var(--text-bright);font-family:var(--sans);font-size:15px;min-height:100%;padding:0;box-sizing:border-box;display:flex;flex-direction:column;}
@@ -445,7 +455,7 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .lv-item-btn.user-lv.active{background:rgba(127,255,107,.1);}
 .lv-item-btn.user-defined{color:var(--text-dim);border-left:2px dashed var(--border-bright);}
 .lv-del{background:transparent;border:none;border-left:1px solid var(--border);color:var(--text-dim);font-family:var(--mono);font-size:12px;padding:0 10px;cursor:pointer;transition:all .15s;}
-.lv-del:hover{color:#ff4444;background:rgba(255,0,0,.07);}
+.lv-del:hover{color:var(--danger);background:var(--danger-tint);}
 
 /* ── ORBIT CATEGORIES ── */
 .orbit-scroll{height:calc(100vh - 200px);min-height:400px;overflow-y:auto;}
@@ -474,14 +484,14 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .result-val{font-family:var(--mono);font-size:14px;color:var(--accent3);text-align:right;}
 .result-val.hl{font-size:22px;color:var(--accent);}
 .result-val.warn{color:var(--accent2);}
-.result-val.neg{color:#ff4444;}
+.result-val.neg{color:var(--danger);}
 .dv-bar{height:3px;background:var(--border);margin:8px 0 12px;overflow:hidden;}
 .dv-bar-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent3));transition:width .6s;}
 .placeholder-msg{font-family:var(--mono);font-size:11px;color:var(--text-dim);text-align:center;padding:14px 0;letter-spacing:.1em;}
 /* Selected-orbit label in Define-an-Orbit header */
 .orb-target-label{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--accent);margin:-4px 0 4px;}
 .orb-target-label.custom{color:var(--text-dim);}
-.error-msg{font-family:var(--mono);font-size:11px;color:#ff6666;padding:8px 10px;border:1px solid rgba(255,80,80,.3);background:rgba(255,0,0,.05);margin-top:8px;}
+.error-msg{font-family:var(--mono);font-size:11px;color:var(--danger-bright);padding:8px 10px;border:1px solid color-mix(in srgb, var(--danger) 30%, transparent);background:var(--danger-tint);margin-top:8px;}
 .breakdown-row{display:flex;justify-content:space-between;padding:4px 0;font-family:var(--mono);font-size:11px;color:var(--text-dim);border-bottom:1px solid rgba(30,37,48,.5);}
 .breakdown-row span:last-child{color:var(--text-bright);}
 .note{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:10px;line-height:1.7;letter-spacing:.04em;}
@@ -524,7 +534,7 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .vp-dv-empty{font-family:var(--mono);font-size:10px;color:var(--text-dim);opacity:.5;padding:16px 0;text-align:center;}
 /* T/W status coloring (used in the spec table's Vehicle column) */
 .vp-stat-val{font-family:var(--mono);font-weight:600;color:var(--text-bright);}
-.vp-stat-val.warn{color:#f4a;}
+.vp-stat-val.warn{color:var(--warn);}
 .vp-stat-val.ok{color:var(--accent3);}
 /* Spec table */
 .vp-spec-tbl{width:100%;border-collapse:collapse;font-size:11px;}
@@ -555,7 +565,7 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .lu-fname{color:var(--text-bright);font-size:11px;}
 .lu-fval{font-family:var(--mono);font-size:11px;color:var(--accent);}
 .lu-dim-msg,.lu-err-msg{font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:30px;text-align:center;line-height:1.7;}
-.lu-err-msg{color:#f47;}
+.lu-err-msg{color:var(--danger-bright);}
 .lu-loading-msg::after{content:'…';animation:ellipsis 1.2s infinite;}
 /* Simple toast for lv_calc */
 #lvc-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:10px;letter-spacing:.08em;padding:7px 18px;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;z-index:9999;}
@@ -597,7 +607,7 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .lib-cat-chevron.open{transform:rotate(90deg);}
 .lib-user-stage-card{position:relative;}
 .lib-del-btn{position:absolute;top:3px;right:3px;background:none;border:none;color:var(--text-dim);font-size:12px;cursor:pointer;line-height:1;padding:1px 3px;}
-.lib-del-btn:hover{color:#ff4444;}
+.lib-del-btn:hover{color:var(--danger);}
 /* ── FILTERS ── */
 .filter-bar{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}
 .filter-toggle-btn{background:transparent;border:1px solid var(--border-bright);color:var(--text-dim);font-family:var(--mono);font-size:10px;padding:5px 10px;cursor:pointer;letter-spacing:.08em;transition:all .15s;white-space:nowrap;}
@@ -659,7 +669,7 @@ select.field:focus{outline:none;border-color:var(--accent);}
 .case-btn .case-label{font-size:10px;color:inherit;}
 .case-btn .case-sub{font-size:8px;color:var(--text-dim);margin-top:2px;}
 .case-del{flex:none;width:22px;background:transparent;border:1px solid var(--border);color:var(--text-dim);font-size:12px;cursor:pointer;padding:0;transition:all .15s;}
-.case-del:hover{border-color:#ff4444;color:#ff4444;}
+.case-del:hover{border-color:var(--danger);color:var(--danger);}
 .cases-empty{font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.05em;padding:8px 0;text-align:center;opacity:.6;}
 .case-actions{display:flex;flex-direction:column;gap:4px;margin-top:10px;}
 @media(max-width:900px){.results-layout{grid-template-columns:1fr;}}
@@ -802,7 +812,7 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 #art-stage-slots{display:flex;flex-wrap:wrap;gap:10px;}
 .art-slot-card{width:96px;display:flex;flex-direction:column;align-items:center;border:1px solid var(--border);background:rgba(0,0,0,.22);cursor:pointer;transition:border-color .14s;padding:8px 6px 7px;}
 .art-slot-card:hover{border-color:var(--accent);}
-.art-slot-card.has-art{border-color:rgba(var(--accent-rgb,136,198,87),.5);}
+.art-slot-card.has-art{border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
 .art-slot-preview{width:72px;height:72px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);border:1px dashed var(--border2);margin-bottom:6px;position:relative;overflow:hidden;}
 .art-slot-card.has-art .art-slot-preview{border-style:solid;border-color:var(--border2);}
 .art-slot-preview img{max-width:100%;max-height:100%;object-fit:contain;display:block;}
@@ -833,7 +843,7 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .tut-list{width:230px;min-width:230px;border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column;padding:8px;gap:3px;}
 .tut-item{text-align:left;background:transparent;border:1px solid transparent;color:var(--text-dim);font-family:var(--mono);font-size:11px;padding:8px 10px;cursor:pointer;line-height:1.4;}
 .tut-item:hover{color:var(--text-bright);background:rgba(255,255,255,.04);}
-.tut-item.active{color:var(--accent);border-color:var(--accent);background:rgba(136,198,87,.08);}
+.tut-item.active{color:var(--accent);border-color:var(--accent);background:var(--accent-tint);}
 .tut-body{flex:1;min-width:0;overflow-y:auto;padding:18px 24px;color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.6;}
 .tut-body h3{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:18px 0 8px;}
 .tut-body h3:first-child{margin-top:0;}
@@ -841,7 +851,7 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .tut-body ul,.tut-body ol{margin:0 0 12px;padding-left:22px;}
 .tut-body li{margin-bottom:6px;}
 .tut-body b{color:var(--text-bright);}
-.tut-tip{border-left:3px solid var(--accent);background:rgba(136,198,87,.06);padding:8px 12px;font-size:13px;color:var(--text-dim);}
+.tut-tip{border-left:3px solid var(--accent);background:var(--accent-tint-faint);padding:8px 12px;font-size:13px;color:var(--text-dim);}
 
 /* LV Calculator sub-tab bar (Vehicles / Orbits / Results), shown in the header
    only while the LV Calculator section is active. */
@@ -854,7 +864,7 @@ td.booster-cell{border-left:2px solid color-mix(in srgb,var(--accent) 30%,transp
 .fleet-vehbox{max-height:240px;overflow:auto;}
 .fleet-drop-zone{margin:8px;padding:14px 10px;border:1.5px dashed var(--border-bright);text-align:center;
   font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:.04em;transition:border-color .12s,background .12s,color .12s;}
-.fleet-drop-zone.drop-hot,.fleet-vehbox.drop-hot{border-color:var(--accent);background:rgba(136,198,87,.10);color:var(--accent);}
+.fleet-drop-zone.drop-hot,.fleet-vehbox.drop-hot{border-color:var(--accent);background:var(--accent-tint-med);color:var(--accent);}
 .fleet-lib-panel{margin-top:18px;border-top:1px solid var(--border);padding-top:12px;}
 .fleet-lib-hdr{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
 .fleet-lib-hdr>span:first-child{font-family:var(--mono);font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-dim);}
@@ -1251,7 +1261,7 @@ button,input,select,textarea{font-family:inherit;}
         <div style="display:flex;gap:8px;margin:0 0 10px;align-items:center;">
           <button class="calc-btn" onclick="calculateWithS15()" style="margin-bottom:0;flex:1;">▶  CALCULATE PERFORMANCE</button>
           <button id="orb-use-in-program-btn" onclick="progUseCurrentVehicle()" title="Load this vehicle into the active Program as a VehicleDefinition"
-            style="font-family:var(--mono);font-size:10px;background:rgba(136,198,87,.08);border:1px solid var(--accent);color:var(--accent);padding:6px 14px;cursor:pointer;letter-spacing:.06em;white-space:nowrap;">Use in Program ▶</button>
+            style="font-family:var(--mono);font-size:10px;background:var(--accent-tint);border:1px solid var(--accent);color:var(--accent);padding:6px 14px;cursor:pointer;letter-spacing:.06em;white-space:nowrap;">Use in Program ▶</button>
         </div>
         <div class="results-layout">
 
@@ -3086,7 +3096,7 @@ function buildOrbitCategories(){
     if(onDel){
       const x=document.createElement('button');
       x.className='orbit-btn';
-      x.style.cssText='flex:none;width:22px;padding:4px 3px;color:#ff4444;border-color:rgba(255,68,68,.4);font-size:13px;';
+      x.style.cssText='flex:none;width:22px;padding:4px 3px;color:var(--danger);border-color:color-mix(in srgb, var(--danger) 40%, transparent);font-size:13px;';
       x.textContent='×';x.title='Remove from list';x.onclick=onDel;
       wrap.appendChild(x);
     }
@@ -4046,7 +4056,7 @@ function tsRenderForm(){
         </div>
         <div id="ts-cmp-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       </div>
-      <div id="ts-error" style="color:#ff4444;font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
+      <div id="ts-error" style="color:var(--danger);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div id="ts-note" style="color:var(--text-dim);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div id="ts-progress" style="color:var(--text-dim);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div class="ts-chart-card" id="ts-chart-wrap"></div>
@@ -4932,7 +4942,7 @@ function orbVehRenderSelectorBar(){
       style="font-family:var(--mono);font-size:11px;background:var(--panel);color:var(--text-bright);border:1px solid var(--border-bright);padding:5px 8px;max-width:260px;">
       ${_orbVehSelectorOptionsHTML()}
     </select>
-    ${_orbVehSel ? `<span style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 9px;border:1px solid var(--accent);color:var(--accent);background:rgba(136,198,87,.08);">LIBRARY: ${_orbVehEsc(_orbVehSel.name)}</span>` : ''}
+    ${_orbVehSel ? `<span style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 9px;border:1px solid var(--accent);color:var(--accent);background:var(--accent-tint);">LIBRARY: ${_orbVehEsc(_orbVehSel.name)}</span>` : ''}
   `;
   const sel = document.getElementById('orb-veh-select');
   if (sel) sel.value = selVal;
@@ -5336,6 +5346,7 @@ const BUILTIN_THEMES={
   default:{name:'Default (Dark)',
     '--bg':'#0a0c10','--panel':'#0f1318','--input':'#0b0e13','--border':'#1e2530','--border-bright':'#2e3d50',
     '--accent':'#00c8ff','--accent2':'#ff6b35','--accent3':'#7fff6b',
+    '--danger':'#ff4444','--warn':'#ffb020',
     '--text':'#c8d8e8','--text-dim':'#5a7080','--text-bright':'#e8f4ff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
     '--nm-bg':'#080a0e','--nm-earth':'#44b06a','--nm-lunar':'#7888c8','--nm-interp':'#cc5040',
@@ -5345,6 +5356,7 @@ const BUILTIN_THEMES={
   perigee:{name:'Perigee',
     '--bg':'#3b393a','--panel':'#2e2c2d','--input':'#3a3739','--border':'#524f50','--border-bright':'#6e6b6c',
     '--accent':'#88c657','--accent2':'#c6a057','--accent3':'#b0e080',
+    '--danger':'#b8564a','--warn':'#c6a057',
     '--text':'#e7e8ea','--text-dim':'#a7a6a4','--text-bright':'#ffffff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
     '--nm-bg':'#282628','--nm-earth':'#5db877','--nm-lunar':'#8890bc','--nm-interp':'#b85848',
@@ -5359,7 +5371,11 @@ function getTheme(key){return customThemes[key]||BUILTIN_THEMES[key]||BUILTIN_TH
 function applyTheme(key){
   activeThemeKey=key;
   const t=getTheme(key);
+  const fallback=BUILTIN_THEMES.default;
   Object.entries(t).forEach(([k,v])=>{if(k.startsWith('--'))document.documentElement.style.setProperty(k,v);});
+  // Guard: legacy custom theme files predating --danger/--warn shouldn't leave
+  // those seeds unset (would break derived --danger-tint/etc in styles.css).
+  ['--danger','--warn'].forEach(k=>{if(!t[k])document.documentElement.style.setProperty(k,fallback[k]);});
   document.body.style.backgroundImage='none';
   const sel=document.getElementById('theme-select');
   if(sel){for(const o of sel.options){if(o.value===key){sel.value=key;break;}}}
@@ -8642,7 +8658,7 @@ function buildSiteSelector(){
       wrap.appendChild(btn);
       const del=document.createElement('button');
       del.className='site-btn';
-      del.style.cssText='flex:none;width:18px;padding:2px 3px;color:#ff6666;border-color:rgba(255,80,80,.3);font-size:11px;';
+      del.style.cssText='flex:none;width:18px;padding:2px 3px;color:var(--danger-bright);border-color:color-mix(in srgb, var(--danger) 30%, transparent);font-size:11px;';
       del.textContent='×';del.title='Remove';
       del.onclick=e=>{e.stopPropagation();deleteUserSpaceport(sp._uid);};
       wrap.appendChild(del);uRow.appendChild(wrap);
@@ -9215,14 +9231,14 @@ function buildStageComposition(){
       const badge=document.createElement('span');
       badge.textContent='½';
       badge.title='Stage-and-a-Half';
-      badge.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:rgba(136,198,87,.12);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';
+      badge.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';
       nameEl.appendChild(badge);
     }
     // Crossfeed / center-throttle badge (booster only) + air-lit indicator for extra groups
     if(isBooster){
       const grp=isExtra?(_extraBoosterGroups[extraIdx]||{}):null;
       const pm=isExtra?(grp.parallelMode||'independent'):(document.getElementById('b_parallel_mode')?.value||'independent');
-      const mkBadge=(txt,title)=>{const b=document.createElement('span');b.textContent=txt;b.title=title;b.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:rgba(136,198,87,.12);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';nameEl.appendChild(b);};
+      const mkBadge=(txt,title)=>{const b=document.createElement('span');b.textContent=txt;b.title=title;b.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';nameEl.appendChild(b);};
       if(pm!=='independent'){
         const thr=Math.round((isExtra?((grp.coreThrottle!=null?grp.coreThrottle:0.57)*100):(parseFloat(document.getElementById('b_core_throttle')?.value)||57)));
         mkBadge(pm==='crossfeed'?'XFEED':(thr+'%'), pm==='crossfeed'?'Crossfeed — boosters feed first stage':('First stage throttled to '+thr+'% during boost'));
@@ -9258,7 +9274,7 @@ function buildStageComposition(){
       rm.style.cssText='width:32px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-left:none;cursor:pointer;color:var(--text-dim);flex-shrink:0;transition:color .15s;';
       rm.innerHTML='<span style="font-size:11px;line-height:1;">&#x2715;</span>';
       rm.title='Remove this booster group';
-      rm.addEventListener('mouseenter',()=>rm.style.color='var(--error,#e06c75)');
+      rm.addEventListener('mouseenter',()=>rm.style.color='var(--danger)');
       rm.addEventListener('mouseleave',()=>rm.style.color='var(--text-dim)');
       rm.addEventListener('click',e=>{e.stopPropagation();if(typeof boosterGroupRemove==='function')boosterGroupRemove(extraIdx);});
       row.appendChild(rm); wrap.appendChild(row); return wrap;
@@ -15145,7 +15161,7 @@ function missionDropStage(missionId, stageDefId) {
 }
 
 function _missionBurnLogCardHTML(entry) {
-  const statusColor = entry.result === 'SUCCESS' ? 'var(--accent3)' : entry.result === 'MARGINAL' ? 'var(--accent2)' : 'var(--error,#e06c75)';
+  const statusColor = entry.result === 'SUCCESS' ? 'var(--accent3)' : entry.result === 'MARGINAL' ? 'var(--accent2)' : 'var(--danger)';
   const o   = entry.orbitAfter || {};
   const stateKV = (k, v) => `<div class="mission-state-kv"><span class="mission-state-key">${k}</span><span class="mission-state-val">${v}</span></div>`;
   const warns = (entry.warnings || []).map(w => `<div style="color:var(--accent2);font-family:var(--mono);font-size:9px;">${w}</div>`).join('');
@@ -15471,7 +15487,7 @@ function _missionSeparateLogCardHTML(entry) {
   if (entry.result !== 'SUCCESS') {
     const w = (entry.warnings || []).join('; ');
     return `<div class="mission-log-card" style="padding:8px 14px;">
-      <span class="mission-log-type" style="color:var(--error,#e06c75)">SEPARATE FAILED</span>
+      <span class="mission-log-type" style="color:var(--danger)">SEPARATE FAILED</span>
       <div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">${w || 'Separation failed'}</div>
     </div>`;
   }
@@ -15489,7 +15505,7 @@ function _missionDockLogCardHTML(entry) {
   if (entry.result !== 'SUCCESS') {
     const w = (entry.warnings || []).join('; ');
     return `<div class="mission-log-card" style="padding:8px 14px;">
-      <span class="mission-log-type" style="color:var(--error,#e06c75)">DOCK FAILED</span>
+      <span class="mission-log-type" style="color:var(--danger)">DOCK FAILED</span>
       <div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">${w || 'Docking failed'}</div>
     </div>`;
   }
@@ -15529,12 +15545,12 @@ function _missionMultiVehicleHTML(m) {
       const orbitLine = os
         ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
-      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'rgba(136,198,87,.14)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
           <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
           <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${v.name}</span>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${(v.stages || []).length} stages</span>
-          ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--error,#e06c75)">${v.status}</span>` : ''}
+          ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">${v.status}</span>` : ''}
         </div>
         ${orbitLine ? `<div>${orbitLine}</div>` : ''}
         <div style="display:flex;gap:12px;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
@@ -15591,12 +15607,12 @@ function _missionMultiVehicleHTML(m) {
       ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;</span>`
       : '';
     // whole row is clickable to make this the active vehicle; active = green
-    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'rgba(136,198,87,.14)' : 'transparent'};cursor:pointer;">
+    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
         <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
         <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${_missionVehicleDisplayName(fv)}</span>
         <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${fv.stages.length} stages</span>
-        ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--error,#e06c75)">EXPENDED</span>' : ''}
+        ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">EXPENDED</span>' : ''}
         <button class="act-btn" style="padding:2px 6px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionRenameVehicle('${id}','${fv._originKey || ''}')" title="Rename this vehicle">✎</button>
         <button class="act-btn" style="padding:2px 8px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionExecExpendVehicle('${id}','${vid}')"${expended ? ' disabled' : ''}>Expend</button>
       </div>
@@ -17391,7 +17407,7 @@ function _missionChecksSeverityIcon(sev) {
   return sev === 'red' ? '&#9679;' : sev === 'amber' ? '&#9650;' : '&#8226;';
 }
 function _missionChecksSeverityColor(sev) {
-  return sev === 'red' ? 'var(--error,#e06c75)' : sev === 'amber' ? 'var(--accent2)' : 'var(--text-dim)';
+  return sev === 'red' ? 'var(--danger)' : sev === 'amber' ? 'var(--accent2)' : 'var(--text-dim)';
 }
 
 function missionToggleChecksInfo(missionId) {
@@ -17430,7 +17446,7 @@ function _missionChecksBoxHTML(m) {
   const topFindings = findings.filter(f => f.severity !== 'info');
 
   const badge = (redN || amberN)
-    ? `${redN ? `<span class="mcc-check-badge" style="color:var(--error,#e06c75);border-color:var(--error,#e06c75);">${redN} red</span>` : ''}${amberN ? `<span class="mcc-check-badge" style="color:var(--accent2);border-color:var(--accent2);">${amberN} amber</span>` : ''}`
+    ? `${redN ? `<span class="mcc-check-badge" style="color:var(--danger);border-color:var(--danger);">${redN} red</span>` : ''}${amberN ? `<span class="mcc-check-badge" style="color:var(--accent2);border-color:var(--accent2);">${amberN} amber</span>` : ''}`
     : `<span class="mcc-check-badge mcc-check-go">GO</span>`;
 
   const evCount = (m._expanded || m.log || []).length;
@@ -17468,7 +17484,7 @@ function _missionChecksToolbarChipHTML(m) {
   const amberN = findings.filter(f => f.severity === 'amber').length;
   const worst = redN ? 'red' : amberN ? 'amber' : 'clean';
   const icon = worst === 'red' ? '&#9679;' : worst === 'amber' ? '&#9650;' : '&#10003;';
-  const color = worst === 'red' ? 'var(--error,#e06c75)' : worst === 'amber' ? 'var(--accent2)' : 'var(--accent3)';
+  const color = worst === 'red' ? 'var(--danger)' : worst === 'amber' ? 'var(--accent2)' : 'var(--accent3)';
   const label = worst === 'clean' ? 'GO' : `${redN ? redN + ' red' : ''}${redN && amberN ? ' / ' : ''}${amberN ? amberN + ' amber' : ''}`;
   const title = worst === 'clean'
     ? 'Flight readiness: all checks pass'

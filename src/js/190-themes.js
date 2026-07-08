@@ -4,6 +4,7 @@ const BUILTIN_THEMES={
   default:{name:'Default (Dark)',
     '--bg':'#0a0c10','--panel':'#0f1318','--input':'#0b0e13','--border':'#1e2530','--border-bright':'#2e3d50',
     '--accent':'#00c8ff','--accent2':'#ff6b35','--accent3':'#7fff6b',
+    '--danger':'#ff4444','--warn':'#ffb020',
     '--text':'#c8d8e8','--text-dim':'#5a7080','--text-bright':'#e8f4ff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
     '--nm-bg':'#080a0e','--nm-earth':'#44b06a','--nm-lunar':'#7888c8','--nm-interp':'#cc5040',
@@ -13,6 +14,7 @@ const BUILTIN_THEMES={
   perigee:{name:'Perigee',
     '--bg':'#3b393a','--panel':'#2e2c2d','--input':'#3a3739','--border':'#524f50','--border-bright':'#6e6b6c',
     '--accent':'#88c657','--accent2':'#c6a057','--accent3':'#b0e080',
+    '--danger':'#b8564a','--warn':'#c6a057',
     '--text':'#e7e8ea','--text-dim':'#a7a6a4','--text-bright':'#ffffff',
     '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
     '--nm-bg':'#282628','--nm-earth':'#5db877','--nm-lunar':'#8890bc','--nm-interp':'#b85848',
@@ -27,7 +29,11 @@ function getTheme(key){return customThemes[key]||BUILTIN_THEMES[key]||BUILTIN_TH
 function applyTheme(key){
   activeThemeKey=key;
   const t=getTheme(key);
+  const fallback=BUILTIN_THEMES.default;
   Object.entries(t).forEach(([k,v])=>{if(k.startsWith('--'))document.documentElement.style.setProperty(k,v);});
+  // Guard: legacy custom theme files predating --danger/--warn shouldn't leave
+  // those seeds unset (would break derived --danger-tint/etc in styles.css).
+  ['--danger','--warn'].forEach(k=>{if(!t[k])document.documentElement.style.setProperty(k,fallback[k]);});
   document.body.style.backgroundImage='none';
   const sel=document.getElementById('theme-select');
   if(sel){for(const o of sel.options){if(o.value===key){sel.value=key;break;}}}

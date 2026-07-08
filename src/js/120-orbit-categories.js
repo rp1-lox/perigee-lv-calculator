@@ -23,7 +23,7 @@ function buildOrbitCategories(){
     if(onDel){
       const x=document.createElement('button');
       x.className='orbit-btn';
-      x.style.cssText='flex:none;width:22px;padding:4px 3px;color:#ff4444;border-color:rgba(255,68,68,.4);font-size:13px;';
+      x.style.cssText='flex:none;width:22px;padding:4px 3px;color:var(--danger);border-color:color-mix(in srgb, var(--danger) 40%, transparent);font-size:13px;';
       x.textContent='×';x.title='Remove from list';x.onclick=onDel;
       wrap.appendChild(x);
     }

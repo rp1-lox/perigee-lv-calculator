@@ -194,7 +194,7 @@ function tsRenderForm(){
         </div>
         <div id="ts-cmp-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       </div>
-      <div id="ts-error" style="color:#ff4444;font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
+      <div id="ts-error" style="color:var(--danger);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div id="ts-note" style="color:var(--text-dim);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div id="ts-progress" style="color:var(--text-dim);font-family:var(--mono);font-size:10px;margin-bottom:8px;"></div>
       <div class="ts-chart-card" id="ts-chart-wrap"></div>

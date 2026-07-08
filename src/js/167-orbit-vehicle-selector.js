@@ -43,7 +43,7 @@ function orbVehRenderSelectorBar(){
       style="font-family:var(--mono);font-size:11px;background:var(--panel);color:var(--text-bright);border:1px solid var(--border-bright);padding:5px 8px;max-width:260px;">
       ${_orbVehSelectorOptionsHTML()}
     </select>
-    ${_orbVehSel ? `<span style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 9px;border:1px solid var(--accent);color:var(--accent);background:rgba(136,198,87,.08);">LIBRARY: ${_orbVehEsc(_orbVehSel.name)}</span>` : ''}
+    ${_orbVehSel ? `<span style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:3px 9px;border:1px solid var(--accent);color:var(--accent);background:var(--accent-tint);">LIBRARY: ${_orbVehEsc(_orbVehSel.name)}</span>` : ''}
   `;
   const sel = document.getElementById('orb-veh-select');
   if (sel) sel.value = selVal;

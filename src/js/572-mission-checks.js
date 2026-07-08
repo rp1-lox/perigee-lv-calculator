@@ -259,7 +259,7 @@ function _missionChecksSeverityIcon(sev) {
   return sev === 'red' ? '&#9679;' : sev === 'amber' ? '&#9650;' : '&#8226;';
 }
 function _missionChecksSeverityColor(sev) {
-  return sev === 'red' ? 'var(--error,#e06c75)' : sev === 'amber' ? 'var(--accent2)' : 'var(--text-dim)';
+  return sev === 'red' ? 'var(--danger)' : sev === 'amber' ? 'var(--accent2)' : 'var(--text-dim)';
 }
 
 function missionToggleChecksInfo(missionId) {
@@ -298,7 +298,7 @@ function _missionChecksBoxHTML(m) {
   const topFindings = findings.filter(f => f.severity !== 'info');
 
   const badge = (redN || amberN)
-    ? `${redN ? `<span class="mcc-check-badge" style="color:var(--error,#e06c75);border-color:var(--error,#e06c75);">${redN} red</span>` : ''}${amberN ? `<span class="mcc-check-badge" style="color:var(--accent2);border-color:var(--accent2);">${amberN} amber</span>` : ''}`
+    ? `${redN ? `<span class="mcc-check-badge" style="color:var(--danger);border-color:var(--danger);">${redN} red</span>` : ''}${amberN ? `<span class="mcc-check-badge" style="color:var(--accent2);border-color:var(--accent2);">${amberN} amber</span>` : ''}`
     : `<span class="mcc-check-badge mcc-check-go">GO</span>`;
 
   const evCount = (m._expanded || m.log || []).length;
@@ -336,7 +336,7 @@ function _missionChecksToolbarChipHTML(m) {
   const amberN = findings.filter(f => f.severity === 'amber').length;
   const worst = redN ? 'red' : amberN ? 'amber' : 'clean';
   const icon = worst === 'red' ? '&#9679;' : worst === 'amber' ? '&#9650;' : '&#10003;';
-  const color = worst === 'red' ? 'var(--error,#e06c75)' : worst === 'amber' ? 'var(--accent2)' : 'var(--accent3)';
+  const color = worst === 'red' ? 'var(--danger)' : worst === 'amber' ? 'var(--accent2)' : 'var(--accent3)';
   const label = worst === 'clean' ? 'GO' : `${redN ? redN + ' red' : ''}${redN && amberN ? ' / ' : ''}${amberN ? amberN + ' amber' : ''}`;
   const title = worst === 'clean'
     ? 'Flight readiness: all checks pass'

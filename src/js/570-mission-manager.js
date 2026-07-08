@@ -2125,7 +2125,7 @@ function missionDropStage(missionId, stageDefId) {
 }
 
 function _missionBurnLogCardHTML(entry) {
-  const statusColor = entry.result === 'SUCCESS' ? 'var(--accent3)' : entry.result === 'MARGINAL' ? 'var(--accent2)' : 'var(--error,#e06c75)';
+  const statusColor = entry.result === 'SUCCESS' ? 'var(--accent3)' : entry.result === 'MARGINAL' ? 'var(--accent2)' : 'var(--danger)';
   const o   = entry.orbitAfter || {};
   const stateKV = (k, v) => `<div class="mission-state-kv"><span class="mission-state-key">${k}</span><span class="mission-state-val">${v}</span></div>`;
   const warns = (entry.warnings || []).map(w => `<div style="color:var(--accent2);font-family:var(--mono);font-size:9px;">${w}</div>`).join('');
@@ -2451,7 +2451,7 @@ function _missionSeparateLogCardHTML(entry) {
   if (entry.result !== 'SUCCESS') {
     const w = (entry.warnings || []).join('; ');
     return `<div class="mission-log-card" style="padding:8px 14px;">
-      <span class="mission-log-type" style="color:var(--error,#e06c75)">SEPARATE FAILED</span>
+      <span class="mission-log-type" style="color:var(--danger)">SEPARATE FAILED</span>
       <div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">${w || 'Separation failed'}</div>
     </div>`;
   }
@@ -2469,7 +2469,7 @@ function _missionDockLogCardHTML(entry) {
   if (entry.result !== 'SUCCESS') {
     const w = (entry.warnings || []).join('; ');
     return `<div class="mission-log-card" style="padding:8px 14px;">
-      <span class="mission-log-type" style="color:var(--error,#e06c75)">DOCK FAILED</span>
+      <span class="mission-log-type" style="color:var(--danger)">DOCK FAILED</span>
       <div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">${w || 'Docking failed'}</div>
     </div>`;
   }
@@ -2509,12 +2509,12 @@ function _missionMultiVehicleHTML(m) {
       const orbitLine = os
         ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
-      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'rgba(136,198,87,.14)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
           <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
           <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${v.name}</span>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${(v.stages || []).length} stages</span>
-          ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--error,#e06c75)">${v.status}</span>` : ''}
+          ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">${v.status}</span>` : ''}
         </div>
         ${orbitLine ? `<div>${orbitLine}</div>` : ''}
         <div style="display:flex;gap:12px;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
@@ -2571,12 +2571,12 @@ function _missionMultiVehicleHTML(m) {
       ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;</span>`
       : '';
     // whole row is clickable to make this the active vehicle; active = green
-    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'rgba(136,198,87,.14)' : 'transparent'};cursor:pointer;">
+    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
         <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
         <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${_missionVehicleDisplayName(fv)}</span>
         <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${fv.stages.length} stages</span>
-        ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--error,#e06c75)">EXPENDED</span>' : ''}
+        ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">EXPENDED</span>' : ''}
         <button class="act-btn" style="padding:2px 6px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionRenameVehicle('${id}','${fv._originKey || ''}')" title="Rename this vehicle">✎</button>
         <button class="act-btn" style="padding:2px 8px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionExecExpendVehicle('${id}','${vid}')"${expended ? ' disabled' : ''}>Expend</button>
       </div>

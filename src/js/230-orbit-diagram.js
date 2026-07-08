@@ -261,7 +261,7 @@ function buildSiteSelector(){
       wrap.appendChild(btn);
       const del=document.createElement('button');
       del.className='site-btn';
-      del.style.cssText='flex:none;width:18px;padding:2px 3px;color:#ff6666;border-color:rgba(255,80,80,.3);font-size:11px;';
+      del.style.cssText='flex:none;width:18px;padding:2px 3px;color:var(--danger-bright);border-color:color-mix(in srgb, var(--danger) 30%, transparent);font-size:11px;';
       del.textContent='×';del.title='Remove';
       del.onclick=e=>{e.stopPropagation();deleteUserSpaceport(sp._uid);};
       wrap.appendChild(del);uRow.appendChild(wrap);

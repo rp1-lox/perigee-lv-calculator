@@ -161,14 +161,14 @@ function buildStageComposition(){
       const badge=document.createElement('span');
       badge.textContent='½';
       badge.title='Stage-and-a-Half';
-      badge.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:rgba(136,198,87,.12);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';
+      badge.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';
       nameEl.appendChild(badge);
     }
     // Crossfeed / center-throttle badge (booster only) + air-lit indicator for extra groups
     if(isBooster){
       const grp=isExtra?(_extraBoosterGroups[extraIdx]||{}):null;
       const pm=isExtra?(grp.parallelMode||'independent'):(document.getElementById('b_parallel_mode')?.value||'independent');
-      const mkBadge=(txt,title)=>{const b=document.createElement('span');b.textContent=txt;b.title=title;b.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:rgba(136,198,87,.12);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';nameEl.appendChild(b);};
+      const mkBadge=(txt,title)=>{const b=document.createElement('span');b.textContent=txt;b.title=title;b.style.cssText='font-size:9px;font-family:var(--mono);color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);border-radius:2px;padding:1px 4px;flex-shrink:0;letter-spacing:0;';nameEl.appendChild(b);};
       if(pm!=='independent'){
         const thr=Math.round((isExtra?((grp.coreThrottle!=null?grp.coreThrottle:0.57)*100):(parseFloat(document.getElementById('b_core_throttle')?.value)||57)));
         mkBadge(pm==='crossfeed'?'XFEED':(thr+'%'), pm==='crossfeed'?'Crossfeed — boosters feed first stage':('First stage throttled to '+thr+'% during boost'));
@@ -204,7 +204,7 @@ function buildStageComposition(){
       rm.style.cssText='width:32px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-left:none;cursor:pointer;color:var(--text-dim);flex-shrink:0;transition:color .15s;';
       rm.innerHTML='<span style="font-size:11px;line-height:1;">&#x2715;</span>';
       rm.title='Remove this booster group';
-      rm.addEventListener('mouseenter',()=>rm.style.color='var(--error,#e06c75)');
+      rm.addEventListener('mouseenter',()=>rm.style.color='var(--danger)');
       rm.addEventListener('mouseleave',()=>rm.style.color='var(--text-dim)');
       rm.addEventListener('click',e=>{e.stopPropagation();if(typeof boosterGroupRemove==='function')boosterGroupRemove(extraIdx);});
       row.appendChild(rm); wrap.appendChild(row); return wrap;
