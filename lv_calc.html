@@ -5484,6 +5484,30 @@ const BUILTIN_THEMES={
     '--nm-edge':'#5a5758','--nm-edge-act':'#88c657','--nm-node-fill':'#2e2c2d',
     '--nm-label':'#a7a6a4','--nm-pill-bg':'#2e2c2d','--nm-pill-bd':'#524f50','--nm-pill-text':'#a7a6a4',
     '--nm-pal-bg':'#252325','--nm-pal-hdr':'#1e1c1e','--nm-pal-item':'#2e2c2d','--nm-pal-item-act':'#1e2419','--nm-ghost':'#524f50'},
+  // Heritage SpaceX logotype palette: Deep Water #005288 + Metallic Silver #A7A9AC on
+  // fairing black. Accent is Deep Water lifted for dark-bg legibility (same ~205° hue).
+  spacex:{name:'SpaceX (Heritage)',
+    '--bg':'#101214','--panel':'#191c1f','--input':'#141619','--border':'#2a2e33','--border-bright':'#41474e',
+    '--accent':'#3d8ec9','--accent2':'#a7a9ac','--accent3':'#8fc1e3',
+    '--danger':'#c9564a','--warn':'#cfa14c',
+    '--text':'#c9ccd0','--text-dim':'#7d8288','--text-bright':'#f2f4f6',
+    '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
+    '--nm-bg':'#0b0d0f','--nm-earth':'#4f9e6e','--nm-lunar':'#8a94b8','--nm-interp':'#b05a4a',
+    '--nm-edge':'#2f353c','--nm-edge-act':'#3d8ec9','--nm-node-fill':'#191c1f',
+    '--nm-label':'#7d8288','--nm-pill-bg':'#191c1f','--nm-pill-bd':'#2a2e33','--nm-pill-text':'#7d8288',
+    '--nm-pal-bg':'#0d0f11','--nm-pal-hdr':'#08090b','--nm-pal-item':'#191c1f','--nm-pal-item-act':'#122433','--nm-ghost':'#2a2e33'},
+  // Blue Origin: feather ultra-blue over deep space navy; cyan secondary keeps chart
+  // series distinguishable within the blue family.
+  blueorigin:{name:'Blue Origin',
+    '--bg':'#0b1226','--panel':'#131c36','--input':'#0e1730','--border':'#25304f','--border-bright':'#39476b',
+    '--accent':'#4d7fff','--accent2':'#22c3dd','--accent3':'#9fb9ff',
+    '--danger':'#e05a5a','--warn':'#e8b04a',
+    '--text':'#d5ddf0','--text-dim':'#8b96b4','--text-bright':'#ffffff',
+    '--mono':"'JetBrains Mono',monospace",'--sans':"'Outfit',sans-serif",
+    '--nm-bg':'#080e1e','--nm-earth':'#4dab74','--nm-lunar':'#8f9dd6','--nm-interp':'#c46a55',
+    '--nm-edge':'#2a3554','--nm-edge-act':'#4d7fff','--nm-node-fill':'#131c36',
+    '--nm-label':'#8b96b4','--nm-pill-bg':'#131c36','--nm-pill-bd':'#25304f','--nm-pill-text':'#8b96b4',
+    '--nm-pal-bg':'#0a0f22','--nm-pal-hdr':'#070b1a','--nm-pal-item':'#131c36','--nm-pal-item-act':'#14264d','--nm-ghost':'#25304f'},
 };;
 let customThemes={};
 let activeThemeKey='perigee';
@@ -18763,6 +18787,7 @@ updateFilterChips();
 loadPersistedUserSpaceports();
 initSiteMap();
 initOrbitDiagram();
+rebuildThemeSelect();   // populate the header select from BUILTIN_THEMES (static HTML lists only two)
 applyTheme('perigee');
 _initVersionUI();
 scEdInit();

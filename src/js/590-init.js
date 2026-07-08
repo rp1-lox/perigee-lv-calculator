@@ -10,6 +10,7 @@ updateFilterChips();
 loadPersistedUserSpaceports();
 initSiteMap();
 initOrbitDiagram();
+rebuildThemeSelect();   // populate the header select from BUILTIN_THEMES (static HTML lists only two)
 applyTheme('perigee');
 _initVersionUI();
 scEdInit();
