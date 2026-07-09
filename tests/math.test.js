@@ -27,6 +27,7 @@ const FILES = [
   'src/js/150-stage-and-a-half.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/385-physics-core.js',
+  'src/js/386-physics-integrator.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/574-trajectory-view.js',
 ];
@@ -74,6 +75,8 @@ const {
   physV3, physAdd, physSub, physScale, physDot, physCross, physMag,
   physOrbitPeriod, physVisViva, physElementsToState, physStateToElements,
   physKeplerPropagate, physBodyStateAt, progStumpffC, progStumpffS,
+  physSoiRadius, physFrameOf, physPatchState, physAccel, physStepFor,
+  physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA })', sandbox);
@@ -806,6 +809,133 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     // velocity is tangential: v . r = 0 for circular rails
     approx('physBodyStateAt: rail velocity perpendicular to radius', physDot(earth.r, earth.v), 0, 1e-3 * physMag(earth.r));
     ok('physBodyStateAt: z components are 0 (coplanar era)', earth.r[2] === 0 && earth.v[2] === 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// physics integrator (P1, 386) — SOI model, frame patching, leapfrog
+// propagation. See PHYSICS_PLAN.md P1 verification list. Tolerances were
+// tuned empirically (2026-07-09, scratch run): two-body phase error
+// ~0.3 km/orbit at 360 steps/orbit; Jacobi drift 7.7e-4 rel over 15 d on a
+// deliberately violent e=0.95 lunar-grazing orbit.
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const muE = PROG_BODIES.Earth.mu, muM = PROG_BODIES.Moon.mu;
+
+  // SOI radii pins
+  approx('physSoiRadius: Moon ~66,183 km', physSoiRadius('Moon'), 66183, 50);
+  approx('physSoiRadius: Earth ~924,600 km', physSoiRadius('Earth'), 924600, 2000);
+  ok('physSoiRadius: Sun infinite', physSoiRadius('Sun') === Infinity);
+  ok('physParentOf: Moon->Earth, Earth->Sun, Sun->null',
+    physParentOf('Moon') === 'Earth' && physParentOf('Earth') === 'Sun' && physParentOf('Sun') === null);
+
+  // frame finding against real rails
+  {
+    const e = physBodyStateAt('Earth', 0), m = physBodyStateAt('Moon', 0);
+    ok('physFrameOf: point 1000 km from Moon -> Moon', physFrameOf(physAdd(m.r, [1000, 0, 0]), 0, {}) === 'Moon');
+    ok('physFrameOf: point 10,000 km from Earth -> Earth', physFrameOf(physAdd(e.r, [10000, 0, 0]), 0, {}) === 'Earth');
+    ok('physFrameOf: deep interplanetary point -> Sun', physFrameOf([2.8e8, 2.8e8, 0], 0, {}) === 'Sun');
+  }
+
+  // SOI patch continuity: Earth frame -> Moon frame -> back is the identity
+  {
+    const st = { r: [300000, 100000, 0], v: [0.5, 0.9, 0] };
+    const toMoon = physPatchState(st, 'Earth', 'Moon', 12345, {});
+    const back = physPatchState(toMoon, 'Moon', 'Earth', 12345, {});
+    approx('physPatchState: round-trip position identity', physMag(physSub(back.r, st.r)), 0, 1e-9);
+    approx('physPatchState: round-trip velocity identity', physMag(physSub(back.v, st.v)), 0, 1e-12);
+  }
+
+  // step ladder: deterministic quantized values, monotone with radius
+  {
+    const ctx = { center: 'Earth', bodies: ['Earth'] };
+    const dtLeo = physStepFor([6771, 0, 0], ctx), dtGeo = physStepFor([42164, 0, 0], ctx);
+    ok(`physStepFor: LEO=${dtLeo}s on ladder`, [1,4,16,64,256,1024,4096,16384,65536].includes(dtLeo));
+    ok('physStepFor: coarser at GEO than LEO', dtGeo > dtLeo);
+  }
+
+  // two-body limit: leapfrog vs analytic Kepler, 20 LEO orbits
+  {
+    const st0 = physElementsToState({ a: 6771, e: 0.001, i: 0, raan: 0, argp: 0, nu: 0 }, muE);
+    const T = physOrbitPeriod(6771, muE);
+    const ctx = { center: 'Earth', bodies: ['Earth'] };
+    const res = physPropagateSegment(st0, 0, 20 * T, ctx, { maxSamples: 8 });
+    const ref = physKeplerPropagate(st0.r, st0.v, res.tF, muE);
+    const posErr = physMag(physSub(res.stateF.r, ref.r));
+    ok(`integrator two-body limit: 20-orbit position error ${posErr.toFixed(2)} km < 10 km`, posErr < 10);
+    const e0 = physStateToElements(st0.r, st0.v, muE), eF = physStateToElements(res.stateF.r, res.stateF.v, muE);
+    ok(`integrator two-body limit: energy drift rel ${(Math.abs(eF.energy - e0.energy) / Math.abs(e0.energy)).toExponential(1)} < 1e-12 (symplectic)`,
+      Math.abs(eF.energy - e0.energy) < 1e-12 * Math.abs(e0.energy));
+  }
+
+  // Jacobi constant, consistent synthetic rails (true CR3BP in relative form)
+  {
+    const d = 384400;
+    const om = Math.sqrt((muE + muM) / (d * d * d)); // consistent: om^2 d^3 = mu1+mu2
+    const railFn = (body, t) => {
+      if (body === 'Earth') return { r: [0, 0, 0], v: [0, 0, 0] };
+      if (body === 'Moon') {
+        const th = om * (t || 0);
+        return { r: [d * Math.cos(th), d * Math.sin(th), 0], v: [-d * om * Math.sin(th), d * om * Math.cos(th), 0] };
+      }
+      return { r: [1e12, 1e12, 0], v: [0, 0, 0] }; // park everything else far away
+    };
+    const jacobi = (st, t) => {
+      const th = om * t, f = muM / (muE + muM);
+      const rE = [-f * d * Math.cos(th), -f * d * Math.sin(th), 0];
+      const vE = [f * d * om * Math.sin(th), -f * d * om * Math.cos(th), 0];
+      const rB = physAdd(st.r, rE), vB = physAdd(st.v, vE);
+      const c = Math.cos(-th), s = Math.sin(-th);
+      const x = c * rB[0] - s * rB[1], y = s * rB[0] + c * rB[1];
+      const vx = c * vB[0] - s * vB[1], vy = s * vB[0] + c * vB[1];
+      const vrx = vx + om * y, vry = vy - om * x;
+      const r1 = physMag(st.r), r2 = physMag(physSub(st.r, railFn('Moon', t).r));
+      return om * om * (x * x + y * y) + 2 * (muE / r1 + muM / r2) - (vrx * vrx + vry * vry);
+    };
+    const st0 = physElementsToState({ a: 200000, e: 0.95, i: 0, raan: 0, argp: 0.5, nu: 0.2 }, muE);
+    const ctx = { center: 'Earth', bodies: ['Earth', 'Moon'], railFn };
+    const C0 = jacobi(st0, 0);
+    let st = st0, t = 0, maxRel = 0;
+    for (let k = 0; k < 14 && physFrameOf(st.r, t, {}, railFn) === 'Earth'; k++) {
+      const res = physPropagateSegment(st, t, t + 86400, ctx, { maxSamples: 4, handoff: false });
+      st = res.stateF; t = res.tF;
+      if (res.frame !== 'Earth') break;
+      maxRel = Math.max(maxRel, Math.abs(jacobi(st, t) - C0) / Math.abs(C0));
+    }
+    ok(`integrator CR3BP: Jacobi constant drift ${maxRel.toExponential(1)} < 2e-3 over ${(t / 86400).toFixed(0)} d (e=0.95 lunar-grazing)`, maxRel < 2e-3 && t > 5 * 86400);
+  }
+
+  // GOLDEN FREE RETURN (real rails): TLI from 185 km LEO, apogee 455,000 km,
+  // burn-point angle 4.5379 rad (seed found by scan, 2026-07-09) -> transits
+  // the Moon's SOI and returns to an Earth perigee at ~62 km altitude.
+  {
+    const rp = PROG_BODIES.Earth.R + 185;
+    const apo = 455000, phi = 4.5379;
+    const a = (rp + apo) / 2;
+    const vP = Math.sqrt(muE * (2 / rp - 1 / a));
+    const st0 = { r: [rp * Math.cos(phi), rp * Math.sin(phi), 0], v: [-vP * Math.sin(phi), vP * Math.cos(phi), 0] };
+    const ctx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] };
+    const res = physPropagateSegment(st0, 0, 12 * 86400, ctx, { maxSamples: 64 });
+    const soiIn = res.events.find(e => e.type === 'soi' && e.to === 'Moon');
+    const soiOut = res.events.find(e => e.type === 'soi' && e.from === 'Moon');
+    ok('free return: enters then exits the Moon SOI', !!soiIn && !!soiOut && soiOut.t > soiIn.t);
+    const peri = res.events.filter(e => e.type === 'periapsis' && e.frame === 'Earth' && soiOut && e.t > soiOut.t);
+    ok('free return: post-flyby Earth periapsis exists', peri.length > 0);
+    if (peri.length) {
+      const hPeri = peri[0].rMag - PROG_BODIES.Earth.R;
+      ok(`free return: return perigee altitude ${hPeri.toFixed(0)} km within [0, 2000] km band`, hPeri >= 0 && hPeri <= 2000);
+    }
+    // determinism: an identical second run is bit-identical
+    const res2 = physPropagateSegment(st0, 0, 12 * 86400, ctx, { maxSamples: 64 });
+    ok('determinism: identical runs produce identical samples + events',
+      JSON.stringify(res.samples) === JSON.stringify(res2.samples) && JSON.stringify(res.events) === JSON.stringify(res2.events));
+  }
+
+  // event bisection
+  {
+    const t = physFindEventTime(x => x - 42.5, 0, 100, 1e-6);
+    approx('physFindEventTime: locates crossing', t, 42.5, 1e-4);
   }
 }
 

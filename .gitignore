@@ -1,5 +1,7 @@
 # Local backups (not for the repo)
 *.bak
+# Debug build artifact (python build.py --debug) — dev-only, never deploy
+lv_calc.debug.html
 lv_calc.html.premerge
 lv_calc.html.pre-refactor
 lv_calc.html.clean-bak
