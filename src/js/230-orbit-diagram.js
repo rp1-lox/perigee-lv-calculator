@@ -6,7 +6,10 @@
 // c = a - r_peri) so the ellipse math is identical to the big view — this
 // panel is deliberately a smaller, non-interactive SVG rendering of the same
 // geometry, not a reimplementation.
-const _OD_VB = 300; // SVG viewBox is 0..300 square; origin translated to center
+// viewBox matches the panel's rendered aspect (~1.1/1, see #orbit-diagram in
+// styles.css) so font-size units map directly to rendered px without a
+// stretch-distortion correction: width slightly wider than height.
+const _OD_VBW = 330, _OD_VBH = 300;
 
 function initOrbitDiagram(){
   const host=document.getElementById('orbit-diagram');
@@ -46,7 +49,7 @@ function drawOrbitDiagram(){
 
   // ── scale: fit content to viewBox, matching the auto-fit spirit of 574's
   // _trajFitScale (linear true scale, headroom margin) ──
-  const margin=34; // px headroom for labels
+  const margin=40; // px headroom for labels (viewBox units == rendered px, see #orbit-diagram CSS aspect-ratio match)
   let maxR;
   if(isEsc){
     maxR=r_park*2.4; // parking ring + a bit of departure-curve headroom
@@ -54,7 +57,7 @@ function drawOrbitDiagram(){
     const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
     maxR=Math.max(r_park,rApo,rPeri);
   }
-  const scale=(_OD_VB/2-margin)/Math.max(1,maxR);
+  const scale=(_OD_VBH/2-margin)/Math.max(1,maxR);
 
   const cs=getComputedStyle(document.documentElement);
   const v=name=>cs.getPropertyValue(name).trim();
@@ -65,22 +68,23 @@ function drawOrbitDiagram(){
   const warnColor='var(--warn)';
 
   let out='';
-  // Earth disc
-  const eR=Math.max(R_e*scale,4);
-  out+=`<circle cx="0" cy="0" r="${eR.toFixed(2)}" fill="${earthColor}" stroke="var(--border-bright)" stroke-width="0.6"/>`;
-  out+=`<text x="0" y="${(eR+10).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="7" fill="${dimColor}">Earth</text>`;
+  // Earth disc — min ~8 viewBox-units (== ~8px rendered, since the viewBox
+  // matches the panel's rendered aspect 1:1 — see #orbit-diagram CSS).
+  const eR=Math.max(R_e*scale,8);
+  out+=`<circle cx="0" cy="0" r="${eR.toFixed(2)}" fill="${earthColor}" stroke="var(--border-bright)" stroke-width="1.2"/>`;
+  out+=`<text x="0" y="${(eR+13).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${dimColor}">Earth</text>`;
 
-  // Parking orbit ring (thin, dim, dashed)
+  // Parking orbit ring (thin, dim, dashed) — label nudged bottom-left per brief
   const rParkPx=r_park*scale;
-  out+=`<circle cx="0" cy="0" r="${rParkPx.toFixed(2)}" fill="none" stroke="${dimColor}" stroke-width="0.7" stroke-dasharray="3,3" opacity="0.7"/>`;
-  out+=`<text x="0" y="${(-rParkPx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${dimColor}">PARK ${_odFmtAlt(r_park,R_e)}</text>`;
+  out+=`<circle cx="0" cy="0" r="${rParkPx.toFixed(2)}" fill="none" stroke="${dimColor}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.7"/>`;
+  out+=`<text x="${(-rParkPx*0.7).toFixed(2)}" y="${(rParkPx*0.7+12).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${dimColor}">PARK ${_odFmtAlt(r_park,R_e)}</text>`;
 
   if(isEsc){
     // Escape mode: schematic outgoing hyperbolic-suggestive open curve.
     // Honest-not-precise: a dashed arc bending outward from the parking ring,
     // annotated with the C3 value, not a rigorously solved hyperbola.
     const th0=-40*Math.PI/180, th1=70*Math.PI/180;
-    const rEndPx=Math.min(_OD_VB/2-14, rParkPx*1.9+30);
+    const rEndPx=Math.min(_OD_VBH/2-16, rParkPx*1.9+30);
     const p0={x:rParkPx*Math.cos(th0),y:-rParkPx*Math.sin(th0)};
     const p1={x:rEndPx*Math.cos(th1),y:-rEndPx*Math.sin(th1)};
     const cxp=(p0.x+p1.x)/2 + 40, cyp=(p0.y+p1.y)/2 - 20;
@@ -92,9 +96,9 @@ function drawOrbitDiagram(){
     const a2={x:p1.x-ah*Math.cos(ang+0.4),y:p1.y-ah*Math.sin(ang+0.4)};
     out+=`<path d="M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a1.x.toFixed(2)} ${a1.y.toFixed(2)} M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a2.x.toFixed(2)} ${a2.y.toFixed(2)}" stroke="${accent2}" stroke-width="1.6" fill="none"/>`;
     out+=`<circle cx="${p0.x.toFixed(2)}" cy="${p0.y.toFixed(2)}" r="2.6" fill="${accent}"/>`;
-    out+=`<text x="${p0.x.toFixed(2)}" y="${(p0.y-7).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${accent}">Injection</text>`;
+    out+=`<text x="${p0.x.toFixed(2)}" y="${(p0.y-9).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${accent}">Injection</text>`;
     const c3Txt=`C3 = ${c3v>=0?'+':''}${c3v.toFixed(1)} km²/s²`;
-    out+=`<text x="${(-_OD_VB/2+8).toFixed(2)}" y="${(_OD_VB/2-10).toFixed(2)}" font-family="var(--mono)" font-size="6.5" fill="${accent2}">${c3Txt}</text>`;
+    out+=`<text x="${(-_OD_VBW/2+8).toFixed(2)}" y="${(_OD_VBH/2-10).toFixed(2)}" font-family="var(--mono)" font-size="10.5" fill="${accent2}">${c3Txt}</text>`;
   } else {
     const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
     const inc=gn('inclination');
@@ -103,36 +107,54 @@ function drawOrbitDiagram(){
       // Target ≈ parking: single circle only, no transfer arc.
       const rPx=rApo*scale;
       out+=`<circle cx="0" cy="0" r="${rPx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-      out+=`<text x="0" y="${(-rPx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+      out+=`<text x="0" y="${(-rPx-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
     } else {
       // Target ellipse/circle via 574's pure geometry helper.
       const g=_trajEllipseGeom(periAlt,apoAlt,R_e);
       const gCirc=Math.abs(g.rApo-g.rPeri)<Math.max(1,R_e*0.001);
       const gcx=g.c*scale, grx=g.a*scale, gry=g.b*scale;
+      // Redundant-transfer suppression: when the transfer ellipse (parking ->
+      // target apoapsis) ~= the target orbit itself (peri-matched elliptical
+      // target — the classic GTO case, model charges dv2=0), don't draw a
+      // separate dashed transfer arc; the target ring IS the transfer. Draw
+      // only the departure burn dot at perigee. Circular targets are
+      // unaffected (gCirc branch never reaches here with a redundant arc,
+      // since a circular target's peri==apo can't equal r_park unless it's
+      // already caught by the "target≈parking" branch above).
+      const redundant=!gCirc && _trajTransferIsRedundant(Math.min(r_park,rApo),Math.max(r_park,rApo),rPeri,rApo);
       if(gCirc){
         out+=`<circle cx="0" cy="0" r="${grx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-        out+=`<text x="0" y="${(-grx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+        out+=`<text x="0" y="${(-grx-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
       } else {
         out+=`<ellipse cx="${gcx.toFixed(2)}" cy="0" rx="${grx.toFixed(2)}" ry="${gry.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-        out+=`<text x="${gcx.toFixed(2)}" y="${(-gry-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rPeri,R_e)}×${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+        // label nudged to the apogee end (far -x side of the ellipse) so it
+        // doesn't sit on top of the parking-ring / transfer-arc geometry.
+        const labelX=gcx-grx;
+        out+=`<text x="${labelX.toFixed(2)}" y="${(-gry-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rPeri,R_e)}×${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
       }
 
-      // Hohmann transfer arc, parking -> target apoapsis, with 2 burn dots at
-      // the tangent points (periapsis-side and apoapsis-side of the transfer).
-      const arc=_trajTransferArcPath(r_park,rApo,scale,0);
-      out+=`<path d="${arc.d}" fill="none" stroke="${accent2}" stroke-width="1.3" stroke-dasharray="3,2.5" opacity="0.9"/>`;
-      out+=`<circle cx="${arc.depX.toFixed(2)}" cy="${arc.depY.toFixed(2)}" r="2.4" fill="${accent}"/>`;
-      out+=`<circle cx="${arc.arrX.toFixed(2)}" cy="${arc.arrY.toFixed(2)}" r="2.4" fill="${accent}"/>`;
+      if(!redundant){
+        // Hohmann transfer arc, parking -> target apoapsis, with 2 burn dots at
+        // the tangent points (periapsis-side and apoapsis-side of the transfer).
+        const arc=_trajTransferArcPath(r_park,rApo,scale,0);
+        out+=`<path d="${arc.d}" fill="none" stroke="${accent2}" stroke-width="1.3" stroke-dasharray="3,2.5" opacity="0.9"/>`;
+        out+=`<circle cx="${arc.depX.toFixed(2)}" cy="${arc.depY.toFixed(2)}" r="2.6" fill="${accent}"/>`;
+        out+=`<circle cx="${arc.arrX.toFixed(2)}" cy="${arc.arrY.toFixed(2)}" r="2.6" fill="${accent}"/>`;
+      } else {
+        // Just the departure burn dot at perigee — the target ellipse IS the transfer.
+        const depX=rPeri*scale, depY=0;
+        out+=`<circle cx="${depX.toFixed(2)}" cy="${depY.toFixed(2)}" r="2.6" fill="${accent}"/>`;
+      }
     }
 
-    out+=`<text x="${(-_OD_VB/2+8).toFixed(2)}" y="${(_OD_VB/2-10).toFixed(2)}" font-family="var(--mono)" font-size="6" fill="${dimColor}">coplanar · inc annotated</text>`;
+    out+=`<text x="${(-_OD_VBW/2+8).toFixed(2)}" y="${(_OD_VBH/2-10).toFixed(2)}" font-family="var(--mono)" font-size="10" fill="${dimColor}">coplanar · inc annotated</text>`;
   }
 
   if(warn){
-    out+=`<text x="0" y="${(_OD_VB/2-22).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${warnColor}">${warn}</text>`;
+    out+=`<text x="0" y="${(_OD_VBH/2-26).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
   }
 
-  host.innerHTML=`<svg viewBox="-${_OD_VB/2} -${_OD_VB/2} ${_OD_VB} ${_OD_VB}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`;
+  host.innerHTML=`<svg viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`;
 }
 
 let activeSiteKey=null;
