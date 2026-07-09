@@ -140,8 +140,31 @@ function _trajCamCenterKm(cam, viewT, overrides) {
 function _trajFitWKmForBody(body, m) {
   let staticR;
   if (body === 'Sun') {
+    // Mission-aware solar fit: fitting the FULL system (out to Neptune) put
+    // any realistic mission's geometry in the inner ~5% of the view, below
+    // every LOD window — "fly to Sun" showed empty space. Frame the outermost
+    // heliocentric ring the mission actually touches instead (Earth's ring is
+    // the floor — every mission departs it); no mission -> full system.
     const rs = Object.values(PROG_HELIO_R);
-    staticR = rs.length ? Math.max(...rs) * 1.15 : 1e9;
+    const fullR = rs.length ? Math.max(...rs) * 1.15 : 1e9;
+    let missionHelioR = 0;
+    if (m) {
+      const frames = _trajGetExtraction(m);
+      Object.keys(frames).forEach(frameId => {
+        const sc = frames[frameId];
+        const touched = sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length);
+        if (!touched) return;
+        const parent = (PROG_MOON_ORBITS[frameId] && PROG_MOON_ORBITS[frameId].parent) || frameId;
+        if (PROG_HELIO_R[parent] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[parent]);
+        (sc.legs || []).forEach(leg => {
+          [leg.fromO, leg.toO].forEach(o => {
+            if (o && o.type === 'transit' && PROG_HELIO_R[o.destination] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[o.destination]);
+          });
+        });
+      });
+      if (missionHelioR > 0 && PROG_HELIO_R.Earth) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R.Earth);
+    }
+    staticR = missionHelioR > 0 ? missionHelioR * 1.3 : fullR;
   } else {
     const moons = _trajMoonsOf(body);
     if (moons.length) {
@@ -630,7 +653,7 @@ const _TRAJ_LOD_RING_MIN = 40, _TRAJ_LOD_BODY_MIN = 10, _TRAJ_LOD_BURN_MIN = 60;
 // embedded in a planet's neighborhood) uses EITHER its own window OR
 // inherits its parent group's resolved alpha, never both multiplied.
 const _TRAJ_LOD_WIN = {
-  heliocentricRing: [8, 15],       // × viewport diagonal at hi (see _trajWindowHi)
+  heliocentricRing: [3, 15],       // × viewport diagonal at hi (see _trajWindowHi); lo=3px so inner-planet rings survive full-system zoom
   moonRing:         [10, 15],
   missionOrbitRing: [12, 15],
   transferArc:      [10, 15],
@@ -1057,8 +1080,17 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     const legState = !hasTOF ? 'planned' : (leg.metArrive <= vt ? 'history' : (leg.met <= vt ? 'current' : 'planned'));
     const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
     if (isSun) {
-      const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
-      const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
+      // A transit orbit's `body` is 'Sun' (the frame it lives in) — its ring
+      // radius on the heliocentric map comes from its DESTINATION planet, not
+      // its body field. Resolving by body alone made every interplanetary arc
+      // silently bail here (r2 === undefined) — the transit-vs-body split, again.
+      const heliR = o => {
+        if (!o) return null;
+        const key = o.type === 'transit' ? o.destination : o.body;
+        return (key != null && PROG_HELIO_R[key] != null) ? PROG_HELIO_R[key] : null;
+      };
+      const r1 = heliR(leg.fromO);
+      const r2 = heliR(leg.toO);
       if (r1 == null || r2 == null) return;
       // Moon-lead orientation (C2): rotate so the arrival end lands on the
       // DESTINATION BODY'S POSITION AT ARRIVAL TIME (t_arrive), not a
