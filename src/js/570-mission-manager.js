@@ -1070,7 +1070,8 @@ function _missionEventDetailHTML(m, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${o.body||''}</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${(o.alt_km||0).toLocaleString()} km${o.apo_km&&o.apo_km!==o.alt_km?' × '+o.apo_km.toLocaleString():''}</span></div>`;
   } else if (e.type === 'MANEUVER') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Route</span><span class="mission-state-val">${e.fromLabel||''} → ${e.toLabel||''}</span></div>
+    const porkChip = (typeof progPorkChipHTML === 'function') ? progPorkChipHTML(id, idx, e.toNode) : '';
+    fields = `<div class="mission-state-kv"><span class="mission-state-key">Route</span><span class="mission-state-val">${e.fromLabel||''} → ${e.toLabel||''}${porkChip?' '+porkChip:''}</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${e.dv!=null?e.dv.toLocaleString()+' m/s':'n/a'}${e.dvOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>
       ${e.prop_consumed?`<div class="mission-state-kv"><span class="mission-state-key">Prop used</span><span class="mission-state-val">${Math.round(e.prop_consumed).toLocaleString()} kg</span></div>`:''}
       ${(e.firingStageId||e.firedStageId)?`<div class="mission-state-kv"><span class="mission-state-key">Firing stage</span><span class="mission-state-val">${_missionStageLabelById(e.firingStageId||e.firedStageId)}</span></div>`:''}
@@ -1133,6 +1134,7 @@ function _missionEventDetailHTML(m, idx) {
           <div class="cfg-item"><label class="cfg-label">To</label>
             <select id="edit-mv-to-${id}" style="${_selStyle}">${_opt(e.toNode)}</select></div>
         </div>
+        <div style="margin-bottom:8px;">${(typeof progPorkButtonHTML === 'function') ? progPorkButtonHTML(id, idx, e.toNode) : ''}</div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// edit the burn/separate steps on the maneuver card itself</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyManeuverEdit('${id}',${idx})">Apply</button>
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-start;margin-top:10px;">
@@ -3132,6 +3134,16 @@ function missionMvStep(id, token, op, a, b, c) {
 }
 function missionMvRefreshSteps(id) { const el = document.getElementById('mv-steps-' + id); if (el) el.innerHTML = _missionMvBuilderHTML(id, 'add'); }
 
+// Re-render the "Launch window..." button in the Add-Event maneuver form when
+// the To-node selection changes (destination may switch between porkchop-
+// supported / unsupported / non-interplanetary).
+function progPorkRefreshAddEvBtn(id) {
+  const el = document.getElementById('pork-addev-btn-' + id);
+  const toSel = document.getElementById('addev-mvt-' + id);
+  if (!el || !toSel || typeof progPorkButtonHTML !== 'function') return;
+  el.innerHTML = progPorkButtonHTML(id, -1, toSel.value);
+}
+
 // The step-builder UI (shared by the add form and an expanded maneuver card).
 function _missionMvBuilderHTML(id, token) {
   const ctx = _missionMvCtx(id, token); if (!ctx) return '';
@@ -3267,11 +3279,13 @@ function _missionManeuverLogCardHTML(entry, id, idx) {
   const marginal = entry.result === 'MARGINAL' ? `<div style="color:var(--accent2);font-family:var(--mono);font-size:9px;margin-top:3px;">⚠ short — only ${Math.round(entry.dvDelivered||0).toLocaleString()} of ${Math.round(entry.dvRequired||0).toLocaleString()} m/s delivered</div>` : '';
   // editable step builder (bound to this event by its index)
   const builder = (id != null && idx != null) ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">${_missionMvBuilderHTML(id, String(idx))}</div>` : '';
+  const porkChip = (id != null && idx != null && typeof progPorkChipHTML === 'function') ? progPorkChipHTML(id, idx, entry.toNode) : '';
   return `<div class="mission-log-card">
     <div class="mission-log-header">
       <span class="mission-log-type">MANEUVER</span>
       ${statusChip}
       <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.fromLabel} → ${entry.toLabel}</span>
+      ${porkChip}
     </div>
     <div class="mission-state-grid">
       ${reqDisplay}
@@ -3642,8 +3656,10 @@ function _missionAddEventHTML(m) {
   } else if (_missionAddEvt === 'maneuver') {
     const nodes = _missionNmNodes();
     const o = nodes.map(n=>`<option value="${n.id}">${n.label}${n.sub?' ('+n.sub+')':''}</option>`).join('');
+    const addevToId = 'addev-mvt-' + id;
     form = `<label class="cfg-label">From</label><select id="addev-mvf-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionMvRefreshSteps('${id}')">${o}</select>
-      <label class="cfg-label">To</label><select id="addev-mvt-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionMvRefreshSteps('${id}')">${o}</select>
+      <label class="cfg-label">To</label><select id="${addevToId}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionMvRefreshSteps('${id}');progPorkRefreshAddEvBtn('${id}')">${o}</select>
+      <div id="pork-addev-btn-${id}" style="margin-bottom:6px;">${(typeof progPorkButtonHTML === 'function') ? progPorkButtonHTML(id, -1, document.getElementById(addevToId) ? document.getElementById(addevToId).value : (nodes[0] && nodes[0].id)) : ''}</div>
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
