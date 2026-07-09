@@ -10,10 +10,14 @@
 const PROG_PORK_MU = 1.32712440018e11;   // km³/s² — Sun
 
 // Planet data.  theta0_rad chosen so optimal (Hohmann) departure ≈ T+0.
+// theta0_rad now READS from the single-source PROG_BODY_KINEMATICS map (360)
+// — these ARE the calibrated values (Earth/Mars/Venus theta0 in that table
+// were taken FROM here originally; see 360's comment). Kept as a literal
+// fallback so this module still works if 360 loads after it or is absent.
 const PROG_PORK_DATA = {
-  Earth: { period_d: 365.256, r_km: 149597870.7, theta0_rad: 0       },
-  Mars:  { period_d: 686.971, r_km: 227939200,   theta0_rad: 0.7729  }, // 44.3°
-  Venus: { period_d: 224.701, r_km: 108208930,   theta0_rad: 5.3390  }, // 305.9°
+  Earth: { period_d: 365.256, r_km: 149597870.7, theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Earth.theta0_rad : 0)      },
+  Mars:  { period_d: 686.971, r_km: 227939200,   theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Mars.theta0_rad  : 0.7729) }, // 44.3°
+  Venus: { period_d: 224.701, r_km: 108208930,   theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Venus.theta0_rad : 5.3390) }, // 305.9°
 };
 
 // ── Stumpff functions ─────────────────────────────────────────────────────────

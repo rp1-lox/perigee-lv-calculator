@@ -765,6 +765,25 @@ function _trajPlanetAngle(body) {
   return (i / bodies.length) * 360 - 90;
 }
 
+// ── C1a: view time + live body angles ──────────────────────────────────────
+// Seconds-since-epoch used to place body glyphs. Mirrors the state panel's
+// "state AS OF this event" semantics (_missionSelectedEventSnapshotEntry,
+// 570): selected event's post-event time (metStart + durationUsed), else
+// mission end (m._metTotal), else 0. Guards NaN/undefined.
+function _trajViewTime(m) {
+  if (!m) return 0;
+  const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
+  if (sel && sel.entry) {
+    const ms = sel.entry.metStart, du = sel.entry.durationUsed;
+    if (typeof ms === 'number' && !isNaN(ms)) {
+      const t = ms + (typeof du === 'number' && !isNaN(du) ? du : 0);
+      if (!isNaN(t)) return t;
+    }
+  }
+  if (typeof m._metTotal === 'number' && !isNaN(m._metTotal)) return m._metTotal;
+  return 0;
+}
+
 // ── SVG builders (WORLD layer — geometry only) ────────────────────────────
 // Fixed viewBox; scale factors computed per scene so the ring set fits with
 // headroom, then the wheel/drag zoom multiplies on top via the viewBox camera
@@ -813,9 +832,10 @@ function _trajSunSceneSVG(m, zoom) {
   const staticMaxR = Math.max(...bodies.map(b => PROG_HELIO_R[b]));
   const missionMaxR = m ? _trajMissionExtent('SUN', m) : 0;
   const scale = _trajFitScale(staticMaxR, missionMaxR);
+  const viewT = _trajViewTime(m);
   const rings = bodies.map((b, i) => {
     const rr = PROG_HELIO_R[b] * scale;
-    const ang = (i / bodies.length) * 2 * Math.PI - Math.PI / 2; // spread angles so labels don't collide
+    const ang = progBodyAngleAt(b, viewT); // C1a: live phase angle (defaults to today's schematic spread at t=0)
     const cx = rr * Math.cos(ang), cy = rr * Math.sin(ang);
     const color = _trajBodyColor(b);
     return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
@@ -831,11 +851,14 @@ function _trajBodySceneSVG(body, m, zoom) {
   const staticMaxR = moons.length ? Math.max(...moons.map(mo => mo.r)) : R * 4;
   const missionMaxR = m ? _trajMissionExtent(body, m) : 0;
   const scale = _trajFitScale(staticMaxR, missionMaxR);
+  const viewT = _trajViewTime(m);
   const moonRings = moons.map(mo => {
     const rr = mo.r * scale;
     const color = _trajBodyColor(mo.name);
+    const ang = progBodyAngleAt(mo.name, viewT); // C1a: live phase angle (defaults to today's schematic angle 0 at t=0)
+    const cx = rr * Math.cos(ang), cy = rr * Math.sin(ang);
     return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
-      + _trajGlyph(rr, 0, _trajBodyPxR(3, zoom), color, mo.name, zoom, false);
+      + _trajGlyph(cx, cy, _trajBodyPxR(3, zoom), color, mo.name, zoom, false);
   }).join('');
   const bodyTrueR = R * scale;
   const bodyPxR = _trajBodyPxR(bodyTrueR, zoom);

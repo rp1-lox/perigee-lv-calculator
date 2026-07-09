@@ -36,6 +36,71 @@ const PROG_MOON_ORBITS = {
   Titan: { parent: 'Saturn', r: 1221900 },
 };
 
+// ── Body kinematics (C1a) ────────────────────────────────────────────────────
+// Single source of truth for orbital PERIOD (seconds, canonical — kills the
+// seconds-vs-days unit bug class at the source) and phase angle at T=0
+// (theta0_rad) for every body the trajectory view / porkchop plotter draws.
+// A PARALLEL map (not a rework of PROG_HELIO_R) so existing consumers of
+// PROG_HELIO_R as plain numbers (progTransferTOF/TMI/etc.) are untouched.
+//
+// Periods (days -> seconds, ×86400):
+//   Mercury 87.969d, Venus 224.701d, Earth 365.256d, Mars 686.971d,
+//   Jupiter 4332.59d, Saturn 10759.22d, Uranus 30688.5d, Neptune 60182d,
+//   Moon 27.3217d, Titan 15.9454d.
+//
+// theta0_rad:
+//   - Earth/Mars/Venus: taken directly FROM PROG_PORK_DATA (410) — those
+//     values are calibrated so a Hohmann departure lands near day 0. The
+//     porkchop module reads its theta0s from THIS table now (single source);
+//     see 410's PROG_PORK_DATA for the unification.
+//   - All other bodies (planets + Moon/Titan): the CURRENT schematic spread
+//     angles used by 574's Sun scene / body scenes, extracted verbatim so
+//     t=0 renders identically to today.
+//     Sun scene planets: spread evenly over Object.keys(PROG_HELIO_R),
+//     ang = (i/n)*2*Math.PI - Math.PI/2, n = 8 (Mercury..Neptune in
+//     PROG_HELIO_R's declared order).
+//     Moon/Titan (body scene moon rings): schematic angle 0 (drawn at
+//     cx=rr, cy=0 — see _trajBodySceneSVG in 574).
+const PROG_BODY_KINEMATICS = {
+  Mercury: { period_s: 87.969   * 86400, theta0_rad: (0/8) * 2*Math.PI - Math.PI/2 },
+  Venus:   { period_s: 224.701  * 86400, theta0_rad: 5.3390 },                        // porkchop-calibrated
+  Earth:   { period_s: 365.256  * 86400, theta0_rad: 0 },                             // porkchop-calibrated
+  Mars:    { period_s: 686.971  * 86400, theta0_rad: 0.7729 },                        // porkchop-calibrated
+  Jupiter: { period_s: 4332.59  * 86400, theta0_rad: (4/8) * 2*Math.PI - Math.PI/2 },
+  Saturn:  { period_s: 10759.22 * 86400, theta0_rad: (5/8) * 2*Math.PI - Math.PI/2 },
+  Uranus:  { period_s: 30688.5  * 86400, theta0_rad: (6/8) * 2*Math.PI - Math.PI/2 },
+  Neptune: { period_s: 60182    * 86400, theta0_rad: (7/8) * 2*Math.PI - Math.PI/2 },
+  Moon:    { period_s: 27.3217  * 86400, theta0_rad: 0 },
+  Titan:   { period_s: 15.9454  * 86400, theta0_rad: 0 },
+};
+
+/** Body phase angle (radians, normalized to [0, 2π)) at time t_s (seconds since epoch). */
+function progBodyAngleAt(body, t_s) {
+  const k = PROG_BODY_KINEMATICS[body];
+  if (!k) return 0;
+  const t = t_s || 0;
+  let theta = k.theta0_rad + 2 * Math.PI * t / k.period_s;
+  theta = theta % (2 * Math.PI);
+  if (theta < 0) theta += 2 * Math.PI;
+  return theta;
+}
+
+/** Heliocentric world position {x,y} km at time t_s. Sun={0,0}; planets on
+ * their PROG_HELIO_R ring; moons = parent position + moon-ring offset. Pure. */
+function progBodyWorldPos(body, t_s) {
+  if (body === 'Sun') return { x: 0, y: 0 };
+  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
+  if (moonInfo) {
+    const parentPos = progBodyWorldPos(moonInfo.parent, t_s);
+    const theta = progBodyAngleAt(body, t_s);
+    return { x: parentPos.x + moonInfo.r * Math.cos(theta), y: parentPos.y + moonInfo.r * Math.sin(theta) };
+  }
+  const r = PROG_HELIO_R[body];
+  if (r == null) return { x: 0, y: 0 };
+  const theta = progBodyAngleAt(body, t_s);
+  return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
+}
+
 // ── Propellant type registry ────────────────────────────────────────────────
 const PROG_PROPELLANT_TYPES = {
   LOX_LH2:  { boiloff_rate: 0.0030, label: 'LOX/LH2',         cryo: true      },

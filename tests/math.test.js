@@ -26,6 +26,7 @@ const FILES = [
   'src/js/145-dest-dv.js',
   'src/js/150-stage-and-a-half.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
+  'src/js/410-program-module-phase-6-pork-chop-plotter.js',
 ];
 
 const src = FILES.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
@@ -64,10 +65,10 @@ const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
-  _s15BecoSplit,
+  _s15BecoSplit, progBodyAngleAt, progBodyWorldPos,
 } = sandbox;
-const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS } =
-  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS })', sandbox);
+const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA } =
+  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA })', sandbox);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // parseMathExpression
@@ -478,6 +479,64 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // Zero elapsed time -> unchanged regardless of rate.
   const b4 = progBoiloff(10000, 0.003, 0, 1.0);
   approx('progBoiloff: zero elapsed days -> unchanged', b4, 10000, 1e-9);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C1a Body kinematics — progBodyAngleAt / progBodyWorldPos / porkchop θ0 unification
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // t=0 == theta0 for every body.
+  Object.keys(PROG_BODY_KINEMATICS).forEach(b => {
+    approx(`progBodyAngleAt(${b}, 0) == theta0_rad`, progBodyAngleAt(b, 0), ((PROG_BODY_KINEMATICS[b].theta0_rad % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI), 1e-9);
+  });
+
+  // Moon: +2*pi after exactly one period (27.3217 days) -> back to theta0.
+  const moonPeriod = 27.3217 * 86400;
+  approx('progBodyAngleAt(Moon, one full period) == theta0 (wrapped)', progBodyAngleAt('Moon', moonPeriod), progBodyAngleAt('Moon', 0), 1e-6);
+
+  // Earth: +pi after half a year (365.256/2 days).
+  const halfYear_s = (365.256 / 2) * 86400;
+  const earthHalf = progBodyAngleAt('Earth', halfYear_s);
+  const earthExpected = ((PROG_BODY_KINEMATICS.Earth.theta0_rad + Math.PI) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+  approx('progBodyAngleAt(Earth, half year) == theta0 + pi (normalized)', earthHalf, earthExpected, 1e-6);
+
+  // Normalization: result always in [0, 2*pi).
+  const bigT = 1e10;
+  const angBig = progBodyAngleAt('Mars', bigT);
+  ok('progBodyAngleAt normalizes to [0, 2*pi)', angBig >= 0 && angBig < 2*Math.PI);
+
+  // progBodyWorldPos: Sun at origin.
+  const sunPos = progBodyWorldPos('Sun', 12345);
+  ok('progBodyWorldPos(Sun) == {0,0}', sunPos.x === 0 && sunPos.y === 0);
+
+  // progBodyWorldPos: Earth at PROG_HELIO_R.Earth distance from origin (t=0).
+  const earthPos = progBodyWorldPos('Earth', 0);
+  approx('progBodyWorldPos(Earth, 0) distance == PROG_HELIO_R.Earth', Math.hypot(earthPos.x, earthPos.y), PROG_HELIO_R.Earth, 1e-3);
+
+  // progBodyWorldPos: Moon == Earth's position + moon-ring offset.
+  const tSample = 5 * 86400;
+  const earthP = progBodyWorldPos('Earth', tSample);
+  const moonP  = progBodyWorldPos('Moon', tSample);
+  const moonAng = progBodyAngleAt('Moon', tSample);
+  const expectedMoonX = earthP.x + PROG_MOON_ORBITS.Moon.r * Math.cos(moonAng);
+  const expectedMoonY = earthP.y + PROG_MOON_ORBITS.Moon.r * Math.sin(moonAng);
+  approx('progBodyWorldPos(Moon) == Earth pos + moon-ring offset (x)', moonP.x, expectedMoonX, 1e-3);
+  approx('progBodyWorldPos(Moon) == Earth pos + moon-ring offset (y)', moonP.y, expectedMoonY, 1e-3);
+
+  // Porkchop-consistency: Mars theta0 - Earth theta0 phase difference unchanged
+  // from the PRE-unification hardcoded values (Mars: 0.7729, Earth: 0, Venus: 5.3390).
+  const OLD_EARTH_THETA0 = 0;
+  const OLD_MARS_THETA0  = 0.7729;
+  const OLD_VENUS_THETA0 = 5.3390;
+  approx('PROG_PORK_DATA Mars-Earth theta0 phase diff unchanged post-unification',
+    PROG_PORK_DATA.Mars.theta0_rad - PROG_PORK_DATA.Earth.theta0_rad,
+    OLD_MARS_THETA0 - OLD_EARTH_THETA0, 1e-6);
+  approx('PROG_PORK_DATA Venus-Earth theta0 phase diff unchanged post-unification',
+    PROG_PORK_DATA.Venus.theta0_rad - PROG_PORK_DATA.Earth.theta0_rad,
+    OLD_VENUS_THETA0 - OLD_EARTH_THETA0, 1e-6);
+  ok('PROG_PORK_DATA.Earth.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Earth.theta0_rad === PROG_BODY_KINEMATICS.Earth.theta0_rad);
+  ok('PROG_PORK_DATA.Mars.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Mars.theta0_rad === PROG_BODY_KINEMATICS.Mars.theta0_rad);
+  ok('PROG_PORK_DATA.Venus.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Venus.theta0_rad === PROG_BODY_KINEMATICS.Venus.theta0_rad);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
