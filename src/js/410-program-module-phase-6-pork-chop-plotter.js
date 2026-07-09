@@ -21,17 +21,8 @@ const PROG_PORK_DATA = {
 };
 
 // ── Stumpff functions ─────────────────────────────────────────────────────────
-// C(ψ) = ∫₀¹ cos(√ψ·t) dt-equivalent  |  S(ψ) = ∫₀¹ sin(√ψ·t)/√ψ dt-equivalent
-function progStumpffC(psi) {
-  if (psi >  1e-6) return (1 - Math.cos(Math.sqrt(psi))) / psi;
-  if (psi < -1e-6) return (Math.cosh(Math.sqrt(-psi)) - 1) / (-psi);
-  return 0.5;                      // series limit
-}
-function progStumpffS(psi) {
-  if (psi >  1e-6) { const s = Math.sqrt(psi);  return (s - Math.sin(s))       / (s * psi); }
-  if (psi < -1e-6) { const s = Math.sqrt(-psi); return (Math.sinh(s) - s)      / (s * (-psi)); }
-  return 1/6;                      // series limit
-}
+// progStumpffC / progStumpffS moved to 385-physics-core.js (P0) — one shared
+// copy for the Lambert solver here AND the universal-variable propagator.
 
 // ── Lambert solver (universal variable method, bisection) ─────────────────────
 // Algorithm: Universal Variable Method, bisection on ψ.

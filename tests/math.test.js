@@ -26,6 +26,7 @@ const FILES = [
   'src/js/145-dest-dv.js',
   'src/js/150-stage-and-a-half.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
+  'src/js/385-physics-core.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/574-trajectory-view.js',
 ];
@@ -70,6 +71,9 @@ const {
   progCalibratedTheta0, progBodyWorldPosCalibrated,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
   _trajTransferArcPath, _trajCorridorMoon, _trajOrbitLabel, _trajLocalRadius,
+  physV3, physAdd, physSub, physScale, physDot, physCross, physMag,
+  physOrbitPeriod, physVisViva, physElementsToState, physStateToElements,
+  physKeplerPropagate, physBodyStateAt, progStumpffC, progStumpffS,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA })', sandbox);
@@ -699,6 +703,109 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const moonTheta = progBodyAngleAt('Moon', tArr);
     approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (x)', moonP.x, parentP.x + PROG_MOON_ORBITS.Moon.r * Math.cos(moonTheta), 1e-6);
     approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (y)', moonP.y, parentP.y + PROG_MOON_ORBITS.Moon.r * Math.sin(moonTheta), 1e-6);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// physics core (P0, 385) — vec3, Stumpff, elements<->state, UV propagation,
+// body rails states. See PHYSICS_PLAN.md P0 verification list.
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  // vec3 sanity
+  ok('physCross: x cross y = z', JSON.stringify(physCross([1,0,0],[0,1,0])) === '[0,0,1]');
+  approx('physMag: 3-4-12 vector', physMag([3,4,12]), 13, 1e-12);
+  approx('physDot: orthogonal', physDot([1,2,3],[3,0,-1]), 0, 1e-12);
+
+  // Stumpff limits + continuity at the series switch
+  approx('StumpffC(0) series limit', progStumpffC(0), 0.5, 1e-12);
+  approx('StumpffS(0) series limit', progStumpffS(0), 1/6, 1e-12);
+  approx('StumpffC continuity at +1e-6', progStumpffC(1.0001e-6), 0.5, 1e-6);
+  approx('StumpffS continuity at -1e-6', progStumpffS(-1.0001e-6), 1/6, 1e-6);
+
+  const muE = PROG_BODIES.Earth.mu;
+
+  // elements -> state -> elements round-trips across the case matrix
+  const CASES = [
+    { name: 'LEO circular',        el: { a: 6771,  e: 0,     i: 0,    raan: 0,   argp: 0,   nu: 1.1 } },
+    { name: 'GTO',                 el: { a: 24371, e: 0.7306,i: 0,    raan: 0,   argp: 0.5, nu: 2.0 } },
+    { name: 'high-e Molniya-ish',  el: { a: 26562, e: 0.74,  i: 1.107,raan: 0.8, argp: 4.94,nu: 0.3 } },
+    { name: 'inclined circular',   el: { a: 7178,  e: 0,     i: 0.9,  raan: 2.1, argp: 0,   nu: 5.5 } },
+    { name: 'hyperbolic',          el: { a: -8000, e: 1.5,   i: 0.2,  raan: 1.0, argp: 2.2, nu: 0.4 } },
+  ];
+  CASES.forEach(c => {
+    const st = physElementsToState(c.el, muE);
+    const back = physStateToElements(st.r, st.v, muE);
+    approx(`round-trip a (${c.name})`, back.a, c.el.a, Math.abs(c.el.a) * 1e-9);
+    approx(`round-trip e (${c.name})`, back.e, c.el.e, 1e-9);
+    approx(`round-trip i (${c.name})`, back.i, c.el.i, 1e-9);
+    if (c.el.e > 1e-9) {
+      // recompose the in-plane angle sum to dodge raan/argp degeneracy splits
+      const inPlane = a => ((a % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+      approx(`round-trip argp+nu (${c.name})`,
+        inPlane(back.argp + back.nu), inPlane(c.el.argp + c.el.nu), 1e-8);
+    }
+  });
+
+  // energy + |h| invariance along a UV propagation
+  {
+    const st0 = physElementsToState({ a: 24371, e: 0.7306, i: 0, raan: 0, argp: 0.5, nu: 0 }, muE);
+    const el0 = physStateToElements(st0.r, st0.v, muE);
+    let maxEnergyErr = 0, maxHErr = 0;
+    for (let k = 1; k <= 20; k++) {
+      const st = physKeplerPropagate(st0.r, st0.v, k * 3000, muE);
+      const el = physStateToElements(st.r, st.v, muE);
+      maxEnergyErr = Math.max(maxEnergyErr, Math.abs(el.energy - el0.energy));
+      maxHErr = Math.max(maxHErr, Math.abs(physMag(el.hVec) - physMag(el0.hVec)));
+    }
+    ok(`UV propagation: energy invariant along GTO (max err ${maxEnergyErr.toExponential(2)})`, maxEnergyErr < 1e-6 * Math.abs(el0.energy));
+    ok(`UV propagation: |h| invariant along GTO (max err ${maxHErr.toExponential(2)})`, maxHErr < 1e-8 * physMag(el0.hVec));
+  }
+
+  // one full period returns to the start state
+  {
+    const el = { a: 6771, e: 0.01, i: 0.3, raan: 1.0, argp: 2.0, nu: 0.7 };
+    const st0 = physElementsToState(el, muE);
+    const T = physOrbitPeriod(el.a, muE);
+    const st1 = physKeplerPropagate(st0.r, st0.v, T, muE);
+    approx('UV propagation: full period returns start (pos km)', physMag(physSub(st1.r, st0.r)), 0, 1e-4);
+    approx('UV propagation: full period returns start (vel km/s)', physMag(physSub(st1.v, st0.v)), 0, 1e-7);
+  }
+
+  // hyperbolic propagation: energy invariant, radius grows outbound
+  {
+    const st0 = physElementsToState({ a: -8000, e: 1.5, i: 0, raan: 0, argp: 0, nu: 0.1 }, muE);
+    const st1 = physKeplerPropagate(st0.r, st0.v, 3600, muE);
+    const e0 = physStateToElements(st0.r, st0.v, muE), e1 = physStateToElements(st1.r, st1.v, muE);
+    approx('UV propagation: hyperbolic energy invariant', e1.energy, e0.energy, Math.abs(e0.energy) * 1e-8);
+    ok('UV propagation: hyperbolic outbound radius grows', physMag(st1.r) > physMag(st0.r));
+  }
+
+  // agreement with the trusted schematic layer
+  {
+    // Hohmann half-ellipse Earth 185 -> 35786 km: propagate periapsis->apoapsis,
+    // arrival time must equal progHohmannTOF for the same radii.
+    const r1 = PROG_BODIES.Earth.R + 185, r2 = PROG_BODIES.Earth.R + 35786;
+    const a = (r1 + r2) / 2, e = (r2 - r1) / (r2 + r1);
+    const st0 = physElementsToState({ a, e, i: 0, raan: 0, argp: 0, nu: 0 }, muE);
+    const tof = progHohmannTOF('Earth', 185, 35786);
+    const st1 = physKeplerPropagate(st0.r, st0.v, tof, muE);
+    approx('UV propagation vs progHohmannTOF: half period lands at apoapsis radius', physMag(st1.r), r2, 1);
+    approx('physVisViva at periapsis matches state speed', physVisViva(r1, a, muE), physMag(st0.v), 1e-9);
+  }
+
+  // body rails states
+  {
+    const moon = physBodyStateAt('Moon', 0);
+    approx('physBodyStateAt: Moon rail speed ~1.018 km/s', physMag(physSub(moon.v, physBodyStateAt('Earth', 0).v)), 1.018, 0.01);
+    const earth = physBodyStateAt('Earth', 12345678);
+    const pos = progBodyWorldPosCalibrated('Earth', 12345678, {});
+    approx('physBodyStateAt: Earth position x = calibrated position source', earth.r[0], pos.x, 1e-6);
+    approx('physBodyStateAt: Earth position y = calibrated position source', earth.r[1], pos.y, 1e-6);
+    approx('physBodyStateAt: Earth rail speed ~29.78 km/s', physMag(earth.v), 29.78, 0.1);
+    // velocity is tangential: v . r = 0 for circular rails
+    approx('physBodyStateAt: rail velocity perpendicular to radius', physDot(earth.r, earth.v), 0, 1e-3 * physMag(earth.r));
+    ok('physBodyStateAt: z components are 0 (coplanar era)', earth.r[2] === 0 && earth.v[2] === 0);
   }
 }
 
