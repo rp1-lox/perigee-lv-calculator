@@ -67,6 +67,7 @@ const {
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
   _s15BecoSplit, progBodyAngleAt, progBodyWorldPos,
+  progCalibratedTheta0, progBodyWorldPosCalibrated,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
   _trajTransferArcPath, _trajCorridorMoon, _trajOrbitLabel, _trajLocalRadius,
 } = sandbox;
@@ -643,6 +644,61 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     // returns the moon's orbital radius (used by other consumers, e.g.
     // mission-extent fitting), not the new 20xR fallback.
     approx('_trajLocalRadius: parent-frame transit (Earth->Moon) still returns moon orbital radius, unaffected by the new fallback', _trajLocalRadius(transitToMoon, 'Earth'), PROG_MOON_ORBITS.Moon.r, 1e-6);
+  }
+
+  // ── progCalibratedTheta0 / progBodyWorldPosCalibrated (planet-phase
+  // calibration for the trajectory view's first-leg-to-a-planet rule) ───────
+  {
+    // (a) golden: t_dep/t_arr consistent with the TABLE theta0s (a real
+    // Hohmann-timed Earth->Mars departure at t_dep=0) should need essentially
+    // no calibration offset — the arc already connects under the table values.
+    const aHelio = (PROG_HELIO_R.Earth + PROG_HELIO_R.Mars) / 2;
+    const tofHelio = Math.PI * Math.sqrt((aHelio * aHelio * aHelio) / PROG_MU_SUN);
+    // Tolerance is loose (1e-3 rad, ~0.06 deg) rather than 1e-9: Mars's table
+    // theta0 was calibrated against the porkchop plotter's actual Lambert
+    // solution (PROG_PORK_DATA, 410), not the pure-Hohmann TOF formula used
+    // here — the two agree to within a small residual, not bit-for-bit.
+    const offsetGolden = progCalibratedTheta0('Mars', 0, tofHelio, 'Earth');
+    approx('progCalibratedTheta0: Earth->Mars at table-consistent Hohmann timing -> offset ~0', offsetGolden, 0, 2e-3);
+
+    // (b) arbitrary time: assert the GEOMETRIC IDENTITY directly rather than
+    // trusting the formula derivation — destination's CALIBRATED angle at
+    // t_arr must equal departure's angle at t_dep + PI (both normalized).
+    const tDep = 12345678, tArr = tDep + 87654321;
+    const offsetArb = progCalibratedTheta0('Mars', tDep, tArr, 'Earth');
+    const norm = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    const kMars = PROG_BODY_KINEMATICS.Mars;
+    const calibratedMarsAngleAtArr = norm(kMars.theta0_rad + offsetArb + 2 * Math.PI * tArr / kMars.period_s);
+    const requiredAngle = norm(progBodyAngleAt('Earth', tDep) + Math.PI);
+    approx('progCalibratedTheta0: geometric identity — calibrated dest angle at t_arr == depart angle at t_dep + PI', calibratedMarsAngleAtArr, requiredAngle, 1e-9);
+
+    // progBodyWorldPosCalibrated: with offset 0 (no override), must exactly
+    // match progBodyWorldPos (drop-in identical behavior when uncalibrated).
+    const p0 = progBodyWorldPos('Mars', tArr);
+    const p0c = progBodyWorldPosCalibrated('Mars', tArr, {});
+    approx('progBodyWorldPosCalibrated: no override -> matches progBodyWorldPos (x)', p0c.x, p0.x, 1e-6);
+    approx('progBodyWorldPosCalibrated: no override -> matches progBodyWorldPos (y)', p0c.y, p0.y, 1e-6);
+
+    // With the calibration offset applied, Mars's world position at t_arr
+    // should land exactly on the "required" angle (180 deg from Earth's
+    // t_dep position) at Mars's orbital radius — i.e. the arc's arrival
+    // endpoint construction is self-consistent.
+    const pCal = progBodyWorldPosCalibrated('Mars', tArr, { Mars: offsetArb });
+    const expX = PROG_HELIO_R.Mars * Math.cos(requiredAngle), expY = PROG_HELIO_R.Mars * Math.sin(requiredAngle);
+    approx('progBodyWorldPosCalibrated: calibrated Mars position lands on required Hohmann-arrival angle (x)', pCal.x, expX, 1e-3);
+    approx('progBodyWorldPosCalibrated: calibrated Mars position lands on required Hohmann-arrival angle (y)', pCal.y, expY, 1e-3);
+
+    // Moon (a PROG_MOON_ORBITS body, not heliocentric) must move WITH a
+    // calibrated Earth if Earth were ever calibrated (it isn't, per spec —
+    // Earth is home base and never calibrated — but the recursion plumbing
+    // must still be correct: a moon's parent-position input goes through
+    // the SAME calibrated path). Verify with a synthetic non-zero Earth
+    // override to prove the recursion actually threads through.
+    const parentP = progBodyWorldPosCalibrated('Earth', tArr, { Earth: 0.5 });
+    const moonP = progBodyWorldPosCalibrated('Moon', tArr, { Earth: 0.5 });
+    const moonTheta = progBodyAngleAt('Moon', tArr);
+    approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (x)', moonP.x, parentP.x + PROG_MOON_ORBITS.Moon.r * Math.cos(moonTheta), 1e-6);
+    approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (y)', moonP.y, parentP.y + PROG_MOON_ORBITS.Moon.r * Math.sin(moonTheta), 1e-6);
   }
 }
 

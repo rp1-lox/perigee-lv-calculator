@@ -101,6 +101,64 @@ function progBodyWorldPos(body, t_s) {
   return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
 }
 
+/**
+ * Per-mission planet-phase calibration offset (radians), NOT persisted and NOT
+ * written into PROG_BODY_KINEMATICS — a pure derived-state helper consulted
+ * only by the trajectory view's render pass (574). See MATH.md §7a "planet
+ * phase calibration" for the full rule set.
+ *
+ * A true-shape Hohmann arc between two heliocentric rings only visually
+ * connects (arrival endpoint lands exactly on the destination body) when the
+ * phase angle between departure and destination body at t_dep happens to
+ * equal the Hohmann geometry's required 180°-apart-at-arrival relationship.
+ * With theta0s fixed per the table, an arbitrary mission MET generally will
+ * NOT satisfy that. This function computes the ADDITIVE theta0 offset that
+ * WOULD make it satisfy that, for one specific (t_dep, t_arr) leg — the
+ * caller (574) applies this offset only to the FIRST leg's destination body,
+ * for THIS mission's render pass only.
+ *
+ * required destination angle at arrival = departBody's angle at t_dep + PI
+ * table destination angle at arrival    = theta0_table + 2*PI*t_arr/period
+ * offset                                = required - table
+ *
+ * Returns 0 if destBody has no kinematics entry. Deliberately NOT normalized
+ * — it's an additive correction to be added to theta0_table before feeding
+ * progBodyAngleAt-equivalent math, not a freestanding angle-in-isolation.
+ */
+function progCalibratedTheta0(destBody, t_dep_s, t_arr_s, departBody) {
+  const depAngle = progBodyAngleAt(departBody, t_dep_s);
+  const requiredArrivalAngle = depAngle + Math.PI;
+  const k = PROG_BODY_KINEMATICS[destBody];
+  if (!k) return 0;
+  const tableArrivalAngle = k.theta0_rad + 2 * Math.PI * t_arr_s / k.period_s;
+  return requiredArrivalAngle - tableArrivalAngle;
+}
+
+/** Heliocentric world position {x,y} km at time t_s for a body, with an extra
+ * PER-MISSION calibration offset applied to each heliocentric planet's own
+ * angle (moons still resolve their OWN angle normally, but their PARENT
+ * position is computed through this same calibrated path recursively — so a
+ * calibrated planet's moons move WITH it). `overrides` is a plain object
+ * `{bodyName: offsetRadians}` — bodies absent from it behave exactly like
+ * progBodyWorldPos (offset 0). Pure; does NOT modify progBodyWorldPos or its
+ * signature/behavior — this is an ADDITIVE new function for 574's calibrated
+ * render pass only. See MATH.md §7a. */
+function progBodyWorldPosCalibrated(body, t_s, overrides) {
+  if (body === 'Sun') return { x: 0, y: 0 };
+  overrides = overrides || {};
+  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
+  if (moonInfo) {
+    const parentPos = progBodyWorldPosCalibrated(moonInfo.parent, t_s, overrides);
+    const theta = progBodyAngleAt(body, t_s); // moons are never calibrated themselves (heliocentric-planet-only concern)
+    return { x: parentPos.x + moonInfo.r * Math.cos(theta), y: parentPos.y + moonInfo.r * Math.sin(theta) };
+  }
+  const r = PROG_HELIO_R[body];
+  if (r == null) return { x: 0, y: 0 };
+  const offset = overrides[body] || 0;
+  const theta = progBodyAngleAt(body, t_s) + offset;
+  return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
+}
+
 // ── Propellant type registry ────────────────────────────────────────────────
 const PROG_PROPELLANT_TYPES = {
   LOX_LH2:  { boiloff_rate: 0.0030, label: 'LOX/LH2',         cryo: true      },
