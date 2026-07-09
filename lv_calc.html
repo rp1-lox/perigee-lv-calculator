@@ -19100,6 +19100,7 @@ function _trajApplyCam(id, cam) {
     _trajResetLabels();
     sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);
     if (overlayEl && rect.width > 0 && rect.height > 0) {
+      overlayEl.style.transform = ''; // clear any mid-drag pan slide
       overlayEl.setAttribute('width', rect.width);
       overlayEl.setAttribute('height', rect.height);
       overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
@@ -19177,10 +19178,12 @@ function trajPanMove(ev) {
     const vbH = _TRAJ_VB * aspect;
     svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2 + du).toFixed(3)} ${(-vbH / 2 + dv).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
   }
-  // Overlay anchors are NOT re-projected during the drag itself (would mean
-  // re-running LOD/collision every mousemove tick); they resync on pan-end
-  // via _trajApplyCam's full re-render. See report note: "re-project on
-  // pan-end, not every tick."
+  // Overlay anchors are NOT re-projected during the drag (that would re-run
+  // LOD/collision every mousemove tick) — but pan is a pure translation, so
+  // sliding the whole overlay by the raw pointer delta keeps labels glued to
+  // their geometry 1:1. The transform is cleared by pan-end's full re-render.
+  const overlayEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${_trajDrag.id}"] svg.traj-overlay`);
+  if (overlayEl) overlayEl.style.transform = `translate(${dx}px, ${dy}px)`;
 }
 function trajPanEnd() {
   if (_trajDrag) {
@@ -20401,7 +20404,9 @@ function _trajLocalScaleFor(body, m) {
 // whether the NAME survives the size gate; collision resolution still runs
 // normally (so crowded labels at extreme zoom still de-duplicate).
 function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel) {
-  _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: 'var(--nm-label)' }], 'body',
+  // Body name inherits the body's own chrome color (theme var) so labels read
+  // as belonging to their glyph rather than a flat gray sheet of names.
+  _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
     { screenSize: r, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
   return `<g>
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
@@ -20585,6 +20590,7 @@ function _missionTrajAfterRender(m) {
       _trajCalibrationCache = { missionId: null, data: null };
       sceneEl.innerHTML = _trajWorldSVG(mm, cam, zoom, rect);
       if (overlayEl) {
+        overlayEl.style.transform = ''; // clear any mid-drag pan slide
         overlayEl.setAttribute('width', rect.width);
         overlayEl.setAttribute('height', rect.height);
         overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
