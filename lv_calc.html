@@ -1367,7 +1367,7 @@ button,input,select,textarea{font-family:inherit;}
             </div>
             <div class="note" style="margin-top:4px;">C3 = v∞² relative to Earth. Vis-viva: Vinj = √(Vesc² + C3). TLI≈−1.9, escape=0, Mars≈8.7, Jupiter≈80.</div>
           </div>
-          <canvas id="orbit-diagram"></canvas>
+          <div id="orbit-diagram"></div>
         </div>
       </div>
     </div><!-- /orb-col-right define-orbit -->
@@ -8828,215 +8828,139 @@ function libImportMine(input){
 }
 
 // ─── ORBIT DIAGRAM ────────────────────────────
+// "Weaker, Earth-centric" true-geometry mini-view. Earth-centric only, no
+// zoom/pan, fixed frame auto-fit each render. Reuses the Trajectory view's
+// (574) pure geometry helper _trajEllipseGeom (focus-correct: body at focus,
+// c = a - r_peri) so the ellipse math is identical to the big view — this
+// panel is deliberately a smaller, non-interactive SVG rendering of the same
+// geometry, not a reimplementation.
+const _OD_VB = 300; // SVG viewBox is 0..300 square; origin translated to center
+
 function initOrbitDiagram(){
-  const canvas=document.getElementById('orbit-diagram');
-  if(!canvas||canvas._odInited)return;
-  canvas._odInited=true;
-  function resize(){
-    clearTimeout(canvas._szTimer);
-    canvas._szTimer=setTimeout(()=>{
-      const dpr=window.devicePixelRatio||1;
-      const w=canvas.offsetWidth,h=canvas.offsetHeight;
-      if(!w||!h)return;
-      canvas._dpr=dpr;
-      canvas.width=Math.round(w*dpr);
-      canvas.height=Math.round(h*dpr);
-      drawOrbitDiagram();
-    },120);
-  }
-  new ResizeObserver(resize).observe(canvas);
-  resize();
+  const host=document.getElementById('orbit-diagram');
+  if(!host||host._odInited)return;
+  host._odInited=true;
+  drawOrbitDiagram();
 }
 
+function _odFmtAlt(r,R_e){return `${Math.round(r-R_e).toLocaleString()}`;}
+
 function drawOrbitDiagram(){
-  const canvas=document.getElementById('orbit-diagram');
-  if(!canvas||!canvas._odInited)return;
-  const dpr=canvas._dpr||1;
-  const ctx=canvas.getContext('2d');
-  const W=canvas.width/dpr,H=canvas.height/dpr;
-  const cx=W/2,cy=H/2;
-  const maxR=Math.min(cx,cy)*0.86;
-  ctx.save();
-  ctx.scale(dpr,dpr);
+  const host=document.getElementById('orbit-diagram');
+  if(!host||!host._odInited)return;
 
-  const cs=getComputedStyle(document.documentElement);
-  const accent=cs.getPropertyValue('--accent').trim();
-  const accent3=cs.getPropertyValue('--accent3').trim()||'#7fff6b';
-  const panelCol=cs.getPropertyValue('--panel').trim();
-
-  ctx.fillStyle=panelCol;ctx.fillRect(0,0,W,H);
-
-  const R_e=6371;
+  const R_e=(typeof PROG_BODIES!=='undefined'&&PROG_BODIES.Earth)?PROG_BODIES.Earth.R:6371;
   const isEsc=(destMode==='escape');
   const gn=id=>parseFloat(document.getElementById(id)?.value)||0;
 
-  let r_park,r_apo,r_peri,c3v;
+  let warn=null;
+  let r_park,apoAlt,periAlt,c3v;
   if(isEsc){
-    r_park=R_e+Math.max(gn('escape-perigee'),100);
+    periAlt=gn('escape-perigee');
+    if(periAlt<0){warn='perigee altitude is negative — showing 0 km';periAlt=0;}
+    r_park=R_e+Math.max(periAlt,100);
     c3v=gn('c3');
-    r_apo=r_park; r_peri=r_park;
   } else {
-    r_park=R_e+Math.max(gn('parking-alt'),100);
-    r_apo =R_e+Math.max(gn('apogee'),100);
-    r_peri=R_e+Math.max(gn('perigee'),100);
-    if(r_peri>r_apo){const t=r_peri;r_peri=r_apo;r_apo=t;}
+    apoAlt=gn('apogee'); periAlt=gn('perigee');
+    let parkAlt=gn('parking-alt');
+    if(apoAlt<0||periAlt<0||parkAlt<0){warn='negative altitude input — clamped to 0 km';}
+    apoAlt=Math.max(apoAlt,0); periAlt=Math.max(periAlt,0); parkAlt=Math.max(parkAlt,0);
+    if(periAlt>apoAlt){
+      warn=(warn?warn+'; ':'')+'perigee > apogee — swapped for display';
+      const t=periAlt;periAlt=apoAlt;apoAlt=t;
+    }
+    r_park=R_e+Math.max(parkAlt,100);
   }
 
-  // power-scale radius → pixels: alt^0.38 so LEO and GEO both render well
-  const r_scale=isEsc ? r_park*28 : Math.max(r_apo,r_park)*1.38;
-  const logR=r=>{
-    if(r<=R_e)return 0;
-    const alt=Math.min(r-R_e, r_scale-R_e);
-    return Math.pow(alt/(r_scale-R_e), 0.38)*maxR;
-  };
+  // ── scale: fit content to viewBox, matching the auto-fit spirit of 574's
+  // _trajFitScale (linear true scale, headroom margin) ──
+  const margin=34; // px headroom for labels
+  let maxR;
+  if(isEsc){
+    maxR=r_park*2.4; // parking ring + a bit of departure-curve headroom
+  } else {
+    const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
+    maxR=Math.max(r_park,rApo,rPeri);
+  }
+  const scale=(_OD_VB/2-margin)/Math.max(1,maxR);
 
-  // parametric orbit arc: r(θ) = p/(1+e·cosθ), perigee at θ=0 (right)
-  const drawArc=(rp,ra,th0,th1,color,lw,dash)=>{
-    const a=(rp+ra)/2, e=(ra-rp)/(ra+rp);
-    const p=a*(1-e*e);
-    const steps=240;
-    ctx.beginPath();
-    ctx.setLineDash(dash||[]);
-    for(let i=0;i<=steps;i++){
-      const th=th0+(th1-th0)*i/steps;
-      const r=e<1e-6?rp:p/(1+e*Math.cos(th));
-      const dr=logR(r);
-      const x=cx+dr*Math.cos(th), y=cy-dr*Math.sin(th);
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    }
-    if(Math.abs(th1-th0)>=Math.PI*1.99)ctx.closePath();
-    ctx.strokeStyle=color;ctx.lineWidth=lw;ctx.stroke();
-    ctx.setLineDash([]);
-  };
+  const cs=getComputedStyle(document.documentElement);
+  const v=name=>cs.getPropertyValue(name).trim();
+  const earthColor=v('--nm-earth')||v('--accent2');
+  const dimColor='var(--text-dim)';
+  const accent='var(--accent)';
+  const accent2='var(--accent2)';
+  const warnColor='var(--warn)';
 
-  const dot=(th,r_km,col,sz)=>{
-    const dr=logR(r_km);
-    ctx.beginPath();ctx.arc(cx+dr*Math.cos(th),cy-dr*Math.sin(th),sz??3.5,0,Math.PI*2);
-    ctx.fillStyle=col;ctx.fill();
-  };
-  const lbl=(text,x,y,col,align)=>{
-    ctx.font='9px JetBrains Mono,monospace';ctx.fillStyle=col;
-    ctx.textAlign=align||'left';ctx.fillText(text,x,y);ctx.textAlign='left';
-  };
-  const fmtAlt=r=>`${Math.round(r-R_e).toLocaleString()} km`;
+  let out='';
+  // Earth disc
+  const eR=Math.max(R_e*scale,4);
+  out+=`<circle cx="0" cy="0" r="${eR.toFixed(2)}" fill="${earthColor}" stroke="var(--border-bright)" stroke-width="0.6"/>`;
+  out+=`<text x="0" y="${(eR+10).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="7" fill="${dimColor}">Earth</text>`;
 
-  // ── Earth ──
-  const eR=Math.max(logR(R_e+20),7);
-  const eg=ctx.createRadialGradient(cx,cy,0,cx,cy,eR);
-  eg.addColorStop(0,'#1a5080');eg.addColorStop(0.55,'#1a6b50');eg.addColorStop(1,'#0a7a3a');
-  ctx.beginPath();ctx.arc(cx,cy,eR,0,Math.PI*2);
-  ctx.fillStyle=eg;ctx.fill();
-  ctx.strokeStyle='rgba(100,210,255,0.5)';ctx.lineWidth=0.7;ctx.stroke();
-  lbl('Earth',cx,cy+3,'rgba(255,255,255,0.55)','center');
+  // Parking orbit ring (thin, dim, dashed)
+  const rParkPx=r_park*scale;
+  out+=`<circle cx="0" cy="0" r="${rParkPx.toFixed(2)}" fill="none" stroke="${dimColor}" stroke-width="0.7" stroke-dasharray="3,3" opacity="0.7"/>`;
+  out+=`<text x="0" y="${(-rParkPx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${dimColor}">PARK ${_odFmtAlt(r_park,R_e)}</text>`;
 
   if(isEsc){
-    // parking orbit (dim dashed)
-    drawArc(r_park,r_park,0,Math.PI*2,'rgba(200,200,200,0.18)',0.8,[4,5]);
-    lbl(fmtAlt(r_park),cx+logR(r_park)+5,cy-4,'rgba(200,200,200,0.4)');
-
-    // hyperbolic departure arc — starts at perigee (right), sweeps counterclockwise outward
-    const mu=398600;
-    const v_c=Math.sqrt(mu/r_park);
-    const v_esc=Math.sqrt(2*mu/r_park);
-    const v_inj=Math.sqrt(v_esc*v_esc+Math.max(c3v,0));
-    // semi-major axis (negative for hyperbola), eccentricity
-    const a_h=mu/(v_inj*v_inj - 2*mu/r_park) * -1; // |a| of hyperbola
-    const e_h=1+r_park/a_h;
-    // asymptote angle: cos(θ∞) = -1/e_h
-    const th_inf=Math.acos(-1/Math.max(e_h,1.001));
-    // Draw from slightly past -θ∞ to slightly past +θ∞, sweeping through perigee
-    const span=th_inf*0.88;
-    ctx.beginPath();ctx.setLineDash([]);
-    const steps=220;
-    const p_h=a_h*(e_h*e_h-1);
-    for(let i=0;i<=steps;i++){
-      const th=-span+2*span*i/steps;
-      const r=p_h/(1+e_h*Math.cos(th));
-      if(r<=0||r>r_scale*1.1)continue;
-      const dr=logR(r);
-      const x=cx+dr*Math.cos(th),y=cy-dr*Math.sin(th);
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    }
-    ctx.strokeStyle=accent;ctx.lineWidth=2;ctx.stroke();
-
-    // Injection burn dot at perigee
-    dot(0,r_park,accent,4);
-    lbl('Injection Δv',cx+logR(r_park)+7,cy+4,accent);
-
-    // Asymptote lines (faint dashed)
-    const aLen=maxR*0.92;
-    ctx.setLineDash([3,5]);ctx.strokeStyle='rgba(255,255,255,0.12)';ctx.lineWidth=0.7;
-    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+aLen*Math.cos(th_inf),cy-aLen*Math.sin(th_inf));ctx.stroke();
-    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+aLen*Math.cos(-th_inf),cy-aLen*Math.sin(-th_inf));ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Footer
-    lbl(`C3 = ${c3v>=0?'+':''}${c3v.toFixed(1)} km²/s²   e = ${e_h.toFixed(3)}`,8,H-10,'rgba(255,255,255,0.3)');
-
+    // Escape mode: schematic outgoing hyperbolic-suggestive open curve.
+    // Honest-not-precise: a dashed arc bending outward from the parking ring,
+    // annotated with the C3 value, not a rigorously solved hyperbola.
+    const th0=-40*Math.PI/180, th1=70*Math.PI/180;
+    const rEndPx=Math.min(_OD_VB/2-14, rParkPx*1.9+30);
+    const p0={x:rParkPx*Math.cos(th0),y:-rParkPx*Math.sin(th0)};
+    const p1={x:rEndPx*Math.cos(th1),y:-rEndPx*Math.sin(th1)};
+    const cxp=(p0.x+p1.x)/2 + 40, cyp=(p0.y+p1.y)/2 - 20;
+    out+=`<path d="M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} Q ${cxp.toFixed(2)} ${cyp.toFixed(2)} ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}" fill="none" stroke="${accent2}" stroke-width="1.6" stroke-dasharray="4,3"/>`;
+    // arrowhead at p1
+    const ang=Math.atan2(p1.y-cyp,p1.x-cxp);
+    const ah=6;
+    const a1={x:p1.x-ah*Math.cos(ang-0.4),y:p1.y-ah*Math.sin(ang-0.4)};
+    const a2={x:p1.x-ah*Math.cos(ang+0.4),y:p1.y-ah*Math.sin(ang+0.4)};
+    out+=`<path d="M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a1.x.toFixed(2)} ${a1.y.toFixed(2)} M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a2.x.toFixed(2)} ${a2.y.toFixed(2)}" stroke="${accent2}" stroke-width="1.6" fill="none"/>`;
+    out+=`<circle cx="${p0.x.toFixed(2)}" cy="${p0.y.toFixed(2)}" r="2.6" fill="${accent}"/>`;
+    out+=`<text x="${p0.x.toFixed(2)}" y="${(p0.y-7).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${accent}">Injection</text>`;
+    const c3Txt=`C3 = ${c3v>=0?'+':''}${c3v.toFixed(1)} km²/s²`;
+    out+=`<text x="${(-_OD_VB/2+8).toFixed(2)}" y="${(_OD_VB/2-10).toFixed(2)}" font-family="var(--mono)" font-size="6.5" fill="${accent2}">${c3Txt}</text>`;
   } else {
-    const isCirc=Math.abs(r_apo-r_peri)<5;
-    const traj=trajectory||'two-burn';
+    const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
+    const inc=gn('inclination');
 
-    // Parking orbit
-    drawArc(r_park,r_park,0,Math.PI*2,'rgba(200,200,200,0.2)',0.8,[4,5]);
-
-    if(traj==='direct'){
-      // Direct ascent: curved line from ~45° atmospheric to target insertion point
-      const r_atm=R_e+100;
-      const th0=Math.PI*0.38,th1=Math.PI*0.70;
-      const r0=logR(r_atm),r1=logR(isCirc?r_apo:r_peri);
-      const sx=cx+r0*Math.cos(th0),sy=cy-r0*Math.sin(th0);
-      const ex=cx+r1*Math.cos(th1),ey=cy-r1*Math.sin(th1);
-      // control point: midpoint pushed outward
-      const mx=cx+(r0+r1)*0.6*Math.cos((th0+th1)/2);
-      const my=cy-(r0+r1)*0.6*Math.sin((th0+th1)/2);
-      ctx.beginPath();ctx.moveTo(sx,sy);ctx.quadraticCurveTo(mx,my,ex,ey);
-      ctx.strokeStyle=accent+'99';ctx.lineWidth=1.5;ctx.setLineDash([3,4]);ctx.stroke();
-      ctx.setLineDash([]);
-      dot(th1,isCirc?r_apo:r_peri,accent,4);
-      lbl('Direct Insertion',8,H-10,'rgba(255,255,255,0.28)');
-
-    } else if(traj==='optimal'&&r_apo>r_park*3.5){
-      // Bi-elliptic: two transfer arcs via an intermediate high point
-      const r_int=Math.min(Math.sqrt(r_park*r_apo)*2.2,r_scale*0.88);
-      drawArc(r_park,r_int,0,Math.PI,accent+'55',1.4);
-      drawArc(r_peri,r_int,-Math.PI,0,accent+'88',1.4);
-      dot(0,r_park,accent,4);
-      dot(Math.PI,r_int,accent,4);
-      dot(0,r_peri,accent,4);
-      lbl('Δv₁',cx+logR(r_park)+7,cy+4,accent);
-      lbl('Δv₂',cx-logR(r_int)-22,cy-6,accent);
-      lbl('Δv₃',cx+logR(r_peri)+7,cy-6,accent);
-      lbl('Bi-Elliptic Transfer',8,H-10,'rgba(255,255,255,0.28)');
-
+    if(Math.abs(rApo-r_park)<5 && Math.abs(rPeri-r_park)<5){
+      // Target ≈ parking: single circle only, no transfer arc.
+      const rPx=rApo*scale;
+      out+=`<circle cx="0" cy="0" r="${rPx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
+      out+=`<text x="0" y="${(-rPx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
     } else {
-      // Hohmann / two-burn: upper half of transfer ellipse
-      if(r_apo>r_park+20){
-        drawArc(r_park,r_apo,0,Math.PI,accent+'88',1.8);
-        dot(0,r_park,accent,4);
-        dot(Math.PI,r_apo,accent,4);
-        lbl('Δv₁',cx+logR(r_park)+7,cy+4,accent);
-        lbl('Δv₂',cx-logR(r_apo)-22,cy-5,accent);
+      // Target ellipse/circle via 574's pure geometry helper.
+      const g=_trajEllipseGeom(periAlt,apoAlt,R_e);
+      const gCirc=Math.abs(g.rApo-g.rPeri)<Math.max(1,R_e*0.001);
+      const gcx=g.c*scale, grx=g.a*scale, gry=g.b*scale;
+      if(gCirc){
+        out+=`<circle cx="0" cy="0" r="${grx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
+        out+=`<text x="0" y="${(-grx-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+      } else {
+        out+=`<ellipse cx="${gcx.toFixed(2)}" cy="0" rx="${grx.toFixed(2)}" ry="${gry.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
+        out+=`<text x="${gcx.toFixed(2)}" y="${(-gry-4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="${accent}">TARGET ${_odFmtAlt(rPeri,R_e)}×${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
       }
-      lbl(traj==='optimal'?'Optimal Transfer':'Hohmann Transfer',8,H-10,'rgba(255,255,255,0.28)');
+
+      // Hohmann transfer arc, parking -> target apoapsis, with 2 burn dots at
+      // the tangent points (periapsis-side and apoapsis-side of the transfer).
+      const arc=_trajTransferArcPath(r_park,rApo,scale,0);
+      out+=`<path d="${arc.d}" fill="none" stroke="${accent2}" stroke-width="1.3" stroke-dasharray="3,2.5" opacity="0.9"/>`;
+      out+=`<circle cx="${arc.depX.toFixed(2)}" cy="${arc.depY.toFixed(2)}" r="2.4" fill="${accent}"/>`;
+      out+=`<circle cx="${arc.arrX.toFixed(2)}" cy="${arc.arrY.toFixed(2)}" r="2.4" fill="${accent}"/>`;
     }
 
-    // ── Final target orbit ──
-    if(isCirc){
-      drawArc(r_apo,r_apo,0,Math.PI*2,accent,2);
-      const dr=logR(r_apo);
-      lbl(fmtAlt(r_apo),cx,cy-dr-6,accent+'dd','center');
-    } else {
-      drawArc(r_peri,r_apo,0,Math.PI*2,accent3,2);
-      lbl(fmtAlt(r_apo),cx-logR(r_apo)-4,cy-5,accent3+'cc','right');
-      lbl(fmtAlt(r_peri),cx+logR(r_peri)+4,cy-5,accent3+'cc');
-    }
-
-    // Parking alt label (bottom-right, small)
-    lbl(`Park: ${fmtAlt(r_park)}`,W-8,H-10,'rgba(200,200,200,0.35)','right');
+    out+=`<text x="${(-_OD_VB/2+8).toFixed(2)}" y="${(_OD_VB/2-10).toFixed(2)}" font-family="var(--mono)" font-size="6" fill="${dimColor}">coplanar · inc annotated</text>`;
   }
 
-  ctx.restore();
+  if(warn){
+    out+=`<text x="0" y="${(_OD_VB/2-22).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${warnColor}">${warn}</text>`;
+  }
+
+  host.innerHTML=`<svg viewBox="-${_OD_VB/2} -${_OD_VB/2} ${_OD_VB} ${_OD_VB}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`;
 }
 
 let activeSiteKey=null;
