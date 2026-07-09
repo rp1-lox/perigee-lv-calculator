@@ -326,6 +326,89 @@ function _trajFixedG(x, y, zoom, inner, extraAttr) {
   return `<g transform="translate(${x.toFixed(2)},${y.toFixed(2)}) scale(${s})"${extraAttr ? ' ' + extraAttr : ''}>${inner}</g>`;
 }
 
+// ── LOD (level-of-detail) + label collision ──────────────────────────────
+// Feature geometry (rings, arcs, markers, discs) always renders — only TEXT
+// annotations are gated/collision-resolved. Per-render registry: every label
+// candidate is pushed here (world-space anchor already known to be fixed-px
+// on screen via _trajFixedG's counter-scale) instead of being inlined
+// directly, then _trajResolveLabels() runs LOD thresholds + a greedy bbox
+// collision pass and returns the final <text>+plate markup for all winners.
+// Reset at the top of every top-level scene render (_trajSceneSVG callers).
+let _trajLabelRegistry = [];
+function _trajResetLabels() { _trajLabelRegistry = []; }
+
+// Priority order (higher wins collisions): selected-event > burn > orbit > body > zone.
+const _TRAJ_LOD_PRI = { selected: 5, burn: 4, orbit: 3, body: 2, zone: 1 };
+
+// Rough monospace glyph width in px at a given font-size (var(--mono) is a
+// fixed-width face; ~0.62em per character is a safe estimate for JetBrains
+// Mono-style fonts — used only for collision bbox sizing, not layout).
+function _trajTextWidthPx(text, fontPx) { return (text || '').length * fontPx * 0.62; }
+
+// Register a label candidate. `x,y` = world-space anchor (pre-zoom svg units,
+// same space _trajFixedG anchors to). `screenSize` = the rendered on-screen
+// px size of the PARENT feature (ring radius, disc radius, arc/ring extent)
+// used for the size-based LOD gate; pass Infinity for features with no size
+// gate (e.g. always-selected). `kind` indexes _TRAJ_LOD_PRI. `lines` is an
+// array of {text, dy, fontPx, color} rendered top-to-bottom inside one plate.
+function _trajRegisterLabel(x, y, lines, kind, opts) {
+  opts = opts || {};
+  _trajLabelRegistry.push({ x, y, lines, kind, priority: (opts.selected ? _TRAJ_LOD_PRI.selected : _TRAJ_LOD_PRI[kind]) || 0,
+    screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: opts.minSize || 0,
+    selected: !!opts.selected, zoom: opts.zoom || 1, anchor: opts.anchor || 'middle' });
+}
+
+// LOD + collision resolution: filters by size gate (unless selected — selected
+// events always show full annotations per the brief), sorts by priority
+// (ties broken by larger screenSize first — bigger features "win" visually),
+// then greedily keeps a label only if its screen-space bbox doesn't overlap
+// an already-kept label; drops losers outright (simple greedy pass, no force
+// layout / leader lines, per the brief). Returns SVG markup string.
+function _trajResolveLabels() {
+  // Collision bboxes are computed in SCREEN-px space (world anchor * zoom),
+  // matching what actually lands on screen: the SVG's CSS width/height scales
+  // by `zoom` while _trajFixedG counter-scales each label's own content by
+  // 1/zoom, so a label's rendered pixel SIZE is constant across zoom — but
+  // its anchor POSITION still moves with zoom (world_px * zoom), same as
+  // every other feature in the scene. Comparing raw world-unit anchors
+  // without the zoom multiplier collapses labels together as you zoom out
+  // (they visually converge toward the scene origin) even though their fixed
+  // on-screen text size stays the same, producing false negatives (missed
+  // overlaps) at zoom < 1. Font sizes (fontPx) are already screen-px by
+  // design and need no further scaling.
+  const cands = _trajLabelRegistry.filter(c => c.selected || c.screenSize >= c.minSize);
+  cands.sort((a, b) => (b.priority - a.priority) || (b.screenSize - a.screenSize));
+  const kept = [];
+  const overlaps = (a, b) => !(a.x2 < b.x1 || b.x2 < a.x1 || a.y2 < b.y1 || b.y2 < a.y1);
+  let out = '';
+  cands.forEach(c => {
+    const z = c.zoom || 1;
+    const sx = c.x * z, sy = c.y * z; // screen-px anchor
+    const maxW = Math.max(1, ...c.lines.map(l => _trajTextWidthPx(l.text, l.fontPx)));
+    const h = c.lines.reduce((s, l) => s + (l.fontPx * 1.15), 0);
+    const topDy = c.lines[0].dy;
+    const bx1 = sx - maxW / 2, bx2 = sx + maxW / 2;
+    const by1 = sy + topDy - c.lines[0].fontPx, by2 = by1 + h + 2;
+    const box = { x1: bx1, x2: bx2, y1: by1, y2: by2 };
+    if (!c.selected) {
+      const hit = kept.some(k => overlaps(box, k.box));
+      if (hit) return; // dropped — a higher/equal-priority label already claims this space
+    }
+    kept.push({ box });
+    const plateW = maxW + 6, plateH = h + 4;
+    const plateX = sx - plateW / 2, plateY = by1 - 1;
+    const textLines = c.lines.map(l => `<text x="0" y="${l.dy.toFixed(2)}" text-anchor="${c.anchor}" font-family="var(--mono)" font-size="${l.fontPx}" fill="${l.color}">${l.text}</text>`).join('');
+    const plate = `<rect x="${(plateX - sx).toFixed(2)}" y="${(plateY - sy).toFixed(2)}" width="${plateW.toFixed(2)}" height="${plateH.toFixed(2)}" fill="var(--panel-tint-plate)" rx="2"/>`;
+    out += _trajFixedG(c.x, c.y, z, plate + textLines);
+  });
+  return out;
+}
+
+// LOD size thresholds (rendered on-screen px, i.e. world-svg-units * zoom),
+// per the brief: ring label >=40px ring radius; body label disc>=10px OR
+// scene focus; burn text >=60px parent arc/ring extent OR selected.
+const _TRAJ_LOD_RING_MIN = 40, _TRAJ_LOD_BODY_MIN = 10, _TRAJ_LOD_BURN_MIN = 60;
+
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -346,24 +429,24 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   if (isCircle) {
     const r = ((rec.peri + rec.apo) / 2 + R) * scale;
     const hitArea = opts.authIdx != null ? `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
-    const label = _trajFixedG(0, -r - 4, zoom, `<text text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--nm-label)">${rec.label}</text>`);
-    const coastBadge = coastTxt ? _trajFixedG(g.c * scale, -6, zoom, `<text text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--nm-label)">${coastTxt}</text>`) : '';
+    const screenSize = r * zoom;
+    const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
+    _trajRegisterLabel(0, -r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, zoom });
+    if (coastTxt) _trajRegisterLabel(-g.c * scale, -6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, zoom });
     return `<g${clickAttr}>
       <circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></circle>
       ${hitArea}
-      ${label}
-      ${coastBadge}
     </g>`;
   }
-  const cx = g.c * scale, cy = 0, rx = g.a * scale, ry = g.b * scale;
+  const cx = -g.c * scale, cy = 0, rx = g.a * scale, ry = g.b * scale;
   const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
-  const label = _trajFixedG(cx, cy - ry - 4, zoom, `<text text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--nm-label)">${rec.label}</text>`);
-  const coastBadge = coastTxt ? _trajFixedG(cx, -6, zoom, `<text text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--nm-label)">${coastTxt}</text>`) : '';
+  const screenSize = Math.max(rx, ry) * zoom;
+  const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
+  _trajRegisterLabel(cx, cy - ry, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, zoom });
+  if (coastTxt) _trajRegisterLabel(cx, -6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, zoom });
   return `<g${clickAttr}>
     <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></ellipse>
     ${hitArea}
-    ${label}
-    ${coastBadge}
   </g>`;
 }
 
@@ -398,15 +481,20 @@ function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   const textColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
   const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
   const titleTxt = opts.title || '';
-  // Fixed-px marker + labels: translate to world anchor, counter-scale by
-  // 1/zoom so the dot/glyph/text render at a constant screen size (see
-  // _trajFixedG). Hit area is drawn inside the same fixed group so it tracks.
+  // Marker dot + hit area always render (geometry, not annotation). The
+  // dv/MET text block is LOD-gated on the parent arc/ring's rendered extent
+  // (opts.screenSize, passed by the caller — the transfer arc's semi-major
+  // axis in px) OR shown unconditionally when the event is selected, per the
+  // brief. Registered through _trajRegisterLabel so it also participates in
+  // the collision pass instead of being inlined unconditionally.
   const inner = `
     <circle cx="0" cy="0" r="${emphasized ? 2.4 : 2}" fill="var(--nm-bg)" stroke="${strokeColor}" stroke-width="${strokeW}"/>
-    <text x="0" y="-5" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${textColor}">${glyph} ${dvText}</text>
-    <text x="0" y="9" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--text-dim)">${metText}</text>
     ${opts.authIdx != null ? `<circle cx="0" cy="0" r="7" fill="transparent"${clickAttr}><title>${titleTxt}</title></circle>` : ''}
   `;
+  const dvLabel = dvText ? `${glyph} ${dvText}` : glyph;
+  const lines = [{ text: dvLabel, dy: -5, fontPx: 10, color: textColor }];
+  if (metText) lines.push({ text: metText, dy: 9, fontPx: 10, color: 'var(--text-dim)' });
+  _trajRegisterLabel(x, y, lines, 'burn', { screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, zoom });
   return _trajFixedG(x, y, zoom, inner, clickAttr.trim());
 }
 
@@ -522,13 +610,16 @@ function _trajSceneContent(scene, m, scale, zoom) {
     const emphasized = selAuthIdx != null && leg.authIdx === selAuthIdx;
     const clickAttr = leg.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${leg.authIdx})"` : '';
     const hoverTitle = `${leg.vehName ? leg.vehName + ' — ' : ''}${leg.fromLabel} → ${leg.toLabel}${leg.dv ? ' &middot; ' + _trajDvText(leg.dv) : ''}${leg.met != null ? ' &middot; ' + _metFmt(leg.met) : ''}`;
-    const markerOpts = (dir) => ({ emphasized, authIdx: leg.authIdx, missionId: id, title: hoverTitle, zoom });
+    // screenSize (rendered px extent of the arc) is filled in per-branch below
+    // once the arc's semi-major axis is known; burn-marker text LOD gates on it.
+    const markerOpts = (screenSize) => ({ emphasized, authIdx: leg.authIdx, missionId: id, title: hoverTitle, zoom, screenSize });
     if (scene === 'SUN') {
       const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
       const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
       if (r1 == null || r2 == null) return;
       const departAng = _trajPlanetAngle(leg.fromO.body);
       const arc = _trajTransferArcPath(r1, r2, scale, departAng);
+      const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
       const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
       const strokeW = emphasized ? 1.2 : 0.7;
       const opacity = emphasized ? 1 : 0.8;
@@ -537,8 +628,8 @@ function _trajSceneContent(scene, m, scale, zoom) {
       // apply here; draw as before.
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
       out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
-      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts());
-      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts());
+      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
+      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts(arcExtentPx));
       return;
     }
     // local-body-frame leg: translunar (Earth scene, r2=Moon ring) or a normal
@@ -557,32 +648,50 @@ function _trajSceneContent(scene, m, scale, zoom) {
     // RING actually draws.
     const toPeri = toO_peri(leg.toO, R), toApo = toO_apo(leg.toO, R);
     const redundant = toPeri != null && toApo != null && _trajTransferIsRedundant(fromR, toApo, toPeri, toApo);
-    const arc = _trajTransferArcPath(fromR, toR, scale, 20 + (li * 35) % 360);
+    // Apse-line alignment: when the destination is elliptical, its ring is
+    // drawn (via _trajRingSVG/_trajEllipseGeom) with apoapsis fixed at local
+    // -x, rotDeg=0 — no rotation parameter exists on the ring. For the dashed
+    // transfer arc to be VISUALLY TANGENT to that ring at the shared apoapsis
+    // (the second/circularization burn point, matching calculate()'s
+    // dv2-at-apoapsis model), the arc must share that same 0-rotation apse
+    // line and use the destination's TRUE apoapsis radius (toApo), not the
+    // mean radius (toR) which only equals toApo for circular targets. The
+    // schematic per-leg rotation (20 + li*35) is dropped for elliptical
+    // destinations so arcs don't go tangent to nothing; circular/degenerate
+    // targets (toApo==toPeri) keep no meaningful apse line so this is a no-op
+    // for them, and legs into scenes without a drawn ring (SUN-scene, handled
+    // above) are unaffected.
+    const arcToR = (toApo != null && toPeri != null && Math.abs(toApo - toPeri) > Math.max(1, toApo * 0.001)) ? toApo : toR;
+    const arc = _trajTransferArcPath(fromR, arcToR, scale, 0);
+    const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
     const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
     const strokeW = emphasized ? 1.2 : 0.7;
     const opacity = emphasized ? 1 : 0.8;
     if (!redundant) {
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
       out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
-      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts());
-      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts());
+      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
+      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts(arcExtentPx));
     } else {
       // Departure burn dot only, at the same perigee-side point the arc would
       // have started from — the target ring itself IS the transfer.
-      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts());
+      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
     }
   });
 
-  // surface events (fixed screen-space marker + label, like burn markers)
+  // surface events (fixed screen-space marker + label, like burn markers) —
+  // dot always renders; label text is LOD-gated through the same registry
+  // (burn priority — these are event markers, same visual weight as burns).
   sc.surface.forEach(s => {
     const ang = s.kind === 'launch' ? -90 : 90; // launch at top, landing at bottom of disc — schematic
     const rad = ang * Math.PI / 180;
     const bodyPxR = Math.max(4, R * scale * 0.02);
     const x = bodyPxR * Math.cos(rad), y = bodyPxR * Math.sin(rad);
     const dy = s.kind === 'launch' ? -5 : 10;
-    const inner = `<circle cx="0" cy="0" r="1.6" fill="var(--accent3)"/>
-      <text x="0" y="${dy}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--accent3)">${s.label}</text>`;
+    const inner = `<circle cx="0" cy="0" r="1.6" fill="var(--accent3)"/>`;
     out += _trajFixedG(x, y, zoom, inner);
+    _trajRegisterLabel(x, y, [{ text: s.label, dy, fontPx: 10, color: 'var(--accent3)' }], 'burn',
+      { screenSize: Infinity, minSize: 0, selected: false, zoom });
   });
 
   return out;
@@ -634,12 +743,15 @@ const _TRAJ_VB = 400; // viewBox is 0..400 in both axes, origin translated to ce
 // applied by the caller via _trajBodyPxR (counter-scaled by zoom so the
 // clamp only bites when zoomed OUT — zooming in lets the true-scale disc
 // grow past the clamp, per the O2 brief). Label is always fixed screen size.
-function _trajGlyph(cx, cy, r, color, label, zoom) {
+function _trajGlyph(cx, cy, r, color, label, zoom, isFocus) {
   const z = zoom || 1;
-  const labelG = _trajFixedG(cx, cy - r - 4, z, `<text text-anchor="middle" font-family="var(--mono)" font-size="10" fill="var(--nm-label)">${label}</text>`);
+  // Body label LOD: disc >=10px rendered OR this body is the scene focus
+  // (always shown per the brief, since the focus body is the orientation
+  // anchor for the whole view).
+  _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: 'var(--nm-label)' }], 'body',
+    { screenSize: r * z, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus, zoom: z });
   return `<g>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
-    ${labelG}
   </g>`;
 }
 
@@ -677,9 +789,9 @@ function _trajSunSceneSVG(m, zoom) {
     const cx = rr * Math.cos(ang), cy = rr * Math.sin(ang);
     const color = _trajBodyColor(b);
     return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
-      + _trajGlyph(cx, cy, _trajBodyPxR(3, zoom), color, b, zoom);
+      + _trajGlyph(cx, cy, _trajBodyPxR(3, zoom), color, b, zoom, false);
   }).join('');
-  const sun = _trajGlyph(0, 0, _trajBodyPxR(6, zoom), _trajBodyColor('SUN'), 'Sun', zoom);
+  const sun = _trajGlyph(0, 0, _trajBodyPxR(6, zoom), _trajBodyColor('SUN'), 'Sun', zoom, true);
   return `${rings}${sun}${_trajSceneContent('SUN', m, scale, zoom)}`;
 }
 
@@ -693,7 +805,7 @@ function _trajBodySceneSVG(body, m, zoom) {
     const rr = mo.r * scale;
     const color = _trajBodyColor(mo.name);
     return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
-      + _trajGlyph(rr, 0, _trajBodyPxR(3, zoom), color, mo.name, zoom);
+      + _trajGlyph(rr, 0, _trajBodyPxR(3, zoom), color, mo.name, zoom, false);
   }).join('');
   // Body disc: true world-scale (R*scale), with a screen-space min-visibility
   // clamp (_trajBodyPxR, ~6px on screen at any zoom) so it never vanishes when
@@ -702,12 +814,19 @@ function _trajBodySceneSVG(body, m, zoom) {
   const bodyTrueR = R * scale;
   const bodyPxR = _trajBodyPxR(bodyTrueR, zoom);
   const discColor = _trajBodyColor(body);
-  const disc = _trajGlyph(0, 0, bodyPxR, discColor, body, zoom);
+  const disc = _trajGlyph(0, 0, bodyPxR, discColor, body, zoom, true);
   return `${moonRings}${disc}${_trajSceneContent(body, m, scale, zoom)}`;
 }
 
 function _trajSceneSVG(scene, m, zoom) {
-  return scene === 'SUN' ? _trajSunSceneSVG(m, zoom) : _trajBodySceneSVG(scene, m, zoom);
+  // Single choke point for all scene renders (initial, wheel-zoom in-place
+  // re-render) — reset the label registry, build geometry (which registers
+  // label candidates as a side effect), then resolve LOD + collisions once
+  // all candidates for this scene are known, and append the winners.
+  _trajResetLabels();
+  const geo = scene === 'SUN' ? _trajSunSceneSVG(m, zoom) : _trajBodySceneSVG(scene, m, zoom);
+  const labels = _trajResolveLabels();
+  return geo + labels;
 }
 
 // Which scene(s) hold content (an orbit ring or a transfer leg) tied to the

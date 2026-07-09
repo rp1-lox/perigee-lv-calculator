@@ -67,17 +67,46 @@ function drawOrbitDiagram(){
   const accent2='var(--accent2)';
   const warnColor='var(--warn)';
 
+  // ── label registry: reuse 574's LOD/collision/plate machinery (loaded in
+  // the same concatenated bundle — declaration order doesn't matter by call
+  // time) so both surfaces share one algorithm and one visual language
+  // (plates, greedy collision drop, priority order). The mini-diagram has no
+  // zoom (zoom=1 always) and every label here is geometry-anchored (no size
+  // gate needed beyond what's computed below), so labels are registered with
+  // minSize:0 (always eligible) and let collision be the only filter.
+  _trajResetLabels();
+  const reg=(x,y,text,fontPx,color,pri)=>_trajRegisterLabel(x,y,[{text,dy:0,fontPx,color}],pri||'orbit',{screenSize:Infinity,minSize:0,selected:false,zoom:1});
+
   let out='';
-  // Earth disc — min ~8 viewBox-units (== ~8px rendered, since the viewBox
-  // matches the panel's rendered aspect 1:1 — see #orbit-diagram CSS).
-  const eR=Math.max(R_e*scale,8);
+  // Earth disc — true scale, but CAPPED per the C brief: at low-orbit targets
+  // a true-scale Earth swamps the ring (e.g. a 200 km target reads as hugging
+  // a giant disc). Clamp to min(true scale, ~55% of the smallest drawn
+  // orbit's rendered radius), floor 8px, so Earth stays a size REFERENCE
+  // rather than dominating the frame. "Smallest drawn orbit" = parking ring
+  // (always drawn) and, when present, the target ring's own smaller apsis.
+  let smallestOrbitPx=r_park*scale;
+  if(!isEsc){
+    const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
+    smallestOrbitPx=Math.min(smallestOrbitPx, rPeri*scale, rApo*scale);
+  }
+  const eR_true=R_e*scale;
+  const eR_cap=Math.max(8, smallestOrbitPx*0.55);
+  const eR=Math.max(8, Math.min(eR_true, eR_cap));
+  const earthCapped=eR_true>eR_cap+0.5;
   out+=`<circle cx="0" cy="0" r="${eR.toFixed(2)}" fill="${earthColor}" stroke="var(--border-bright)" stroke-width="1.2"/>`;
-  out+=`<text x="0" y="${(eR+13).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${dimColor}">Earth</text>`;
+  reg(0,eR+13,'Earth',10,dimColor,'body');
 
   // Parking orbit ring (thin, dim, dashed) — label nudged bottom-left per brief
   const rParkPx=r_park*scale;
   out+=`<circle cx="0" cy="0" r="${rParkPx.toFixed(2)}" fill="none" stroke="${dimColor}" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.7"/>`;
-  out+=`<text x="${(-rParkPx*0.7).toFixed(2)}" y="${(rParkPx*0.7+12).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${dimColor}">PARK ${_odFmtAlt(r_park,R_e)}</text>`;
+  reg(-rParkPx*0.7, rParkPx*0.7+12, `PARK ${_odFmtAlt(r_park,R_e)}`, 10, dimColor, 'orbit');
+
+  // Corner title (fixed header line, top-left, ~10px, plated) instead of a
+  // large TARGET label floating centered-over-the-orbit — per the B/mini-
+  // diagram brief. Built up below once the target params are known; emitted
+  // as a direct (non-collision, always-on) plated text since it's pinned to
+  // a fixed screen corner, not anchored to scene geometry.
+  let titleTxt=null;
 
   if(isEsc){
     // Escape mode: schematic outgoing hyperbolic-suggestive open curve.
@@ -96,9 +125,8 @@ function drawOrbitDiagram(){
     const a2={x:p1.x-ah*Math.cos(ang+0.4),y:p1.y-ah*Math.sin(ang+0.4)};
     out+=`<path d="M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a1.x.toFixed(2)} ${a1.y.toFixed(2)} M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${a2.x.toFixed(2)} ${a2.y.toFixed(2)}" stroke="${accent2}" stroke-width="1.6" fill="none"/>`;
     out+=`<circle cx="${p0.x.toFixed(2)}" cy="${p0.y.toFixed(2)}" r="2.6" fill="${accent}"/>`;
-    out+=`<text x="${p0.x.toFixed(2)}" y="${(p0.y-9).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${accent}">Injection</text>`;
-    const c3Txt=`C3 = ${c3v>=0?'+':''}${c3v.toFixed(1)} km²/s²`;
-    out+=`<text x="${(-_OD_VBW/2+8).toFixed(2)}" y="${(_OD_VBH/2-10).toFixed(2)}" font-family="var(--mono)" font-size="10.5" fill="${accent2}">${c3Txt}</text>`;
+    reg(p0.x, p0.y-9, 'Injection', 10, accent, 'burn');
+    titleTxt=`C3 = ${c3v>=0?'+':''}${c3v.toFixed(1)} km²/s²`;
   } else {
     const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
     const inc=gn('inclination');
@@ -107,12 +135,12 @@ function drawOrbitDiagram(){
       // Target ≈ parking: single circle only, no transfer arc.
       const rPx=rApo*scale;
       out+=`<circle cx="0" cy="0" r="${rPx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-      out+=`<text x="0" y="${(-rPx-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+      titleTxt=`TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}`;
     } else {
       // Target ellipse/circle via 574's pure geometry helper.
       const g=_trajEllipseGeom(periAlt,apoAlt,R_e);
       const gCirc=Math.abs(g.rApo-g.rPeri)<Math.max(1,R_e*0.001);
-      const gcx=g.c*scale, grx=g.a*scale, gry=g.b*scale;
+      const gcx=-g.c*scale, grx=g.a*scale, gry=g.b*scale;
       // Redundant-transfer suppression: when the transfer ellipse (parking ->
       // target apoapsis) ~= the target orbit itself (peri-matched elliptical
       // target — the classic GTO case, model charges dv2=0), don't draw a
@@ -124,18 +152,18 @@ function drawOrbitDiagram(){
       const redundant=!gCirc && _trajTransferIsRedundant(Math.min(r_park,rApo),Math.max(r_park,rApo),rPeri,rApo);
       if(gCirc){
         out+=`<circle cx="0" cy="0" r="${grx.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-        out+=`<text x="0" y="${(-grx-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+        titleTxt=`TARGET ${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}`;
       } else {
         out+=`<ellipse cx="${gcx.toFixed(2)}" cy="0" rx="${grx.toFixed(2)}" ry="${gry.toFixed(2)}" fill="none" stroke="${accent}" stroke-width="2"/>`;
-        // label nudged to the apogee end (far -x side of the ellipse) so it
-        // doesn't sit on top of the parking-ring / transfer-arc geometry.
-        const labelX=gcx-grx;
-        out+=`<text x="${labelX.toFixed(2)}" y="${(-gry-6).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="${accent}">TARGET ${_odFmtAlt(rPeri,R_e)}×${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}</text>`;
+        titleTxt=`TARGET ${_odFmtAlt(rPeri,R_e)}×${_odFmtAlt(rApo,R_e)}${inc?(' · '+inc.toFixed(1)+'°'):''}`;
       }
 
       if(!redundant){
         // Hohmann transfer arc, parking -> target apoapsis, with 2 burn dots at
         // the tangent points (periapsis-side and apoapsis-side of the transfer).
+        // Apse-line aligned with the target ellipse (rotDeg=0 on both — see
+        // the bug-fix note above _trajEllipseGeom's callers): the arrival dot
+        // (arc.arrX/arrY) coincides with the target ellipse's apoapsis point.
         const arc=_trajTransferArcPath(r_park,rApo,scale,0);
         out+=`<path d="${arc.d}" fill="none" stroke="${accent2}" stroke-width="1.3" stroke-dasharray="3,2.5" opacity="0.9"/>`;
         out+=`<circle cx="${arc.depX.toFixed(2)}" cy="${arc.depY.toFixed(2)}" r="2.6" fill="${accent}"/>`;
@@ -146,15 +174,39 @@ function drawOrbitDiagram(){
         out+=`<circle cx="${depX.toFixed(2)}" cy="${depY.toFixed(2)}" r="2.6" fill="${accent}"/>`;
       }
     }
+  }
 
-    out+=`<text x="${(-_OD_VBW/2+8).toFixed(2)}" y="${(_OD_VBH/2-10).toFixed(2)}" font-family="var(--mono)" font-size="10" fill="${dimColor}">coplanar · inc annotated</text>`;
+  // Resolve scene-anchored labels (Earth/PARK/Injection etc.) with LOD +
+  // collision now that all candidates for this render are registered.
+  out+=_trajResolveLabels();
+
+  // Fixed-corner overlays (not part of the collision pass — pinned screen
+  // positions, plated for legibility over geometry): title top-left (≤11px,
+  // per brief), coplanar note + warn bottom-left, Earth-cap note in the footer.
+  const plateRect=(x,y,w,h)=>`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--panel-tint-plate)" rx="2"/>`;
+  if(titleTxt){
+    const tw=_trajTextWidthPx(titleTxt,10.5);
+    const tx=-_OD_VBW/2+8, ty=-_OD_VBH/2+16;
+    out+=plateRect(tx-3, ty-11, tw+6, 15)+`<text x="${tx.toFixed(2)}" y="${ty.toFixed(2)}" font-family="var(--mono)" font-size="10.5" fill="${accent}">${titleTxt}</text>`;
+  }
+  if(!isEsc){
+    const noteTxt='coplanar · inc annotated';
+    const nw=_trajTextWidthPx(noteTxt,10);
+    const nx=-_OD_VBW/2+8, ny=_OD_VBH/2-10;
+    out+=plateRect(nx-3, ny-11, nw+6, 14)+`<text x="${nx.toFixed(2)}" y="${ny.toFixed(2)}" font-family="var(--mono)" font-size="10" fill="${dimColor}">${noteTxt}</text>`;
+  } else {
+    // titleTxt already carries the C3 readout in escape mode (moved to the
+    // corner header above), so no separate bottom-left note is needed here.
   }
 
   if(warn){
-    out+=`<text x="0" y="${(_OD_VBH/2-26).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
+    const ww=_trajTextWidthPx(warn,10);
+    out+=plateRect(-ww/2-3, _OD_VBH/2-26-11, ww+6, 14)+`<text x="0" y="${(_OD_VBH/2-26).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
   }
 
-  host.innerHTML=`<svg viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`;
+  const footerNote=earthCapped?'Earth size schematic':'';
+  const footerHtml=footerNote?`<div class="od-footer-note">${footerNote}</div>`:'';
+  host.innerHTML=`<svg viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>${footerHtml}`;
 }
 
 let activeSiteKey=null;

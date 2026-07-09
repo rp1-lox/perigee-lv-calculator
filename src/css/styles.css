@@ -343,6 +343,10 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
   --nm-earth-zone: color-mix(in srgb, var(--nm-earth) 7%, transparent);
   --nm-lunar-zone: color-mix(in srgb, var(--nm-lunar) 7%, transparent);
   --nm-interp-zone: color-mix(in srgb, var(--nm-interp) 7%, transparent);
+  /* Text-plate wash for SVG symbology (trajectory view + orbit diagram) —
+     a near-opaque panel backing so labels stay legible over geometry at any
+     zoom, per the theming rule (no chromatic literals; derived var only). */
+  --panel-tint-plate: color-mix(in srgb, var(--panel) 85%, transparent);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
@@ -378,7 +382,8 @@ header h1{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spac
 /* ── SECTION LABEL ── */
 .sl{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--text-dim);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:10px;}
 .sl::after{content:'';flex:1;height:1px;background:var(--border);}
-#orbit-diagram{display:block;flex:0 0 auto;align-self:stretch;width:100%;aspect-ratio:1.1/1;min-height:300px;border:1px solid var(--border);box-sizing:border-box;}
+#orbit-diagram{display:block;flex:0 0 auto;align-self:stretch;width:100%;aspect-ratio:1.1/1;min-height:300px;border:1px solid var(--border);box-sizing:border-box;position:relative;}
+.od-footer-note{font-family:var(--mono);font-size:9px;color:var(--text-dim);text-align:right;padding:2px 4px 0;}
 
 /* ── PANEL ── */
 .panel{background:var(--panel);border:1px solid var(--border);padding:14px;margin-bottom:12px;overflow:hidden;}
