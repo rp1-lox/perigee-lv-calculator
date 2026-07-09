@@ -817,7 +817,7 @@ function _missionApplyDeploy(m, e) {
   return { fv, payloadMass, payloadNames: [sc.name] };
 }
 
-function missionExecLaunch(id) {
+function missionExecLaunch(id, opts) {
   const m = _missionGet(id);
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
@@ -826,7 +826,10 @@ function missionExecLaunch(id) {
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
-  // prompt the user to name the freshly-launched vehicle (skippable → keeps auto name)
+  // prompt the user to name the freshly-launched vehicle (skippable → keeps auto name).
+  // Suppressed when called programmatically (e.g. devSeedApolloMission) via opts.silent —
+  // an unattended script shouldn't pop a UI modal the caller can't dismiss.
+  if (opts && opts.silent) return;
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   if (fv && fv._originKey) setTimeout(() => missionRenameVehicle(id, fv._originKey), 0);
 }

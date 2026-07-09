@@ -24,7 +24,7 @@ function devSeedApolloMission(opts) {
   const csm = _scEdSC.find(s => /csm/i.test(s.name));
   const lm  = _scEdSC.find(s => /lunar module|(^|\s)lm(\s|$)/i.test(s.name));
   m.payloadScIds = [csm, lm].filter(Boolean).map(s => s.spacecraftId);
-  missionExecLaunch(m.missionId);
+  missionExecLaunch(m.missionId, { silent: true });
   if (opts.maneuvers !== false) {
     missionExecManeuver(m.missionId, 'leo', 'tlc');   // trans-lunar injection
     missionExecManeuver(m.missionId, 'tlc', 'llo');   // lunar orbit insertion

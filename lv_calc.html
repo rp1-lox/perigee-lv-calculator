@@ -327,10 +327,12 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-wrap{display:flex;flex-direction:column;height:100%;min-height:0;}
 .traj-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;flex-shrink:0;}
 .traj-focus-seg{flex-wrap:wrap;}
-.traj-canvas{flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--nm-bg);border:1px solid var(--border);cursor:grab;}
+.traj-canvas{position:relative;flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--nm-bg);border:1px solid var(--border);cursor:grab;}
 .traj-canvas:active{cursor:grabbing;}
 .traj-svg{display:block;}
 .traj-footer{flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--text-dim);text-align:right;padding:4px 2px 0;}
+.traj-hint-chip{position:absolute;top:8px;right:8px;z-index:2;font-family:var(--mono);font-size:9px;color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);padding:4px 9px;border-radius:3px;cursor:pointer;user-select:none;}
+.traj-hint-chip:hover{background:var(--accent-tint-strongest);}
 
 /* ===== RESTORED LV CALCULATOR CSS (from backup) ===== */
 
@@ -14380,7 +14382,7 @@ function _missionApplyDeploy(m, e) {
   return { fv, payloadMass, payloadNames: [sc.name] };
 }
 
-function missionExecLaunch(id) {
+function missionExecLaunch(id, opts) {
   const m = _missionGet(id);
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
@@ -14389,7 +14391,10 @@ function missionExecLaunch(id) {
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
-  // prompt the user to name the freshly-launched vehicle (skippable → keeps auto name)
+  // prompt the user to name the freshly-launched vehicle (skippable → keeps auto name).
+  // Suppressed when called programmatically (e.g. devSeedApolloMission) via opts.silent —
+  // an unattended script shouldn't pop a UI modal the caller can't dismiss.
+  if (opts && opts.silent) return;
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   if (fv && fv._originKey) setTimeout(() => missionRenameVehicle(id, fv._originKey), 0);
 }
@@ -18426,7 +18431,7 @@ function devSeedApolloMission(opts) {
   const csm = _scEdSC.find(s => /csm/i.test(s.name));
   const lm  = _scEdSC.find(s => /lunar module|(^|\s)lm(\s|$)/i.test(s.name));
   m.payloadScIds = [csm, lm].filter(Boolean).map(s => s.spacecraftId);
-  missionExecLaunch(m.missionId);
+  missionExecLaunch(m.missionId, { silent: true });
   if (opts.maneuvers !== false) {
     missionExecManeuver(m.missionId, 'leo', 'tlc');   // trans-lunar injection
     missionExecManeuver(m.missionId, 'tlc', 'llo');   // lunar orbit insertion
@@ -18523,19 +18528,28 @@ function trajWheelZoom(ev, id) {
 }
 
 let _trajDrag = null;
+// Set true when a pan-drag actually moved the pointer (>3px, same threshold as
+// the node map's missionNmPanMove) so the click that follows a real drag on an
+// interactive arc/marker/ring doesn't also select an event (drag-vs-click
+// disambiguation, per the node map / library-browser _didDrag pattern).
+let _trajJustDragged = false;
 function trajPanStart(ev, id) {
-  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, pan0: Object.assign({}, _trajPan({ missionId: id })) };
+  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, pan0: Object.assign({}, _trajPan({ missionId: id })), moved: false };
   ev.preventDefault();
 }
 function trajPanMove(ev) {
   if (!_trajDrag) return;
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
   const p = { x: _trajDrag.pan0.x + dx, y: _trajDrag.pan0.y + dy };
   _trajPanByMission[_trajDrag.id] = p;
   const el = document.querySelector(`.mcc-view-area .traj-scene[data-mid="${_trajDrag.id}"]`);
   if (el) el.setAttribute('transform', `translate(${p.x},${p.y})`);
 }
-function trajPanEnd() { _trajDrag = null; }
+function trajPanEnd() {
+  if (_trajDrag) _trajJustDragged = _trajDrag.moved;
+  _trajDrag = null;
+}
 
 // ── O1-b: mission content extraction ─────────────────────────────────────
 // Everything below reads the REPLAYED log (m._expanded, populated by
@@ -18551,7 +18565,23 @@ function _trajOrbitKey(body, peri, apo) {
   return body + '|' + Math.round(peri) + '|' + Math.round(apo);
 }
 
+// Detects a transit-corridor snapshot (e.g. a TLC leg captured mid-coast: peri
+// near a low parking orbit, apo near a moon's orbital radius around `body`) so
+// it can be labeled "TLC corridor"-style instead of a raw "185×378000" ring —
+// per the O1-c polish brief. Tolerance is generous (2%) since these are
+// snapshot-of-the-moment radii, not exact apsides.
+function _trajCorridorMoon(body, apo) {
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  const moons = _trajMoonsOf(body);
+  for (const mo of moons) {
+    if (Math.abs((apo + R) - mo.r) < mo.r * 0.02) return mo.name;
+  }
+  return null;
+}
+
 function _trajOrbitLabel(body, peri, apo) {
+  const corridorMoon = _trajCorridorMoon(body, apo);
+  if (corridorMoon) return `T${corridorMoon.slice(0, 1).toUpperCase()}C corridor`; // "TLC corridor" for Moon, generalized initial for other moons
   // ORBIT_CATEGORIES (060) is an array of {planet, orbits:[{name,mode,perigee,apogee,...}]}
   // grouped by planet — find this body's group, then match on peri/apo within tolerance
   // for a friendlier label ("LEO 200 km" instead of "200×200").
@@ -18598,7 +18628,7 @@ function _trajExtractMission(m) {
     return { color: _missionLaneColor(m, label, idx), label };
   };
 
-  const addOrbitRing = (body, peri, apo, ownerKeys) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx) => {
     if (body == null || peri == null || apo == null) return null;
     const sceneId = body;
     const sc = sceneFor(sceneId);
@@ -18609,10 +18639,12 @@ function _trajExtractMission(m) {
         key, body, peri, apo,
         label: _trajOrbitLabel(body, peri, apo),
         colors: new Set(), names: new Set(),
+        firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
       });
     }
     const rec = sc.orbits.get(key);
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
+    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
     return rec;
   };
 
@@ -18623,7 +18655,7 @@ function _trajExtractMission(m) {
       const o = v.orbit;
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
     });
   });
 
@@ -18648,9 +18680,13 @@ function _trajExtractMission(m) {
     if (!sceneId) return;
     const lane = laneColorFor(_trajOwnerKeysForManeuver(e));
     const dvUsed = (e.dvDelivered != null ? e.dvDelivered : e.dvRequired) || 0;
+    const metArrive = (e.metStart != null && e.durationUsed != null) ? (e.metStart + e.durationUsed) : null;
+    const vehName = (_trajOwnerKeysForManeuver(e) && m._ownerLabels && m._ownerLabels[_trajOwnerKeysForManeuver(e)[0]]) || e.activeName || '';
     sceneFor(sceneId).legs.push({
       sceneId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
-      dv: dvUsed, met: e.metStart, color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
+      dv: dvUsed, met: e.metStart, metArrive, vehName,
+      color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
+      authIdx: e._authIdx != null ? e._authIdx : null,
     });
   });
 
@@ -18663,7 +18699,7 @@ function _trajExtractMission(m) {
     if (!v) return;
     const o = v.orbit;
     const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
-    const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners);
+    const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
     if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
   });
 
@@ -18700,12 +18736,18 @@ function _trajEllipseGeom(peri, apo, R) {
   return { rPeri, rApo, a, b, c };
 }
 
-function _trajRingSVG(rec, body, scale, color) {
+function _trajRingSVG(rec, body, scale, color, opts) {
+  opts = opts || {};
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const g = _trajEllipseGeom(rec.peri, rec.apo, R);
   const isCircle = Math.abs(rec.apo - rec.peri) < Math.max(1, R * 0.001);
-  const strokeColor = color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)');
-  const title = [...rec.names].join(', ') || rec.label;
+  const emphasized = !!opts.emphasized;
+  const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
+  const strokeW = emphasized ? 1.4 : 0.7;
+  const opacity = emphasized ? 1 : 0.85;
+  const names = [...rec.names].join(', ');
+  const title = `${names ? names + ' — ' : ''}${rec.label}`;
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
   // loiter badge: placed just below the ring label, at the ellipse center's x
   // (a legible spot regardless of eccentricity, not tied to a specific apsis).
   const coastBadge = rec.coast && rec.coast.length
@@ -18713,15 +18755,19 @@ function _trajRingSVG(rec, body, scale, color) {
     : '';
   if (isCircle) {
     const r = ((rec.peri + rec.apo) / 2 + R) * scale;
-    return `<g>
-      <circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="0.7" opacity="0.85"><title>${title}</title></circle>
+    const hitArea = opts.authIdx != null ? `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+    return `<g${clickAttr}>
+      <circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}"><title>${title}</title></circle>
+      ${hitArea}
       <text x="0" y="${(-r - 4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="var(--nm-label)">${rec.label}</text>
       ${coastBadge}
     </g>`;
   }
   const cx = g.c * scale, cy = 0, rx = g.a * scale, ry = g.b * scale;
-  return `<g>
-    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="0.7" opacity="0.85"><title>${title}</title></ellipse>
+  const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+  return `<g${clickAttr}>
+    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}"><title>${title}</title></ellipse>
+    ${hitArea}
     <text x="${cx.toFixed(2)}" y="${(cy - ry - 4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="var(--nm-label)">${rec.label}</text>
     ${coastBadge}
   </g>`;
@@ -18748,13 +18794,34 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg) {
            depX: p1.x, depY: p1.y, arrX: p2.x, arrY: p2.y };
 }
 
-function _trajBurnMarker(x, y, dir, dvText, metText) {
+function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
+  opts = opts || {};
   const glyph = dir === 'up' ? '▲' : '▼';
-  return `<g>
-    <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="var(--nm-bg)" stroke="var(--accent2)" stroke-width="0.8"/>
-    <text x="${x.toFixed(2)}" y="${(y - 5).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="var(--accent2)">${glyph} ${dvText}</text>
+  const emphasized = !!opts.emphasized;
+  const strokeColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
+  const strokeW = emphasized ? 1.3 : 0.8;
+  const textColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
+  const titleTxt = opts.title || '';
+  // invisible wider hit-area circle on top of the small visible marker so it's
+  // easy to click without the strokes needing to be thick (standard trick, see
+  // node map / library-browser drag-vs-click patterns).
+  const hitArea = opts.authIdx != null
+    ? `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="7" fill="transparent"${clickAttr}><title>${titleTxt}</title></circle>` : '';
+  return `<g${clickAttr}>
+    <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${emphasized ? 2.4 : 2}" fill="var(--nm-bg)" stroke="${strokeColor}" stroke-width="${strokeW}"/>
+    <text x="${x.toFixed(2)}" y="${(y - 5).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="${textColor}">${glyph} ${dvText}</text>
     <text x="${x.toFixed(2)}" y="${(y + 9).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="5.5" fill="var(--text-dim)">${metText}</text>
+    ${hitArea}
   </g>`;
+}
+
+// Click handler shared by arcs/markers/rings: selects the AUTHORED event
+// (expands its card + rewinds the state panel via existing missionSelectEvent
+// behavior). Guarded against firing after a real pan-drag (see trajCanvasDown).
+function _trajSelectEventFromView(id, authIdx) {
+  if (_trajJustDragged) { _trajJustDragged = false; return; }
+  if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
 }
 
 // Compute the min zoom-worthy extent (max body-centered / heliocentric radius,
@@ -18799,6 +18866,15 @@ function _trajGetExtraction(m) {
 // scene for the given scene id ('SUN' or a body name). `scale` is the scene's
 // resolved px-per-km factor (already fit to whichever is larger: static
 // content or mission content — see _trajSunSceneSVG / _trajBodySceneSVG).
+// Authored index of the currently-selected (expanded) event, or null. Single
+// source of truth for O1-c emphasis — reads m.log's e._expanded flag, the same
+// one missionSelectEvent()/the events panel use, so the two views can't drift.
+function _trajSelectedAuthIdx(m) {
+  if (!m || !m.log) return null;
+  const idx = m.log.findIndex(e => e._expanded);
+  return idx >= 0 ? idx : null;
+}
+
 function _trajSceneContent(scene, m, scale) {
   if (!m) return '';
   const scenes = _trajGetExtraction(m);
@@ -18807,27 +18883,41 @@ function _trajSceneContent(scene, m, scale) {
   const body = scene === 'SUN' ? null : scene;
   const R = body ? ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0) : 0;
   scale = scale || 1;
+  const id = m.missionId;
+  const selAuthIdx = _trajSelectedAuthIdx(m);
 
   let out = '';
 
   // orbit rings (skip for SUN scene — heliocentric transit legs are drawn as
   // arcs between the static planet rings, not as a new "orbit" of the Sun)
   if (body) {
-    sc.orbits.forEach(rec => { out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null); });
+    sc.orbits.forEach(rec => {
+      const emphasized = selAuthIdx != null && rec.firstAuthIdx === selAuthIdx;
+      out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null,
+        { emphasized, authIdx: rec.firstAuthIdx, missionId: id });
+    });
   }
 
   // transfer legs
   sc.legs.forEach((leg, li) => {
+    const emphasized = selAuthIdx != null && leg.authIdx === selAuthIdx;
+    const clickAttr = leg.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${leg.authIdx})"` : '';
+    const hoverTitle = `${leg.vehName ? leg.vehName + ' — ' : ''}${leg.fromLabel} → ${leg.toLabel}${leg.dv ? ' &middot; ' + _trajDvText(leg.dv) : ''}${leg.met != null ? ' &middot; ' + _metFmt(leg.met) : ''}`;
+    const markerOpts = (dir) => ({ emphasized, authIdx: leg.authIdx, missionId: id, title: hoverTitle });
     if (scene === 'SUN') {
       const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
       const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
       if (r1 == null || r2 == null) return;
       const departAng = _trajPlanetAngle(leg.fromO.body);
       const arc = _trajTransferArcPath(r1, r2, scale, departAng);
-      const color = leg.color || 'var(--accent2)';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="2.5,2" opacity="0.8"><title>${leg.fromLabel} → ${leg.toLabel}</title></path>`;
-      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met));
-      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', '');
+      const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
+      const strokeW = emphasized ? 1.2 : 0.7;
+      const opacity = emphasized ? 1 : 0.8;
+      // invisible wider hit-area stroke over the thin dashed arc (visible strokes stay thin/blueprint).
+      const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
+      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts());
+      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts());
       return;
     }
     // local-body-frame leg: translunar (Earth scene, r2=Moon ring) or a normal
@@ -18836,10 +18926,13 @@ function _trajSceneContent(scene, m, scale) {
     const toR = _trajLocalRadius(leg.toO, body);
     if (fromR == null || toR == null) return;
     const arc = _trajTransferArcPath(fromR, toR, scale, 20 + (li * 35) % 360);
-    const color = leg.color || 'var(--accent2)';
-    out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="2.5,2" opacity="0.8"><title>${leg.fromLabel} → ${leg.toLabel}</title></path>`;
-    out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met));
-    out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', '');
+    const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
+    const strokeW = emphasized ? 1.2 : 0.7;
+    const opacity = emphasized ? 1 : 0.8;
+    const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
+    out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+    out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts());
+    out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts());
   });
 
   // surface events
@@ -18953,6 +19046,22 @@ function _trajSceneSVG(scene, m) {
   return scene === 'SUN' ? _trajSunSceneSVG(m) : _trajBodySceneSVG(scene, m);
 }
 
+// Which scene(s) hold content (an orbit ring or a transfer leg) tied to the
+// given authored event index. Used for the "event in EARTH scene → switch"
+// hint chip when the selected event's content lives outside the current focus.
+function _trajScenesForAuthIdx(m, authIdx) {
+  if (authIdx == null) return [];
+  const scenes = _trajGetExtraction(m);
+  const hits = [];
+  Object.keys(scenes).forEach(sceneId => {
+    const sc = scenes[sceneId];
+    const hasOrbit = [...sc.orbits.values()].some(rec => rec.firstAuthIdx === authIdx);
+    const hasLeg = sc.legs.some(leg => leg.authIdx === authIdx);
+    if (hasOrbit || hasLeg) hits.push(sceneId);
+  });
+  return hits;
+}
+
 // ── top-level view builder (called from missionRenderDetail via 570's hook) ──
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
@@ -18968,6 +19077,20 @@ function _missionTrajViewHTML(m) {
   const svgInner = _trajSceneSVG(focus, m);
   const px = Math.round(_TRAJ_VB * zoom);
 
+  // Selection hint chip: if the selected event's content lives in a scene
+  // other than the current focus, offer a one-click switch instead of
+  // auto-switching (per the O1-c brief — don't yank the user's view).
+  const selAuthIdx = _trajSelectedAuthIdx(m);
+  let hintChip = '';
+  if (selAuthIdx != null) {
+    const hitScenes = _trajScenesForAuthIdx(m, selAuthIdx).filter(s => s !== focus);
+    if (hitScenes.length) {
+      const target = hitScenes[0];
+      const label = (scenes.find(s => s.id === target) || { label: target }).label;
+      hintChip = `<div class="traj-hint-chip" onclick="trajSetFocus('${id}','${target}')" title="Switch to the ${label} scene">event in ${label.toUpperCase()} scene &rarr; switch</div>`;
+    }
+  }
+
   return `
     <div class="traj-wrap" data-mid="${id}">
       <div class="traj-toolbar">
@@ -18977,6 +19100,7 @@ function _missionTrajViewHTML(m) {
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"
            onmousedown="trajPanStart(event,'${id}')" onmousemove="trajPanMove(event)"
            onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()">
+        ${hintChip}
         <svg class="traj-svg" viewBox="-${_TRAJ_VB/2} -${_TRAJ_VB/2} ${_TRAJ_VB} ${_TRAJ_VB}"
              style="width:${px}px;height:${px}px;">
           <g class="traj-scene" data-mid="${id}" transform="translate(${pan.x},${pan.y})">
