@@ -4307,23 +4307,31 @@ function _missionNodeMapHTML(m) {
   return `<div class="nm-root">${ctrlHTML}<div class="nm-scroll" onwheel="missionNmWheel(event,'${id}')" onmousedown="missionNmPanStart(event,'${id}')">${svgHTML}</div></div>`;
 }
 
+// Per-body identity colors — a DATA palette (like VP_COLORS/TS_SERIES_COLORS,
+// exempt from the no-chromatic-literals chrome rule): bodies keep the same
+// color in the node map AND the trajectory view so the two stay cohesive.
+const PROG_BODY_COLORS = {
+  Sun:'#c6a057', Earth:'#5db877', Moon:'#8890bc', Venus:'#d8a657', Mercury:'#aa8866',
+  Mars:'#b85848', Jupiter:'#cc8844', Saturn:'#ccbb88', Uranus:'#5fd0d0', Neptune:'#5566dd',
+};
+
 // Compute the solar-system node-map layout: body positions + per-node positions.
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {
-  // body order (left → right) and per-body geometry/color
+  // body order (left → right) and per-body geometry (colors from PROG_BODY_COLORS)
   const META = {
-    Earth:   { col:'#5db877', bodyR:30, soiR:150 },
-    Moon:    { col:'#8890bc', bodyR:14, soiR:70  },
-    Venus:   { col:'#d8a657', bodyR:24, soiR:95  },
-    Mercury: { col:'#aa8866', bodyR:14, soiR:60  },
-    Mars:    { col:'#b85848', bodyR:20, soiR:95  },
-    Jupiter: { col:'#cc8844', bodyR:42, soiR:185 },
-    Saturn:  { col:'#ccbb88', bodyR:38, soiR:160 },
-    Uranus:  { col:'#5fd0d0', bodyR:28, soiR:120 },
-    Neptune: { col:'#5566dd', bodyR:28, soiR:120 },
+    Earth:   { col:PROG_BODY_COLORS.Earth,   bodyR:30, soiR:150 },
+    Moon:    { col:PROG_BODY_COLORS.Moon,    bodyR:14, soiR:70  },
+    Venus:   { col:PROG_BODY_COLORS.Venus,   bodyR:24, soiR:95  },
+    Mercury: { col:PROG_BODY_COLORS.Mercury, bodyR:14, soiR:60  },
+    Mars:    { col:PROG_BODY_COLORS.Mars,    bodyR:20, soiR:95  },
+    Jupiter: { col:PROG_BODY_COLORS.Jupiter, bodyR:42, soiR:185 },
+    Saturn:  { col:PROG_BODY_COLORS.Saturn,  bodyR:38, soiR:160 },
+    Uranus:  { col:PROG_BODY_COLORS.Uranus,  bodyR:28, soiR:120 },
+    Neptune: { col:PROG_BODY_COLORS.Neptune, bodyR:28, soiR:120 },
   };
   const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune'];
-  const bodyCol = { Sun:'#c6a057' };
+  const bodyCol = { Sun: PROG_BODY_COLORS.Sun };
   ORDER.forEach(b => bodyCol[b] = META[b].col);
 
   const SLOT = 320, PADX = 200, BASE_Y = 470, WORLD_H = 1040;

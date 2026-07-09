@@ -89,9 +89,11 @@ const _TRAJ_WKM_MIN = 200, _TRAJ_WKM_MAX = 1.2e10;
 
 // ── body -> chrome color mapping ─────────────────────────────────────────
 function _trajBodyColor(body) {
-  if (body === 'Sun') return 'var(--warn)';
-  if (body === 'Earth') return 'var(--nm-earth)';
-  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return 'var(--nm-lunar)';
+  // Shared per-body DATA palette (570's PROG_BODY_COLORS) so glyphs, rings and
+  // labels here match the same body's color in the orbit map. Unlisted moons
+  // (e.g. Titan) fall back to the Moon's hue; anything else to the theme accent2.
+  if (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS[body]) return PROG_BODY_COLORS[body];
+  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS.Moon) || 'var(--nm-lunar)';
   return 'var(--nm-interp)';
 }
 
