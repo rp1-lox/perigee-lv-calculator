@@ -27,6 +27,7 @@ const FILES = [
   'src/js/150-stage-and-a-half.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
+  'src/js/574-trajectory-view.js',
 ];
 
 const src = FILES.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
@@ -66,6 +67,8 @@ const {
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
   _s15BecoSplit, progBodyAngleAt, progBodyWorldPos,
+  _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
+  _trajTransferArcPath, _trajCorridorMoon, _trajOrbitLabel, _trajLocalRadius,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA })', sandbox);
@@ -537,6 +540,110 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('PROG_PORK_DATA.Earth.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Earth.theta0_rad === PROG_BODY_KINEMATICS.Earth.theta0_rad);
   ok('PROG_PORK_DATA.Mars.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Mars.theta0_rad === PROG_BODY_KINEMATICS.Mars.theta0_rad);
   ok('PROG_PORK_DATA.Venus.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Venus.theta0_rad === PROG_BODY_KINEMATICS.Venus.theta0_rad);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C2 trajectory-view LOD ramps + mission-state rendering — pure helpers
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // ── _trajArcRotationForTarget: arrival endpoint lands ON the target ──────
+  // Straight right (target due +x of origin) -> rotDeg = 0 - 180 = -180 (== 180).
+  approx('_trajArcRotationForTarget: target due +x -> rot = 180 (or -180)', Math.abs(_trajArcRotationForTarget(0, 0, 100, 0)), 180, 1e-6);
+  // Target due +y (90deg) -> rot = 90 - 180 = -90.
+  approx('_trajArcRotationForTarget: target due +y -> rot = -90', _trajArcRotationForTarget(0, 0, 0, 100), -90, 1e-6);
+  // Target due -x (180deg) -> rot = 180-180 = 0.
+  approx('_trajArcRotationForTarget: target due -x -> rot = 0', _trajArcRotationForTarget(0, 0, -100, 0), 0, 1e-6);
+  // Non-origin local frame: offset (ox,oy) is subtracted correctly.
+  approx('_trajArcRotationForTarget: works with a non-zero local origin', _trajArcRotationForTarget(50, 50, 50, 150), -90, 1e-6);
+
+  // Round-trip: apply the solved rotation back through _trajTransferArcPath
+  // and confirm the arrival endpoint (arrX,arrY) lands on the target within
+  // float tolerance — this is the actual invariant the Moon-lead feature needs.
+  {
+    const ox = 10, oy = -5, targetX = 200, targetY = 340;
+    const rot = _trajArcRotationForTarget(ox, oy, targetX, targetY);
+    const arc = _trajTransferArcPath(6871, 384400 + 1737, 1, rot, ox, oy);
+    // arrX/arrY should lie on the ray from (ox,oy) through (targetX,targetY) —
+    // check the angle matches (magnitude differs since rApo != target distance).
+    const arcAng = Math.atan2(arc.arrY - oy, arc.arrX - ox);
+    const targetAng = Math.atan2(targetY - oy, targetX - ox);
+    approx('_trajArcRotationForTarget round-trip: arc arrival angle == target angle', arcAng, targetAng, 1e-6);
+  }
+
+  // ── _trajLegPathFraction: linear schematic clamp ─────────────────────────
+  approx('_trajLegPathFraction: at departure -> 0', _trajLegPathFraction(100, 50, 100), 0, 1e-9);
+  approx('_trajLegPathFraction: at arrival -> 1', _trajLegPathFraction(100, 50, 150), 1, 1e-9);
+  approx('_trajLegPathFraction: midpoint -> 0.5', _trajLegPathFraction(100, 50, 125), 0.5, 1e-9);
+  ok('_trajLegPathFraction: clamps below departure to 0', _trajLegPathFraction(100, 50, 50) === 0);
+  ok('_trajLegPathFraction: clamps past arrival to 1', _trajLegPathFraction(100, 50, 500) === 1);
+  ok('_trajLegPathFraction: zero/negative TOF -> 0 (no divide-by-zero)', _trajLegPathFraction(100, 0, 100) === 0);
+
+  // ── _trajArcPointAt: endpoints match _trajTransferArcPath's own p1/p2 ────
+  {
+    const r1 = 6871, r2 = 42164, scale = 1, rot = 37, ox = 3, oy = -8;
+    const arc = _trajTransferArcPath(r1, r2, scale, rot, ox, oy);
+    const p0 = _trajArcPointAt(r1, r2, scale, rot, ox, oy, 0);
+    const p1 = _trajArcPointAt(r1, r2, scale, rot, ox, oy, 1);
+    approx('_trajArcPointAt(t=0) == arc departure point (x)', p0.x, arc.depX, 1e-6);
+    approx('_trajArcPointAt(t=0) == arc departure point (y)', p0.y, arc.depY, 1e-6);
+    approx('_trajArcPointAt(t=1) == arc arrival point (x)', p1.x, arc.arrX, 1e-6);
+    approx('_trajArcPointAt(t=1) == arc arrival point (y)', p1.y, arc.arrY, 1e-6);
+  }
+
+  // ── _trajLodOpacity: window + linear ramp behavior ───────────────────────
+  ok('_trajLodOpacity: below window -> 0', _trajLodOpacity(5, 10, 100) === 0);
+  ok('_trajLodOpacity: above window -> 0', _trajLodOpacity(200, 10, 100) === 0);
+  ok('_trajLodOpacity: dead center of window -> 1', _trajLodOpacity(55, 10, 100) === 1);
+  // Window [10,100]: ramp width = min((100-10)*0.2, 10*0.2) = min(18,2) = 2
+  // (capped at 20% of lo — see _trajLodOpacity's doc comment for why the
+  // full-span ramp would be absurdly wide for our lo<<hi windows).
+  approx('_trajLodOpacity: at lo edge -> 0', _trajLodOpacity(10, 10, 100), 0, 1e-9);
+  // At lo + rampW/2 -> 0.5 through the entry ramp.
+  approx('_trajLodOpacity: halfway through entry ramp -> 0.5', _trajLodOpacity(10 + 1, 10, 100), 0.5, 1e-9);
+  approx('_trajLodOpacity: at hi edge -> 0', _trajLodOpacity(100, 10, 100), 0, 1e-9);
+  approx('_trajLodOpacity: halfway through exit ramp -> 0.5', _trajLodOpacity(100 - 1, 10, 100), 0.5, 1e-9);
+  approx('_trajLodOpacity: well past entry ramp -> 1', _trajLodOpacity(20, 10, 100), 1, 1e-9);
+  // hi=Infinity (zone-of-influence "fade in only, no ceiling") must NOT
+  // collapse to 0 at large sizePx — this was a real bug caught in-browser
+  // (Infinity span made the ramp width infinite, so opacity was always ~0).
+  ok('_trajLodOpacity: hi=Infinity, sizePx far past lo -> 1 (no ceiling)', _trajLodOpacity(5531, 30, Infinity) === 1);
+  ok('_trajLodOpacity: hi=Infinity, sizePx below lo -> 0', _trajLodOpacity(10, 30, Infinity) === 0);
+  approx('_trajLodOpacity: hi=Infinity, sizePx at lo -> 0', _trajLodOpacity(30, 30, Infinity), 0, 1e-9);
+
+  // ── _trajOrbitLabel / corridor suppression: labeler no longer special-cases
+  // "TLC corridor" text (rings die entirely at the extraction layer instead —
+  // see _trajCorridorMoon's doc comment) — confirm the label function doesn't
+  // emit corridor text for a corridor-shaped orbit (extraction-layer
+  // suppression is exercised via _trajCorridorMoon directly, the detector
+  // is unchanged/still used to SUPPRESS, just not to relabel).
+  ok('_trajCorridorMoon: still detects a TLC-shaped snapshot (peri~LEO, apo~Moon radius)', _trajCorridorMoon('Earth', PROG_MOON_ORBITS.Moon.r - PROG_BODIES.Earth.R) === 'Moon');
+  ok('_trajOrbitLabel: no longer emits "corridor" text for any orbit', !_trajOrbitLabel('Earth', 185, PROG_MOON_ORBITS.Moon.r - PROG_BODIES.Earth.R).toLowerCase().includes('corridor'));
+
+  // ── _trajLocalRadius: Moon-frame patched-conic seam fallback (C2 fix, then
+  // C2-review fix) ────────────────────────────────────────────────────────
+  // A transit leg whose destination IS the frame body itself (e.g. body ===
+  // 'Moon', o.destination === 'Moon') previously returned null (leg silently
+  // never rendered in the destination's own frame — the TLC->LLO coast arc
+  // was invisible). Schematic fallback originally used 20x the destination
+  // body's own radius — but that value has no relationship to the actual
+  // departure-arrival gap, so at Earth anchor (zoomed out to frame the whole
+  // Earth-Moon system) the arc's drawn extent collapsed under the LOD
+  // window's px floor and the leg vanished entirely, even though the mirror
+  // leg in the Earth frame (LEO->TLC, using the moon's full ORBITAL radius
+  // mo.r as its far endpoint) rendered fine at the same zoom. Fix: scale off
+  // mo.r (20% of it) instead, so both ends of the cross-frame leg agree on
+  // the physical scale of the gap and the arc renders at a consistent size
+  // regardless of camera anchor.
+  {
+    const transitToMoon = { type: 'transit', body: 'Earth', destination: 'Moon' };
+    const r = _trajLocalRadius(transitToMoon, 'Moon');
+    approx('_trajLocalRadius: transit arriving at its own destination frame -> 50% of moon orbital radius (schematic SOI edge)', r, PROG_MOON_ORBITS.Moon.r * 0.5, 1e-6);
+    ok('_trajLocalRadius: still returns null for a transit with no destination', _trajLocalRadius({ type: 'transit', body: 'Sun' }, 'Moon') === null);
+    // Parent-frame case (Earth, destination Moon) is UNCHANGED — still
+    // returns the moon's orbital radius (used by other consumers, e.g.
+    // mission-extent fitting), not the new 20xR fallback.
+    approx('_trajLocalRadius: parent-frame transit (Earth->Moon) still returns moon orbital radius, unaffected by the new fallback', _trajLocalRadius(transitToMoon, 'Earth'), PROG_MOON_ORBITS.Moon.r, 1e-6);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

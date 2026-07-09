@@ -285,10 +285,11 @@ function _trajOrbitKey(body, peri, apo) {
 }
 
 // Detects a transit-corridor snapshot (e.g. a TLC leg captured mid-coast: peri
-// near a low parking orbit, apo near a moon's orbital radius around `body`) so
-// it can be labeled "TLC corridor"-style instead of a raw "185×378000" ring —
-// per the O1-c polish brief. Tolerance is generous (2%) since these are
-// snapshot-of-the-moment radii, not exact apsides.
+// near a low parking orbit, apo near a moon's orbital radius around `body`).
+// C2: corridor STATE RINGS DIE — arcs carry all transfer meaning now. This
+// detector is kept only to SUPPRESS ring generation for these snapshots (see
+// addOrbitRing below), not to relabel them. Tolerance generous (2%) since
+// these are snapshot-of-the-moment radii, not exact apsides.
 function _trajCorridorMoon(body, apo) {
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const moons = _trajMoonsOf(body);
@@ -299,8 +300,6 @@ function _trajCorridorMoon(body, apo) {
 }
 
 function _trajOrbitLabel(body, peri, apo) {
-  const corridorMoon = _trajCorridorMoon(body, apo);
-  if (corridorMoon) return `T${corridorMoon.slice(0, 1).toUpperCase()}C corridor`; // "TLC corridor" for Moon, generalized initial for other moons
   const group = (typeof ORBIT_CATEGORIES !== 'undefined') ? ORBIT_CATEGORIES.find(g => g.planet === body) : null;
   if (group) {
     for (const cat of group.orbits) {
@@ -344,8 +343,21 @@ function _trajExtractMission(m) {
     return { color: _missionLaneColor(m, label, idx), label };
   };
 
+  // C2 "expended vehicle" dimming: earliest EXPEND met per owner key, so an
+  // orbit ring whose only owners are all-expended-by-viewTime can be dimmed
+  // the same as history legs (reuses _TRAJ_HISTORY_ALPHA). Best-effort: keys
+  // by originKey when present (vehicle-level EXPEND) — stage-level EXPENDs
+  // don't retire the whole vehicle so are intentionally NOT tracked here.
+  const expendMetByOwner = {};
+  log.forEach(e => {
+    if (e.type === 'EXPEND' && e.vehicleLevel && e.targetKey != null && e.metStart != null) {
+      if (expendMetByOwner[e.targetKey] == null || e.metStart < expendMetByOwner[e.targetKey]) expendMetByOwner[e.targetKey] = e.metStart;
+    }
+  });
+
   const addOrbitRing = (body, peri, apo, ownerKeys, authIdx) => {
     if (body == null || peri == null || apo == null) return null;
+    if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
     const sc = frameFor(frameId);
     const key = _trajOrbitKey(body, peri, apo);
@@ -356,11 +368,13 @@ function _trajExtractMission(m) {
         label: _trajOrbitLabel(body, peri, apo),
         colors: new Set(), names: new Set(),
         firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
+        ownerKeys: new Set(),
       });
     }
     const rec = sc.orbits.get(key);
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
     if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
+    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
     return rec;
   };
 
@@ -417,6 +431,23 @@ function _trajExtractMission(m) {
     const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
     const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
     if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
+  });
+
+  // Resolve each ring's expend-at-met (C2 "expended vehicle" dimming): the
+  // LATEST of its owners' expend times (a ring is only "history" once ALL
+  // its owners are gone — a multi-owner co-located ring with one surviving
+  // owner stays current).
+  Object.values(frames).forEach(sc => {
+    sc.orbits.forEach(rec => {
+      if (!rec.ownerKeys || !rec.ownerKeys.size) { rec.expendMet = null; return; }
+      let allExpended = true, maxMet = -Infinity;
+      rec.ownerKeys.forEach(k => {
+        const em = expendMetByOwner[k];
+        if (em == null) { allExpended = false; return; }
+        if (em > maxMet) maxMet = em;
+      });
+      rec.expendMet = allExpended ? maxMet : null;
+    });
   });
 
   return frames;
@@ -502,6 +533,11 @@ function _trajTextWidthPx(text, fontPx) { return (text || '').length * fontPx * 
 // markup (e.g. a burn triangle) anchored at the same render point, always
 // rendered regardless of label LOD/collision outcome (geometry-adjacent
 // symbology, not text).
+// `opts.opacity` (0..1, default 1) — overlay symbology INHERITS its parent
+// feature's alpha per the C2 brief ("labels/markers fade WITH their
+// geometry"). A label still needs BOTH its feature visible (opacity>0, and
+// past the minSize gate below) AND its own size gate to actually render —
+// the two are independent checks, this field carries the first.
 function _trajRegisterLabel(x, y, lines, kind, opts) {
   opts = opts || {};
   _trajLabelRegistry.push({
@@ -509,6 +545,7 @@ function _trajRegisterLabel(x, y, lines, kind, opts) {
     screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: opts.minSize || 0,
     selected: !!opts.selected, anchor: opts.anchor || 'middle',
     marker: opts.marker || null, hit: opts.hit || null,
+    opacity: opts.opacity != null ? Math.max(0, Math.min(1, opts.opacity)) : 1,
   });
 }
 
@@ -519,18 +556,21 @@ function _trajRegisterLabel(x, y, lines, kind, opts) {
 // threshold and every emitted shape after that point is in px, full stop —
 // no zoom or pxScale correction anywhere in this function.
 function _trajResolveLabels(cam, rect) {
-  const cands = _trajLabelRegistry.filter(c => c.selected || c.screenSize >= c.minSize);
+  // A candidate needs BOTH its feature visible (opacity>0) AND its own size
+  // gate (screenSize>=minSize, or selected) to be eligible at all.
+  const cands = _trajLabelRegistry.filter(c => c.opacity > 0 && (c.selected || c.screenSize >= c.minSize));
   cands.sort((a, b) => (b.priority - a.priority) || (b.screenSize - a.screenSize));
   const kept = [];
   const overlaps = (a, b) => !(a.x2 < b.x1 || b.x2 < a.x1 || a.y2 < b.y1 || b.y2 < a.y1);
   let out = '';
   // Always-render markers (triangles/dots/hit-circles) are emitted for every
   // candidate regardless of label collision outcome — only the TEXT+plate is
-  // collision-gated.
+  // collision-gated. Marker inherits the feature's opacity too.
   cands.forEach(c => {
     if (!c.marker) return;
     const p = _trajWorldToScreen(c.x, c.y, cam, rect);
-    out += `<g transform="translate(${p.x.toFixed(2)},${p.y.toFixed(2)})">${c.marker}${c.hit || ''}</g>`;
+    const op = c.opacity < 1 ? ` opacity="${c.opacity.toFixed(3)}"` : '';
+    out += `<g transform="translate(${p.x.toFixed(2)},${p.y.toFixed(2)})"${op}>${c.marker}${c.hit || ''}</g>`;
   });
   cands.forEach(c => {
     if (!c.lines || !c.lines.length) return;
@@ -549,9 +589,10 @@ function _trajResolveLabels(cam, rect) {
     kept.push({ box });
     const plateW = maxW + 6, plateH = h + 4;
     const plateX = bx1 - 3, plateY = by1 - 1;
+    const groupOp = c.opacity < 1 ? ` opacity="${c.opacity.toFixed(3)}"` : '';
     const textLines = c.lines.map(l => `<text x="${sx.toFixed(2)}" y="${(sy + l.dy).toFixed(2)}" text-anchor="${c.anchor}" font-family="var(--mono)" font-size="${l.fontPx}" fill="${l.color}">${l.text}</text>`).join('');
     const plate = `<rect x="${plateX.toFixed(2)}" y="${plateY.toFixed(2)}" width="${plateW.toFixed(2)}" height="${plateH.toFixed(2)}" fill="var(--panel-tint-plate)" rx="2"/>`;
-    out += plate + textLines;
+    out += `<g${groupOp}>${plate}${textLines}</g>`;
   });
   return out;
 }
@@ -561,13 +602,36 @@ function _trajResolveLabels(cam, rect) {
 // scene focus; burn text >=60px parent arc/ring extent OR selected.
 const _TRAJ_LOD_RING_MIN = 40, _TRAJ_LOD_BODY_MIN = 10, _TRAJ_LOD_BURN_MIN = 60;
 
-// ── C1b correctness culling (minimal LOD — REQUIRED precision/perf gates) ──
+// ── C2: LOD OPACITY WINDOWS (per-feature px visibility windows, linear ramp
+// at ~20% of the window width at each edge — see _trajLodOpacity). These
+// replace C1b's hard culls for the FEATURE geometry itself; the two
+// correctness culls below (_trajCullRingByDiagonal / _trajCullByExtent)
+// remain as the EXTREME ends only (numerical/degenerate-geometry safety, not
+// a visual LOD decision — a ring beyond 20x the viewport diagonal is culled
+// outright regardless of window math, same as before).
+// RULE: one fade authority per feature — a child (e.g. a mission ring
+// embedded in a planet's neighborhood) uses EITHER its own window OR
+// inherits its parent group's resolved alpha, never both multiplied.
+const _TRAJ_LOD_WIN = {
+  heliocentricRing: [8, 15],       // × viewport diagonal at hi (see _trajWindowHi)
+  moonRing:         [10, 15],
+  missionOrbitRing: [12, 15],
+  transferArc:      [10, 15],
+  zoneOfInfluence:  [30, 15],      // hi unused (no fade-out ceiling — fades IN only above lo)
+};
+// hi values above are "x times viewport diagonal" multipliers except where
+// noted; resolved to actual px via _trajWindowHi so every window shares the
+// same viewport-relative ceiling semantics as the old hard cull did.
+function _trajWindowHi(multiplier, viewportDiagPx) {
+  return (viewportDiagPx || 800) * multiplier;
+}
+
+// ── C1b/C2 correctness culling (numerical safety — kept as the window's
+// extreme outer end, NOT a visual LOD decision) ──
 // (a) rings whose projected radius exceeds ~20x the viewport diagonal are
 //     culled outright — at extreme zoom-in a huge/short-visible-chord ring
 //     (e.g. Neptune's ring while anchored deep in LEO) would otherwise emit a
 //     near-straight-line arc that jitters/degenerates in SVG's arc-flag math.
-//     The near-straight visible portion simply vanishes in C1b (full
-//     fade/chord rendering is a C2 ramp, not required now).
 // (b) features whose projected extent < 0.5px are culled (the entire Earth
 //     neighborhood at Sun zoom collapses under this — glyphs/labels keep
 //     their EXISTING LOD gates on top, unaffected).
@@ -591,6 +655,12 @@ function _trajCullPositionOffscreen(renderX, renderY, zoom, viewportDiagPx) {
   return distPx > viewportDiagPx * 20;
 }
 
+// `opts.historyAlpha` (0..1, optional multiplier < 1): applied when the
+// orbit belongs to a vehicle that no longer exists at viewTime (expended
+// before t) — same "history" dimming used for legs, per the mission-state
+// rendering brief. This is the ring's OWN fade authority combining with the
+// LOD ramp by simple multiplication (both describe the SAME feature, not a
+// parent/child pair, so this does not violate the one-fade-authority rule).
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -601,7 +671,8 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const emphasized = !!opts.emphasized;
   const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
   const strokeW = emphasized ? 1.4 : 0.7;
-  const opacity = emphasized ? 1 : 0.85;
+  const baseOpacity = emphasized ? 1 : 0.85;
+  const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
   const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
@@ -613,10 +684,13 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     const screenSize = r * zoom;
     if (_trajCullByExtent(screenSize)) return '';
     if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
+    const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
+    const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
+    if (lodAlpha <= 0) return '';
     const hitArea = opts.authIdx != null ? `<circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
     const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
-    _trajRegisterLabel(ox, oy - r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
-    if (coastTxt) _trajRegisterLabel(ox - g.c * scale, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
+    _trajRegisterLabel(ox, oy - r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+    if (coastTxt) _trajRegisterLabel(ox - g.c * scale, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
     return `<g${clickAttr}>
       <circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></circle>
       ${hitArea}
@@ -626,10 +700,13 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const screenSize = Math.max(rx, ry) * zoom;
   if (_trajCullByExtent(screenSize)) return '';
   if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
+  const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
+  if (lodAlpha <= 0) return '';
+  const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
   const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
-  _trajRegisterLabel(cx, cy - ry, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
-  if (coastTxt) _trajRegisterLabel(cx, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
+  _trajRegisterLabel(cx, cy - ry, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+  if (coastTxt) _trajRegisterLabel(cx, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
   return `<g${clickAttr}>
     <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></ellipse>
     ${hitArea}
@@ -657,6 +734,78 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg, ox, oy) {
            depX: p1.x, depY: p1.y, arrX: p2.x, arrY: p2.y };
 }
 
+// ── Moon-lead arc orientation (pure geometry) ──────────────────────────────
+// _trajTransferArcPath's arrival endpoint (the -rApo*scale local point) lands
+// at screen angle (180 + rotDeg) degrees after rotation, since periapsis is
+// fixed at local angle 0. To make the arrival end land ON a specific target
+// point (targetX,targetY) relative to the arc's local origin (ox,oy), solve
+// for rotDeg = angle(origin -> target) - 180, normalized to (-180,180].
+// Pure function, no DOM/globals — testable in isolation.
+function _trajArcRotationForTarget(ox, oy, targetX, targetY) {
+  const dx = targetX - ox, dy = targetY - oy;
+  let ang = Math.atan2(dy, dx) * 180 / Math.PI - 180;
+  ang = ((ang + 180) % 360 + 360) % 360 - 180; // normalize to (-180,180]
+  return ang;
+}
+
+// Linear (schematic, NOT Kepler) fraction of a leg's path completed at time
+// viewT, clamped to [0,1]. Per MATH.md critique: real vehicles move faster
+// near periapsis (true-anomaly rate is non-uniform); this is a path-length
+// approximation for the schematic vehicle dot only, not a physics claim.
+function _trajLegPathFraction(metDepart, tof, viewT) {
+  if (!(tof > 0)) return 0;
+  const f = (viewT - metDepart) / tof;
+  return Math.max(0, Math.min(1, f));
+}
+
+// Point at parameter t (0..1, periapsis->apoapsis sweep, CCW half-ellipse)
+// along the arc emitted by _trajTransferArcPath, in the SAME render-space
+// coords as its d-path (so a caller can drop a dot directly on the drawn
+// path without re-deriving the ellipse). t=0 -> p1 (departure/periapsis
+// end), t=1 -> p2 (arrival/apoapsis end). Walks the true-anomaly-uniform
+// half-ellipse parametrically (theta from 0 to pi) — schematic, matches the
+// half-ellipse the SVG arc-flag draws, not true orbital speed.
+function _trajArcPointAt(r1, r2, scale, rotDeg, ox, oy, t) {
+  ox = ox || 0; oy = oy || 0;
+  const rPeri = Math.min(r1, r2) * scale, rApo = Math.max(r1, r2) * scale;
+  const a = (rPeri + rApo) / 2, b = Math.sqrt(Math.max(0, rPeri * rApo)), c = a - rPeri;
+  const theta = Math.max(0, Math.min(1, t)) * Math.PI; // 0..pi sweeps periapsis->apoapsis
+  // Ellipse centered at local (-c,0) — periapsis (local +rPeri,0) is `a` from
+  // center: center_x + a = rPeri => center_x = rPeri - a = -c. Matches
+  // _trajTransferArcPath's p1=(rPeri*scale,0), p2=(-rApo*scale,0) convention
+  // (theta=0 -> periapsis at +x, theta=pi -> apoapsis at -x).
+  const lx = -c + a * Math.cos(theta), ly = b * Math.sin(theta);
+  const rad = (rotDeg || 0) * Math.PI / 180;
+  const rx = lx * Math.cos(rad) - ly * Math.sin(rad), ry = lx * Math.sin(rad) + ly * Math.cos(rad);
+  return { x: rx + ox, y: ry + oy };
+}
+
+// ── LOD opacity ramp (C2) ──────────────────────────────────────────────────
+// Replaces C1b's hard culls with a linear fade at each end of a px-size
+// visibility window [lo,hi]. Ramp width is ~20% of the window (in log space
+// isn't needed here — windows are already px, linear ramp on px is fine
+// since the edges are the interesting region, not the whole span).
+// Returns opacity in [0,1]; 0 outside the window, 1 in the window's middle
+// 60%, linear ramp in the outer 20% bands at each end.
+function _trajLodOpacity(sizePx, lo, hi) {
+  if (!(sizePx >= 0)) return 0;
+  if (sizePx < lo) return 0;
+  // Ramp width is 20% of the window, but CAPPED at 20% of `lo` — our windows
+  // routinely pair a small lo (~10-30px) with a huge hi (15x viewport
+  // diagonal, effectively "never fades out"), and 20% of THAT span would put
+  // the entry ramp thousands of px wide, making everything just past lo read
+  // as nearly invisible. Capping keeps the entry ramp a sane, visually-tight
+  // band right at the lo threshold regardless of how far away hi is.
+  const rampWFull = (isFinite(hi) && hi > lo) ? (hi - lo) * 0.2 : Infinity;
+  const rampW = Math.max(1, Math.min(rampWFull, lo * 0.2));
+  if (isFinite(hi) && hi > lo) {
+    if (sizePx > hi) return 0;
+    if (sizePx > hi - rampW) return (hi - sizePx) / rampW;
+  }
+  if (sizePx < lo + rampW) return (sizePx - lo) / rampW;
+  return 1;
+}
+
 // Burn marker — registers a fixed-px triangle glyph + optional dv/MET text at
 // a render-space (floating-origin) anchor. Geometry side (world layer) gets
 // nothing from this function any more; everything it emits is overlay-side
@@ -679,7 +828,27 @@ function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   const dvLabel = dvText ? `${glyph} ${dvText}` : glyph;
   const lines = [{ text: dvLabel, dy: -5, fontPx: 10, color: textColor }];
   if (metText) lines.push({ text: metText, dy: 9, fontPx: 10, color: 'var(--text-dim)' });
-  _trajRegisterLabel(x, y, lines, 'burn', { screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit });
+  _trajRegisterLabel(x, y, lines, 'burn', { screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit, opacity: opts.opacity != null ? opts.opacity : 1 });
+}
+
+// History alpha (C2): legs/orbits belonging to a vehicle/state that no
+// longer exists "now" (arrived-and-past, or expended before viewTime) dim to
+// this constant rather than disappearing — keeps mission HISTORY legible
+// without competing visually with the current/planned state.
+const _TRAJ_HISTORY_ALPHA = 0.35;
+
+// Ghost marker (C2 Moon-lead fix): a dim glyph-outline + label at a body's
+// ARRIVAL-time position, shown only when it differs visibly (>3px) from the
+// body's CURRENT viewTime position — so users don't conclude "the arc misses
+// the Moon" when the Moon has since moved along its own orbit. LOD-gated
+// like any other label (screenSize tied to zoom so it also fades with scale).
+function _trajGhostMarker(x, y, bodyName, zoom, parentAlpha) {
+  const alpha = (parentAlpha != null ? parentAlpha : 1);
+  const r = _trajBodyPxR(3, zoom);
+  const marker = `<circle cx="0" cy="0" r="${r}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="none"/>`;
+  const lines = [{ text: `${bodyName} at arrival`, dy: -4 - r, fontPx: 9, color: 'var(--text-dim)' }];
+  _trajRegisterLabel(x, y, lines, 'zone', { screenSize: r * zoom, minSize: 0, selected: false, marker, opacity: alpha * 0.8 });
+  return '';
 }
 
 // Click handler shared by arcs/markers/rings: selects the AUTHORED event
@@ -763,7 +932,7 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
 // body's neighborhood (independent of the camera zoom, same "local scene
 // scale" concept as before — it just gets recentered on ox,oy instead of on
 // the SVG origin).
-function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx) {
+function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, viewT) {
   if (!m) return '';
   const frames = _trajGetExtraction(m);
   const sc = frames[body];
@@ -782,32 +951,74 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx) {
   if (!isSun) {
     sc.orbits.forEach(rec => {
       const emphasized = selAuthIdx != null && rec.firstAuthIdx === selAuthIdx;
+      // C2: a ring whose owning vehicle(s) are ALL expended by viewTime dims
+      // to history alpha, same treatment as an arrived leg.
+      const isHistoryOrbit = rec.expendMet != null && viewT != null && rec.expendMet <= viewT;
       out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null,
-        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx });
+        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx, historyAlpha: isHistoryOrbit ? _TRAJ_HISTORY_ALPHA : 1 });
     });
   }
 
-  // transfer legs
+  // transfer legs — C2 mission-state trimming: a leg's relationship to
+  // viewT decides its render treatment: arrived (metArrive <= viewT) =
+  // "history" (dimmed, _TRAJ_HISTORY_ALPHA); departed but not yet arrived
+  // (met <= viewT < metArrive) = "current" (full-strength + a schematic
+  // vehicle dot at linear path fraction); not yet departed (met > viewT) =
+  // "planned" (today's dashed rendering, unchanged). Legs with no `met`
+  // (older missions / degenerate data) fall back to "planned" treatment.
+  const vt = viewT != null ? viewT : Infinity;
   sc.legs.forEach((leg, li) => {
     const emphasized = selAuthIdx != null && leg.authIdx === selAuthIdx;
     const clickAttr = leg.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${leg.authIdx})"` : '';
     const hoverTitle = `${leg.vehName ? leg.vehName + ' — ' : ''}${leg.fromLabel} → ${leg.toLabel}${leg.dv ? ' &middot; ' + _trajDvText(leg.dv) : ''}${leg.met != null ? ' &middot; ' + _metFmt(leg.met) : ''}`;
     const markerOpts = (screenSize) => ({ emphasized, authIdx: leg.authIdx, missionId: id, title: hoverTitle, zoom, screenSize });
+    const hasTOF = leg.met != null && leg.metArrive != null && leg.metArrive > leg.met;
+    const legState = !hasTOF ? 'planned' : (leg.metArrive <= vt ? 'history' : (leg.met <= vt ? 'current' : 'planned'));
+    const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
     if (isSun) {
       const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
       const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
       if (r1 == null || r2 == null) return;
-      const departAng = _trajPlanetAngle(leg.fromO.body);
-      const arc = _trajTransferArcPath(r1, r2, scale, departAng, ox, oy);
+      // Moon-lead orientation (C2): rotate so the arrival end lands on the
+      // DESTINATION BODY'S POSITION AT ARRIVAL TIME (t_arrive), not a
+      // schematic fixed angle — same rule as the local-body case below,
+      // just resolved in heliocentric coords for interplanetary legs.
+      const destBody = leg.toO.destination || leg.toO.body || leg.toLabel;
+      const tArrive = leg.metArrive != null ? leg.metArrive : vt;
+      let rotAng = _trajPlanetAngle(leg.fromO.body);
+      let ghostP = null, arrivalTargetP = null;
+      if (destBody && PROG_HELIO_R[destBody] != null && typeof progBodyWorldPos === 'function') {
+        const arrWorld = progBodyWorldPos(destBody, tArrive);
+        arrivalTargetP = { x: arrWorld.x - (progBodyWorldPos('Sun', 0).x) , y: arrWorld.y }; // Sun frame origin is (0,0); ox,oy is the Sun's render pos already
+        // arrivalTargetP must be in the SAME render-space as ox,oy (Sun's
+        // floating-origin position) — since Sun world pos is always (0,0),
+        // the offset from Sun-world to arrival-world equals the offset we
+        // need from (ox,oy).
+        arrivalTargetP = { x: ox + arrWorld.x, y: oy + arrWorld.y };
+        rotAng = _trajArcRotationForTarget(ox, oy, arrivalTargetP.x, arrivalTargetP.y);
+        const viewWorld = progBodyWorldPos(destBody, vt);
+        const viewP = { x: ox + viewWorld.x, y: oy + viewWorld.y };
+        if (Math.hypot(viewP.x - arrivalTargetP.x, viewP.y - arrivalTargetP.y) * zoom > 3) ghostP = arrivalTargetP;
+      }
+      const arc = _trajTransferArcPath(r1, r2, scale, rotAng, ox, oy);
       const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
       if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
+      const arcAlpha = emphasized ? 1 : _trajLodOpacity(arcExtentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
+      if (arcAlpha <= 0) return;
       const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
       const strokeW = emphasized ? 1.2 : 0.7;
-      const opacity = emphasized ? 1 : 0.8;
+      const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
+      const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
-      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
-      _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts(arcExtentPx));
+      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
+      _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
+      if (legState === 'current' && hasTOF) {
+        const frac = _trajLegPathFraction(leg.met, leg.metArrive - leg.met, vt);
+        const dotP = _trajArcPointAt(r1, r2, scale, rotAng, ox, oy, frac);
+        out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
+      }
+      if (ghostP) out += _trajGhostMarker(ghostP.x, ghostP.y, destBody, zoom, arcAlpha * stateAlpha);
       return;
     }
     const fromR = _trajLocalRadius(leg.fromO, body);
@@ -816,20 +1027,44 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx) {
     const toPeri = toO_peri(leg.toO, R), toApo = toO_apo(leg.toO, R);
     const redundant = toPeri != null && toApo != null && _trajTransferIsRedundant(fromR, toApo, toPeri, toApo);
     const arcToR = (toApo != null && toPeri != null && Math.abs(toApo - toPeri) > Math.max(1, toApo * 0.001)) ? toApo : toR;
-    const arc = _trajTransferArcPath(fromR, arcToR, scale, 0, ox, oy);
+    // Moon-lead orientation (C2): for a leg whose destination is a MOON of
+    // this body frame (o.destination present, e.g. LEO->TLC->LLO), orient
+    // the apse line so the arrival end lands on that moon's world position
+    // AT ARRIVAL TIME rather than the old fixed rotDeg=0 convention.
+    const destMoon = leg.toO.destination || null;
+    let rotAng = 0, ghostLocal = null;
+    if (destMoon && PROG_MOON_ORBITS[destMoon] && PROG_MOON_ORBITS[destMoon].parent === body) {
+      const tArrive = leg.metArrive != null ? leg.metArrive : vt;
+      const arrTheta = progBodyAngleAt(destMoon, tArrive);
+      const arrLocal = { x: ox + PROG_MOON_ORBITS[destMoon].r * scale * Math.cos(arrTheta), y: oy + PROG_MOON_ORBITS[destMoon].r * scale * Math.sin(arrTheta) };
+      rotAng = _trajArcRotationForTarget(ox, oy, arrLocal.x, arrLocal.y);
+      const viewTheta = progBodyAngleAt(destMoon, vt);
+      const viewLocal = { x: ox + PROG_MOON_ORBITS[destMoon].r * scale * Math.cos(viewTheta), y: oy + PROG_MOON_ORBITS[destMoon].r * scale * Math.sin(viewTheta) };
+      if (Math.hypot(viewLocal.x - arrLocal.x, viewLocal.y - arrLocal.y) * zoom > 3) ghostLocal = { p: arrLocal, body: destMoon };
+    }
+    const arc = _trajTransferArcPath(fromR, arcToR, scale, rotAng, ox, oy);
     const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
     if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
+    const arcAlpha = emphasized ? 1 : _trajLodOpacity(arcExtentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
+    if (arcAlpha <= 0) return;
     const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
     const strokeW = emphasized ? 1.2 : 0.7;
-    const opacity = emphasized ? 1 : 0.8;
+    const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
+    const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
     if (!redundant) {
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}" stroke-dasharray="2.5,2" opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
-      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
-      _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), markerOpts(arcExtentPx));
+      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
+      _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
+      if (legState === 'current' && hasTOF) {
+        const frac = _trajLegPathFraction(leg.met, leg.metArrive - leg.met, vt);
+        const dotP = _trajArcPointAt(fromR, arcToR, scale, rotAng, ox, oy, frac);
+        out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
+      }
     } else {
-      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), markerOpts(arcExtentPx));
+      _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
     }
+    if (ghostLocal) out += _trajGhostMarker(ghostLocal.p.x, ghostLocal.p.y, ghostLocal.body, zoom, arcAlpha * stateAlpha);
   });
 
   // surface events (fixed-px marker + LOD-gated label, like burn markers)
@@ -859,7 +1094,45 @@ function _trajLocalRadius(o, body) {
   if (o.type === 'transit') {
     if (o.destination) {
       const mo = PROG_MOON_ORBITS[o.destination];
-      if (mo && mo.parent === body) return mo.r;
+      if (mo && mo.parent === body) return mo.r; // parent-frame view (Earth): moon's orbital radius
+      // C2 fix: a transit whose DESTINATION is `body` itself (e.g. body ===
+      // 'Moon', o.destination === 'Moon') is the ARRIVING end drawn in the
+      // destination's OWN frame — this is a patched-conic seam (the true
+      // departure point is hyperbolic-relative-to-the-moon, not a finite
+      // body-centered radius). Schematic fallback: draw from the moon's own
+      // SOI-scale edge (a fixed multiple of its radius) down to the arrival
+      // orbit, same spirit as a Hohmann-arc placeholder for the un-modeled
+      // hyperbolic approach leg. This is what lets the TLC->LLO leg actually
+      // render in the Moon frame (previously silently dropped — fromR was
+      // always null here, so the leg never drew at all).
+      if (o.destination === body) {
+        // Bug fix (C2 review): this was `R*20` (a fixed multiple of the
+        // MOON's own body radius, ~34,748 km for the Moon) — a value with NO
+        // relationship to the actual departure-arrival gap the arc has to
+        // span. That made the leg's drawn extent (and therefore its
+        // _TRAJ_LOD_WIN.transferArc gate, evaluated in real screen px) a
+        // function of camera zoom alone: at Moon anchor the camera is zoomed
+        // in tight enough that even this tiny schematic radius reads as a
+        // large arc; at Earth anchor (zoomed out to frame the whole
+        // Earth-Moon gap) the SAME arc collapses under the window's 10px
+        // floor and the leg silently vanished — even though its parent
+        // frame's mirror leg (Earth's LEO->TLC, which correctly uses the
+        // FULL mo.r orbital radius as its far endpoint) rendered fine at the
+        // same zoom. Fix: scale the SOI-fallback radius off the moon's own
+        // orbital radius (mo.r, the same quantity the parent-frame leg above
+        // already uses) rather than the moon's body radius, so the two ends
+        // of this cross-frame leg agree on the physical scale of the gap
+        // they're schematically bridging — the arc's drawn extent is then
+        // consistent (and correctly LOD-gated on its OWN screen extent,
+        // per the one-fade-authority rule) at any camera anchor. Fraction
+        // (0.5) picked so the arc's drawn extent clears the transferArc
+        // window's 10px floor with headroom at typical Earth-fit zoom
+        // (verified in-browser: ~19px vs. the 10px floor, up from ~4-8px
+        // with smaller fractions/the old R*20 fallback).
+        const mo2 = PROG_MOON_ORBITS[body];
+        const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 1;
+        return mo2 ? Math.max(R * 2, mo2.r * 0.5) : R * 20; // schematic SOI-edge radius, not a physical Hill-sphere calc
+      }
     }
     return null;
   }
@@ -928,7 +1201,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     if (!_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) {
       const sunScale = _trajLocalScaleFor('Sun', m);
       out += _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun');
-      out += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx);
+      out += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT);
     }
   }
 
@@ -940,18 +1213,40 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const ringScreenR = worldR * zoom; // ring radius in px, at the SUN's floating origin — culling uses this
     const sunP = toRender(0, 0);
     const sunOffscreen = _trajCullPositionOffscreen(sunP.x, sunP.y, zoom, viewportDiagPx);
-    if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx)) {
-      out += `<circle cx="${sunP.x.toFixed(2)}" cy="${sunP.y.toFixed(2)}" r="${worldR.toFixed(2)}" fill="none" stroke="${_trajBodyColor(body)}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`;
+    const ringAlpha = _trajLodOpacity(ringScreenR, _TRAJ_LOD_WIN.heliocentricRing[0], _trajWindowHi(_TRAJ_LOD_WIN.heliocentricRing[1], viewportDiagPx));
+    if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && ringAlpha > 0) {
+      out += `<circle cx="${sunP.x.toFixed(2)}" cy="${sunP.y.toFixed(2)}" r="${worldR.toFixed(2)}" fill="none" stroke="${_trajBodyColor(body)}" stroke-width="0.6" opacity="${(0.55 * ringAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
     }
     const wp = progBodyWorldPos(body, viewT);
     const p = toRender(wp.x, wp.y);
     if (_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) return;
     const trueR = 3; // schematic glyph radius, world units == km at scale=1 for the heliocentric ring layer
+    // "Far representation" (C2 — fixes the C1b handoff): the body's own disc
+    // never fades (existing clamp+true-scale invariant, unchanged); its NAME
+    // label is force-eligible (always shows, size-gate bypassed) whenever the
+    // disc has hit its min-px clamp — i.e. we're zoomed out far enough
+    // relative to THIS body that its true-scale disc would be imperceptible,
+    // so it's rendered as glyph+name instead. This is per-body (not tied to
+    // the ring's own fade window) specifically so ALL 9 planets keep their
+    // names at full solar zoom-out even though their heliocentric rings span
+    // wildly different radii (Mercury's ring is tiny next to Neptune's, but
+    // both bodies are equally "far" from the camera at that zoom).
+    const forceLabel = (trueR * zoom) < _TRAJ_MIN_BODY_PX;
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom) * zoom)) {
-      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body);
+      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel);
     }
+    // Zone-of-influence content (this body's moons + mission content) fades
+    // IN as the body's own neighborhood extent exceeds ~30px — a single fade
+    // authority for everything embedded at this body's position (moons drawn
+    // in the next pass check the SAME gate via zoiAlpha, never multiplying a
+    // second window on top — one fade authority per feature, per the brief).
     const localScale = _trajLocalScaleFor(body, m);
-    out += _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx);
+    const neighborhoodExtentPx = _trajBodyPxR(trueR, zoom) * zoom; // conservative floor; refined per-body below via moon ring extents
+    const zoiAlpha = _trajLodOpacity(Math.max(neighborhoodExtentPx, _trajBodyNeighborhoodPx(body, zoom)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
+    if (zoiAlpha > 0) {
+      const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT);
+      out += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
+    }
   });
 
   // ── moons: ring around parent + glyph, embedded mission content ───────────
@@ -960,21 +1255,40 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const parentP = toRender(parentWP.x, parentWP.y);
     const parentOffscreen = _trajCullPositionOffscreen(parentP.x, parentP.y, zoom, viewportDiagPx);
     const ringScreenR = mo.r * zoom;
-    if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR)) {
-      out += `<circle cx="${parentP.x.toFixed(2)}" cy="${parentP.y.toFixed(2)}" r="${mo.r.toFixed(2)}" fill="none" stroke="${_trajBodyColor(name)}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`;
+    // Moon ring is part of its PARENT's zone-of-influence — inherits the
+    // parent's zoiAlpha (single fade authority: the moon ring is a CHILD of
+    // the parent's neighborhood, so it does NOT also apply its own window on
+    // top; see _TRAJ_LOD_WIN.moonRing used only for the moon's OWN mission
+    // content children, analogous one level down).
+    const parentZoiAlpha = _trajLodOpacity(Math.max(ringScreenR, _trajBodyPxR(3, zoom) * zoom), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
+    if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR) && parentZoiAlpha > 0) {
+      out += `<circle cx="${parentP.x.toFixed(2)}" cy="${parentP.y.toFixed(2)}" r="${mo.r.toFixed(2)}" fill="none" stroke="${_trajBodyColor(name)}" stroke-width="0.6" opacity="${(0.55 * parentZoiAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
     }
+    if (parentZoiAlpha <= 0) return; // moon (and its content) hidden with its parent's ZOI — no separate cull needed
     const wp = progBodyWorldPos(name, viewT);
     const p = toRender(wp.x, wp.y);
     if (_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) return;
     const trueR = 3;
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom) * zoom)) {
-      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name);
+      const glyphSvg = _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name, false);
+      out += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m);
-    out += _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx);
+    const contentSvg = _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT);
+    out += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
   });
 
   return out;
+}
+
+// Rough px extent of a body's own moon-ring neighborhood (max moon ring
+// radius at the current zoom), used to feed the zone-of-influence fade gate
+// — a body with moons "opens up" once ITS OWN moons' rings are big enough to
+// be worth drawing, not merely once its own disc clears 30px.
+function _trajBodyNeighborhoodPx(body, zoom) {
+  const moons = _trajMoonsOf(body);
+  if (!moons.length) return 0;
+  return Math.max(...moons.map(mo => mo.r)) * (zoom || 1);
 }
 
 // Local px-per-km scale for a body's embedded mission content (its own orbit
@@ -1001,10 +1315,18 @@ function _trajLocalScaleFor(body, m) {
 // _trajBodyPxR (so the clamp only bites when zoomed OUT — zooming in lets
 // the true-scale disc grow past the clamp). Label registration (overlay
 // layer) happens alongside, keyed to the same render-space anchor.
-function _trajGlyph(cx, cy, r, color, label, zoom, isFocus) {
+// `forceLabel` (C2 "far representation" fix): when true, the label is
+// registered with selected:true semantics for its SIZE gate (always
+// eligible) regardless of the disc's screenSize — this is how all 9 planet
+// names stay visible at full solar zoom-out once their neighborhood content
+// has faded away and they're reduced to glyph+name. The disc itself is
+// UNAFFECTED (still true-scale/min-clamped as before) — this only changes
+// whether the NAME survives the size gate; collision resolution still runs
+// normally (so crowded labels at extreme zoom still de-duplicate).
+function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel) {
   const z = zoom || 1;
   _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: 'var(--nm-label)' }], 'body',
-    { screenSize: r * z, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus });
+    { screenSize: r * z, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
   return `<g>
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
   </g>`;
