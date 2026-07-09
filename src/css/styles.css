@@ -316,6 +316,15 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .nm-orbit-chip:hover{background:var(--panel);}
 .nm-orbit-chip:active{cursor:grabbing;}
 
+/* TRAJECTORY VIEW — restrained blueprint style: thin strokes, mono labels, theme colors */
+.traj-wrap{display:flex;flex-direction:column;height:100%;min-height:0;}
+.traj-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;flex-shrink:0;}
+.traj-focus-seg{flex-wrap:wrap;}
+.traj-canvas{flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--nm-bg);border:1px solid var(--border);cursor:grab;}
+.traj-canvas:active{cursor:grabbing;}
+.traj-svg{display:block;}
+.traj-footer{flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--text-dim);text-align:right;padding:4px 2px 0;}
+
 /* ===== RESTORED LV CALCULATOR CSS (from backup) ===== */
 
 :root{--bg:#3b393a;--panel:#2e2c2d;--border:#524f50;--border-bright:#6e6b6c;--accent:#88c657;--accent2:#c6a057;--accent3:#b0e080;--danger:#b8564a;--warn:#c6a057;--text:#e7e8ea;--text-dim:#a7a6a4;--text-bright:#ffffff;--mono:'JetBrains Mono',monospace;--sans:'Outfit',sans-serif;--nm-bg:#282628;--nm-earth:#5db877;--nm-lunar:#8890bc;--nm-interp:#b85848;--nm-edge:#5a5758;--nm-edge-act:#88c657;--nm-node-fill:#2e2c2d;--nm-label:#a7a6a4;--nm-pill-bg:#2e2c2d;--nm-pill-bd:#524f50;--nm-pill-text:#a7a6a4;--nm-pal-bg:#252325;--nm-pal-hdr:#1e1c1e;--nm-pal-item:#2e2c2d;--nm-pal-item-act:#1e2419;--nm-ghost:#524f50;

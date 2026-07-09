@@ -66,8 +66,8 @@ const {
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
   _s15BecoSplit,
 } = sandbox;
-const { G0, MU, RE, OMEGA_E, PROG_BODIES } =
-  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES })', sandbox);
+const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS } =
+  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS })', sandbox);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // parseMathExpression
@@ -434,6 +434,28 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   const nodeLeoA = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
   const nodeLeoB = { orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400 } };
   ok('progTransferTOF: same orbit -> 0 (degenerate)', progTransferTOF(nodeLeoA, nodeLeoB) === 0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// O1-a Trajectory view data — PROG_HELIO_R outer-planet expansion + PROG_MOON_ORBITS
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  ['Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'].forEach(b => {
+    ok(`PROG_HELIO_R has ${b}`, typeof PROG_HELIO_R[b] === 'number' && PROG_HELIO_R[b] > 0);
+  });
+  ok('PROG_MOON_ORBITS.Moon parents to Earth', PROG_MOON_ORBITS.Moon && PROG_MOON_ORBITS.Moon.parent === 'Earth');
+  ok('PROG_MOON_ORBITS.Titan parents to Saturn', PROG_MOON_ORBITS.Titan && PROG_MOON_ORBITS.Titan.parent === 'Saturn');
+
+  // Earth -> Jupiter Hohmann TOF: a = (r_E + r_J)/2, half-period = pi*sqrt(a^3/mu_sun).
+  // Analytically ~2.73 years (~997 days) for a co-planar Hohmann transfer.
+  const a = (PROG_HELIO_R.Earth + PROG_HELIO_R.Jupiter) / 2;
+  const tofJup = Math.PI * Math.sqrt(Math.pow(a, 3) / PROG_MU_SUN);
+  approx('Earth->Jupiter Hohmann TOF ~= 2.73 years', tofJup / 86400 / 365.25, 2.73, 0.05);
+
+  // Earth -> Saturn sanity: should be meaningfully longer than Earth->Jupiter (outer body).
+  const aSat = (PROG_HELIO_R.Earth + PROG_HELIO_R.Saturn) / 2;
+  const tofSat = Math.PI * Math.sqrt(Math.pow(aSat, 3) / PROG_MU_SUN);
+  ok('Earth->Saturn Hohmann TOF > Earth->Jupiter Hohmann TOF', tofSat > tofJup);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

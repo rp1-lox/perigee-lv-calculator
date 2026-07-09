@@ -17,11 +17,24 @@ const PROG_BODIES = {
 };
 const PROG_MU_SUN       = 1.32712440018e11; // km³/s² — heliocentric
 const PROG_HELIO_R      = {                  // km — mean orbital radii
-  Earth: 149597870.7,
-  Mars:  227939200,
-  Venus: 108208930,
+  Mercury: 57.91e6,
+  Venus:   108208930,
+  Earth:   149597870.7,
+  Mars:    227939200,
+  Jupiter: 778.5e6,
+  Saturn:  1.4335e9,
+  Uranus:  2.8725e9,
+  Neptune: 4.4951e9,
 };
 const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centre
+
+// Moon-type bodies orbiting a planet rather than the Sun (for trajectory scenes
+// and any future local-orbit math). Keyed by body name; `parent` must exist in
+// PROG_BODIES, `r` is mean orbital radius (km) from parent centre.
+const PROG_MOON_ORBITS = {
+  Moon:  { parent: 'Earth',  r: PROG_MOON_ORBIT_R },
+  Titan: { parent: 'Saturn', r: 1221900 },
+};
 
 // ── Propellant type registry ────────────────────────────────────────────────
 const PROG_PROPELLANT_TYPES = {

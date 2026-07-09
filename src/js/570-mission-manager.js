@@ -3,7 +3,7 @@
 
 let _missions = [];
 let _missionSel = null;
-let _missionViewMode  = 'band';       // 'band' | 'nodemap'  — band is the primary view
+let _missionViewMode  = 'band';       // 'band' | 'nodemap' | 'traj'  — band is the primary view
 let _missionEvtFilter = { type: 'ALL', veh: 'ALL' };   // events-list filter
 let _missionBandScrub = null;
 let _missionBandSpacing = 90;          // px per timeline column (user-configurable)
@@ -443,7 +443,9 @@ function missionRenderDetail() {
     : '';
 
   // ── center content ──
-  const view = _missionViewMode === 'nodemap' ? _missionNodeMapHTML(m) : _missionBandViewHTML(m);
+  const view = _missionViewMode === 'nodemap' ? _missionNodeMapHTML(m)
+    : _missionViewMode === 'traj' ? (typeof _missionTrajViewHTML === 'function' ? _missionTrajViewHTML(m) : '')
+    : _missionBandViewHTML(m);
 
   // ── mission/program name now live in the File ▾ menu (topbar removed — its row's
   // vertical space goes to the body; the view toggle + undo/redo + File menu all
@@ -473,6 +475,7 @@ function missionRenderDetail() {
           <div class="seg">
             <button class="${_missionViewMode === 'band' ? 'active' : ''}" onclick="missionSetView('${id}','band')">Band</button>
             <button class="${_missionViewMode === 'nodemap' ? 'active' : ''}" onclick="missionSetView('${id}','nodemap')">Orbit Map</button>
+            <button class="${_missionViewMode === 'traj' ? 'active' : ''}" onclick="missionSetView('${id}','traj')">Trajectory</button>
           </div>
           <div class="mcc-toolbar-sep"></div>
           <div class="mcc-topbar-undoredo">
@@ -522,6 +525,7 @@ function missionRenderDetail() {
   `;
   if (m.vehicleId) setTimeout(() => missionBurnPreview(m.missionId), 0);
   if (_missionViewMode === 'nodemap') _missionCenterNmEarth();
+  if (_missionViewMode === 'traj' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
 }
 
 // Position the node-map scroll on Earth's system (Earth + its orbits), leaving the
