@@ -335,6 +335,10 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
   --accent-tint-strongest: color-mix(in srgb, var(--accent) 14%, transparent);
   --danger-tint: color-mix(in srgb, var(--danger) 15%, transparent);
   --danger-bright: color-mix(in srgb, var(--danger) 70%, var(--text-bright));
+  /* Band-view body-zone washes — track the node-map nm-* seeds so zone tints follow theme */
+  --nm-earth-zone: color-mix(in srgb, var(--nm-earth) 7%, transparent);
+  --nm-lunar-zone: color-mix(in srgb, var(--nm-lunar) 7%, transparent);
+  --nm-interp-zone: color-mix(in srgb, var(--nm-interp) 7%, transparent);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
@@ -16914,7 +16918,7 @@ function _missionBandModel(m) {
     let label = e.type;
     if (e.type === 'BURN') label = e.burnLabel || 'BURN';
     else if (e.type === 'MANEUVER') label = '→ ' + (e.toLabel || e.toNode || '');
-    events.push({ index: i, type: e.type, col: c, label, met: e.metStart });
+    events.push({ index: i, type: e.type, col: c, label, met: e.metStart, durationUsed: e.durationUsed });
   });
 
   const lanes = [...owners.values()];
@@ -16941,7 +16945,7 @@ function _missionBandModel(m) {
   };
   lanes.forEach(L => L.points.forEach(p => { if (!zoneMap[p.zoneKey]) zoneMap[p.zoneKey] = { key: p.zoneKey, label: p.zoneLabel, order: p.zoneOrder }; }));
   const zones = Object.values(zoneMap).sort((a, b) => a.order - b.order);
-  const zoneSlot = {}; zones.forEach((z, idx) => { z.slot = idx; zoneSlot[z.key] = idx; });
+  const zoneSlot = {}; zones.forEach((z, idx) => { z.slot = idx; zoneSlot[z.key] = idx; z.bodyGroup = _missionBodyGroupOf(z.key); });
 
   // ── per-point vertical offset WITHIN a zone: different vehicles separate, docked
   //    owners (same vehicle) cluster — keeps the polylines distinct but converging. ──
@@ -16984,6 +16988,20 @@ function _missionBandModel(m) {
 
   return { events, lanes, zones, zoneSlot, count: m.log.length, colCount, colOf };
 }
+
+// Map a band zoneKey (from _missionOrbitZone) to its body/system group, for the
+// band-view "body zone" backdrop (decoration only — matches node-map zone naming:
+// earth | lunar | interp). Used to tint bands by which body they orbit/sit on.
+function _missionBodyGroupOf(zoneKey) {
+  if (zoneKey === 'earth' || zoneKey === 'leo' || zoneKey === 'meo' || zoneKey === 'heo') return 'earth';
+  if (zoneKey === 'moon' || zoneKey === 'llo' || zoneKey === 'nrho') return 'lunar';
+  if (zoneKey === 'mars' || zoneKey === 'mars-orbit' || zoneKey === 'venus-orbit' || zoneKey === 'transit'
+      || zoneKey.endsWith('-surf') || zoneKey.endsWith('-orbit')) return 'interp';
+  return null;   // 'space'/'coast' — no specific body, no zone backdrop
+}
+const _MISSION_BODY_ZONE_COLOR = { earth: 'var(--nm-earth)', lunar: 'var(--nm-lunar)', interp: 'var(--nm-interp)' };
+const _MISSION_BODY_ZONE_TINT  = { earth: 'var(--nm-earth-zone)', lunar: 'var(--nm-lunar-zone)', interp: 'var(--nm-interp-zone)' };
+const _MISSION_BODY_ZONE_LABEL = { earth: 'EARTH', lunar: 'CISLUNAR', interp: 'INTERPLANETARY' };
 
 // Map an orbital state to a labelled band/zone, ordered by energy (Earth low → high).
 function _missionOrbitZone(o) {
@@ -17329,6 +17347,42 @@ function _missionBandViewHTML(m) {
 
   const scrub = _missionBandScrub == null ? (model.count - 1) : _missionBandScrub;
 
+  // ── body-zone backdrops: group consecutive zone slots by body (earth/lunar/interp)
+  //    into one faint tinted region + boundary + label, so the chart reads as a place
+  //    (not just abstract altitude bands). Decoration only — painted FIRST (behind
+  //    everything else) and never affects layout; zones with no bandGroup (deep-space
+  //    coast) are left untinted, and a body only appears if this mission visited it. ──
+  let bodyZoneHTML = '';
+  {
+    const groups = [];
+    for (let i = model.zones.length - 1; i >= 0; i--) {   // top slot → bottom slot (screen order)
+      const z = model.zones[i];
+      const g = groups[groups.length - 1];
+      if (g && g.bodyGroup === z.bodyGroup) g.zones.push(z);
+      else groups.push({ bodyGroup: z.bodyGroup, zones: [z] });
+    }
+    for (const g of groups) {
+      if (!g.bodyGroup) continue;
+      const topSlot = g.zones[0].slot, botSlot = g.zones[g.zones.length - 1].slot;
+      const yTop = topPad + (zoneCount - 1 - topSlot) * bandH;
+      const yBot = topPad + (zoneCount - botSlot) * bandH;
+      const color = _MISSION_BODY_ZONE_COLOR[g.bodyGroup], tint = _MISSION_BODY_ZONE_TINT[g.bodyGroup], label = _MISSION_BODY_ZONE_LABEL[g.bodyGroup];
+      bodyZoneHTML += `<rect x="0" y="${yTop}" width="${totalW}" height="${yBot - yTop}" fill="${tint}"/>`;
+      bodyZoneHTML += `<line x1="0" y1="${yTop}" x2="${totalW}" y2="${yTop}" stroke="${color}" stroke-opacity="0.3" stroke-width="1"/>`;
+      bodyZoneHTML += `<text x="8" y="${yTop + 12}" font-family="var(--mono)" font-size="8px" font-weight="700" letter-spacing=".12em" fill="var(--text-dim)">${label}</text>`;
+      // body glyph at the zone's SURFACE band (if present) — a limb arc + horizon line so
+      // "on the surface" reads as sitting ON the body, not floating between dots.
+      const surfZone = g.zones.find(z => z.key === 'earth' || z.key === 'moon' || z.key.endsWith('-surf') || z.key === 'mars');
+      if (surfZone) {
+        const sy = topPad + (zoneCount - 1 - surfZone.slot) * bandH;
+        const cy = sy + bandH - 14, gr = 9, gx = leftPad - 60;
+        bodyZoneHTML += `<line x1="${leftPad}" y1="${cy}" x2="${totalW - 6}" y2="${cy}" stroke="${color}" stroke-opacity="0.25" stroke-width="1" stroke-dasharray="2 3"/>`;
+        bodyZoneHTML += `<circle cx="${gx}" cy="${cy}" r="${gr}" fill="none" stroke="${color}" stroke-width="1.4" opacity="0.8"/>`;
+        bodyZoneHTML += `<path d="M ${gx - gr} ${cy} A ${gr} ${gr} 0 0 1 ${gx + gr} ${cy}" fill="${color}" opacity="0.18"/>`;
+      }
+    }
+  }
+
   // ── zone bands: labelled horizontal regions (Earth at the bottom → higher orbits up) ──
   let gridHTML = '';
   model.zones.forEach(z => {
@@ -17362,7 +17416,7 @@ function _missionBandViewHTML(m) {
     for (const p of lane.points) {
       const k = keyP(p);
       let n = nodes.get(k);
-      if (!n) { n = { x: X(p.col + (p.xFrac || 0)), y: Y(p), col: p.col, frac: p.xFrac || 0, vid: p.vehicleId, alt: p.alt, status: p.status, index: p.index, ascent: !!p._ascent, rep: lane, hasIn: false, hasOut: false }; nodes.set(k, n); }
+      if (!n) { n = { x: X(p.col + (p.xFrac || 0)), y: Y(p), col: p.col, frac: p.xFrac || 0, vid: p.vehicleId, alt: p.alt, status: p.status, index: p.index, ascent: !!p._ascent, rep: lane, hasIn: false, hasOut: false, zoneKey: p.zoneKey, bodyGroup: _missionBodyGroupOf(p.zoneKey) }; nodes.set(k, n); }
       else if (lane.birth < n.rep.birth) { n.rep = lane; n.y = Y(p); }
     }
   }
@@ -17382,14 +17436,36 @@ function _missionBandViewHTML(m) {
   // incoming edge, or its rep differs from every predecessor (a SEPARATE fork).
   for (const e of edges.values()) { const A = nodes.get(e.a), B = nodes.get(e.b); if (A && B && A.rep === B.rep) B._repIn = true; }
   const clip = s => s.length > 16 ? s.slice(0, 15) + '…' : s;
+  // compact duration label for a transfer leg, e.g. "≈5d" / "≈3h" — decoration only.
+  const fmtLegDur = sec => {
+    if (sec == null || !isFinite(sec) || sec <= 0) return '';
+    const d = sec / 86400;
+    if (d >= 1) return '≈' + (d >= 10 ? Math.round(d) : Math.round(d * 10) / 10) + 'd';
+    const h = sec / 3600;
+    if (h >= 1) return '≈' + Math.round(h) + 'h';
+    return '≈' + Math.round(sec / 60) + 'm';
+  };
   let lanesHTML = '';
   // edges (active vehicle gets the translucent accent underlay)
   for (const e of edges.values()) {
     const A = nodes.get(e.a), B = nodes.get(e.b);
     if (!A || !B) continue;
+    // a leg that crosses body zones (or connects a transit/corridor band) reads as a
+    // TRANSFER — dashed, with a small mid-segment duration label — vs. a same-zone move.
+    const crossesZone = A.bodyGroup && B.bodyGroup && A.bodyGroup !== B.bodyGroup;
+    const isTransit = A.zoneKey === 'transit' || B.zoneKey === 'transit' || A.zoneKey === 'nrho' || B.zoneKey === 'nrho';
+    const isLeg = crossesZone || (isTransit && A.zoneKey !== B.zoneKey);
     if (A.vid === m.vehicleId || B.vid === m.vehicleId)
       lanesHTML += `<polyline points="${A.x},${A.y} ${B.x},${B.y}" fill="none" stroke="var(--accent)" stroke-width="7" opacity="0.16" stroke-linejoin="round"/>`;
-    lanesHTML += `<polyline points="${A.x},${A.y} ${B.x},${B.y}" fill="none" stroke="${e.rep.color}" stroke-width="2.5" opacity="${e.rep.expended ? '0.4' : '1'}" stroke-linejoin="round"/>`;
+    lanesHTML += `<polyline points="${A.x},${A.y} ${B.x},${B.y}" fill="none" stroke="${e.rep.color}" stroke-width="2.5" opacity="${e.rep.expended ? '0.4' : '1'}" stroke-linejoin="round"${isLeg ? ' stroke-dasharray="5 3"' : ''}/>`;
+    if (isLeg) {
+      const ev = model.events[B.index];
+      const durLabel = fmtLegDur(ev && ev.durationUsed);
+      if (durLabel) {
+        const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2 - 6;
+        lanesHTML += `<text x="${mx}" y="${my}" text-anchor="middle" font-family="var(--mono)" font-size="7px" fill="var(--text-dim)" style="pointer-events:none">${durLabel}</text>`;
+      }
+    }
   }
   // lone nodes (a track with a single event) → short dash
   for (const n of nodes.values()) {
@@ -17443,7 +17519,7 @@ function _missionBandViewHTML(m) {
   legendHTML += '</div>';
 
   const zf = _missionBandZoom;
-  const svgHTML = `<svg viewBox="0 0 ${totalW} ${totalH}" width="${Math.round(totalW * zf)}" height="${Math.round(totalH * zf)}" style="background:var(--panel);display:block;">${gridHTML}${branchHTML}${lanesHTML}${scrubberHTML}</svg>`;
+  const svgHTML = `<svg viewBox="0 0 ${totalW} ${totalH}" width="${Math.round(totalW * zf)}" height="${Math.round(totalH * zf)}" style="background:var(--panel);display:block;">${bodyZoneHTML}${gridHTML}${branchHTML}${lanesHTML}${scrubberHTML}</svg>`;
 
   return `<div class="band-root">${legendHTML}<div class="band-scroll" onwheel="missionBandWheel(event,'${id}')">${svgHTML}</div></div>`;
 }

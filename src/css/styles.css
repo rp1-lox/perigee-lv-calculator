@@ -328,6 +328,10 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
   --accent-tint-strongest: color-mix(in srgb, var(--accent) 14%, transparent);
   --danger-tint: color-mix(in srgb, var(--danger) 15%, transparent);
   --danger-bright: color-mix(in srgb, var(--danger) 70%, var(--text-bright));
+  /* Band-view body-zone washes — track the node-map nm-* seeds so zone tints follow theme */
+  --nm-earth-zone: color-mix(in srgb, var(--nm-earth) 7%, transparent);
+  --nm-lunar-zone: color-mix(in srgb, var(--nm-lunar) 7%, transparent);
+  --nm-interp-zone: color-mix(in srgb, var(--nm-interp) 7%, transparent);
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
