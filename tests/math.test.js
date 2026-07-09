@@ -28,6 +28,7 @@ const FILES = [
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
+  'src/js/565-physics-mission.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/574-trajectory-view.js',
 ];
@@ -936,6 +937,66 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   {
     const t = physFindEventTime(x => x - 42.5, 0, 100, 1e-6);
     approx('physFindEventTime: locates crossing', t, 42.5, 1e-4);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// P2 — mission physics bridge (565): analytic phasing + solved node burns
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physPhaseBurnAngle, physSolveNodeBurn, physSchematicCoastTof,
+          physKeplerPropagate, physMissionLeg, progBodyAngleAt, progHohmannTOF,
+          PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission } =
+    vm.runInContext('({ physPhaseBurnAngle, physSolveNodeBurn, physSchematicCoastTof, physKeplerPropagate, physMissionLeg, progBodyAngleAt, progHohmannTOF, PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission })', sandbox);
+
+  // phasing geometry: burn point diametrically opposite the arrival point
+  approx('P2 phasing: arrival at π → burn at 0', physPhaseBurnAngle(Math.PI), 0, 1e-12);
+  approx('P2 phasing: arrival at 0.5 → burn at 0.5+π', physPhaseBurnAngle(0.5), 0.5 + Math.PI, 1e-12);
+  ok('P2 phasing: normalized to [0,2π)', physPhaseBurnAngle(-1) >= 0 && physPhaseBurnAngle(7) < 2 * Math.PI);
+
+  // schematic coast TOF conventions
+  const leo = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185 };
+  const tlc = { type: 'transit', body: 'Earth', c3: -1.9, destination: 'Moon' };
+  const geo = { type: 'circular', body: 'Earth', perigee: 35786, apogee: 35786 };
+  const tofMoon = physSchematicCoastTof(leo, tlc);
+  approx('P2 coast TOF: LEO→TLC equals translunar half-ellipse',
+    tofMoon, progHohmannTOF('Earth', 185, PROG_MOON_ORBIT_R - PROG_BODIES.Earth.R), 1);
+  approx('P2 coast TOF: LEO→GEO equals Hohmann',
+    physSchematicCoastTof(leo, geo), progHohmannTOF('Earth', 185, 35786), 1);
+
+  // solved-burn magnitude parity: |dvVec| is exactly the engine-supplied value
+  const burnP = physSolveNodeBurn(leo, tlc, 86400 * 3, 3.15);
+  ok('P2 solved burn: returns a state for LEO→TLC', !!burnP && !!burnP.state);
+  approx('P2 solved burn: |dvVec| equals supplied magnitude',
+    Math.hypot(burnP.dvVec[0], burnP.dvVec[1], burnP.dvVec[2]), 3.15, 1e-12);
+  ok('P2 solved burn: cislunar body set', burnP.bodies.includes('Earth') && burnP.bodies.includes('Moon'));
+
+  // GOLDEN — analytic phasing arrival: a true Hohmann burn placed by
+  // physSolveNodeBurn, propagated two-body for the schematic TOF, must land
+  // on the Moon's railed position at arrival (consistent inputs: same rails,
+  // same TOF; pure geometry, no perturbations).
+  {
+    const tDep = 86400 * 5;
+    const muE = PROG_BODIES.Earth.mu;
+    const r1 = PROG_BODIES.Earth.R + 185, r2 = PROG_MOON_ORBIT_R;
+    const aT = (r1 + r2) / 2;
+    const dvHoh = Math.sqrt(muE * (2 / r1 - 1 / aT)) - Math.sqrt(muE / r1); // km/s
+    const b = physSolveNodeBurn(leo, tlc, tDep, dvHoh);
+    const st = physKeplerPropagate(b.state.r, b.state.v, b.coastTof_s, muE);
+    ok('P2 golden: Kepler propagation converged', !!st);
+    const moonAng = progBodyAngleAt('Moon', tDep + b.coastTof_s);
+    const moonPos = [r2 * Math.cos(moonAng), r2 * Math.sin(moonAng), 0];
+    const missKm = Math.hypot(st.r[0] - moonPos[0], st.r[1] - moonPos[1], st.r[2] - moonPos[2]);
+    ok(`P2 golden: Hohmann arrival lands on the Moon's railed position (miss ${missKm.toFixed(1)} km < 500 km)`,
+      missKm < 500);
+  }
+
+  // side-table accessor
+  {
+    _physTrajByMission['test-mid'] = { legs: [{ authIdx: 2, tof_s: 42 }] };
+    ok('P2 side-table: physMissionLeg finds by authIdx', physMissionLeg('test-mid', 2).tof_s === 42);
+    ok('P2 side-table: miss returns null', physMissionLeg('test-mid', 5) === null && physMissionLeg('nope', 0) === null);
+    delete _physTrajByMission['test-mid'];
   }
 }
 

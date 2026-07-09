@@ -925,6 +925,11 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">RECOVER</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${entry.vehicleName||'?'} recovered</div>
   </div>`;
+  if (entry.type === 'MNODE') return `<div class="mission-log-card" style="padding:8px 14px;">
+    <span class="mission-log-type">MANEUVER NODE (vector)</span>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">Δv ${(entry.dvRequired||0).toLocaleString()} m/s <span style="color:var(--text-dim);">(pro ${Math.round(entry.dvPro_ms||0)} / rad ${Math.round(entry.dvRad_ms||0)} / nrm ${Math.round(entry.dvNrm_ms||0)})</span></div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">prop &minus;${(entry.prop_consumed||0).toLocaleString()} kg &middot; ${entry.result||''}</div>
+  </div>`;
   if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">COAST</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.days||0).toLocaleString()} d${entry.label ? ' — ' + entry.label : ''}${entry.metStart!=null?` <span style="color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>`:''}</div>
@@ -1789,6 +1794,9 @@ function _missionResolveSepIndex(m, e, active, sepIndex) {
 // ── RECOMPUTE ENGINE: tear down & replay the full mission log from scratch ──
 function missionRecompute(m) {
   if (!m || typeof PROG_ACTIVE_PROGRAM === 'undefined') return;
+  // P2 physics bridge: rotate the trajectory side-table (current -> previous)
+  // so this replay can consult the PREVIOUS rebuild's physics TOFs (565).
+  if (typeof physMissionRecomputeBegin === 'function') physMissionRecomputeBegin(m);
   // tear down this mission's runtime vehicles
   (m.vehicleIds || []).forEach(vid => { if (PROG_ACTIVE_PROGRAM.vehicles[vid]) delete PROG_ACTIVE_PROGRAM.vehicles[vid]; });
   m.vehicleIds = []; m.vehicleId = null;
@@ -1982,7 +1990,12 @@ function missionRecompute(m) {
       // meaning the burn draws from POST-boiloff tanks — a coast that eats enough cryo
       // propellant correctly starves the arrival burn, and the existing burn-overdraw
       // check (572 #2) catches the resulting shortfall for free.
-      durationAuto = progTransferTOF(_missionNmNodeById(e.fromNode), _missionNmNodeById(e.toNode));
+      // Duration precedence (P2): durationOverride (below, T1 block) > physics
+      // leg TOF (previous rebuild's side-table, stale-by-one — see 565 +
+      // MATH.md §7e) > launchWindow > Hohmann (both inside progTransferTOF).
+      const _physTof = (typeof physLegTofFor === 'function') ? physLegTofFor(m, e, metClock) : null;
+      durationAuto = (_physTof != null) ? _physTof
+        : progTransferTOF(_missionNmNodeById(e.fromNode), _missionNmNodeById(e.toNode));
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
       _missionApplyManeuver(active, e);
     } else if (e.type === 'SEPARATE' && e.result === 'SUCCESS') {
@@ -2111,6 +2124,35 @@ function missionRecompute(m) {
       e.result = 'SUCCESS';
       e.boiloffKg = applyMissionBoiloff(Math.max(0, e.days || 0));
     }
+    else if (e.type === 'MNODE') {
+      // P2 vector maneuver node (authored via missionExecManeuverNode, 565; no
+      // dock UI until P4). Burns propellant through the SAME rocket-eq path as
+      // MANEUVER burn steps with |Δv| = √(pro²+rad²+nrm²); advances NO orbit
+      // state — the node-map orbit stays where it is (the physics-side
+      // trajectory divergence is P3/P4's problem; MATH.md §7e critique).
+      active = resolveActive(e);
+      if (active) {
+        e.vehicleId = active.vehicleId;
+        const fullDv = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
+        e.dvRequired = Math.round(fullDv);
+        let delivered = 0, propTotal = 0;
+        const st = active.stages.find(s => s.stageDefinitionId === _missionDefaultFiringStageId(active)) || null;
+        if (st && (st.isp || 0) > 0 && fullDv > 0) {
+          const m_wet = _missionVehWetMass(active);
+          const avail = progStageRemainingProp(st);
+          if (avail > 0) {
+            const need = progRocketEqPropNeeded(m_wet, fullDv, st.isp);
+            if (need > avail) { propTotal = avail; delivered = progRocketEqDv(m_wet, avail, st.isp); }
+            else { propTotal = need; delivered = fullDv; }
+            progBurnPropellant(st, propTotal);
+            e.firedStageId = st.stageDefinitionId;
+          }
+        }
+        e.dv = Math.round(delivered); e.dv_actual = Math.round(delivered); e.dvDelivered = Math.round(delivered);
+        e.prop_consumed = Math.round(propTotal);
+        e.result = fullDv > 0 ? (delivered + 1 >= fullDv ? 'SUCCESS' : 'MARGINAL') : 'SUCCESS';
+      } else { e.result = 'FAILED'; }
+    }
     // ── T1: MET bookkeeping — durationOverride (authored, seconds) wins over the
     //    computed auto value; both are cached so the UI can show "(custom)". Events
     //    before the first LAUNCH sit at T+0 (metClock hasn't started advancing yet). ──
@@ -2154,6 +2196,13 @@ function missionRecompute(m) {
 
   m.vehicleIds = live.map(v => v.vehicleId);
   m.vehicleId = active ? active.vehicleId : (m.vehicleIds[0] || null);
+  // P2 physics bridge: rebuild propagated trajectory legs into the 565
+  // side-table (results NEVER stored on m — autosave/undo leak guard). Runs
+  // BEFORE autosave/undo/checks; may trigger ONE extra recompute pass when a
+  // physics TOF disagrees >1% with the duration this replay used (see 565).
+  if (typeof PHYS_ENABLED !== 'undefined' && PHYS_ENABLED && typeof physRebuildMissionTrajectories === 'function') {
+    try { physRebuildMissionTrajectories(m); } catch (err) { console.warn('physics trajectory rebuild failed:', err); }
+  }
   if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
   if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
   // Flight Readiness checks are derived state — computed LAST, after autosave has
