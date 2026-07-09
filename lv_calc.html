@@ -20018,7 +20018,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     // second window on top — one fade authority per feature, per the brief).
     const localScale = _trajLocalScaleFor(body, m);
     const neighborhoodExtentPx = _trajBodyPxR(trueR, zoom) * zoom; // conservative floor; refined per-body below via moon ring extents
-    const zoiAlpha = _trajLodOpacity(Math.max(neighborhoodExtentPx, _trajBodyNeighborhoodPx(body, zoom)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
+    const zoiAlpha = _trajLodOpacity(Math.max(neighborhoodExtentPx, _trajBodyNeighborhoodPx(body, zoom, m)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (zoiAlpha > 0) {
       const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
       out += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
@@ -20059,14 +20059,21 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   return out;
 }
 
-// Rough px extent of a body's own moon-ring neighborhood (max moon ring
-// radius at the current zoom), used to feed the zone-of-influence fade gate
-// — a body with moons "opens up" once ITS OWN moons' rings are big enough to
-// be worth drawing, not merely once its own disc clears 30px.
-function _trajBodyNeighborhoodPx(body, zoom) {
+// A body's "neighborhood" radius in km — the ONE definition shared by the
+// fly-to fit and the zone-of-influence LOD gate, so any camera that frames a
+// body's content also opens the gate that draws it. (They were separate
+// definitions before: the gate counted only moon rings, so moonless planets'
+// mission content NEVER rendered at any zoom — MATH.md critique 26, fixed.)
+function _trajBodyNeighborhoodKm(body, m) {
   const moons = _trajMoonsOf(body);
-  if (!moons.length) return 0;
-  return Math.max(...moons.map(mo => mo.r)) * (zoom || 1);
+  const moonR = moons.length ? Math.max(...moons.map(mo => mo.r)) : 0;
+  const contentR = m ? _trajMissionExtentForBody(body, m) : 0;
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  return Math.max(moonR, contentR, R * 4);
+}
+
+function _trajBodyNeighborhoodPx(body, zoom, m) {
+  return _trajBodyNeighborhoodKm(body, m) * (zoom || 1);
 }
 
 // Local px-per-km scale for a body's embedded mission content (its own orbit
