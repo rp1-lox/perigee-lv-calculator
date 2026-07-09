@@ -101,13 +101,357 @@ function trajPanMove(ev) {
 }
 function trajPanEnd() { _trajDrag = null; }
 
+// ── O1-b: mission content extraction ─────────────────────────────────────
+// Everything below reads the REPLAYED log (m._expanded, populated by
+// missionRecompute — each entry carries e.snapshot[] of live-vehicle states
+// AFTER that event, plus e.metStart / e.dvRequired / e.dvDelivered / e.fromNode
+// / e.toNode for MANEUVER, e.days for COAST). Positions along orbits are NOT
+// modeled — this is a geometry-true, time-schematic map, per the design brief.
+
+// A scene-local orbit record: { key, body, a, e, r_peri, r_apo, label, colors:Set, names:Set }
+// key dedupes identical orbits (rounded so float noise from repeated snapshots
+// doesn't fork the same LEO into two near-identical rings).
+function _trajOrbitKey(body, peri, apo) {
+  return body + '|' + Math.round(peri) + '|' + Math.round(apo);
+}
+
+function _trajOrbitLabel(body, peri, apo) {
+  // ORBIT_CATEGORIES (060) is an array of {planet, orbits:[{name,mode,perigee,apogee,...}]}
+  // grouped by planet — find this body's group, then match on peri/apo within tolerance
+  // for a friendlier label ("LEO 200 km" instead of "200×200").
+  const group = (typeof ORBIT_CATEGORIES !== 'undefined') ? ORBIT_CATEGORIES.find(g => g.planet === body) : null;
+  if (group) {
+    for (const cat of group.orbits) {
+      if (cat.mode === 'orbit' && cat.perigee != null && Math.abs(cat.perigee - peri) < 50 && cat.apogee != null && Math.abs(cat.apogee - apo) < 50) {
+        return cat.name;
+      }
+    }
+  }
+  const prefix = body === 'Earth' ? '' : (body + ' ');
+  const rounded = Math.round(peri);
+  return Math.abs(apo - peri) < 5 ? `${prefix}${rounded}` : `${prefix}${rounded}×${Math.round(apo)}`;
+}
+
+// Which scene (body name, or 'SUN' for interplanetary/heliocentric legs) an
+// orbit/transit record belongs in.
+function _trajSceneForOrbit(o) {
+  if (!o) return null;
+  if (o.transit && o.body === 'Sun') return 'SUN';
+  if (o.transit) return o.body || 'Earth'; // translunar etc — parent body's local scene
+  if (o.escape) return o.body || 'Earth';
+  return o.body || 'Earth';
+}
+
+// Walk m._expanded snapshots, building per-scene: orbit rings, transfer legs,
+// burn markers, and surface events. Cached per mission per render call (cheap
+// enough to just recompute; log length is small).
+function _trajExtractMission(m) {
+  const scenes = {}; // sceneId -> { orbits: Map<key,rec>, legs: [], surface: [] }
+  const sceneFor = id => (scenes[id] = scenes[id] || { orbits: new Map(), legs: [], surface: [] });
+  const log = (m && m._expanded && m._expanded.length) ? m._expanded : (m ? (m.log || []) : []);
+  if (!log.length) return scenes;
+
+  const laneColorFor = (ownerKeys) => {
+    if (!ownerKeys || !ownerKeys.length) return null;
+    const key = ownerKeys[0];
+    const label = (m._ownerLabels && m._ownerLabels[key]) || null;
+    if (!label) return null;
+    // fallbackIdx doesn't matter for coloring purposes if a custom color is set;
+    // otherwise fall back to a stable hash of the label so re-renders don't flicker.
+    let idx = 0; for (let i = 0; i < label.length; i++) idx = (idx * 31 + label.charCodeAt(i)) >>> 0;
+    return { color: _missionLaneColor(m, label, idx), label };
+  };
+
+  const addOrbitRing = (body, peri, apo, ownerKeys) => {
+    if (body == null || peri == null || apo == null) return null;
+    const sceneId = body;
+    const sc = sceneFor(sceneId);
+    const key = _trajOrbitKey(body, peri, apo);
+    const lane = laneColorFor(ownerKeys);
+    if (!sc.orbits.has(key)) {
+      sc.orbits.set(key, {
+        key, body, peri, apo,
+        label: _trajOrbitLabel(body, peri, apo),
+        colors: new Set(), names: new Set(),
+      });
+    }
+    const rec = sc.orbits.get(key);
+    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
+    return rec;
+  };
+
+  // ── snapshots: every distinct orbit any vehicle occupies ─────────────────
+  log.forEach(e => {
+    (e.snapshot || []).forEach(v => {
+      if (!v.orbit || v.orbit.surface) return;
+      const o = v.orbit;
+      const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+      if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners);
+    });
+  });
+
+  // ── surface events: LAUNCH / (REENTER-derived) LAND ──────────────────────
+  log.forEach(e => {
+    if (e.type === 'LAUNCH') {
+      const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+      sceneFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
+    } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
+      const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';
+      sceneFor(body).surface.push({ kind: 'land', body, label: e.type === 'RECOVER' ? 'Recovery' : 'Landing', met: e.metStart });
+    }
+  });
+
+  // ── transfer legs: MANEUVER events with a from/to node pair ──────────────
+  log.forEach(e => {
+    if (e.type !== 'MANEUVER' || !e.fromNode || !e.toNode) return;
+    const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
+    if (!fromN || !toN || !fromN.orbit || !toN.orbit) return;
+    const fromO = fromN.orbit, toO = toN.orbit;
+    const sceneId = _trajSceneForOrbit(toO) || _trajSceneForOrbit(fromO);
+    if (!sceneId) return;
+    const lane = laneColorFor(_trajOwnerKeysForManeuver(e));
+    const dvUsed = (e.dvDelivered != null ? e.dvDelivered : e.dvRequired) || 0;
+    sceneFor(sceneId).legs.push({
+      sceneId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
+      dv: dvUsed, met: e.metStart, color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
+    });
+  });
+
+  // ── COAST loiter badges: attach to the orbit ring active at that point ───
+  log.forEach((e, i) => {
+    if (e.type !== 'COAST') return;
+    const snap = e.snapshot || [];
+    // pick the first non-surface orbit in this snapshot as "where we're loitering"
+    const v = snap.find(vv => vv.orbit && !vv.orbit.surface && ((vv.orbit.perigee ?? 0) > 0 || (vv.orbit.apogee ?? 0) > 0));
+    if (!v) return;
+    const o = v.orbit;
+    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners);
+    if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
+  });
+
+  return scenes;
+}
+
+// A MANEUVER event doesn't carry v.owners directly — resolve via the active
+// vehicle key (activeKey) against m._ownerLabels-keyed owner sets is indirect,
+// so instead prefer the destination snapshot's owners for the SAME event (the
+// vehicle that just arrived is the one that flew the leg).
+function _trajOwnerKeysForManeuver(e) {
+  const snap = e.snapshot || [];
+  if (!snap.length) return null;
+  // the maneuvering vehicle is whichever snapshot entry has the fewest/most recent
+  // owners overlap; simplest reliable pick: first non-empty owners array.
+  const v = snap.find(vv => vv.owners && vv.owners.length);
+  return v ? v.owners : null;
+}
+
+// ── geometry helpers ──────────────────────────────────────────────────────
+// True-geometry ellipse for a (peri,apo) orbit around a body of radius R,
+// focus at the body center (origin in scene-local coords). Returns SVG-ready
+// numbers in KM (caller applies scene `scale`).
+//   a       = semi-major axis
+//   c       = center-to-focus distance = a - r_peri
+//   cx      = -c  (center is on the -x side since periapsis is drawn at +x)
+// Periapsis is placed at angle 0 (local +x) by convention; ellipses are drawn
+// axis-aligned then rotated by `rotDeg` for schematic orientation variety.
+function _trajEllipseGeom(peri, apo, R) {
+  const rPeri = R + peri, rApo = R + apo;
+  const a = (rPeri + rApo) / 2;
+  const b = Math.sqrt(Math.max(0, rPeri * rApo));
+  const c = a - rPeri; // signed offset from focus to center along +x
+  return { rPeri, rApo, a, b, c };
+}
+
+function _trajRingSVG(rec, body, scale, color) {
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  const g = _trajEllipseGeom(rec.peri, rec.apo, R);
+  const isCircle = Math.abs(rec.apo - rec.peri) < Math.max(1, R * 0.001);
+  const strokeColor = color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)');
+  const title = [...rec.names].join(', ') || rec.label;
+  // loiter badge: placed just below the ring label, at the ellipse center's x
+  // (a legible spot regardless of eccentricity, not tied to a specific apsis).
+  const coastBadge = rec.coast && rec.coast.length
+    ? `<text x="${(g.c * scale).toFixed(2)}" y="-6" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="var(--nm-label)">&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d</text>`
+    : '';
+  if (isCircle) {
+    const r = ((rec.peri + rec.apo) / 2 + R) * scale;
+    return `<g>
+      <circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="0.7" opacity="0.85"><title>${title}</title></circle>
+      <text x="0" y="${(-r - 4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="var(--nm-label)">${rec.label}</text>
+      ${coastBadge}
+    </g>`;
+  }
+  const cx = g.c * scale, cy = 0, rx = g.a * scale, ry = g.b * scale;
+  return `<g>
+    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="0.7" opacity="0.85"><title>${title}</title></ellipse>
+    <text x="${cx.toFixed(2)}" y="${(cy - ry - 4).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6.5" fill="var(--nm-label)">${rec.label}</text>
+    ${coastBadge}
+  </g>`;
+}
+
+// Half-ellipse Hohmann transfer arc between r1 (departure) and r2 (arrival),
+// both body-centered radii (R already included). Drawn as an SVG elliptical
+// arc path from periapsis to apoapsis (or vice versa), at a given rotation.
+function _trajTransferArcPath(r1, r2, scale, rotDeg) {
+  const rPeri = Math.min(r1, r2), rApo = Math.max(r1, r2);
+  const a = (rPeri + rApo) / 2, b = Math.sqrt(Math.max(0, rPeri * rApo)), c = a - rPeri;
+  const rot = rotDeg || 0;
+  const rad = rot * Math.PI / 180;
+  const rotp = (x, y) => ({ x: x * Math.cos(rad) - y * Math.sin(rad), y: x * Math.sin(rad) + y * Math.cos(rad) });
+  // local (unrotated) ellipse centered at (c,0)*scale, periapsis at local (rPeri,0), apoapsis at local (-rApo,0)
+  const p1l = { x: rPeri * scale, y: 0 };
+  const p2l = { x: -rApo * scale, y: 0 };
+  const p1 = rotp(p1l.x, p1l.y), p2 = rotp(p2l.x, p2l.y);
+  const rx = (a * scale).toFixed(2), ry = (b * scale).toFixed(2);
+  const rotDegAttr = rot.toFixed(1);
+  // half-ellipse: large-arc-flag 0, sweep depends on orientation but 0/1 both draw
+  // a half; pick 1 for a consistent "upper" half visually.
+  return { d: `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${rx} ${ry} ${rotDegAttr} 0 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
+           depX: p1.x, depY: p1.y, arrX: p2.x, arrY: p2.y };
+}
+
+function _trajBurnMarker(x, y, dir, dvText, metText) {
+  const glyph = dir === 'up' ? '▲' : '▼';
+  return `<g>
+    <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="var(--nm-bg)" stroke="var(--accent2)" stroke-width="0.8"/>
+    <text x="${x.toFixed(2)}" y="${(y - 5).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="var(--accent2)">${glyph} ${dvText}</text>
+    <text x="${x.toFixed(2)}" y="${(y + 9).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="5.5" fill="var(--text-dim)">${metText}</text>
+  </g>`;
+}
+
+// Compute the min zoom-worthy extent (max body-centered / heliocentric radius,
+// km) of a scene's MISSION content only (orbit apoapses + transfer/legs'
+// far endpoint) — used to pick the initial fit-to-content scale, per the
+// design brief (static rings beyond remain reachable by zooming out further).
+function _trajMissionExtent(scene, m) {
+  const scenes = _trajGetExtraction(m);
+  const sc = scenes[scene];
+  if (!sc) return 0;
+  const body = scene === 'SUN' ? null : scene;
+  const R = body ? ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0) : 0;
+  let maxR = 0;
+  sc.orbits.forEach(rec => { maxR = Math.max(maxR, R + rec.apo); });
+  sc.legs.forEach(leg => {
+    if (scene === 'SUN') {
+      const r1 = PROG_HELIO_R[leg.fromO.body], r2 = PROG_HELIO_R[leg.toO.body];
+      if (r1 != null) maxR = Math.max(maxR, r1);
+      if (r2 != null) maxR = Math.max(maxR, r2);
+    } else {
+      const r1 = _trajLocalRadius(leg.fromO, body), r2 = _trajLocalRadius(leg.toO, body);
+      if (r1 != null) maxR = Math.max(maxR, r1);
+      if (r2 != null) maxR = Math.max(maxR, r2);
+    }
+  });
+  return maxR;
+}
+
+// Per-render extraction cache, keyed by missionId so switching missions (or a
+// stale reference from a prior render) can't leak state across renders.
+let _trajExtractionCache = { missionId: null, data: null };
+function _trajGetExtraction(m) {
+  if (!m) return {};
+  if (_trajExtractionCache.missionId === m.missionId && _trajExtractionCache.data) return _trajExtractionCache.data;
+  const data = _trajExtractMission(m);
+  _trajExtractionCache = { missionId: m.missionId, data };
+  return data;
+}
+
 // ── extension point for O1-b ─────────────────────────────────────────────
 // Returns extra SVG markup (groups/paths) to overlay on top of the static
-// scene for the given scene id ('SUN' or a body name). A later run will fill
-// this in with mission orbit rings + transfer arcs read from m.log; keep the
-// signature stable. Return '' for now — static phase only.
-function _trajSceneContent(scene, m) {
-  return '';
+// scene for the given scene id ('SUN' or a body name). `scale` is the scene's
+// resolved px-per-km factor (already fit to whichever is larger: static
+// content or mission content — see _trajSunSceneSVG / _trajBodySceneSVG).
+function _trajSceneContent(scene, m, scale) {
+  if (!m) return '';
+  const scenes = _trajGetExtraction(m);
+  const sc = scenes[scene];
+  if (!sc) return '';
+  const body = scene === 'SUN' ? null : scene;
+  const R = body ? ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0) : 0;
+  scale = scale || 1;
+
+  let out = '';
+
+  // orbit rings (skip for SUN scene — heliocentric transit legs are drawn as
+  // arcs between the static planet rings, not as a new "orbit" of the Sun)
+  if (body) {
+    sc.orbits.forEach(rec => { out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null); });
+  }
+
+  // transfer legs
+  sc.legs.forEach((leg, li) => {
+    if (scene === 'SUN') {
+      const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
+      const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
+      if (r1 == null || r2 == null) return;
+      const departAng = _trajPlanetAngle(leg.fromO.body);
+      const arc = _trajTransferArcPath(r1, r2, scale, departAng);
+      const color = leg.color || 'var(--accent2)';
+      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="2.5,2" opacity="0.8"><title>${leg.fromLabel} → ${leg.toLabel}</title></path>`;
+      out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met));
+      out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', '');
+      return;
+    }
+    // local-body-frame leg: translunar (Earth scene, r2=Moon ring) or a normal
+    // circular/elliptic-to-circular/elliptic transfer within the same body's SOI.
+    const fromR = _trajLocalRadius(leg.fromO, body);
+    const toR = _trajLocalRadius(leg.toO, body);
+    if (fromR == null || toR == null) return;
+    const arc = _trajTransferArcPath(fromR, toR, scale, 20 + (li * 35) % 360);
+    const color = leg.color || 'var(--accent2)';
+    out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="2.5,2" opacity="0.8"><title>${leg.fromLabel} → ${leg.toLabel}</title></path>`;
+    out += _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met));
+    out += _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', '');
+  });
+
+  // surface events
+  sc.surface.forEach(s => {
+    const ang = s.kind === 'launch' ? -90 : 90; // launch at top, landing at bottom of disc — schematic
+    const rad = ang * Math.PI / 180;
+    const bodyPxR = Math.max(4, R * scale * 0.02);
+    const x = bodyPxR * Math.cos(rad), y = bodyPxR * Math.sin(rad);
+    out += `<g><circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="1.6" fill="var(--accent3)"/>
+      <text x="${x.toFixed(2)}" y="${(y + (s.kind === 'launch' ? -5 : 10)).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="6" fill="var(--accent3)">${s.label}</text></g>`;
+  });
+
+  return out;
+}
+
+function _trajDvText(dv) {
+  return dv ? Math.round(dv).toLocaleString() + ' m/s' : '';
+}
+
+// Body-centered radius (km, including body R) for a node-map orbit spec, in
+// the given scene body's local frame. Returns null if the orbit isn't in this
+// body's local frame (e.g. a transit/escape leg that belongs to a different scene).
+function _trajLocalRadius(o, body) {
+  if (!o) return null;
+  if (o.type === 'transit') {
+    // translunar/etc: departure end is a parking-orbit radius in `body`'s frame,
+    // arrival end is the destination body's orbital radius around `body`.
+    if (o.destination) {
+      const mo = PROG_MOON_ORBITS[o.destination];
+      if (mo && mo.parent === body) return mo.r;
+    }
+    return null;
+  }
+  if (o.body !== body) return null;
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  if (o.type === 'surface') return R;
+  const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+  return R + (peri + apo) / 2; // transfer endpoints use mean radius as departure/arrival point
+}
+
+// Schematic angle for a planet in the Sun scene, matching _trajSunSceneSVG's
+// own layout (index order in PROG_HELIO_R, spread evenly) — kept in sync so
+// transfer arcs originate at the visually-drawn ring position.
+function _trajPlanetAngle(body) {
+  const bodies = Object.keys(PROG_HELIO_R);
+  const i = bodies.indexOf(body);
+  if (i < 0) return 0;
+  return (i / bodies.length) * 360 - 90;
 }
 
 // ── SVG builders ──────────────────────────────────────────────────────────
@@ -123,10 +467,21 @@ function _trajGlyph(cx, cy, r, color, label) {
   </g>`;
 }
 
+// Default initial scale fits the MISSION's extent in this scene (min zoom that
+// shows all mission orbits/arcs + the body), not the static maxR — per the O1-b
+// design brief. Static rings beyond remain reachable by zooming out (user zoom
+// is unbounded down to _TRAJ_ZMIN). Falls back to staticMaxR when the mission
+// has no content in this scene (or no mission at all — static phase view).
+function _trajFitScale(staticMaxR, missionMaxR) {
+  const fitR = (missionMaxR > 0 && missionMaxR < staticMaxR) ? missionMaxR : staticMaxR;
+  return (_TRAJ_VB / 2 - 20) / Math.max(1, fitR);
+}
+
 function _trajSunSceneSVG(m) {
   const bodies = Object.keys(PROG_HELIO_R);
-  const maxR = Math.max(...bodies.map(b => PROG_HELIO_R[b]));
-  const scale = (_TRAJ_VB / 2 - 20) / maxR;   // fit outermost ring with margin
+  const staticMaxR = Math.max(...bodies.map(b => PROG_HELIO_R[b]));
+  const missionMaxR = m ? _trajMissionExtent('SUN', m) : 0;
+  const scale = _trajFitScale(staticMaxR, missionMaxR);
   const rings = bodies.map((b, i) => {
     const rr = PROG_HELIO_R[b] * scale;
     const ang = (i / bodies.length) * 2 * Math.PI - Math.PI / 2; // spread angles so labels don't collide
@@ -136,14 +491,15 @@ function _trajSunSceneSVG(m) {
       + _trajGlyph(cx, cy, 3, color, b);
   }).join('');
   const sun = _trajGlyph(0, 0, 6, _trajBodyColor('SUN'), 'Sun');
-  return `${rings}${sun}${_trajSceneContent('SUN', m)}`;
+  return `${rings}${sun}${_trajSceneContent('SUN', m, scale)}`;
 }
 
 function _trajBodySceneSVG(body, m) {
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 6371;
   const moons = _trajMoonsOf(body);
-  const maxR = moons.length ? Math.max(...moons.map(mo => mo.r)) : R * 4;
-  const scale = (_TRAJ_VB / 2 - 20) / maxR;
+  const staticMaxR = moons.length ? Math.max(...moons.map(mo => mo.r)) : R * 4;
+  const missionMaxR = m ? _trajMissionExtent(body, m) : 0;
+  const scale = _trajFitScale(staticMaxR, missionMaxR);
   const moonRings = moons.map(mo => {
     const rr = mo.r * scale;
     const color = _trajBodyColor(mo.name);
@@ -154,7 +510,7 @@ function _trajBodySceneSVG(body, m) {
   const bodyPxR = Math.max(4, R * scale * 0.02); // body radius is tiny vs moon-orbit scale — clamp for visibility, disc is schematic-scale not orbit-scale
   const discColor = _trajBodyColor(body);
   const disc = _trajGlyph(0, 0, bodyPxR, discColor, body);
-  return `${moonRings}${disc}${_trajSceneContent(body, m)}`;
+  return `${moonRings}${disc}${_trajSceneContent(body, m, scale)}`;
 }
 
 function _trajSceneSVG(scene, m) {
@@ -164,6 +520,7 @@ function _trajSceneSVG(scene, m) {
 // ── top-level view builder (called from missionRenderDetail via 570's hook) ──
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
+  _trajExtractionCache = { missionId: null, data: null }; // force fresh extraction each render (mission log may have changed)
   const focus = _trajFocus(m);
   const zoom = _trajZoom(m);
   const pan = _trajPan(m);
