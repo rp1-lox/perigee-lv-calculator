@@ -31,6 +31,15 @@ function showPage(p){
   if(target==='trades'){ tsEnsureRendered(); }
   if(target==='spacecraft'){ scEdRenderList(); scEdRenderDetail(); if(typeof scLibSetMode==='function') scLibSetMode(_scLibMode||'mine'); }
   if(target==='orbits' && typeof orbVehRenderSelectorBar==='function'){ orbVehRenderSelectorBar(); }
+  // Re-draw the mini orbit-diagram on navigation TO the orbits page: its
+  // overlay layer (230) sizes itself off the panel's REAL measured px rect
+  // (see 230's header comment), which is 0x0 while the page is display:none —
+  // the very first initOrbitDiagram() call at page-init time draws into a
+  // hidden panel and falls back to the nominal _OD_VBW/_OD_VBH box, causing a
+  // stretch-scaled overlay (fonts render ~2.5x too big) the first time the
+  // user opens Orbits. Re-drawing here, once the page is visible and
+  // measurable, fixes that first-paint case.
+  if(target==='orbits' && typeof drawOrbitDiagram==='function'){ drawOrbitDiagram(); }
 
   // Legacy 'results' alias: scroll the results panel into view once rendered.
   if(p==='results'){

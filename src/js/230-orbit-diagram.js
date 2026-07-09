@@ -6,9 +6,19 @@
 // c = a - r_peri) so the ellipse math is identical to the big view — this
 // panel is deliberately a smaller, non-interactive SVG rendering of the same
 // geometry, not a reimplementation.
+//
+// Two-layer split (same architecture as 574, see that file's header comment
+// for the full rationale): the mini-diagram's world "camera" is a CONSTANT
+// transform (fixed frame, auto-fit each render, no zoom/pan) — trivial
+// compared to 574's mutable viewBox camera, but it funnels through the exact
+// SAME projection (_trajWorldToScreen) and the exact same label registry /
+// resolve pass (_trajRegisterLabel / _trajResolveLabels) so there is ONE
+// symbology code path shared by both surfaces, not two. World geometry
+// (rings/ellipses/discs/arcs) is drawn directly into the world <svg> in
+// world-unit (km*scale) coordinates as before; labels/plates are registered
+// then resolved into a sibling overlay <svg> sized in real container px.
 // viewBox matches the panel's rendered aspect (~1.1/1, see #orbit-diagram in
-// styles.css) so font-size units map directly to rendered px without a
-// stretch-distortion correction: width slightly wider than height.
+// styles.css) so world-unit and overlay-px boxes have the same aspect ratio.
 const _OD_VBW = 330, _OD_VBH = 300;
 
 function initOrbitDiagram(){
@@ -75,7 +85,7 @@ function drawOrbitDiagram(){
   // gate needed beyond what's computed below), so labels are registered with
   // minSize:0 (always eligible) and let collision be the only filter.
   _trajResetLabels();
-  const reg=(x,y,text,fontPx,color,pri)=>_trajRegisterLabel(x,y,[{text,dy:0,fontPx,color}],pri||'orbit',{screenSize:Infinity,minSize:0,selected:false,zoom:1});
+  const reg=(x,y,text,fontPx,color,pri)=>_trajRegisterLabel(x,y,[{text,dy:0,fontPx,color}],pri||'orbit',{screenSize:Infinity,minSize:0,selected:false});
 
   let out='';
   // Earth disc — true scale, but CAPPED per the C brief: at low-orbit targets
@@ -176,24 +186,49 @@ function drawOrbitDiagram(){
     }
   }
 
-  // Resolve scene-anchored labels (Earth/PARK/Injection etc.) with LOD +
-  // collision now that all candidates for this render are registered.
-  out+=_trajResolveLabels();
+  // ── overlay resolution (layer 2) ──────────────────────────────────────
+  // `out` above is WORLD-layer geometry only (rings/ellipses/discs/arcs), in
+  // world-unit (km*scale) coords, [-_OD_VBW/2.._OD_VBW/2] x [-_OD_VBH/2.._OD_VBH/2].
+  // Everything text/plate/marker goes through the SAME projection+resolve
+  // path as 574: a synthetic camera whose box equals the world viewBox
+  // (cam.w=_OD_VBW, centered at 0,0), projected against the panel's ACTUAL
+  // measured rendered rect (odRect) — NOT the nominal _OD_VBW x _OD_VBH box.
+  // The panel's CSS aspect-ratio is pinned to match _OD_VBW/_OD_VBH (see
+  // #orbit-diagram in styles.css) so the two boxes are always the same
+  // ASPECT, but the panel can render at any absolute size (350px wide on a
+  // narrow layout, 900px on a wide one) — using the nominal box here would
+  // silently stretch-scale every overlay px (font-size 10.5 rendering at
+  // ~27px when the real box is ~2.5x the nominal one, the bug this fixes).
+  // The overlay <svg>'s own viewBox is set to this same real-px rect below,
+  // so world-unit-authored fixed-corner math (already in the -W/2..W/2 box)
+  // still projects correctly through toPx().
+  const odHost = document.getElementById('orbit-diagram');
+  const odHostRect = odHost ? odHost.getBoundingClientRect() : null;
+  const odRealW = (odHostRect && odHostRect.width > 0) ? odHostRect.width : _OD_VBW;
+  const odRealH = (odHostRect && odHostRect.height > 0) ? odHostRect.height : _OD_VBH;
+  const odCam = { cx: 0, cy: 0, w: _OD_VBW };
+  const odRect = { width: odRealW, height: odRealH };
+  let overlay = _trajResolveLabels(odCam, odRect);
 
   // Fixed-corner overlays (not part of the collision pass — pinned screen
   // positions, plated for legibility over geometry): title top-left (≤11px,
   // per brief), coplanar note + warn bottom-left, Earth-cap note in the footer.
+  // These are already expressed in the same world-unit box, so projecting
+  // through _trajWorldToScreen against odCam/odRect is an identity mapping
+  // here (offset by the half-box + the same box origin) — done explicitly
+  // (not hand-rolled) so this stays on the one shared projection path.
+  const toPx = (x, y) => _trajWorldToScreen(x, y, odCam, odRect);
   const plateRect=(x,y,w,h)=>`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" fill="var(--panel-tint-plate)" rx="2"/>`;
   if(titleTxt){
     const tw=_trajTextWidthPx(titleTxt,10.5);
-    const tx=-_OD_VBW/2+8, ty=-_OD_VBH/2+16;
-    out+=plateRect(tx-3, ty-11, tw+6, 15)+`<text x="${tx.toFixed(2)}" y="${ty.toFixed(2)}" font-family="var(--mono)" font-size="10.5" fill="${accent}">${titleTxt}</text>`;
+    const p=toPx(-_OD_VBW/2+8, -_OD_VBH/2+16);
+    overlay+=plateRect(p.x-3, p.y-11, tw+6, 15)+`<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" font-family="var(--mono)" font-size="10.5" fill="${accent}">${titleTxt}</text>`;
   }
   if(!isEsc){
     const noteTxt='coplanar · inc annotated';
     const nw=_trajTextWidthPx(noteTxt,10);
-    const nx=-_OD_VBW/2+8, ny=_OD_VBH/2-10;
-    out+=plateRect(nx-3, ny-11, nw+6, 14)+`<text x="${nx.toFixed(2)}" y="${ny.toFixed(2)}" font-family="var(--mono)" font-size="10" fill="${dimColor}">${noteTxt}</text>`;
+    const p=toPx(-_OD_VBW/2+8, _OD_VBH/2-10);
+    overlay+=plateRect(p.x-3, p.y-11, nw+6, 14)+`<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" font-family="var(--mono)" font-size="10" fill="${dimColor}">${noteTxt}</text>`;
   } else {
     // titleTxt already carries the C3 readout in escape mode (moved to the
     // corner header above), so no separate bottom-left note is needed here.
@@ -201,12 +236,15 @@ function drawOrbitDiagram(){
 
   if(warn){
     const ww=_trajTextWidthPx(warn,10);
-    out+=plateRect(-ww/2-3, _OD_VBH/2-26-11, ww+6, 14)+`<text x="0" y="${(_OD_VBH/2-26).toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
+    const p=toPx(0, _OD_VBH/2-26);
+    overlay+=plateRect(p.x-ww/2-3, p.y-11, ww+6, 14)+`<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
   }
 
   const footerNote=earthCapped?'Earth size schematic':'';
   const footerHtml=footerNote?`<div class="od-footer-note">${footerNote}</div>`:'';
-  host.innerHTML=`<svg viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>${footerHtml}`;
+  host.innerHTML=`<svg class="od-svg" viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`
+    + `<svg class="od-overlay" viewBox="0 0 ${odRealW.toFixed(2)} ${odRealH.toFixed(2)}" width="100%" height="100%" preserveAspectRatio="none">${overlay}</svg>`
+    + footerHtml;
 }
 
 let activeSiteKey=null;
