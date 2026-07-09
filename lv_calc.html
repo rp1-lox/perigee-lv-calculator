@@ -18579,84 +18579,108 @@ function devSeedApolloMission(opts) {
   return { missionId: m.missionId, log: m.log.map(e => e.type) };
 }
 
-// ─── TRAJECTORY VIEW — two-layer map renderer ───────────────────────────
+// ─── TRAJECTORY VIEW — unified continuous-zoom world (C1b) ───────────────
 // Third mission view: a 2D true-geometry orbital map ("2D KSP/SFS-like"),
 // restrained blueprint style (thin strokes, mono labels, theme colors — NOT
 // cartoon). Mission orbits / transfer arcs come from _trajSceneContent().
 //
-// ── ARCHITECTURE (mandatory two-layer map-renderer split) ────────────────
-// After three rounds of symbology-sizing bugs (too small / clipped / huge)
-// from counter-scaling text and markers INSIDE the viewBox-camera world SVG,
-// the architecture is now hard-split:
+// ── ARCHITECTURE — ONE WORLD, HELIOCENTRIC KM ─────────────────────────────
+// C1b deletes the scene catalog entirely. There is no per-body "scene" any
+// more — one render pass draws the WHOLE system every time: the Sun, every
+// planet's heliocentric ring + disc/glyph, moons on their rings around their
+// parents, and ALL mission content (orbit rings, transfer arcs, burn
+// markers, surface events) embedded at its parent body's CURRENT world
+// position (progBodyWorldPos). A camera (pan/zoom, anchored to a body) picks
+// which slice of that one world is visible — "changing scene" is now just
+// "flying the camera," never a different render path.
 //
-//   LAYER 1 — WORLD  (svg.traj-svg):  GEOMETRY ONLY. Orbit rings/ellipses,
-//     transfer arcs, body discs, ground/surface dots, and (world-scaled) hit
-//     strokes for click-to-select. Pure viewBox-camera SVG — width/height
-//     100%, viewBox mutates for zoom/pan. Nothing in this layer is sized in
-//     screen px; it is all true-scale world units (km * scale).
+// Two-layer split is preserved (mandatory, per the a0f5614 architecture —
+// see the auto-memory note this task was briefed with):
 //
-//   LAYER 2 — SYMBOLOGY overlay (svg.traj-overlay): a sibling SVG absolutely
-//     positioned exactly over the world svg, SAME box, NO viewBox scaling
-//     (width/height = container px, 1 unit = 1px). Everything authored here
-//     — labels, plates, burn markers, leader/hit circles — is a literal CSS
-//     px size, so it can never be "counter-scaled wrong": there is no scale
-//     to get wrong. `pointer-events:none` on the root; `pointer-events:auto`
-//     only on the individual interactive symbol groups, so panning the world
-//     layer through the overlay still works.
+//   LAYER 1 — WORLD  (svg.traj-svg): GEOMETRY ONLY, in FLOATING-ORIGIN render
+//     coords (see below) — never raw heliocentric km (Neptune ~4.5e9 km
+//     would jitter/overflow float precision inside an SVG attribute at LEO
+//     zoom). Pure viewBox-camera SVG; nothing in this layer is sized in
+//     screen px.
 //
-// One projection function, `_trajWorldToScreen(x, y, cam, rect)`, maps a
-// world-space (km*scale) point to overlay px for every anchor — rings label
-// anchors, burn marker anchors, body-glyph label anchors, everything. LOD
-// gates and the greedy label-collision pass run DIRECTLY in px against that
-// projection (no unit conversion — they used to have to correct for
-// zoom * pxScale; that correction no longer exists because px IS px now).
+//   LAYER 2 — SYMBOLOGY overlay (svg.traj-overlay): sibling SVG, container
+//     px 1:1, all labels/plates/markers/hit-circles. Untouched by C1b except
+//     that anchors are now floating-origin render coords too (still funneled
+//     through the ONE projection function below).
 //
-// DELETED as part of this refactor (the old counter-scale machinery):
-//   _trajFixedG (world-space translate + 1/zoom counter-scale group wrapper)
-//   _trajRenderPxScale (per-render container-px/_TRAJ_VB correction factor)
-//   the screenSize *_trajRenderPxScale correction in _trajRegisterLabel
-//   the pxPerUnit = zoom*_trajRenderPxScale anchor math in _trajResolveLabels
-//   inline text/plate emission from _trajRingSVG/_trajBurnMarker/_trajGlyph
-//     (now they register overlay anchors only — see _trajRegisterLabel calls)
+// `_trajWorldToScreen(x, y, cam, rect)` is UNCHANGED signature/semantics —
+// the mini-diagram (230-orbit-diagram.js) calls it directly with a synthetic
+// cam and must keep working untouched. What changed is what "world" MEANS:
+// x,y are now floating-origin render units (worldKm - camCenterKm), not
+// scene-local km*scale.
 //
-// Module-local, session-only state (NOT authored — never touches m.log or
-// autosave; focus/zoom reset on reload, same spirit as _missionNmZoom but
-// kept separate per mission id so switching missions doesn't fight itself).
-let _trajFocusByMission = {};   // missionId -> body name ('SUN','Earth','Moon',...)
-// Camera model (viewBox-camera, unchanged by this refactor): the world <svg>
-// ALWAYS fills its container (width/height:100%) — zoom/pan are expressed
-// purely as viewBox mutations, never CSS element sizing, so true-scale
-// content can never be clipped by shrinking the svg element below the
-// container. Camera state per mission: { cx, cy, w } — world-unit (scene
-// `scale`-space, same space geometry is already drawn in) center + width;
-// height is derived from the container's aspect ratio at render time so the
-// viewBox always exactly matches the rendered box (no letterboxing, no
-// overflow). `zoom` = _TRAJ_VB / cam.w ("how much more zoomed in than the
-// default fit").
-let _trajCamByMission   = {};   // missionId -> {cx,cy,w}
+// ── FLOATING ORIGIN (precision — non-negotiable) ──────────────────────────
+// Every render computes camCenterKm = worldPos(cam.anchorBody, viewTime) +
+// cam.relOffsetKm, then every emitted point is (worldKm - camCenterKm) — so
+// SVG attributes never carry heliocentric-scale numbers. The viewBox itself
+// is therefore always centered near (0,0) regardless of where in the solar
+// system the camera actually is.
+//
+// ── ANCHORED CAMERA (the teleport killer) ─────────────────────────────────
+// Camera state per mission: { anchorBody, relOffsetKm:{x,y}, wKm }. Effective
+// center = worldPos(anchorBody, viewTime) + relOffsetKm. Wheel zoom-to-cursor
+// mutates wKm + relOffsetKm; drag pan mutates relOffsetKm; changing the
+// selected event (which moves viewTime) leaves anchor+offset untouched, so
+// the anchored body stays fixed on screen while the rest of the system moves
+// around it. Fly-to (trajSetFocus, kept name/signature for the focus-bar
+// wiring) sets anchor, zeroes offset, and fits wKm to the body's
+// neighborhood.
+//
+// DELETED as part of C1b (the scene-catalog machinery):
+//   _trajSceneList, _trajFocus/_trajFocusByMission (scene-keyed) — replaced
+//     by camera anchor state (_trajCamByMission[id].anchorBody)
+//   _trajSceneForOrbit's scene-id return value being a "which SVG to build"
+//     key — orbits/legs are now just embedded at their body's world pos,
+//     every scene renders in the one pass
+//   _trajSunSceneSVG / _trajBodySceneSVG / _trajSceneGeomSVG (per-scene
+//     builders) — replaced by _trajWorldSVG (one pass, everything)
+//   _trajFitScale/_trajMissionExtent's "which scene" framing — replaced by
+//     _trajFitCamToAnchor (still fits mission content, now camera-driven)
+//   the "scene switch" hint chip semantics — hint chip now means "fly to"
+// Kept (still load-bearing, unchanged behavior): the LOD/label registry
+// (_trajRegisterLabel/_trajResolveLabels/_trajWorldToScreen), the mission log
+// extraction (_trajExtractMission and friends), ellipse/arc geometry helpers,
+// pan/wheel gesture plumbing (adapted to mutate relOffsetKm/wKm instead of
+// cx/cy/w), the ResizeObserver sync path.
 
-// Fixed reference "world box" size (viewBox units at zoom=1, i.e. the default
-// fit-to-content window).
+// Module-local, session-only state (NOT authored — never touches m.log or
+// autosave; camera resets on reload, same spirit as _missionNmZoom).
+// Camera per mission: { anchorBody, relOffsetKm:{x,y}, wKm }.
+//   anchorBody   — body name the camera tracks ('Sun' or any PROG_BODIES key)
+//   relOffsetKm  — pan offset from the anchor's world position, in km
+//   wKm          — camera viewBox width, in km (zoom = independent of any
+//                  scene-local `scale` factor now — it's real km)
+let _trajCamByMission = {};
+
+// Fixed reference viewBox size in RENDER units (floating-origin km, i.e. 1
+// render unit = 1 km at zoom reference). Kept named _TRAJ_VB for continuity
+// with the mini-diagram's synthetic cam (still `{cx:0,cy:0,w:_OD_VBW}` in its
+// own unrelated unit space — no coupling).
 const _TRAJ_VB = 400;
 
-const _TRAJ_ZMIN = 0.15, _TRAJ_ZMAX = 20; // camera w = _TRAJ_VB/zoom, clamped to [_TRAJ_VB/_TRAJ_ZMAX, _TRAJ_VB/_TRAJ_ZMIN]
+// Zoom clamps per the C1b brief: wKm in [~200 km, ~1.2e10 km] (just past
+// Neptune's ring so the full system is reachable in one continuous zoom).
+const _TRAJ_WKM_MIN = 200, _TRAJ_WKM_MAX = 1.2e10;
 
 // ── body -> chrome color mapping ─────────────────────────────────────────
 function _trajBodyColor(body) {
-  if (body === 'SUN') return 'var(--warn)';
+  if (body === 'Sun') return 'var(--warn)';
   if (body === 'Earth') return 'var(--nm-earth)';
   if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return 'var(--nm-lunar)';
   return 'var(--nm-interp)';
 }
 
-// ── scene catalog ────────────────────────────────────────────────────────
-function _trajSceneList() {
-  const scenes = [{ id: 'SUN', label: 'Sun' }];
-  Object.keys(PROG_HELIO_R).forEach(b => scenes.push({ id: b, label: b }));
-  Object.values(PROG_MOON_ORBITS || {}).forEach(mo => {
-    if (!scenes.find(s => s.id === mo.parent)) scenes.push({ id: mo.parent, label: mo.parent });
-  });
-  return scenes;
+// All body names the world ever draws: Sun + every heliocentric body +
+// every moon. Used for the full-system render pass and the focus-bar list.
+function _trajAllBodies() {
+  const helio = Object.keys(PROG_HELIO_R);
+  const moons = Object.keys(PROG_MOON_ORBITS || {});
+  return ['Sun', ...helio, ...moons];
 }
 
 function _trajMoonsOf(body) {
@@ -18665,19 +18689,58 @@ function _trajMoonsOf(body) {
     .map(([name, mo]) => ({ name, r: mo.r }));
 }
 
-function _trajFocus(m) { return _trajFocusByMission[m.missionId] || 'Earth'; }
+// ── camera helpers ─────────────────────────────────────────────────────────
+function _trajCam(id) {
+  return _trajCamByMission[id] || { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _TRAJ_VB };
+}
+function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
 
-function _trajCam(id) { return _trajCamByMission[id] || { cx: 0, cy: 0, w: _TRAJ_VB }; }
-function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.w; }
+// Effective camera center in heliocentric km at the given view time — the
+// ONE place anchor + offset combine. Everything else in the render path
+// subtracts this from world km to get floating-origin render coords.
+function _trajCamCenterKm(cam, viewT) {
+  const p = progBodyWorldPos(cam.anchorBody, viewT);
+  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0) };
+}
+
+// Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
+//   - has moons  -> fit the outermost moon's ring (x ~2.6 headroom)
+//   - Sun        -> fit the outermost planet's ring
+//   - no moons   -> a schematic multiple of the body's own radius (local orbit space)
+// Mission content anchored at this body (if any) can extend the fit, same
+// spirit as the old _trajFitScale's "mission extent vs static extent" — we
+// take whichever is larger so authored orbits are never clipped on fly-to.
+function _trajFitWKmForBody(body, m) {
+  let staticR;
+  if (body === 'Sun') {
+    const rs = Object.values(PROG_HELIO_R);
+    staticR = rs.length ? Math.max(...rs) * 1.15 : 1e9;
+  } else {
+    const moons = _trajMoonsOf(body);
+    if (moons.length) {
+      staticR = Math.max(...moons.map(mo => mo.r)) * 2.6;
+    } else {
+      const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 6371;
+      staticR = R * 8; // schematic local-orbit neighborhood
+    }
+  }
+  const missionR = m ? _trajMissionExtentForBody(body, m) : 0;
+  const fitR = Math.max(staticR, missionR * 1.2);
+  return Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, fitR * 2));
+}
 
 function trajSetFocus(id, body) {
-  _trajFocusByMission[id] = body;
-  delete _trajCamByMission[id]; // re-fit to the new scene's content on next render
+  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const wKm = _trajFitWKmForBody(body, m);
+  _trajCamByMission[id] = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm };
   missionRenderDetail();
 }
 
 function trajResetView(id) {
-  delete _trajCamByMission[id]; // re-fit to current scene's content on next render
+  const cam = _trajCam(id);
+  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const wKm = _trajFitWKmForBody(cam.anchorBody, m);
+  _trajCamByMission[id] = { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm };
   missionRenderDetail();
 }
 
@@ -18693,20 +18756,20 @@ function _trajApplyCam(id, cam) {
   if (!svgEl) { missionRenderDetail(); return; }
   const rect = svgEl.getBoundingClientRect();
   const aspect = (rect.width > 0 && rect.height > 0) ? (rect.height / rect.width) : 1;
-  const h = cam.w * aspect;
-  svgEl.setAttribute('viewBox', `${(cam.cx - cam.w / 2).toFixed(3)} ${(cam.cy - h / 2).toFixed(3)} ${cam.w.toFixed(3)} ${h.toFixed(3)}`);
+  const h = cam.wKm * aspect;
+  svgEl.setAttribute('viewBox', `${(-cam.wKm / 2).toFixed(3)} ${(-h / 2).toFixed(3)} ${cam.wKm.toFixed(3)} ${h.toFixed(3)}`);
   const sceneEl = svgEl.querySelector('g.traj-scene');
   if (sceneEl && typeof _missions !== 'undefined') {
     const m = (_missions || []).find(mm => mm.missionId === id);
-    const focus = _trajFocus({ missionId: id });
     const zoom = _trajZoomFromCam(cam);
     _trajResetLabels();
-    sceneEl.innerHTML = _trajSceneGeomSVG(focus, m, zoom);
+    sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);
     if (overlayEl && rect.width > 0 && rect.height > 0) {
       overlayEl.setAttribute('width', rect.width);
       overlayEl.setAttribute('height', rect.height);
       overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
-      overlayEl.innerHTML = _trajResolveLabels(cam, rect);
+      const renderCam = { cx: 0, cy: 0, w: cam.wKm };
+      overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
     }
   }
 }
@@ -18716,28 +18779,32 @@ function trajWheelZoom(ev, id) {
   const svgEl = (ev.currentTarget.querySelector && ev.currentTarget.querySelector('svg.traj-svg')) || null;
   const cam = _trajCam(id);
   const dir = ev.deltaY < 0 ? 1 : -1;
-  const wMin = _TRAJ_VB / _TRAJ_ZMAX, wMax = _TRAJ_VB / _TRAJ_ZMIN;
-  const nextW = Math.max(wMin, Math.min(wMax, cam.w * (1 - dir * 0.15)));
-  if (nextW === cam.w) return;
-  // Zoom about the cursor: convert cursor screen position to world coords
-  // under the CURRENT camera, then re-anchor so that same world point stays
-  // under the cursor after the width change (standard viewBox zoom-to-point).
-  let cx = cam.cx, cy = cam.cy;
+  const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
+  if (nextW === cam.wKm) return;
+  // Zoom about the cursor: convert cursor screen position to a render-space
+  // (floating-origin) point under the CURRENT camera, then re-anchor the
+  // OFFSET so that same point stays under the cursor after the width change
+  // (standard viewBox zoom-to-point, but operating on relOffsetKm rather
+  // than an absolute center — the anchor body's world position is added
+  // back in at render time, so this math never touches heliocentric km).
+  let offX = cam.relOffsetKm ? cam.relOffsetKm.x : 0, offY = cam.relOffsetKm ? cam.relOffsetKm.y : 0;
   if (svgEl) {
     const rect = svgEl.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       const aspect = rect.height / rect.width;
-      const h = cam.w * aspect;
+      const h = cam.wKm * aspect;
       const fx = (ev.clientX - rect.left) / rect.width;  // 0..1 across the svg
       const fy = (ev.clientY - rect.top) / rect.height;
-      const worldX = (cam.cx - cam.w / 2) + fx * cam.w;
-      const worldY = (cam.cy - h / 2) + fy * h;
+      // render-space point under cursor (render coords are offset-relative
+      // since the anchor's own world pos is the floating origin)
+      const rx = (-cam.wKm / 2) + fx * cam.wKm;
+      const ry = (-h / 2) + fy * h;
       const nextH = nextW * aspect;
-      cx = worldX - (fx - 0.5) * nextW;
-      cy = worldY - (fy - 0.5) * nextH;
+      offX = offX + rx - (fx - 0.5) * nextW;
+      offY = offY + ry - (fy - 0.5) * nextH;
     }
   }
-  _trajApplyCam(id, { cx, cy, w: nextW });
+  _trajApplyCam(id, { anchorBody: cam.anchorBody, relOffsetKm: { x: offX, y: offY }, wKm: nextW });
 }
 
 let _trajDrag = null;
@@ -18747,7 +18814,7 @@ let _trajDrag = null;
 // disambiguation, per the node map / library-browser _didDrag pattern).
 let _trajJustDragged = false;
 function trajPanStart(ev, id) {
-  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id)), moved: false, rectW: null, rectH: null };
+  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
   const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
   if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
   ev.preventDefault();
@@ -18757,18 +18824,18 @@ function trajPanMove(ev) {
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
   const rectW = _trajDrag.rectW || 400, rectH = _trajDrag.rectH || 400;
-  // Screen-px delta -> world-unit delta at the CURRENT camera width (drag
-  // pan shifts cx/cy directly, opposite the pointer delta since dragging
+  // Screen-px delta -> world-unit (km) delta at the CURRENT camera width (drag
+  // pan shifts relOffsetKm directly, opposite the pointer delta since dragging
   // right should reveal content to the left).
-  const worldDx = -dx * (_trajDrag.cam0.w / rectW);
+  const worldDx = -dx * (_trajDrag.cam0.wKm / rectW);
   const aspect = rectH / rectW;
-  const worldDy = -dy * (_trajDrag.cam0.w * aspect / rectH);
-  const cam = { cx: _trajDrag.cam0.cx + worldDx, cy: _trajDrag.cam0.cy + worldDy, w: _trajDrag.cam0.w };
+  const worldDy = -dy * (_trajDrag.cam0.wKm * aspect / rectH);
+  const cam = { anchorBody: _trajDrag.cam0.anchorBody, relOffsetKm: { x: _trajDrag.cam0.relOffsetKm.x + worldDx, y: _trajDrag.cam0.relOffsetKm.y + worldDy }, wKm: _trajDrag.cam0.wKm };
   _trajCamByMission[_trajDrag.id] = cam;
   const svgEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${_trajDrag.id}"] svg.traj-svg`);
   if (svgEl) {
-    const h = cam.w * aspect;
-    svgEl.setAttribute('viewBox', `${(cam.cx - cam.w / 2).toFixed(3)} ${(cam.cy - h / 2).toFixed(3)} ${cam.w.toFixed(3)} ${h.toFixed(3)}`);
+    const h = cam.wKm * aspect;
+    svgEl.setAttribute('viewBox', `${(-cam.wKm / 2).toFixed(3)} ${(-h / 2).toFixed(3)} ${cam.wKm.toFixed(3)} ${h.toFixed(3)}`);
   }
   // Overlay anchors are NOT re-projected during the drag itself (would mean
   // re-running LOD/collision every mousemove tick); they resync on pan-end
@@ -18827,24 +18894,26 @@ function _trajOrbitLabel(body, peri, apo) {
   return Math.abs(apo - peri) < 5 ? `${prefix}${rounded}` : `${prefix}${rounded}×${Math.round(apo)}`;
 }
 
-// Which scene (body name, or 'SUN' for interplanetary/heliocentric legs) an
-// orbit/transit record belongs in.
-function _trajSceneForOrbit(o) {
+// Which body-frame ('Sun' for interplanetary/heliocentric legs, else a body
+// name) an orbit/transit record belongs in. Renamed conceptually from "scene"
+// to "frame" in C1b (there's no scene to route to any more — this only picks
+// which body's world position the content is drawn around).
+function _trajFrameForOrbit(o) {
   if (!o) return null;
-  if (o.transit && o.body === 'Sun') return 'SUN';
-  if (o.transit) return o.body || 'Earth'; // translunar etc — parent body's local scene
+  if (o.transit && o.body === 'Sun') return 'Sun';
+  if (o.transit) return o.body || 'Earth'; // translunar etc — parent body's local frame
   if (o.escape) return o.body || 'Earth';
   return o.body || 'Earth';
 }
 
-// Walk m._expanded snapshots, building per-scene: orbit rings, transfer legs,
-// burn markers, and surface events. Cached per mission per render call (cheap
-// enough to just recompute; log length is small).
+// Walk m._expanded snapshots, building per-body-frame: orbit rings, transfer
+// legs, burn markers, and surface events. Cached per mission per render call
+// (cheap enough to just recompute; log length is small).
 function _trajExtractMission(m) {
-  const scenes = {}; // sceneId -> { orbits: Map<key,rec>, legs: [], surface: [] }
-  const sceneFor = id => (scenes[id] = scenes[id] || { orbits: new Map(), legs: [], surface: [] });
+  const frames = {}; // bodyFrame -> { orbits: Map<key,rec>, legs: [], surface: [] }
+  const frameFor = id => (frames[id] = frames[id] || { orbits: new Map(), legs: [], surface: [] });
   const log = (m && m._expanded && m._expanded.length) ? m._expanded : (m ? (m.log || []) : []);
-  if (!log.length) return scenes;
+  if (!log.length) return frames;
 
   const laneColorFor = (ownerKeys) => {
     if (!ownerKeys || !ownerKeys.length) return null;
@@ -18857,8 +18926,8 @@ function _trajExtractMission(m) {
 
   const addOrbitRing = (body, peri, apo, ownerKeys, authIdx) => {
     if (body == null || peri == null || apo == null) return null;
-    const sceneId = body;
-    const sc = sceneFor(sceneId);
+    const frameId = body;
+    const sc = frameFor(frameId);
     const key = _trajOrbitKey(body, peri, apo);
     const lane = laneColorFor(ownerKeys);
     if (!sc.orbits.has(key)) {
@@ -18890,10 +18959,10 @@ function _trajExtractMission(m) {
   log.forEach(e => {
     if (e.type === 'LAUNCH') {
       const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
-      sceneFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
+      frameFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
     } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
       const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';
-      sceneFor(body).surface.push({ kind: 'land', body, label: e.type === 'RECOVER' ? 'Recovery' : 'Landing', met: e.metStart });
+      frameFor(body).surface.push({ kind: 'land', body, label: e.type === 'RECOVER' ? 'Recovery' : 'Landing', met: e.metStart });
     }
   });
 
@@ -18903,14 +18972,14 @@ function _trajExtractMission(m) {
     const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
     if (!fromN || !toN || !fromN.orbit || !toN.orbit) return;
     const fromO = fromN.orbit, toO = toN.orbit;
-    const sceneId = _trajSceneForOrbit(toO) || _trajSceneForOrbit(fromO);
-    if (!sceneId) return;
+    const frameId = _trajFrameForOrbit(toO) || _trajFrameForOrbit(fromO);
+    if (!frameId) return;
     const lane = laneColorFor(_trajOwnerKeysForManeuver(e));
     const dvUsed = (e.dvDelivered != null ? e.dvDelivered : e.dvRequired) || 0;
     const metArrive = (e.metStart != null && e.durationUsed != null) ? (e.metStart + e.durationUsed) : null;
     const vehName = (_trajOwnerKeysForManeuver(e) && m._ownerLabels && m._ownerLabels[_trajOwnerKeysForManeuver(e)[0]]) || e.activeName || '';
-    sceneFor(sceneId).legs.push({
-      sceneId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
+    frameFor(frameId).legs.push({
+      frameId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
       dv: dvUsed, met: e.metStart, metArrive, vehName,
       color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
       authIdx: e._authIdx != null ? e._authIdx : null,
@@ -18930,7 +18999,7 @@ function _trajExtractMission(m) {
     if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
   });
 
-  return scenes;
+  return frames;
 }
 
 // A MANEUVER event doesn't carry v.owners directly — resolve via the active
@@ -18946,8 +19015,8 @@ function _trajOwnerKeysForManeuver(e) {
 
 // ── geometry helpers ──────────────────────────────────────────────────────
 // True-geometry ellipse for a (peri,apo) orbit around a body of radius R,
-// focus at the body center (origin in scene-local coords). Returns SVG-ready
-// numbers in KM (caller applies scene `scale`).
+// focus at the body center (LOCAL coords, before the body's world offset is
+// added). Returns SVG-ready numbers in KM (caller applies scene `scale`).
 //   a       = semi-major axis
 //   c       = center-to-focus distance = a - r_peri
 //   cx      = -c  (center is on the -x side since periapsis is drawn at +x)
@@ -18961,12 +19030,14 @@ function _trajEllipseGeom(peri, apo, R) {
 }
 
 // ── PROJECTION — the one function every overlay anchor goes through ───────
-// World-space (km*scale svg units, same space g.traj-scene draws in) -> overlay
-// px, given the current camera and the world svg's measured bounding rect.
-// This is the ONLY place world coords become screen px; both the trajectory
-// view (viewBox camera) and the mini orbit-diagram (fixed constant-scale
-// "camera") funnel through it — the mini-diagram just passes a synthetic cam
-// = {cx:0,cy:0,w:_OD_VBW} and its own rect-shaped box.
+// Render-space (floating-origin km * scale, same space g.traj-scene draws
+// in) -> overlay px, given the current camera and the world svg's measured
+// bounding rect. UNCHANGED signature/semantics from the two-layer refactor:
+// both the trajectory view and the mini orbit-diagram (230, fixed camera
+// {cx:0,cy:0,w:_OD_VBW}) funnel through it. `cam.cx/cam.cy` are always 0 for
+// the trajectory view's own calls post-C1b (floating origin design), but the
+// function itself stays cx/cy-general so 230's differently-centered
+// synthetic cam keeps working unmodified.
 function _trajWorldToScreen(x, y, cam, rect) {
   const w = rect && rect.width > 0 ? rect.width : cam.w;
   const h = rect && rect.height > 0 ? rect.height : cam.w;
@@ -18981,11 +19052,12 @@ function _trajWorldToScreen(x, y, cam, rect) {
 // Feature geometry (rings, arcs, markers, discs) always renders in the WORLD
 // layer — only TEXT/marker-glyph annotations are gated/collision-resolved,
 // and they live entirely in the OVERLAY layer. Per-render registry: every
-// label/marker candidate is pushed here as a WORLD anchor (x,y) — projection
-// to px happens once, in _trajResolveLabels, via _trajWorldToScreen — plus a
-// `screenSizeWorld` (the parent feature's true-scale world radius/extent) so
-// the LOD gate can multiply it by the actual zoom at resolve time. Reset at
-// the top of every top-level scene render.
+// label/marker candidate is pushed here as a RENDER-SPACE anchor (x,y,
+// floating-origin km*scale) — projection to px happens once, in
+// _trajResolveLabels, via _trajWorldToScreen — plus a `screenSizeWorld` (the
+// parent feature's true-scale world radius/extent) so the LOD gate can
+// multiply it by the actual zoom at resolve time. Reset at the top of every
+// top-level render.
 let _trajLabelRegistry = [];
 function _trajResetLabels() { _trajLabelRegistry = []; }
 
@@ -18997,18 +19069,19 @@ const _TRAJ_LOD_PRI = { selected: 5, burn: 4, orbit: 3, body: 2, zone: 1 };
 // Mono-style fonts — used only for collision bbox sizing, not layout).
 function _trajTextWidthPx(text, fontPx) { return (text || '').length * fontPx * 0.62; }
 
-// Register a label candidate. `x,y` = world-space anchor (same space geometry
-// is drawn in). `screenSize` = the rendered on-screen px size of the PARENT
-// feature (ring radius, disc radius, arc/ring extent) at the CURRENT zoom —
-// callers already have `zoom` in hand and pass true-world-radius*zoom, same
-// contract as before; the difference is there's no further pxScale
-// correction needed since px really is px in the overlay now. Pass Infinity
-// for features with no size gate (e.g. always-selected, or the mini-diagram
-// which has no LOD). `kind` indexes _TRAJ_LOD_PRI. `lines` is an array of
-// {text, dy, fontPx, color} rendered top-to-bottom inside one plate.
-// `marker` (optional) = extra overlay markup (e.g. a burn triangle) anchored
-// at the same world point, always rendered regardless of label LOD/collision
-// outcome (geometry-adjacent symbology, not text).
+// Register a label candidate. `x,y` = render-space anchor (same space
+// geometry is drawn in — floating-origin). `screenSize` = the rendered
+// on-screen px size of the PARENT feature (ring radius, disc radius,
+// arc/ring extent) at the CURRENT zoom — callers already have `zoom` in hand
+// and pass true-world-radius*zoom, same contract as before; the difference
+// is there's no further pxScale correction needed since px really is px in
+// the overlay now. Pass Infinity for features with no size gate (e.g.
+// always-selected, or the mini-diagram which has no LOD). `kind` indexes
+// _TRAJ_LOD_PRI. `lines` is an array of {text, dy, fontPx, color} rendered
+// top-to-bottom inside one plate. `marker` (optional) = extra overlay
+// markup (e.g. a burn triangle) anchored at the same render point, always
+// rendered regardless of label LOD/collision outcome (geometry-adjacent
+// symbology, not text).
 function _trajRegisterLabel(x, y, lines, kind, opts) {
   opts = opts || {};
   _trajLabelRegistry.push({
@@ -19022,9 +19095,9 @@ function _trajRegisterLabel(x, y, lines, kind, opts) {
 // LOD + collision resolution, run in PURE PX against the overlay's own
 // coordinate space (0,0 top-left, width x height = container px — set by the
 // caller's <svg viewBox="0 0 W H">). `cam`/`rect` are used only to project
-// each candidate's world anchor to px via _trajWorldToScreen; every threshold
-// and every emitted shape after that point is in px, full stop — no zoom or
-// pxScale correction anywhere in this function.
+// each candidate's render-space anchor to px via _trajWorldToScreen; every
+// threshold and every emitted shape after that point is in px, full stop —
+// no zoom or pxScale correction anywhere in this function.
 function _trajResolveLabels(cam, rect) {
   const cands = _trajLabelRegistry.filter(c => c.selected || c.screenSize >= c.minSize);
   cands.sort((a, b) => (b.priority - a.priority) || (b.screenSize - a.screenSize));
@@ -19068,9 +19141,40 @@ function _trajResolveLabels(cam, rect) {
 // scene focus; burn text >=60px parent arc/ring extent OR selected.
 const _TRAJ_LOD_RING_MIN = 40, _TRAJ_LOD_BODY_MIN = 10, _TRAJ_LOD_BURN_MIN = 60;
 
+// ── C1b correctness culling (minimal LOD — REQUIRED precision/perf gates) ──
+// (a) rings whose projected radius exceeds ~20x the viewport diagonal are
+//     culled outright — at extreme zoom-in a huge/short-visible-chord ring
+//     (e.g. Neptune's ring while anchored deep in LEO) would otherwise emit a
+//     near-straight-line arc that jitters/degenerates in SVG's arc-flag math.
+//     The near-straight visible portion simply vanishes in C1b (full
+//     fade/chord rendering is a C2 ramp, not required now).
+// (b) features whose projected extent < 0.5px are culled (the entire Earth
+//     neighborhood at Sun zoom collapses under this — glyphs/labels keep
+//     their EXISTING LOD gates on top, unaffected).
+function _trajCullRingByDiagonal(rPx, viewportDiagPx) {
+  return rPx > viewportDiagPx * 20;
+}
+function _trajCullByExtent(extentPx) {
+  return extentPx < 0.5;
+}
+// Position-based off-screen cull: a body (glyph + embedded content) whose
+// render-space position is far outside the viewport is skipped ENTIRELY —
+// this is the fix for the "far body's min-px glyph clamp still emits its
+// true (huge, off-screen) coordinate" case: _trajBodyPxR guarantees a
+// visible-sized DISC, but the disc's CENTER can still be billions of km from
+// the camera, and SVG attribute floats at that magnitude are exactly the
+// precision hazard the floating-origin design exists to avoid. Threshold
+// mirrors the ring cull (20x viewport diagonal, generous so a body just
+// outside frame doesn't pop).
+function _trajCullPositionOffscreen(renderX, renderY, zoom, viewportDiagPx) {
+  const distPx = Math.hypot(renderX, renderY) * zoom;
+  return distPx > viewportDiagPx * 20;
+}
+
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
+  const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const g = _trajEllipseGeom(rec.peri, rec.apo, R);
   const isCircle = Math.abs(rec.apo - rec.peri) < Math.max(1, R * 0.001);
@@ -19083,24 +19187,29 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
+  const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
   if (isCircle) {
     const r = ((rec.peri + rec.apo) / 2 + R) * scale;
-    const hitArea = opts.authIdx != null ? `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
     const screenSize = r * zoom;
+    if (_trajCullByExtent(screenSize)) return '';
+    if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
+    const hitArea = opts.authIdx != null ? `<circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
     const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
-    _trajRegisterLabel(0, -r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
-    if (coastTxt) _trajRegisterLabel(-g.c * scale, -6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
+    _trajRegisterLabel(ox, oy - r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
+    if (coastTxt) _trajRegisterLabel(ox - g.c * scale, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
     return `<g${clickAttr}>
-      <circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></circle>
+      <circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></circle>
       ${hitArea}
     </g>`;
   }
-  const cx = -g.c * scale, cy = 0, rx = g.a * scale, ry = g.b * scale;
-  const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+  const cx = ox - g.c * scale, cy = oy, rx = g.a * scale, ry = g.b * scale;
   const screenSize = Math.max(rx, ry) * zoom;
+  if (_trajCullByExtent(screenSize)) return '';
+  if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
+  const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
   _trajRegisterLabel(cx, cy - ry, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
-  if (coastTxt) _trajRegisterLabel(cx, -6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
+  if (coastTxt) _trajRegisterLabel(cx, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized });
   return `<g${clickAttr}>
     <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></ellipse>
     ${hitArea}
@@ -19108,9 +19217,11 @@ function _trajRingSVG(rec, body, scale, color, opts) {
 }
 
 // Half-ellipse Hohmann transfer arc between r1 (departure) and r2 (arrival),
-// both body-centered radii (R already included). Drawn as an SVG elliptical
-// arc path from periapsis to apoapsis (or vice versa), at a given rotation.
-function _trajTransferArcPath(r1, r2, scale, rotDeg) {
+// both body-centered radii (R already included), drawn relative to a local
+// origin (ox,oy) — the body's floating-origin render position — so the arc
+// embeds correctly wherever that body currently is.
+function _trajTransferArcPath(r1, r2, scale, rotDeg, ox, oy) {
+  ox = ox || 0; oy = oy || 0;
   const rPeri = Math.min(r1, r2), rApo = Math.max(r1, r2);
   const a = (rPeri + rApo) / 2, b = Math.sqrt(Math.max(0, rPeri * rApo)), c = a - rPeri;
   const rot = rotDeg || 0;
@@ -19118,7 +19229,8 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg) {
   const rotp = (x, y) => ({ x: x * Math.cos(rad) - y * Math.sin(rad), y: x * Math.sin(rad) + y * Math.cos(rad) });
   const p1l = { x: rPeri * scale, y: 0 };
   const p2l = { x: -rApo * scale, y: 0 };
-  const p1 = rotp(p1l.x, p1l.y), p2 = rotp(p2l.x, p2l.y);
+  const p1r = rotp(p1l.x, p1l.y), p2r = rotp(p2l.x, p2l.y);
+  const p1 = { x: p1r.x + ox, y: p1r.y + oy }, p2 = { x: p2r.x + ox, y: p2r.y + oy };
   const rx = (a * scale).toFixed(2), ry = (b * scale).toFixed(2);
   const rotDegAttr = rot.toFixed(1);
   return { d: `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${rx} ${ry} ${rotDegAttr} 0 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
@@ -19126,9 +19238,10 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg) {
 }
 
 // Burn marker — registers a fixed-px triangle glyph + optional dv/MET text at
-// a world anchor. Geometry side (world layer) gets nothing from this function
-// any more; everything it emits is overlay-side markup carried on the label
-// registry entry (`marker`/`hit`), resolved to px by _trajResolveLabels.
+// a render-space (floating-origin) anchor. Geometry side (world layer) gets
+// nothing from this function any more; everything it emits is overlay-side
+// markup carried on the label registry entry (`marker`/`hit`), resolved to
+// px by _trajResolveLabels.
 function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -19157,20 +19270,20 @@ function _trajSelectEventFromView(id, authIdx) {
   if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
 }
 
-// Compute the min zoom-worthy extent (max body-centered / heliocentric radius,
-// km) of a scene's MISSION content only (orbit apoapses + transfer/legs'
-// far endpoint) — used to pick the initial fit-to-content scale, per the
-// design brief (static rings beyond remain reachable by zooming out further).
-function _trajMissionExtent(scene, m) {
-  const scenes = _trajGetExtraction(m);
-  const sc = scenes[scene];
+// Compute the min zoom-worthy extent (max body-centered radius, km) of a
+// body-frame's MISSION content only (orbit apoapses + transfer/legs' far
+// endpoint) — used to pick the fly-to fit scale (static rings beyond remain
+// reachable by zooming out further).
+function _trajMissionExtentForBody(body, m) {
+  const frames = _trajGetExtraction(m);
+  const sc = frames[body];
   if (!sc) return 0;
-  const body = scene === 'SUN' ? null : scene;
-  const R = body ? ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0) : 0;
+  const isSun = body === 'Sun';
+  const R = isSun ? 0 : ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0);
   let maxR = 0;
   sc.orbits.forEach(rec => { maxR = Math.max(maxR, R + rec.apo); });
   sc.legs.forEach(leg => {
-    if (scene === 'SUN') {
+    if (isSun) {
       const r1 = PROG_HELIO_R[leg.fromO.body], r2 = PROG_HELIO_R[leg.toO.body];
       if (r1 != null) maxR = Math.max(maxR, r1);
       if (r2 != null) maxR = Math.max(maxR, r2);
@@ -19194,12 +19307,6 @@ function _trajGetExtraction(m) {
   return data;
 }
 
-// ── extension point ───────────────────────────────────────────────────────
-// Returns extra SVG markup (WORLD-layer groups/paths only — geometry, hit
-// strokes) to overlay on top of the static scene for the given scene id
-// ('SUN' or a body name). Symbology (labels/markers) is registered as a side
-// effect via _trajRegisterLabel/_trajBurnMarker and resolved separately by
-// the overlay pass. `scale` is the scene's resolved px-per-km factor.
 function _trajSelectedAuthIdx(m) {
   if (!m || !m.log) return null;
   const idx = m.log.findIndex(e => e._expanded);
@@ -19207,7 +19314,7 @@ function _trajSelectedAuthIdx(m) {
 }
 
 // Body-centered periapsis/apoapsis radius (km, including body R) for a
-// node-map orbit spec — used only by the redundancy check above (distinct
+// node-map orbit spec — used only by the redundancy check below (distinct
 // from _trajLocalRadius's single "mean radius" used for arc endpoints).
 function toO_peri(o, R) {
   if (!o || o.perigee == null && o.apogee == null) return null;
@@ -19230,13 +19337,19 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
   return Math.abs(arcRPeri - toRPeri) < tolP && Math.abs(arcRApo - toRApo) < tolA;
 }
 
-function _trajSceneContent(scene, m, scale, zoom) {
+// Emits mission content (orbit rings, transfer legs, surface events) for one
+// body frame, positioned around (ox,oy) — that body's floating-origin render
+// coordinates for this frame. `scale` is the LOCAL px-per-km factor for this
+// body's neighborhood (independent of the camera zoom, same "local scene
+// scale" concept as before — it just gets recentered on ox,oy instead of on
+// the SVG origin).
+function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx) {
   if (!m) return '';
-  const scenes = _trajGetExtraction(m);
-  const sc = scenes[scene];
+  const frames = _trajGetExtraction(m);
+  const sc = frames[body];
   if (!sc) return '';
-  const body = scene === 'SUN' ? null : scene;
-  const R = body ? ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0) : 0;
+  const isSun = body === 'Sun';
+  const R = isSun ? 0 : ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0);
   scale = scale || 1;
   zoom = zoom || 1;
   const id = m.missionId;
@@ -19244,13 +19357,13 @@ function _trajSceneContent(scene, m, scale, zoom) {
 
   let out = '';
 
-  // orbit rings (skip for SUN scene — heliocentric transit legs are drawn as
-  // arcs between the static planet rings, not as a new "orbit" of the Sun)
-  if (body) {
+  // orbit rings (skip for Sun frame — heliocentric transit legs are drawn as
+  // arcs between the planet rings, not as a new "orbit" of the Sun)
+  if (!isSun) {
     sc.orbits.forEach(rec => {
       const emphasized = selAuthIdx != null && rec.firstAuthIdx === selAuthIdx;
       out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null,
-        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom });
+        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx });
     });
   }
 
@@ -19260,13 +19373,14 @@ function _trajSceneContent(scene, m, scale, zoom) {
     const clickAttr = leg.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${leg.authIdx})"` : '';
     const hoverTitle = `${leg.vehName ? leg.vehName + ' — ' : ''}${leg.fromLabel} → ${leg.toLabel}${leg.dv ? ' &middot; ' + _trajDvText(leg.dv) : ''}${leg.met != null ? ' &middot; ' + _metFmt(leg.met) : ''}`;
     const markerOpts = (screenSize) => ({ emphasized, authIdx: leg.authIdx, missionId: id, title: hoverTitle, zoom, screenSize });
-    if (scene === 'SUN') {
+    if (isSun) {
       const r1 = PROG_HELIO_R[leg.fromO.body] || PROG_HELIO_R[leg.fromLabel] || null;
       const r2 = PROG_HELIO_R[leg.toO.body] || PROG_HELIO_R[leg.toLabel] || null;
       if (r1 == null || r2 == null) return;
       const departAng = _trajPlanetAngle(leg.fromO.body);
-      const arc = _trajTransferArcPath(r1, r2, scale, departAng);
+      const arc = _trajTransferArcPath(r1, r2, scale, departAng, ox, oy);
       const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
+      if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
       const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
       const strokeW = emphasized ? 1.2 : 0.7;
       const opacity = emphasized ? 1 : 0.8;
@@ -19282,8 +19396,9 @@ function _trajSceneContent(scene, m, scale, zoom) {
     const toPeri = toO_peri(leg.toO, R), toApo = toO_apo(leg.toO, R);
     const redundant = toPeri != null && toApo != null && _trajTransferIsRedundant(fromR, toApo, toPeri, toApo);
     const arcToR = (toApo != null && toPeri != null && Math.abs(toApo - toPeri) > Math.max(1, toApo * 0.001)) ? toApo : toR;
-    const arc = _trajTransferArcPath(fromR, arcToR, scale, 0);
+    const arc = _trajTransferArcPath(fromR, arcToR, scale, 0, ox, oy);
     const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2 * zoom;
+    if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
     const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
     const strokeW = emphasized ? 1.2 : 0.7;
     const opacity = emphasized ? 1 : 0.8;
@@ -19302,7 +19417,7 @@ function _trajSceneContent(scene, m, scale, zoom) {
     const ang = s.kind === 'launch' ? -90 : 90; // launch at top, landing at bottom of disc — schematic
     const rad = ang * Math.PI / 180;
     const bodyPxR = Math.max(4, R * scale * 0.02);
-    const x = bodyPxR * Math.cos(rad), y = bodyPxR * Math.sin(rad);
+    const x = ox + bodyPxR * Math.cos(rad), y = oy + bodyPxR * Math.sin(rad);
     const dy = s.kind === 'launch' ? -5 : 10;
     const marker = `<circle cx="0" cy="0" r="1.6" fill="var(--accent3)" pointer-events="none"/>`;
     _trajRegisterLabel(x, y, [{ text: s.label, dy, fontPx: 10, color: 'var(--accent3)' }], 'burn',
@@ -19317,8 +19432,8 @@ function _trajDvText(dv) {
 }
 
 // Body-centered radius (km, including body R) for a node-map orbit spec, in
-// the given scene body's local frame. Returns null if the orbit isn't in this
-// body's local frame (e.g. a transit/escape leg that belongs to a different scene).
+// the given body's local frame. Returns null if the orbit isn't in this
+// body's local frame (e.g. a transit/escape leg that belongs to a different frame).
 function _trajLocalRadius(o, body) {
   if (!o) return null;
   if (o.type === 'transit') {
@@ -19335,9 +19450,13 @@ function _trajLocalRadius(o, body) {
   return R + (peri + apo) / 2; // transfer endpoints use mean radius as departure/arrival point
 }
 
-// Schematic angle for a planet in the Sun scene, matching _trajSunSceneSVG's
-// own layout (index order in PROG_HELIO_R, spread evenly) — kept in sync so
-// transfer arcs originate at the visually-drawn ring position.
+// Schematic angle for a planet in the Sun frame, matching the OLD sun-scene
+// layout (index order in PROG_HELIO_R, spread evenly) — kept in sync so
+// transfer arcs originate at the visually-drawn ring position. NOTE: this is
+// ONLY used for interplanetary transfer arc rotation, not for the planet's
+// actual drawn position any more (that now comes from progBodyWorldPos /
+// progBodyAngleAt, which uses the SAME schematic spread as theta0 for bodies
+// without porkchop-calibrated angles — see 360's PROG_BODY_KINEMATICS).
 function _trajPlanetAngle(body) {
   const bodies = Object.keys(PROG_HELIO_R);
   const i = bodies.indexOf(body);
@@ -19345,7 +19464,7 @@ function _trajPlanetAngle(body) {
   return (i / bodies.length) * 360 - 90;
 }
 
-// ── C1a: view time + live body angles ──────────────────────────────────────
+// ── C1a: view time (kept) ──────────────────────────────────────────────────
 // Seconds-since-epoch used to place body glyphs. Mirrors the state panel's
 // "state AS OF this event" semantics (_missionSelectedEventSnapshotEntry,
 // 570): selected event's post-event time (metStart + durationUsed), else
@@ -19364,23 +19483,110 @@ function _trajViewTime(m) {
   return 0;
 }
 
-// ── SVG builders (WORLD layer — geometry only) ────────────────────────────
-// Fixed viewBox; scale factors computed per scene so the ring set fits with
-// headroom, then the wheel/drag zoom multiplies on top via the viewBox camera
-// (linear true scale — no log compression of distances).
+// ── SVG builder (WORLD layer — geometry only, ONE PASS, C1b) ──────────────
+// The single render function replacing _trajSunSceneSVG/_trajBodySceneSVG/
+// _trajSceneGeomSVG. Draws EVERY body (Sun, planets, moons) each call,
+// positioned by progBodyWorldPos(body, viewTime) minus the camera's floating
+// origin (_trajCamCenterKm), plus every body's embedded mission content.
+// `cam` = {anchorBody, relOffsetKm, wKm}; `zoom` = _TRAJ_VB/cam.wKm;
+// `rect` = the world svg's measured bounding rect (for viewport-diagonal
+// culling — falls back to a square guess pre-mount).
+function _trajWorldSVG(m, cam, zoom, rect) {
+  const viewT = _trajViewTime(m);
+  const camCenter = _trajCamCenterKm(cam, viewT); // heliocentric km — the ONE floating-origin subtraction point
+  const rectW = (rect && rect.width > 0) ? rect.width : 400, rectH = (rect && rect.height > 0) ? rect.height : 400;
+  const viewportDiagPx = Math.sqrt(rectW * rectW + rectH * rectH);
 
-// Body/planet glyph: disc only (world layer). Disc radius `r` is a WORLD-space
-// (scaled km) radius as computed by the caller; screen-space min-visibility
-// clamp is applied by the caller via _trajBodyPxR (so the clamp only bites
-// when zoomed OUT — zooming in lets the true-scale disc grow past the clamp).
-// Label registration (overlay layer) happens alongside, keyed to the same
-// world anchor.
+  // World-to-render: heliocentric km -> render-space km (floating origin).
+  const toRender = (worldX, worldY) => ({ x: worldX - camCenter.x, y: worldY - camCenter.y });
+
+  let out = '';
+
+  // ── Sun (drawn unless off-screen — the heliocentric origin) ───────────────
+  {
+    const p = toRender(0, 0);
+    if (!_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) {
+      const sunScale = _trajLocalScaleFor('Sun', m);
+      out += _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun');
+      out += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx);
+    }
+  }
+
+  // ── planets: heliocentric ring + glyph, each with its own local scale for
+  // embedded mission content (its own orbit rings etc. — same concept as the
+  // old per-scene `scale`, just computed per body instead of per active scene) ──
+  Object.keys(PROG_HELIO_R).forEach(body => {
+    const worldR = PROG_HELIO_R[body];
+    const ringScreenR = worldR * zoom; // ring radius in px, at the SUN's floating origin — culling uses this
+    const sunP = toRender(0, 0);
+    const sunOffscreen = _trajCullPositionOffscreen(sunP.x, sunP.y, zoom, viewportDiagPx);
+    if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx)) {
+      out += `<circle cx="${sunP.x.toFixed(2)}" cy="${sunP.y.toFixed(2)}" r="${worldR.toFixed(2)}" fill="none" stroke="${_trajBodyColor(body)}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`;
+    }
+    const wp = progBodyWorldPos(body, viewT);
+    const p = toRender(wp.x, wp.y);
+    if (_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) return;
+    const trueR = 3; // schematic glyph radius, world units == km at scale=1 for the heliocentric ring layer
+    if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom) * zoom)) {
+      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body);
+    }
+    const localScale = _trajLocalScaleFor(body, m);
+    out += _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx);
+  });
+
+  // ── moons: ring around parent + glyph, embedded mission content ───────────
+  Object.entries(PROG_MOON_ORBITS || {}).forEach(([name, mo]) => {
+    const parentWP = progBodyWorldPos(mo.parent, viewT);
+    const parentP = toRender(parentWP.x, parentWP.y);
+    const parentOffscreen = _trajCullPositionOffscreen(parentP.x, parentP.y, zoom, viewportDiagPx);
+    const ringScreenR = mo.r * zoom;
+    if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR)) {
+      out += `<circle cx="${parentP.x.toFixed(2)}" cy="${parentP.y.toFixed(2)}" r="${mo.r.toFixed(2)}" fill="none" stroke="${_trajBodyColor(name)}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`;
+    }
+    const wp = progBodyWorldPos(name, viewT);
+    const p = toRender(wp.x, wp.y);
+    if (_trajCullPositionOffscreen(p.x, p.y, zoom, viewportDiagPx)) return;
+    const trueR = 3;
+    if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom) * zoom)) {
+      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name);
+    }
+    const localScale = _trajLocalScaleFor(name, m);
+    out += _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx);
+  });
+
+  return out;
+}
+
+// Local px-per-km scale for a body's embedded mission content (its own orbit
+// rings / transfer arcs), independent of the camera zoom. This mirrors the
+// OLD per-scene `_trajFitScale` concept: content is drawn true-scale-in-km at
+// scale=1 relative to the world (the camera zoom does the rest), EXCEPT that
+// small bodies (planets/moons with real orbit rings measured in hundreds to
+// tens-of-thousands of km) need their mission content legible without
+// requiring the user to zoom to literal 1:1 — so each body gets a fixed
+// local multiplier sized to its own characteristic scale (its radius), same
+// spirit as the old fit-to-content scale but now purely a per-body constant
+// since there's no single "active scene" to fit anymrore. Chosen so a LEO
+// ring (a few hundred km above a body of a few thousand km radius) renders
+// at a legible fraction of that body's disc when the camera is zoomed to
+// frame the body itself.
+function _trajLocalScaleFor(body, m) {
+  return 1; // true-scale km; camera zoom alone determines rendered size (matches "linear true scale — no log compression of distances" invariant)
+}
+
+// ── glyph + px-clamp helpers (world layer) ────────────────────────────────
+// Body/planet glyph: disc only (world layer). `cx,cy` are RENDER-SPACE
+// (floating-origin) coords; `r` is a WORLD-space (km) radius as computed by
+// the caller; screen-space min-visibility clamp is applied by the caller via
+// _trajBodyPxR (so the clamp only bites when zoomed OUT — zooming in lets
+// the true-scale disc grow past the clamp). Label registration (overlay
+// layer) happens alongside, keyed to the same render-space anchor.
 function _trajGlyph(cx, cy, r, color, label, zoom, isFocus) {
   const z = zoom || 1;
   _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: 'var(--nm-label)' }], 'body',
     { screenSize: r * z, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus });
   return `<g>
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
+    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
   </g>`;
 }
 
@@ -19397,102 +19603,45 @@ function _trajBodyPxR(trueR, zoom) {
   return Math.max(trueR, _TRAJ_MIN_BODY_PX / z);
 }
 
-// Default initial scale fits the MISSION's extent in this scene (min zoom that
-// shows all mission orbits/arcs + the body), not the static maxR — per the O1-b
-// design brief. Static rings beyond remain reachable by zooming out (user zoom
-// is unbounded down to _TRAJ_ZMIN). Falls back to staticMaxR when the mission
-// has no content in this scene (or no mission at all — static phase view).
-function _trajFitScale(staticMaxR, missionMaxR) {
-  const fitR = (missionMaxR > 0 && missionMaxR < staticMaxR) ? missionMaxR : staticMaxR;
-  return (_TRAJ_VB / 2 - 12) / Math.max(1, fitR);
-}
-
-function _trajSunSceneSVG(m, zoom) {
-  const bodies = Object.keys(PROG_HELIO_R);
-  const staticMaxR = Math.max(...bodies.map(b => PROG_HELIO_R[b]));
-  const missionMaxR = m ? _trajMissionExtent('SUN', m) : 0;
-  const scale = _trajFitScale(staticMaxR, missionMaxR);
-  const viewT = _trajViewTime(m);
-  const rings = bodies.map((b, i) => {
-    const rr = PROG_HELIO_R[b] * scale;
-    const ang = progBodyAngleAt(b, viewT); // C1a: live phase angle (defaults to today's schematic spread at t=0)
-    const cx = rr * Math.cos(ang), cy = rr * Math.sin(ang);
-    const color = _trajBodyColor(b);
-    return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
-      + _trajGlyph(cx, cy, _trajBodyPxR(3, zoom), color, b, zoom, false);
-  }).join('');
-  const sun = _trajGlyph(0, 0, _trajBodyPxR(6, zoom), _trajBodyColor('SUN'), 'Sun', zoom, true);
-  return `${rings}${sun}${_trajSceneContent('SUN', m, scale, zoom)}`;
-}
-
-function _trajBodySceneSVG(body, m, zoom) {
-  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 6371;
-  const moons = _trajMoonsOf(body);
-  const staticMaxR = moons.length ? Math.max(...moons.map(mo => mo.r)) : R * 4;
-  const missionMaxR = m ? _trajMissionExtent(body, m) : 0;
-  const scale = _trajFitScale(staticMaxR, missionMaxR);
-  const viewT = _trajViewTime(m);
-  const moonRings = moons.map(mo => {
-    const rr = mo.r * scale;
-    const color = _trajBodyColor(mo.name);
-    const ang = progBodyAngleAt(mo.name, viewT); // C1a: live phase angle (defaults to today's schematic angle 0 at t=0)
-    const cx = rr * Math.cos(ang), cy = rr * Math.sin(ang);
-    return `<circle cx="0" cy="0" r="${rr.toFixed(2)}" fill="none" stroke="${color}" stroke-width="0.6" opacity="0.55" vector-effect="non-scaling-stroke"/>`
-      + _trajGlyph(cx, cy, _trajBodyPxR(3, zoom), color, mo.name, zoom, false);
-  }).join('');
-  const bodyTrueR = R * scale;
-  const bodyPxR = _trajBodyPxR(bodyTrueR, zoom);
-  const discColor = _trajBodyColor(body);
-  const disc = _trajGlyph(0, 0, bodyPxR, discColor, body, zoom, true);
-  return `${moonRings}${disc}${_trajSceneContent(body, m, scale, zoom)}`;
-}
-
-// WORLD-layer geometry only (no label resolution — caller resolves the
-// overlay separately once it knows the container's real px rect).
-function _trajSceneGeomSVG(scene, m, zoom) {
-  return scene === 'SUN' ? _trajSunSceneSVG(m, zoom) : _trajBodySceneSVG(scene, m, zoom);
-}
-
-// Which scene(s) hold content (an orbit ring or a transfer leg) tied to the
-// given authored event index. Used for the "event in EARTH scene → switch"
-// hint chip when the selected event's content lives outside the current focus.
-function _trajScenesForAuthIdx(m, authIdx) {
+// Which body-frame(s) hold content (an orbit ring or a transfer leg) tied to
+// the given authored event index. Used for the "event at BODY — fly to" hint
+// chip when the selected event's content lives somewhere other than the
+// camera's current anchor.
+function _trajFramesForAuthIdx(m, authIdx) {
   if (authIdx == null) return [];
-  const scenes = _trajGetExtraction(m);
+  const frames = _trajGetExtraction(m);
   const hits = [];
-  Object.keys(scenes).forEach(sceneId => {
-    const sc = scenes[sceneId];
+  Object.keys(frames).forEach(frameId => {
+    const sc = frames[frameId];
     const hasOrbit = [...sc.orbits.values()].some(rec => rec.firstAuthIdx === authIdx);
     const hasLeg = sc.legs.some(leg => leg.authIdx === authIdx);
-    if (hasOrbit || hasLeg) hits.push(sceneId);
+    if (hasOrbit || hasLeg) hits.push(frameId);
   });
   return hits;
 }
 
-// Which scenes are "moons of a planet" vs standalone — used to group the
-// focus bar into planet buttons (moonless) and planet+flyout controls (has
-// moons), so Moon/Titan scenes get a first-class nav path instead of only
-// being reachable through the hint chip. A scene counts as a moon-parent if
-// _trajMoonsOf(id) is non-empty; scene ids not in PROG_MOON_ORBITS values but
-// present in _trajSceneList (e.g. 'SUN') are always plain buttons.
+// Focus-bar grouping: bodies with moons render as a button + a flyout
+// listing the parent and its moons (first-class nav path for Moon/Titan);
+// moonless bodies (+Sun) render as plain buttons. Unchanged UX from before
+// C1b — only the underlying action (trajSetFocus) now flies the camera
+// instead of switching a scene.
 function _trajFocusGroups() {
-  const scenes = _trajSceneList();
-  return scenes.map(s => ({ scene: s, moons: s.id === 'SUN' ? [] : _trajMoonsOf(s.id) }));
+  const bodies = [{ id: 'Sun', label: 'Sun' }, ...Object.keys(PROG_HELIO_R).map(b => ({ id: b, label: b }))];
+  return bodies.map(s => ({ scene: s, moons: s.id === 'Sun' ? [] : _trajMoonsOf(s.id) }));
 }
 
 // ── top-level view builder (called from missionRenderDetail via 570's hook) ──
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
   _trajExtractionCache = { missionId: null, data: null }; // force fresh extraction each render (mission log may have changed)
-  const focus = _trajFocus(m);
-  const scenes = _trajSceneList();
 
-  // ── camera: fit-to-content on first access for this (mission,scene) pair ──
+  // ── camera: default-anchor-Earth fit-to-content on first access for this mission ──
   let cam = _trajCamByMission[id];
-  if (!cam) { cam = { cx: 0, cy: 0, w: _TRAJ_VB }; _trajCamByMission[id] = cam; }
+  if (!cam) { cam = { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _trajFitWKmForBody('Earth', m) }; _trajCamByMission[id] = cam; }
   const zoom = _trajZoomFromCam(cam);
+  const focus = cam.anchorBody;
 
-  // Grouped focus bar: moonless bodies (+SUN) render as plain buttons; bodies
+  // Grouped focus bar: moonless bodies (+Sun) render as plain buttons; bodies
   // with moons render as a button + a small flyout dropdown listing the
   // parent and its moons, so Moon/Titan scenes get first-class navigation.
   const groups = _trajFocusGroups();
@@ -19520,21 +19669,20 @@ function _missionTrajViewHTML(m) {
   // the container's real px rect is known — the initial paint here can't
   // resolve overlay px yet since the svg isn't measurable before mount).
   _trajResetLabels();
-  const svgInner = _trajSceneGeomSVG(focus, m, zoom);
-  const h = cam.w; // square default (aspect corrected post-mount; initial paint assumes 1:1 until measured)
-  const viewBox = `${(cam.cx - cam.w / 2).toFixed(3)} ${(cam.cy - h / 2).toFixed(3)} ${cam.w.toFixed(3)} ${h.toFixed(3)}`;
+  const svgInner = _trajWorldSVG(m, cam, zoom, null);
+  const h = cam.wKm; // square default (aspect corrected post-mount; initial paint assumes 1:1 until measured)
+  const viewBox = `${(-cam.wKm / 2).toFixed(3)} ${(-h / 2).toFixed(3)} ${cam.wKm.toFixed(3)} ${h.toFixed(3)}`;
 
-  // Selection hint chip: if the selected event's content lives in a scene
-  // other than the current focus, offer a one-click switch instead of
-  // auto-switching (per the O1-c brief — don't yank the user's view).
+  // Selection hint chip: if the selected event's content lives at a body
+  // frame other than the camera's current anchor, offer a one-click fly-to
+  // instead of auto-flying (per the O1-c brief — don't yank the user's view).
   const selAuthIdx = _trajSelectedAuthIdx(m);
   let hintChip = '';
   if (selAuthIdx != null) {
-    const hitScenes = _trajScenesForAuthIdx(m, selAuthIdx).filter(s => s !== focus);
-    if (hitScenes.length) {
-      const target = hitScenes[0];
-      const label = (scenes.find(s => s.id === target) || { label: target }).label;
-      hintChip = `<div class="traj-hint-chip" onclick="trajSetFocus('${id}','${target}')" title="Switch to the ${label} scene">event in ${label.toUpperCase()} scene &rarr; switch</div>`;
+    const hitFrames = _trajFramesForAuthIdx(m, selAuthIdx).filter(s => s !== focus);
+    if (hitFrames.length) {
+      const target = hitFrames[0];
+      hintChip = `<div class="traj-hint-chip" onclick="trajSetFocus('${id}','${target}')" title="Fly to ${target}">fly to ${target.toUpperCase()}</div>`;
     }
   }
 
@@ -19602,20 +19750,20 @@ function _missionTrajAfterRender(m) {
     const rect = svgEl.getBoundingClientRect();
     if (!(rect.width > 0) || !(rect.height > 0)) return;
     const aspect = rect.height / rect.width;
-    const h = cam.w * aspect;
-    svgEl.setAttribute('viewBox', `${(cam.cx - cam.w / 2).toFixed(3)} ${(cam.cy - h / 2).toFixed(3)} ${cam.w.toFixed(3)} ${h.toFixed(3)}`);
+    const h = cam.wKm * aspect;
+    svgEl.setAttribute('viewBox', `${(-cam.wKm / 2).toFixed(3)} ${(-h / 2).toFixed(3)} ${cam.wKm.toFixed(3)} ${h.toFixed(3)}`);
     const sceneEl = svgEl.querySelector('g.traj-scene');
     if (sceneEl && typeof _missions !== 'undefined') {
       const mm = (_missions || []).find(x => x.missionId === id);
-      const focus = _trajFocus({ missionId: id });
       const zoom = _trajZoomFromCam(cam);
       _trajResetLabels();
-      sceneEl.innerHTML = _trajSceneGeomSVG(focus, mm, zoom);
+      sceneEl.innerHTML = _trajWorldSVG(mm, cam, zoom, rect);
       if (overlayEl) {
         overlayEl.setAttribute('width', rect.width);
         overlayEl.setAttribute('height', rect.height);
         overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
-        overlayEl.innerHTML = _trajResolveLabels(cam, rect);
+        const renderCam = { cx: 0, cy: 0, w: cam.wKm };
+        overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
       }
     }
   };
