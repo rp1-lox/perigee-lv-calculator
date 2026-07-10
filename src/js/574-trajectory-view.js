@@ -295,8 +295,18 @@ function trajPanMove(ev) {
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
   const cam0 = _trajDrag.cam0;
+  // R3.5 (user flight-test item 3): az already wrapped freely (JS `%` on a
+  // growing/shrinking value just cycles, negative results are harmless to
+  // sin/cos) — the actual clamp bug was el being pinned to [0.087, π/2], i.e.
+  // ONE quarter-turn of tilt only (top-down to just-above-the-horizon), so
+  // dragging past the horizon (or trying to look from "below") visibly
+  // stalled ("doesn't let me go beyond a certain point"). Loosen el to the
+  // full ±(π/2 − 0.01) continuous range (a hair short of the poles, where the
+  // az/el decomposition is singular) so drag-rotate reaches every orientation
+  // a KSP-style free camera would.
   const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
-  const el = Math.max(0.087, Math.min(Math.PI / 2, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
+  const elMax = Math.PI / 2 - 0.01;
+  const el = Math.max(-elMax, Math.min(elMax, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
   const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
   const now = performance.now();
   if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
@@ -811,11 +821,13 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const incRad = orient.i, raanRad = orient.raan, argpRad = orient.argp;
   const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
   let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
+  const screenPts = [];
   for (let k = 0; k < pts.length; k++) {
     const q = _trajProj3(pts[k][0] * scale, pts[k][1] * scale, pts[k][2] * scale);
     const x = ox + q.x, y = oy + q.y;
     if (!isFinite(x) || !isFinite(y)) return '';
     d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    screenPts.push({ x, y });
     if (y < topY) { topY = y; topX = x; }
     if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
   }
@@ -828,8 +840,21 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
   _trajRegisterLabel(topX, topY, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
   if (coastTxt) _trajRegisterLabel(periX, periY - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+  // R3.5 item 2: direction-of-motion cue — split the ring into faint->bright
+  // segments (sample order = increasing eccentric anomaly = prograde motion,
+  // per progOrbitSamplePoints) instead of one uniform-opacity path, so which
+  // way the orbit goes is visible at a glance (KSP fades the trailing side).
+  // The single hit-path/title/label handling above is unaffected — this only
+  // changes how the VISIBLE stroke is emitted.
+  const segs = _trajRingDirSegments(screenPts, 10);
+  const segPaths = segs.length ? segs.map(seg => {
+    const segD = seg.pts.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity).toFixed(3);
+    return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('') : `<path d="${d}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
   return `<g${clickAttr}>
-    <path d="${d}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}${incTxt}</title></path>
+    <title>${title}${incTxt}</title>
+    ${segPaths}
     ${hitArea}
   </g>`;
 }
@@ -2082,7 +2107,11 @@ function _missionTrajViewHTML(m) {
 function _trajFooterHTML(cam) {
   const elDeg = Math.round(((cam.el != null ? cam.el : Math.PI / 2) * 180 / Math.PI));
   const azDeg = Math.round((((cam.az || 0) * 180 / Math.PI) % 360 + 360) % 360);
-  const orientTxt = elDeg < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
+  // R3.5: el now ranges over ±~89.4° (full-range tilt, item 3) instead of
+  // [0,90] — tilt = 90 - el still reads correctly across the whole range
+  // (0 at top-down, 90 at the horizon, up to ~180 near straight-up-from-below);
+  // only suppress the readout right at the canonical top-down default.
+  const orientTxt = Math.abs(elDeg) < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
   return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; drag rotates &middot; scroll zooms &middot; click a body to center &middot; body sizes clamped for visibility`;
 }
 

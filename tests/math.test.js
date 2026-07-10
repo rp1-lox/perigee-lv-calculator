@@ -1651,6 +1651,56 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R3.5 — gizmo polish (user flight-test feedback, 2026-07-10) pure helpers
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue,
+          _trajRingDirSegments } =
+    vm.runInContext('({ _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue, _trajRingDirSegments })', sandbox);
+
+  // item 1: cursor-nearest-sample center-drag mapping
+  {
+    const pts = [{ x: 0, y: 0, met: 0 }, { x: 100, y: 0, met: 50 }, { x: 0, y: 100, met: 150 }];
+    ok('gizmo nearest-screen-met: exact hit picks that sample', _trajGizmoNearestScreenMet(pts, 100, 0) === 50);
+    ok('gizmo nearest-screen-met: closer-to-origin cursor picks met=0', _trajGizmoNearestScreenMet(pts, 5, 5) === 0);
+    ok('gizmo nearest-screen-met: works in every direction (not just along one axis)', _trajGizmoNearestScreenMet(pts, 10, 90) === 150);
+    ok('gizmo nearest-screen-met: empty array -> null', _trajGizmoNearestScreenMet([], 1, 1) === null);
+  }
+
+  // item 4: opposing-handle zero-crossing clamp
+  {
+    ok('gizmo clampCross: same-sign passes through unchanged', _trajGizmoClampCross(50, 30) === 30);
+    ok('gizmo clampCross: crossing from + to - clamps to 0', _trajGizmoClampCross(50, -10) === 0);
+    ok('gizmo clampCross: crossing from - to + clamps to 0', _trajGizmoClampCross(-50, 10) === 0);
+    ok('gizmo clampCross: prev=0 lets any candidate through (new drag, free to build the opposite sign)', _trajGizmoClampCross(0, -10) === -10 && _trajGizmoClampCross(0, 10) === 10);
+
+    // composed drag-component value: grabbing the OPPOSITE handle drains an
+    // existing value to 0 and STAYS there for the rest of that same drag
+    // (does not silently continue negative) — matches the user's report.
+    approx('gizmo dragComponentValue: own-handle drag away from 0 builds normally', _trajGizmoDragComponentValue(0, 1, 200), 200, 1e-9);
+    approx('gizmo dragComponentValue: own-handle drag back floors at 0', _trajGizmoDragComponentValue(50, 1, -1000), 0, 1e-9);
+    approx('gizmo dragComponentValue: opposite-handle grab drains +50 to 0, not negative', _trajGizmoDragComponentValue(50, -1, 500), 0, 1e-9);
+    approx('gizmo dragComponentValue: opposite-handle grab even far past the drain point stays at 0', _trajGizmoDragComponentValue(50, -1, 99999), 0, 1e-9);
+    approx('gizmo dragComponentValue: a FRESH drag from 0 on the opposite handle builds negative freely', _trajGizmoDragComponentValue(0, -1, 500), -500, 1e-9);
+    ok('gizmo dragComponentValue: a "+" handle result is never negative', _trajGizmoDragComponentValue(-50, 1, -9999) === 0);
+    ok('gizmo dragComponentValue: a "-" handle result is never positive', _trajGizmoDragComponentValue(50, -1, -9999) === 0);
+  }
+
+  // item 2: ring direction-of-motion opacity segments
+  {
+    const pts10 = Array.from({ length: 11 }, (_, i) => ({ x: i, y: 0 }));
+    const segs = _trajRingDirSegments(pts10, 10);
+    ok('gizmo ring-dir-segments: produces 10 segments for 10 evenly-divisible edges', segs.length === 10);
+    ok('gizmo ring-dir-segments: opacity ramps from faint (trailing) to full (leading)', segs[0].opacity < segs[segs.length - 1].opacity && segs[segs.length - 1].opacity === 1);
+    ok('gizmo ring-dir-segments: first segment starts near the documented 0.25 floor', Math.abs(segs[0].opacity - 0.25) < 1e-9);
+    ok('gizmo ring-dir-segments: empty/degenerate input -> []', _trajRingDirSegments([], 10).length === 0 && _trajRingDirSegments([{ x: 0, y: 0 }], 10).length === 0);
+    // segments are contiguous and cover every point (no gaps in the drawn ring)
+    let covered = 0; segs.forEach(s => { covered += s.pts.length - 1; });
+    ok('gizmo ring-dir-segments: segments are contiguous (edge count sums to the input edge count)', covered === pts10.length - 1);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // R4 — J2 / orbital-economy layer (385/386): secular rates + optional J2
 // integrator term (default off, MATH.md §7l)
 // ═══════════════════════════════════════════════════════════════════════════
