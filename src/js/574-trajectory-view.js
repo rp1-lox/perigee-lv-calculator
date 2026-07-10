@@ -249,6 +249,10 @@ function _trajApplyCam(id, cam) {
       const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
       overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
       if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
+      // R3.5.2: the world re-render just rebuilt g.traj-scene, wiping the
+      // gizmo's scene-space preview path — repaint it too, or the previewed
+      // trajectory vanishes the moment the user zooms/rotates to look at it.
+      if (typeof _trajGizmoRepaintScenePreview === 'function') _trajGizmoRepaintScenePreview();
     }
   }
   const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
@@ -2175,6 +2179,10 @@ function _missionTrajAfterRender(m) {
         const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
         overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
         if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
+      // R3.5.2: the world re-render just rebuilt g.traj-scene, wiping the
+      // gizmo's scene-space preview path — repaint it too, or the previewed
+      // trajectory vanishes the moment the user zooms/rotates to look at it.
+      if (typeof _trajGizmoRepaintScenePreview === 'function') _trajGizmoRepaintScenePreview();
       }
     }
   };

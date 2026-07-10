@@ -340,6 +340,7 @@ function _trajGizmoOpenPending(id, met) {
   if (!node) return;
   _trajGizmo = { missionId: id, met, authIdx: null, dv: { pro: 0, rad: 0, nrm: 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
   document.addEventListener('keydown', _trajGizmoKeydown);
+  _trajGizmoAddDismissListeners();
   missionRenderDetail();
 }
 
@@ -352,13 +353,45 @@ function _trajGizmoOpenExisting(id, authIdx) {
   if (!node) return;
   _trajGizmo = { missionId: id, met, authIdx, dv: { pro: e.dvPro_ms || 0, rad: e.dvRad_ms || 0, nrm: e.dvNrm_ms || 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
   document.addEventListener('keydown', _trajGizmoKeydown);
+  _trajGizmoAddDismissListeners();
   _trajGizmoRepaintOverlay();
+}
+
+// R3.5.2 (user flight-test): dismiss affordances beyond Escape — left-click
+// anywhere that isn't the gizmo (its overlay layer or flyout menu) closes it,
+// as does right-click when not mid-drag. Committed MNODE edits are already in
+// the log by close time (commit happens on drag release), so closing only
+// clears the pending overlay/preview.
+function _trajGizmoAddDismissListeners() {
+  document.addEventListener('click', _trajGizmoDocClick, true);
+  document.addEventListener('contextmenu', _trajGizmoDocCtxMenu);
+}
+function _trajGizmoRemoveDismissListeners() {
+  document.removeEventListener('click', _trajGizmoDocClick, true);
+  document.removeEventListener('contextmenu', _trajGizmoDocCtxMenu);
+}
+function _trajGizmoDocClick(evt) {
+  const g = _trajGizmo;
+  if (!g || g.drag || g.centerDrag) return;
+  // A camera rotate-drag ends with a click too — don't treat it as dismissal.
+  // (Read without consuming: trajGlyphClick owns resetting the flag.)
+  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) return;
+  const t = evt.target;
+  if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu')) return;
+  _trajGizmoClose();
+}
+function _trajGizmoDocCtxMenu(evt) {
+  const g = _trajGizmo;
+  if (!g || g.drag || g.centerDrag) return; // mid-drag right-click = cancel drag (own handler)
+  evt.preventDefault();
+  _trajGizmoClose();
 }
 
 function _trajGizmoClose() {
   if (!_trajGizmo) return;
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   document.removeEventListener('keydown', _trajGizmoKeydown);
+  _trajGizmoRemoveDismissListeners();
   const id = _trajGizmo.missionId;
   _trajGizmo = null;
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
@@ -1025,7 +1058,12 @@ function _trajGizmoScheduleScratchCheap() {
 
 function _trajGizmoRunScratch(mode) {
   const g = _trajGizmo;
-  if (!g || (!g.drag && !g.centerDrag)) return; // drag may have ended before the throttle/debounce fired
+  if (!g) return;
+  // Cheap throttle ticks only matter mid-drag. The FULL debounce deliberately
+  // fires ~2s AFTER release (drag already null) — it must still run, or the
+  // n-body/heliocentric refinement never happens at all (R3.5.2: this guard
+  // used to bail for both modes, which is why escape previews never showed).
+  if (mode !== 'full' && !g.drag && !g.centerDrag) return;
   const node = g.node;
   const dvVec = physAdd(physAdd(
     physScale(node.vHat, (g.dv.pro || 0) / 1000),
