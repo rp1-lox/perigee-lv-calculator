@@ -1655,8 +1655,8 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 // ═══════════════════════════════════════════════════════════════════════════
 {
   const { _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue,
-          _trajRingDirSegments } =
-    vm.runInContext('({ _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue, _trajRingDirSegments })', sandbox);
+          _trajRingDirSegments, _trajGizmoPullRate } =
+    vm.runInContext('({ _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue, _trajRingDirSegments, _trajGizmoPullRate })', sandbox);
 
   // item 1: cursor-nearest-sample center-drag mapping
   {
@@ -1697,6 +1697,15 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     // segments are contiguous and cover every point (no gaps in the drawn ring)
     let covered = 0; segs.forEach(s => { covered += s.pts.length - 1; });
     ok('gizmo ring-dir-segments: segments are contiguous (edge count sums to the input edge count)', covered === pts10.length - 1);
+  }
+
+  // R3.5.1 (2026-07-10, correction #2): rate-based handle drag — pull
+  // distance -> a RATE (m/s per second), not a direct dv delta.
+  {
+    ok('gizmo pullRate: zero (or negative/back-toward-node) pull -> zero rate', _trajGizmoPullRate(0, false) === 0 && _trajGizmoPullRate(-15, false) === 0);
+    approx('gizmo pullRate: a 40px pull matches the documented tuning constant', _trajGizmoPullRate(40, false), 20, 1e-9);
+    ok('gizmo pullRate: shift (fine control) scales the rate down by 10x', Math.abs(_trajGizmoPullRate(40, true) - _trajGizmoPullRate(40, false) * 0.1) < 1e-9);
+    ok('gizmo pullRate: a bigger pull yields a bigger rate (monotonic ramp)', _trajGizmoPullRate(80, false) > _trajGizmoPullRate(40, false));
   }
 }
 

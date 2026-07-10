@@ -130,6 +130,26 @@ function _trajGizmoDragComponentValue(compStart, sign, deltaDv) {
   return sign > 0 ? Math.max(0, crossClamped) : Math.min(0, crossClamped);
 }
 
+/** R3.5.1 (2026-07-10, correction #2, user flight-test on R3.5 item 4): the
+ *  zero-cross clamp above FELT wrong in practice — real KSP lets a held
+ *  handle's pull set a continuous RATE of change, and pulling the opposite
+ *  handle just drains the component through zero and keeps going negative
+ *  (no stop-at-zero). `_trajGizmoDragComponentValue`/`_trajGizmoClampCross`
+ *  are kept (still gate-pinned below) but are NO LONGER on the live drag
+ *  path — see _trajGizmoHandleTick, which now integrates this rate instead.
+ *  `pullPx` is the drag displacement projected onto the handle's own
+ *  outward axis, already floored to >= 0 by the caller (pushing back toward
+ *  the node = zero rate, never a negative pull). Ramp is a tunable
+ *  power curve — smooth near 0, steepening with distance — scaled 0.1x with
+ *  Shift (fine control), matching the old px-to-dv gain's fine-control
+ *  ratio. Pure. */
+const _TRAJ_GIZMO_RATE_MS_PER_S = 20; // m/s per second of hold, at a 40px pull (tunable)
+function _trajGizmoPullRate(pullPx, shiftHeld) {
+  const p = Math.max(0, pullPx || 0);
+  const base = _TRAJ_GIZMO_RATE_MS_PER_S * Math.pow(p / 40, 1.5);
+  return shiftHeld ? base * 0.1 : base;
+}
+
 /** R3.5 (item 2): split a sampled ring polyline (array of {x,y} render/screen
  *  points, in DIRECTION-OF-MOTION order) into `nSeg` contiguous segments with
  *  opacity ramping from ~0.25 (trailing/behind) to 1.0 (leading edge) — KSP's
@@ -429,6 +449,48 @@ function _trajGizmoHandleValue(g, h) {
   return h.sign > 0 ? Math.max(0, comp) : Math.max(0, -comp);
 }
 
+/** R3.5.1 (2026-07-10, correction #1): KSP navball-style glyph for a handle
+ *  knob, in the knob's own LOCAL coordinate space (origin at the knob
+ *  center; screen px, y-down). `r` = the knob's visible radius; `color` =
+ *  the handle's own var(--accent*) (data, not a chromatic literal — same
+ *  var already used for the shaft line); `negSide` draws a dashed ring (the
+ *  paired "-" handle) instead of solid, consistent with the existing +/-
+ *  outline convention. Pure string builder, DOM-free. */
+function _trajGizmoKnobGlyphSVG(key, r, color, negSide) {
+  const ring = `<circle r="${r}" fill="none" stroke="${color}" stroke-width="1.4"${negSide ? ' stroke-dasharray="2.5,2"' : ''} opacity="0.9"/>`;
+  const spokeAt = (deg, r0, r1) => {
+    const rad = (deg * Math.PI) / 180;
+    const x0 = r0 * Math.sin(rad), y0 = -r0 * Math.cos(rad);
+    const x1 = r1 * Math.sin(rad), y1 = -r1 * Math.cos(rad);
+    return `<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="${color}" stroke-width="1.4"/>`;
+  };
+  if (key === 'pro' || key === 'retro') {
+    const angles = key === 'pro' ? [0, 120, 240] : [60, 180, 300];
+    let g = ring + `<circle r="1.8" fill="${color}"/>`;
+    angles.forEach(a => { g += spokeAt(a, r * 0.4, r * 0.95); });
+    if (key === 'retro') {
+      const d = r * 0.55;
+      g += `<line x1="${(-d).toFixed(1)}" y1="${(-d).toFixed(1)}" x2="${d.toFixed(1)}" y2="${d.toFixed(1)}" stroke="${color}" stroke-width="1.3"/>`;
+      g += `<line x1="${(-d).toFixed(1)}" y1="${d.toFixed(1)}" x2="${d.toFixed(1)}" y2="${(-d).toFixed(1)}" stroke="${color}" stroke-width="1.3"/>`;
+    }
+    return g;
+  }
+  if (key === 'radOut' || key === 'radIn') {
+    let g = ring;
+    [0, 90, 180, 270].forEach(a => {
+      g += key === 'radOut' ? spokeAt(a, r * 0.6, r * 1.15) : spokeAt(a, r * 0.55, r * 0.9);
+    });
+    return g;
+  }
+  // normal / antinormal: outline triangle, vertex pointing away from the
+  // node ('nrm', up) or toward it ('antinrm', inverted).
+  const up = key === 'nrm';
+  const tipY = up ? -r * 1.1 : r * 1.1;
+  const baseY = up ? r * 0.6 : -r * 0.6;
+  const baseW = r * 0.9;
+  return `<polygon points="0,${tipY.toFixed(1)} ${(-baseW).toFixed(1)},${baseY.toFixed(1)} ${baseW.toFixed(1)},${baseY.toFixed(1)}" fill="none" stroke="${color}" stroke-width="1.5"${negSide ? ' stroke-dasharray="2.5,2"' : ''}/>`;
+}
+
 function _trajGizmoOverlaySVG(id, rect) {
   const geo = _trajGizmoScreenGeo(id, rect);
   const g = _trajGizmo;
@@ -446,24 +508,15 @@ function _trajGizmoOverlaySVG(id, rect) {
     if (d.degenerate) {
       svg += `<rect id="${kid}" x="${(tipScreen.x - 5).toFixed(1)}" y="${(tipScreen.y - 5).toFixed(1)}" width="10" height="10" transform="rotate(45 ${tipScreen.x.toFixed(1)} ${tipScreen.y.toFixed(1)})" fill="${d.color}" opacity="${negSide ? 0.55 : 0.85}" style="pointer-events:auto;cursor:grab" onmousedown="event.stopPropagation();_trajGizmoHandleDown(event,'${h.key}')" onmouseenter="_trajGizmoHoverKnob(this,true)" onmouseleave="_trajGizmoHoverKnob(this,false)"><title>${h.label} (near edge-on at this view angle) — drag anyway</title></rect>`;
     } else {
-      // R3.5 item 5: KSP-like vector arrowhead at the tip (the shaft <line>
-      // above is the vector's body) — filled triangle for a "+" handle,
-      // hollow/outline triangle for the paired "-" handle (same outline-only
-      // distinction as before, no second color). A larger transparent hit
-      // circle underneath satisfies the >= 12px hit-radius requirement
-      // without inflating the visible glyph.
-      svg += `<circle cx="${tipScreen.x.toFixed(1)}" cy="${tipScreen.y.toFixed(1)}" r="12" fill="transparent" style="pointer-events:auto;cursor:grab" onmousedown="event.stopPropagation();_trajGizmoHandleDown(event,'${h.key}')" onmouseenter="_trajGizmoHoverKnob(this,true)" onmouseleave="_trajGizmoHoverKnob(this,false)"><title>${h.label} handle — drag away from the node to increase (shift = fine)</title></circle>`;
-      const arrowLen = knobR + 4, arrowW = knobR * 0.9;
-      const perpX = -d.uy, perpY = d.ux;
-      const baseX = tipScreen.x - d.ux * arrowLen, baseY = tipScreen.y - d.uy * arrowLen;
-      const b1x = baseX + perpX * arrowW / 2, b1y = baseY + perpY * arrowW / 2;
-      const b2x = baseX - perpX * arrowW / 2, b2y = baseY - perpY * arrowW / 2;
-      const polyPts = `${tipScreen.x.toFixed(1)},${tipScreen.y.toFixed(1)} ${b1x.toFixed(1)},${b1y.toFixed(1)} ${b2x.toFixed(1)},${b2y.toFixed(1)}`;
-      if (negSide) {
-        svg += `<polygon id="${kid}" points="${polyPts}" fill="none" stroke="${d.color}" stroke-width="1.6" opacity="0.85" pointer-events="none"/>`;
-      } else {
-        svg += `<polygon id="${kid}" points="${polyPts}" fill="${d.color}" opacity="0.9" pointer-events="none"/>`;
-      }
+      // R3.5.1 (2026-07-10, correction #1): back to a circular knob (the
+      // R3.5 arrowhead killed hover-highlight and was harder to grab) PLUS a
+      // KSP navball glyph drawn inside it via _trajGizmoKnobGlyphSVG — the
+      // >= 12px transparent hit circle is unchanged, and the glyph group
+      // (`<g id="${kid}">`) is its sibling so _trajGizmoHoverKnob can scale
+      // the whole glyph up on hover (see that function).
+      svg += `<circle cx="${tipScreen.x.toFixed(1)}" cy="${tipScreen.y.toFixed(1)}" r="12" fill="transparent" style="pointer-events:auto;cursor:grab" onmousedown="event.stopPropagation();_trajGizmoHandleDown(event,'${h.key}')" onmouseenter="_trajGizmoHoverKnob(this,true)" onmouseleave="_trajGizmoHoverKnob(this,false)"><title>${h.label} handle — pull and hold to build rate (shift = fine)</title></circle>`;
+      const glyph = _trajGizmoKnobGlyphSVG(h.key, knobR, d.color, negSide);
+      svg += `<g id="${kid}" transform="translate(${tipScreen.x.toFixed(1)},${tipScreen.y.toFixed(1)})" data-tx="${tipScreen.x.toFixed(1)}" data-ty="${tipScreen.y.toFixed(1)}" style="pointer-events:none">${glyph}</g>`;
     }
   });
   const readout = _trajGizmoFormatReadout(g.dv.pro, g.dv.rad, g.dv.nrm, g.met);
@@ -534,16 +587,18 @@ function _trajGizmoCaPlateText(g) {
 function _trajGizmoHoverKnob(el, on) {
   const sib = el && el.nextElementSibling;
   if (!sib) return;
-  if (sib.tagName === 'circle') {
-    if (on) { sib.setAttribute('r', String(parseFloat(sib.getAttribute('r') || '7') + 2)); sib.setAttribute('stroke-width', '3'); sib.setAttribute('opacity', '1'); sib.dataset.hoverBoosted = '1'; }
-    else if (sib.dataset.hoverBoosted) { sib.setAttribute('r', String(parseFloat(sib.getAttribute('r')) - 2)); sib.setAttribute('stroke-width', '2'); sib.setAttribute('opacity', sib.getAttribute('fill') === 'none' ? '0.85' : '0.9'); delete sib.dataset.hoverBoosted; }
-  } else if (sib.tagName === 'polygon') {
-    // R3.5 item 5: arrowheads can't grow their own points cheaply on hover —
-    // brighten opacity + (for outline handles) thicken the stroke instead.
-    const isOutline = sib.getAttribute('fill') === 'none';
-    if (on) { sib.setAttribute('opacity', '1'); if (isOutline) sib.setAttribute('stroke-width', '2.6'); sib.dataset.hoverBoosted = '1'; }
-    else if (sib.dataset.hoverBoosted) { sib.setAttribute('opacity', isOutline ? '0.85' : '0.9'); if (isOutline) sib.setAttribute('stroke-width', '1.6'); delete sib.dataset.hoverBoosted; }
+  if (sib.tagName === 'g') {
+    // R3.5.1 (correction #1): the glyph group scales up around its own
+    // anchor point on hover — translate is baked into data-tx/data-ty so a
+    // trailing scale() applies around the glyph's local origin (the tip),
+    // restoring the pre-R3.5 "hover expands the knob slightly" behavior.
+    const tx = sib.getAttribute('data-tx'), ty = sib.getAttribute('data-ty');
+    sib.setAttribute('transform', `translate(${tx},${ty}) scale(${on ? 1.3 : 1})`);
+    return;
   }
+  if (sib.tagName !== 'circle') return;
+  if (on) { sib.setAttribute('r', String(parseFloat(sib.getAttribute('r') || '7') + 2)); sib.setAttribute('stroke-width', '3'); sib.setAttribute('opacity', '1'); sib.dataset.hoverBoosted = '1'; }
+  else if (sib.dataset.hoverBoosted) { sib.setAttribute('r', String(parseFloat(sib.getAttribute('r')) - 2)); sib.setAttribute('stroke-width', '2'); sib.setAttribute('opacity', sib.getAttribute('fill') === 'none' ? '0.85' : '0.9'); delete sib.dataset.hoverBoosted; }
 }
 
 /** Cheap repaint of just the gizmo overlay layer — called after every full
@@ -668,12 +723,25 @@ function _trajGizmoHandleDown(evt, key) {
   const rect = svgEl && svgEl.getBoundingClientRect();
   const geo = rect && _trajGizmoScreenGeo(g.missionId, rect);
   if (!geo) return;
-  // R3.5 item 4: compStart is the component's RAW signed value at grab time
-  // (not the handle's own >=0 side magnitude) — see _trajGizmoDragComponentValue.
-  g.drag = { key, component: h.component, sign: h.sign, x0: evt.clientX, y0: evt.clientY, compStart: g.dv[h.component] || 0, dir: geo.dirs[key] };
+  // R3.5.1 (correction #2): compStart is still the component's RAW signed
+  // value at grab time (used only to revert on cancel) — the live value is
+  // now driven by _trajGizmoHandleTick's rate integration, not a per-move
+  // px->dv conversion. curX/curY track the latest cursor position; the
+  // ticker (started below) reads them every animation frame.
+  g.drag = { key, component: h.component, sign: h.sign, x0: evt.clientX, y0: evt.clientY, curX: evt.clientX, curY: evt.clientY, shift: evt.shiftKey, compStart: g.dv[h.component] || 0, dir: geo.dirs[key], lastTickMs: (typeof performance !== 'undefined' ? performance.now() : Date.now()) };
   document.addEventListener('mousemove', _trajGizmoHandleMove);
   document.addEventListener('mouseup', _trajGizmoHandleUp);
   document.addEventListener('contextmenu', _trajGizmoDragCtxMenu);
+  _trajGizmoStartDragTicker();
+  // R3.5.1 (item 3 root-cause fix): arm the full-fidelity debounce right
+  // away, same as a real move would — otherwise a user who holds a handle
+  // perfectly still while the rate builds (very plausible with a hold-to-
+  // accumulate control) never triggers a single 'full' scratch pass, and an
+  // escaping burn's heliocentric preview never has a chance to compute
+  // before release. See _trajGizmoHandleMove for the matching re-arm on
+  // actual cursor movement, and _trajGizmoHandleTick for why per-TICK calls
+  // deliberately do NOT touch this timer.
+  _trajGizmoScheduleScratch();
 }
 
 function _trajGizmoDragCtxMenu(evt) {
@@ -692,15 +760,62 @@ function _trajGizmoKeydown(evt) {
   else _trajGizmoClose();
 }
 
+// R3.5.1 (correction #2): mousemove during a handle drag only records the
+// latest cursor position + shift state — the actual Δv integration happens
+// in _trajGizmoHandleTick, driven by requestAnimationFrame, so the number
+// keeps climbing even if the cursor sits still (KSP "hold to build rate").
 function _trajGizmoHandleMove(evt) {
   const g = _trajGizmo;
   if (!g || !g.drag) return;
-  const dx = evt.clientX - g.drag.x0, dy = evt.clientY - g.drag.y0;
-  const along = dx * g.drag.dir.ux + dy * g.drag.dir.uy; // signed px along the handle's OWN outward direction (pulling away always increases this handle's side)
-  const deltaDv = _trajGizmoPxToDv(along, evt.shiftKey);
-  g.dv[g.drag.component] = _trajGizmoDragComponentValue(g.drag.compStart, g.drag.sign, deltaDv);
-  _trajGizmoRepaintOverlay();
+  g.drag.curX = evt.clientX;
+  g.drag.curY = evt.clientY;
+  g.drag.shift = evt.shiftKey;
+  // Real cursor movement re-arms the full-fidelity debounce (matches the
+  // R3.4 "any new movement resets the ladder to cheap" contract) — ticks
+  // alone (no movement) leave it running so a stationary hold still gets
+  // its one full pass ~2s in, per _trajGizmoHandleDown's comment.
   _trajGizmoScheduleScratch();
+}
+
+let _trajGizmoDragTicker = null;
+
+/** One rAF tick of the held-handle rate integration: pullPx (>=0, along the
+ *  handle's own outward axis — pushing back toward the node floors to 0)
+ *  drives _trajGizmoPullRate (m/s per second); that rate is applied for
+ *  this tick's real elapsed dt and ADDED signed (sign*rate*dt) to the
+ *  component with NO zero-floor — crossing zero and going negative (or
+ *  positive, for the opposite handle) is intentional, per the user's
+ *  described KSP behavior. */
+function _trajGizmoHandleTick() {
+  const g = _trajGizmo;
+  if (!g || !g.drag) { _trajGizmoDragTicker = null; return; }
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const dt = Math.max(0, (now - (g.drag.lastTickMs || now)) / 1000);
+  g.drag.lastTickMs = now;
+  const dx = g.drag.curX - g.drag.x0, dy = g.drag.curY - g.drag.y0;
+  const alongPx = dx * g.drag.dir.ux + dy * g.drag.dir.uy;
+  const pullPx = Math.max(0, alongPx);
+  const rate = _trajGizmoPullRate(pullPx, g.drag.shift);
+  if (rate > 0 && dt > 0) {
+    g.dv[g.drag.component] = (g.dv[g.drag.component] || 0) + g.drag.sign * rate * dt;
+    _trajGizmoRepaintOverlay();
+    // R3.5.1 (item 3 note): while the ticker runs, only the CHEAP throttled
+    // preview refreshes — the full n-body debounce is deliberately NOT
+    // re-armed on every tick (it would never fire while a handle is held),
+    // and the release path doesn't need it either since _trajGizmoCommit
+    // triggers a real missionRecompute (full physics) immediately.
+    _trajGizmoScheduleScratchCheap();
+  }
+  _trajGizmoDragTicker = requestAnimationFrame(_trajGizmoHandleTick);
+}
+
+function _trajGizmoStartDragTicker() {
+  if (_trajGizmoDragTicker) return;
+  _trajGizmoDragTicker = requestAnimationFrame(_trajGizmoHandleTick);
+}
+
+function _trajGizmoStopDragTicker() {
+  if (_trajGizmoDragTicker) { cancelAnimationFrame(_trajGizmoDragTicker); _trajGizmoDragTicker = null; }
 }
 
 function _trajGizmoEndDragListeners() {
@@ -713,6 +828,7 @@ function _trajGizmoHandleUp() {
   const g = _trajGizmo;
   if (!g || !g.drag) return;
   _trajGizmoEndDragListeners();
+  _trajGizmoStopDragTicker();
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   g.drag = null;
   _trajGizmoCommit();
@@ -722,6 +838,7 @@ function _trajGizmoCancelDrag() {
   const g = _trajGizmo;
   if (!g || !g.drag) return;
   _trajGizmoEndDragListeners();
+  _trajGizmoStopDragTicker();
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   g.dv[g.drag.component] = g.drag.compStart; // revert this drag's delta — zero log mutation
   g.drag = null;
@@ -893,6 +1010,15 @@ function _trajGizmoScheduleScratch() {
   if (g) g.lastMoveMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   if (_trajGizmoFullTimer) clearTimeout(_trajGizmoFullTimer);
   _trajGizmoFullTimer = setTimeout(() => { _trajGizmoFullTimer = null; _trajGizmoRunScratch('full'); }, _TRAJ_GIZMO_FULL_DEBOUNCE_MS);
+  if (_trajGizmoScratchTimer) return;
+  _trajGizmoScratchTimer = setTimeout(() => { _trajGizmoScratchTimer = null; _trajGizmoRunScratch('cheap'); }, 100);
+}
+
+/** R3.5.1 (correction #2): the handle-drag ticker's per-tick scratch
+ *  refresh — cheap-mode only, never arms the full debounce (see
+ *  _trajGizmoHandleTick for why: arming it every tick would starve it from
+ *  ever firing while a handle is held down). */
+function _trajGizmoScheduleScratchCheap() {
   if (_trajGizmoScratchTimer) return;
   _trajGizmoScratchTimer = setTimeout(() => { _trajGizmoScratchTimer = null; _trajGizmoRunScratch('cheap'); }, 100);
 }
