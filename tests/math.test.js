@@ -81,6 +81,8 @@ const {
   physKeplerPropagate, physBodyStateAt, progStumpffC, progStumpffS,
   physSoiRadius, physFrameOf, physPatchState, physAccel, physStepFor,
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
+  physMissionLeg, _trajGizmoClosestApproach,
+  _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -1739,6 +1741,55 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
         Math.sign(predWrapped) === Math.sign(dRaan) && Math.abs(dRaan - predWrapped) < 2.0);
     }
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R5 — node-map coherence pass (2026-07-10): SOI-derived layout radius +
+// physics-annotated edges (430's pure helpers, called by 570's node map).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Layout radius: real physics (Earth's SOI ~ 924,000 km) should produce a
+  // finite, positive, in-range radius — not the literal fallback constant.
+  const rEarth = _nmSoiLayoutRadius('Earth', 150);
+  ok('R5 layout: Earth SOI-derived radius is finite and positive', isFinite(rEarth) && rEarth > 0);
+  ok('R5 layout: Earth SOI-derived radius clamps within [45,260]', rEarth >= 45 && rEarth <= 260);
+
+  // Provenance ordering: bodies with bigger real SOI (relative to Earth) get a
+  // bigger derived radius — Jupiter's SOI dwarfs Mercury's.
+  const rMercury = _nmSoiLayoutRadius('Mercury', 60);
+  const rJupiter = _nmSoiLayoutRadius('Jupiter', 185);
+  ok('R5 layout: Jupiter (huge SOI) derives a larger radius than Mercury (tiny SOI)', rJupiter > rMercury);
+
+  // Guard: unavailable physSoiRadius (or an unknown body) falls back verbatim.
+  ok('R5 layout: unknown body falls back to the literal constant',
+    _nmSoiLayoutRadius('Pluto', 42) === 42);
+  {
+    const savedFn = sandbox.physSoiRadius;
+    sandbox.physSoiRadius = undefined;
+    ok('R5 layout: physSoiRadius unavailable falls back to the literal constant',
+      vm.runInContext("_nmSoiLayoutRadius('Earth', 150)", sandbox) === 150);
+    sandbox.physSoiRadius = savedFn;
+  }
+
+  // Edge annotation: no leg in the side-table -> "estimated", never flown, and
+  // never touches ΔV (the function has no ΔV-shaped return field at all).
+  const annNone = _nmEdgePhysicsAnnotation('mission-x', 0, () => null);
+  ok('R5 edges: no physics leg -> flown:false / estimated label',
+    annNone.flown === false && annNone.label === 'estimated');
+
+  // Edge annotation: converged leg -> flown:true, TOF surfaced in days, and (if
+  // a closest-approach scanner + dest are present) CA distance surfaced too.
+  const fakeLeg = { converged: true, tof_s: 3 * 86400, dest: 'Moon', samples: [{ t: 0, r: [1, 0, 0], frame: 'Earth' }] };
+  const annFlown = _nmEdgePhysicsAnnotation('mission-x', 2, (mid, idx) => (mid === 'mission-x' && idx === 2) ? fakeLeg : null,
+    () => ({ dKm: 12345 }));
+  ok('R5 edges: converged leg -> flown:true', annFlown.flown === true);
+  ok('R5 edges: converged leg surfaces TOF in days (3d)', Math.abs(annFlown.tofSeconds / 86400 - 3) < 1e-9);
+  ok('R5 edges: converged leg surfaces closest-approach km from the injected scanner', annFlown.closestApproachKm === 12345);
+  ok('R5 edges: flown label carries the "flown" marker', annFlown.label.indexOf('flown') >= 0);
+
+  // Unconverged leg -> estimated, even though a leg record exists.
+  const annUnconverged = _nmEdgePhysicsAnnotation('mission-x', 3, () => ({ converged: false }));
+  ok('R5 edges: unconverged leg -> flown:false / estimated label', annUnconverged.flown === false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -482,4 +482,64 @@ function _nmDvPhysics(nA, nB) {
   return null;   // no model — caller may show "enter manually"
 }
 
+// ── R5 — node-map coherence pass ──────────────────────────────────────────────
+// The node map and trajectory view become two projections of ONE dataset.
+// These two pure helpers are extracted so the layout/annotation logic is
+// unit-testable (see tests/math.test.js) without constructing SVG or DOM.
+
+// SOI-derived layout radius (2026-07-10, R5 item 1). Replaces the hand-set
+// `soiR` constants in 570's _missionNmLayout with values DERIVED from real
+// SOI physics (physSoiRadius, 386) — log-scaled and anchored to Earth's
+// legacy 150px radius so the layout stays visually reasonable (the point is
+// provenance, not literal km; giant planets clamp together at the top of the
+// range — a known cosmetic limit, not a physics one). `fallback` is the old
+// hand-set constant for that body; used verbatim if physSoiRadius is
+// unavailable (guard) or returns a non-finite/zero radius.
+function _nmSoiLayoutRadius(body, fallback) {
+  if (typeof physSoiRadius !== 'function') return fallback;
+  let soi, soiEarth;
+  try { soi = physSoiRadius(body); soiEarth = physSoiRadius('Earth'); }
+  catch (err) { return fallback; }
+  if (!soi || !isFinite(soi) || soi <= 0) return fallback;
+  if (!soiEarth || !isFinite(soiEarth) || soiEarth <= 0) return fallback;
+  const EARTH_R = 150, MIN_R = 45, MAX_R = 260, SCALE = 0.22;
+  const r = EARTH_R * (1 + SCALE * Math.log(soi / soiEarth));
+  return Math.max(MIN_R, Math.min(MAX_R, r));
+}
+
+// Physics annotation for a node-map maneuver edge (R5 item 2). `logIdx` is
+// the mission log index of the MANEUVER event the edge represents (matches
+// physics legs' `authIdx` — see 565's leg-building loop, `leg.authIdx = i`
+// against the SAME m.log index space e._authIdx is stamped from). Looks up
+// the converged physics leg for that index in the mission's side-table
+// (`_physTrajByMission`, 565 — the ONLY sanctioned mission-physics
+// side-table) via the injected `legLookup` (defaults to physMissionLeg so
+// this stays pure/testable with a stub). Returns:
+//   { flown:true,  tofSeconds, closestApproachKm|null, label }  — converged leg found
+//   { flown:false, label }                                       — no/unconverged leg
+// NEVER touches ΔV — solved-burn magnitude stays sourced from
+// progNmComputeEdgeDv/dvOverride exclusively (byte-parity discipline); this
+// function only adds a display annotation alongside that number.
+function _nmEdgePhysicsAnnotation(missionId, logIdx, legLookup, caFn) {
+  const lookup = legLookup || (typeof physMissionLeg === 'function' ? physMissionLeg : null);
+  if (!lookup || missionId == null || logIdx == null) return { flown: false, label: 'estimated' };
+  let leg = null;
+  try { leg = lookup(missionId, logIdx); } catch (err) { leg = null; }
+  if (!leg || !leg.converged) return { flown: false, label: 'estimated' };
+  const tofSeconds = leg.tofPhysics != null ? leg.tofPhysics : leg.tof_s;
+  let closestApproachKm = null;
+  if (leg.dest && leg.samples && leg.samples.length) {
+    const scan = caFn || (typeof _trajGizmoClosestApproach === 'function' ? _trajGizmoClosestApproach : null);
+    if (scan) {
+      try { const ca = scan(leg.samples, leg.dest); if (ca) closestApproachKm = ca.dKm; }
+      catch (err) { closestApproachKm = null; }
+    }
+  }
+  const tofDays = tofSeconds != null ? (tofSeconds / 86400) : null;
+  const parts = ['flown ✓'];
+  if (tofDays != null) parts.push(`TOF ${tofDays.toFixed(1)}d`);
+  if (closestApproachKm != null) parts.push(`CA ${Math.round(closestApproachKm).toLocaleString()} km`);
+  return { flown: true, tofSeconds, closestApproachKm, label: parts.join(' · ') };
+}
+
 // ── Phase 8 tests (pure JS, no DOM) ──────────────────────────────────────────

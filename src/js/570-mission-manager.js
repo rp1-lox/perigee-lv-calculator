@@ -3307,12 +3307,30 @@ function missionNodeClick(id, nodeId) {
   m.log.forEach((e, i) => { if (e.type === 'MANEUVER' && e.toNode === nodeId) target = i; });
   if (target < 0 && nodeId === _missionNodeForLaunch(m)) m.log.forEach((e, i) => { if (e.type === 'LAUNCH' || e.type === 'DEPLOY') target = i; });
   if (target >= 0) {
+    // R5 item 3: route through the shared selection model (m.log[i]._expanded,
+    // the same flag _trajSelectedAuthIdx reads) so selecting an orbit node here
+    // also highlights the matching ring in the trajectory view.
+    _missionNmSelectShared(id, target);
+    missionRenderDetail();
     const tid = 'mlog-' + id + '-' + target;
     setTimeout(() => {
       const el = document.getElementById(tid);
       if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.style.outline = '2px solid var(--accent)'; setTimeout(() => { el.style.outline = ''; }, 1500); }
     }, 60);
   }
+}
+
+// R5 item 3: single entry point both missionNodeClick and missionEdgeClick use
+// to select a log event through the SAME selection state the trajectory view
+// reads (_expanded → _trajSelectedAuthIdx) and the SAME gizmo hook the
+// trajectory view's own ring/arc clicks use (_trajSelectEventFromView) — so a
+// node-map click and a trajectory-view click land in identical state.
+function _missionNmSelectShared(id, idx) {
+  const m = _missionGet(id);
+  if (!m || !m.log[idx]) return;
+  m.log.forEach(e => { e._expanded = false; });
+  m.log[idx]._expanded = true;
+  if (typeof _trajGizmoOnEventSelected === 'function') _trajGizmoOnEventSelected(id, idx, m.log[idx]);
 }
 
 // SVG arrowhead pointing from (sx,sy) toward (tx,ty), backed off the target by `back`.
@@ -3329,8 +3347,7 @@ function _nmArrowHead(sx, sy, tx, ty, color, back) {
 function missionEdgeClick(id, idx) {
   const m = _missionGet(id);
   if (!m || !m.log[idx]) return;
-  m.log.forEach(e => { e._expanded = false; });
-  m.log[idx]._expanded = true;
+  _missionNmSelectShared(id, idx);   // R5 item 3: same selection state as trajectory view clicks
   missionRenderDetail();
   const tid = 'mlog-' + id + '-' + idx;
   setTimeout(() => {
@@ -4442,11 +4459,23 @@ function _missionNodeMapHTML(m) {
       const bothWays = p.loToHi != null && p.hiToLo != null;
       const latestIdx = Math.max(p.loToHi == null ? -1 : p.loToHi, p.hiToLo == null ? -1 : p.hiToLo);
       const col = 'var(--accent)';
-      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}maneuver (click to open)</title>`;
+      // R5 item 2: annotate from the physics side-table (_physTrajByMission via
+      // _nmEdgePhysicsAnnotation, 430) — display only, NEVER touches ΔV (that
+      // stays sourced from progNmComputeEdgeDv/dvOverride exclusively).
+      const ann = (typeof _nmEdgePhysicsAnnotation === 'function')
+        ? _nmEdgePhysicsAnnotation(id, latestIdx) : { flown: false, label: 'estimated' };
+      const annTitle = ann.flown ? ` — ${_tsEsc(ann.label)}` : ' — estimated (schematic)';
+      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}maneuver (click to open)${annTitle}</title>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="${col}" stroke-width="2.5" opacity="0.85"/>`;
       if (p.loToHi != null || bothWays) edgesHTML += _nmArrowHead(Ax, Ay, Bx, By, col, 2);   // arrow at hi edge
       if (p.hiToLo != null || bothWays) edgesHTML += _nmArrowHead(Bx, By, Ax, Ay, col, 2);   // arrow at lo edge
+      if (ann.flown) {
+        // "flown ✓" badge at the edge midpoint — accent-styled, no chromatic literals.
+        const mx = (Ax + Bx) / 2, my = (Ay + By) / 2;
+        edgesHTML += `<circle cx="${mx}" cy="${my}" r="4.5" fill="var(--bg)" stroke="var(--accent)" stroke-width="1.4"/>`;
+        edgesHTML += `<text x="${mx}" y="${my + 2.5}" text-anchor="middle" font-family="var(--mono)" font-size="6.5px" fill="var(--accent)">✓</text>`;
+      }
       edgesHTML += `</g>`;
     }
   }
@@ -4509,16 +4538,20 @@ const PROG_BODY_COLORS = {
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {
   // body order (left → right) and per-body geometry (colors from PROG_BODY_COLORS)
+  // R5 (2026-07-10): soiR is DERIVED from real SOI physics (physSoiRadius, 386)
+  // via the pure helper _nmSoiLayoutRadius (430) — log-scaled/clamped for a
+  // reasonable layout; provenance, not literal km. The numeric literals below
+  // are now only the FALLBACK used if physSoiRadius is unavailable.
   const META = {
-    Earth:   { col:PROG_BODY_COLORS.Earth,   bodyR:30, soiR:150 },
-    Moon:    { col:PROG_BODY_COLORS.Moon,    bodyR:14, soiR:70  },
-    Venus:   { col:PROG_BODY_COLORS.Venus,   bodyR:24, soiR:95  },
-    Mercury: { col:PROG_BODY_COLORS.Mercury, bodyR:14, soiR:60  },
-    Mars:    { col:PROG_BODY_COLORS.Mars,    bodyR:20, soiR:95  },
-    Jupiter: { col:PROG_BODY_COLORS.Jupiter, bodyR:42, soiR:185 },
-    Saturn:  { col:PROG_BODY_COLORS.Saturn,  bodyR:38, soiR:160 },
-    Uranus:  { col:PROG_BODY_COLORS.Uranus,  bodyR:28, soiR:120 },
-    Neptune: { col:PROG_BODY_COLORS.Neptune, bodyR:28, soiR:120 },
+    Earth:   { col:PROG_BODY_COLORS.Earth,   bodyR:30, soiR:_nmSoiLayoutRadius('Earth',   150) },
+    Moon:    { col:PROG_BODY_COLORS.Moon,    bodyR:14, soiR:_nmSoiLayoutRadius('Moon',    70)  },
+    Venus:   { col:PROG_BODY_COLORS.Venus,   bodyR:24, soiR:_nmSoiLayoutRadius('Venus',   95)  },
+    Mercury: { col:PROG_BODY_COLORS.Mercury, bodyR:14, soiR:_nmSoiLayoutRadius('Mercury', 60)  },
+    Mars:    { col:PROG_BODY_COLORS.Mars,    bodyR:20, soiR:_nmSoiLayoutRadius('Mars',    95)  },
+    Jupiter: { col:PROG_BODY_COLORS.Jupiter, bodyR:42, soiR:_nmSoiLayoutRadius('Jupiter', 185) },
+    Saturn:  { col:PROG_BODY_COLORS.Saturn,  bodyR:38, soiR:_nmSoiLayoutRadius('Saturn',  160) },
+    Uranus:  { col:PROG_BODY_COLORS.Uranus,  bodyR:28, soiR:_nmSoiLayoutRadius('Uranus',  120) },
+    Neptune: { col:PROG_BODY_COLORS.Neptune, bodyR:28, soiR:_nmSoiLayoutRadius('Neptune', 120) },
   };
   const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune'];
   const bodyCol = { Sun: PROG_BODY_COLORS.Sun };
