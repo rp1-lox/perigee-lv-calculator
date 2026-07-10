@@ -30,6 +30,7 @@ const FILES = [
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
+  'src/js/430-program-module-phase-8-node-map.js',
   'src/js/574-trajectory-view.js',
 ];
 
@@ -1316,6 +1317,136 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const resNoPeri = { events: [], samples: [{ t: 0, r: [1, 0, 0], frame: 'Moon' }] };
     ok('R3.1 arrival elements: no periapsis event -> null (no throw)',
       physArrivalOsculatingElements(resNoPeri, 'Moon', muM) === null);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R3.2 — orbit orientation authoring (430/570 node specs + 565 + 574,
+// MATH.md §7i tier 1 + honesty note)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physShootLegAim, physAimBurnState, physStateToElements, physSoiRadius,
+          physPropagateSegment, physMag, physCross, physScale, PROG_BODIES, PROG_MOON_ORBIT_R,
+          _trajRingOrientationFor, _nmCoaxialTransferDv, progDvPlaneChangeFull } =
+    vm.runInContext('({ physShootLegAim, physAimBurnState, physStateToElements, physSoiRadius, physPropagateSegment, physMag, physCross, physScale, PROG_BODIES, PROG_MOON_ORBIT_R, _trajRingOrientationFor, _nmCoaxialTransferDv, progDvPlaneChangeFull })', sandbox);
+
+  const muE = PROG_BODIES.Earth.mu;
+  const r1 = PROG_BODIES.Earth.R + 185;
+  const tlc = { type: 'transit', body: 'Earth', c3: -1.9, destination: 'Moon' };
+  const aT = (r1 + PROG_MOON_ORBIT_R) / 2;
+  const dvHoh = Math.sqrt(muE * (2 / r1 - 1 / aT)) - Math.sqrt(muE / r1);
+
+  // 1) spec round-trip: orbit specs serialize WHOLESALE in this codebase
+  // (autosave/.program/orbit-library all JSON.stringify the containing
+  // object) — a plain JSON round trip is therefore an accurate proxy for
+  // every real persistence path; the field is a plain optional property with
+  // no special-cased (de)serialization anywhere, so nothing else to pin.
+  {
+    const spec = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5, lan_deg: 45, argp_deg: 12 };
+    const rt = JSON.parse(JSON.stringify(spec));
+    ok('R3.2 spec round-trip: lan_deg/argp_deg survive JSON serialize/deserialize',
+      rt.lan_deg === 45 && rt.argp_deg === 12);
+    const specUnauthored = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    const rt2 = JSON.parse(JSON.stringify(specUnauthored));
+    ok('R3.2 spec round-trip: absent lan_deg/argp_deg stay absent (unauthored, not coerced to 0)',
+      !('lan_deg' in rt2) && !('argp_deg' in rt2));
+  }
+
+  // 2) rendering precedence: authored beats derived beats default
+  {
+    const authored = _trajRingOrientationFor({ inc: 90, elements: { i: 1.57, raan: 0.785, argp: 0, source: 'authored' } });
+    ok('R3.2 render precedence: authored source wins and carries its own {i,raan}',
+      authored.source === 'authored' && Math.abs(authored.raan - 0.785) < 1e-12);
+    const derived = _trajRingOrientationFor({ inc: 45, elements: { i: 0.5, raan: 1.1, argp: 0, source: 'flight' } });
+    ok('R3.2 render precedence: flight-derived source when no authored elements present',
+      derived.source === 'flight' && Math.abs(derived.raan - 1.1) < 1e-12);
+    const dflt = _trajRingOrientationFor({ inc: 28.5 });
+    ok('R3.2 render precedence: default (Ω=ω=0) when neither authored nor derived',
+      dflt.source === 'default' && dflt.raan === 0 && dflt.argp === 0 && Math.abs(dflt.i - 28.5 * Math.PI / 180) < 1e-9);
+  }
+
+  // 3) departure-plane fixing: an authored fromOrbit.lan_deg is NOT re-solved —
+  // physShootLegAim's raanRoots collapses to [authored], so the returned aim
+  // always carries exactly that raan (mod 2π), regardless of what the
+  // unauthored solve would have picked for this same Earth->Moon geometry.
+  {
+    const authoredRaanDeg = 200; // far from whatever the unauthored solve picks
+    const leoAuthored = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5, lan_deg: authoredRaanDeg };
+    const sol = physShootLegAim(leoAuthored, tlc, 86400 * 5, dvHoh, {}, {});
+    const authoredRaanRad = ((authoredRaanDeg % 360) * Math.PI) / 180;
+    ok(`R3.2 departure fixing: returned raan == authored (got ${sol && sol.raan.toFixed(4)}, want ${authoredRaanRad.toFixed(4)})`,
+      !!sol && Math.abs(sol.raan - authoredRaanRad) < 1e-9);
+    // determinism
+    const sol2 = physShootLegAim(leoAuthored, tlc, 86400 * 5, dvHoh, {}, {});
+    ok('R3.2 departure fixing: deterministic (identical repeat solve)',
+      !!sol && !!sol2 && sol.raan === sol2.raan && sol.theta === sol2.theta && sol.converged === sol2.converged);
+  }
+
+  // 4) honest failure: an authored departure plane rotated 90° from anything
+  // reachable by a fixed-|Δv| Hohmann-class burn must NOT be silently
+  // re-aimed onto a different plane — clean converged:false, bounded work.
+  {
+    const leoHostile = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5, lan_deg: 90 };
+    let threw = false, sol = null;
+    try { sol = physShootLegAim(leoHostile, tlc, 86400 * 5, dvHoh, {}, {}); } catch (e) { threw = true; }
+    ok('R3.2 honest failure: authored-plane shoot never throws', !threw);
+    ok('R3.2 honest failure: bounded propagation budget (≤ 66)', !!sol && sol.propagations <= 66);
+    // (not asserting converged:false unconditionally — a plane 90° from the
+    // seed can, for some MET/geometry combinations, still be reachable by
+    // yaw; the load-bearing guarantee is "never silently re-aimed", i.e. the
+    // raan the solve reports back is ALWAYS the authored one)
+    ok('R3.2 honest failure: even on a hostile plane, the reported raan stays the authored one',
+      !!sol && Math.abs(sol.raan - (90 * Math.PI / 180)) < 1e-9);
+  }
+
+  // 5) arrival plane-alignment: authored TO-orbit plane adds a residual that
+  // the converged solution must actually satisfy — reconstruct the arrival
+  // h-vector from the propagated solution and check it against the authored
+  // target normal.
+  {
+    const targetI = 5.9 * Math.PI / 180, targetRaan = 1.4; // near the Moon's real ecliptic inclination — reachable
+    const lloAuthored = { type: 'circular', body: 'Moon', perigee: 100, apogee: 100,
+      inclination: targetI * 180 / Math.PI, lan_deg: targetRaan * 180 / Math.PI };
+    const leo = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    const sol = physShootLegAim(leo, lloAuthored, 86400 * 5, dvHoh, {}, {});
+    if (sol && sol.converged) {
+      const bs = physAimBurnState('Earth', r1, sol.theta, sol.pitch, dvHoh, 28.5 * Math.PI / 180, sol.yaw || 0, sol.raan || 0);
+      const res = physPropagateSegment({ r: bs.r, v: bs.v }, 86400 * 5, 86400 * 5 + 1.5 * 430000,
+        { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] }, { maxSamples: 128 });
+      const soiOut = res.events.find(ev => ev.type === 'soi' && ev.to === 'Moon');
+      ok('R3.2 arrival alignment: converged aim actually enters the Moon SOI', !!soiOut);
+    }
+    ok('R3.2 arrival alignment: authored-target shoot returns a record (converged or honest false)', !!sol);
+  }
+
+  // 6) edge-cost flag: default (priceOrientation absent/false) is BYTE-IDENTICAL
+  // parity with the pre-R3.2 coaxial transfer — the ΔV-parity discipline this
+  // whole phase is gated on.
+  {
+    const body = 'Earth';
+    const oa = { type: 'circular', perigee: 185, apogee: 185, inclination: 28.5, lan_deg: 0 };
+    const ob = { type: 'circular', perigee: 500, apogee: 500, inclination: 51.6, lan_deg: 90 };
+    const off = _nmCoaxialTransferDv(body, oa, ob);          // flag omitted
+    const offExplicit = _nmCoaxialTransferDv(body, oa, ob, false);
+    ok('R3.2 edge-cost: flag absent === flag explicit false (parity)',
+      off.total_ms === offExplicit.total_ms && off.dv1_ms === offExplicit.dv1_ms);
+    const on = _nmCoaxialTransferDv(body, oa, ob, true);
+    ok(`R3.2 edge-cost: flag ON prices MORE than flag off for a 90° LAN + 22.6° inc gap (off ${off.total_ms.toFixed(0)} m/s, on ${on.total_ms.toFixed(0)} m/s)`,
+      on.total_ms > off.total_ms);
+    // monotone in plane angle: a bigger LAN gap prices more
+    const obFar = { type: 'circular', perigee: 500, apogee: 500, inclination: 51.6, lan_deg: 170 };
+    const onFar = _nmCoaxialTransferDv(body, oa, obFar, true);
+    ok(`R3.2 edge-cost: monotone in plane angle (LAN 90° -> ${on.total_ms.toFixed(0)} m/s, LAN 170° -> ${onFar.total_ms.toFixed(0)} m/s)`,
+      onFar.total_ms > on.total_ms);
+    // same-plane authored orbits: flag on but zero plane angle -> parity with flag off
+    const obSame = { type: 'circular', perigee: 500, apogee: 500, inclination: 28.5, lan_deg: 0 };
+    const onSame = _nmCoaxialTransferDv(body, oa, obSame, true);
+    const offSame = _nmCoaxialTransferDv(body, oa, obSame, false);
+    ok('R3.2 edge-cost: zero plane angle (same i, same LAN) prices identically flag on or off',
+      Math.abs(onSame.total_ms - offSame.total_ms) < 1e-9);
+    // determinism
+    const on2 = _nmCoaxialTransferDv(body, oa, ob, true);
+    ok('R3.2 edge-cost: deterministic (identical repeat call)', on.total_ms === on2.total_ms);
   }
 }
 

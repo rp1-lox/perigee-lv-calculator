@@ -357,6 +357,8 @@
               <div class="cfg-item"><label>Perigee (km)</label><input type="number" class="field" id="perigee" value="400" min="100" oninput="markOrbitUserDefined();drawOrbitDiagram()"></div>
               <div class="cfg-item"><label>Inclination (°)</label><input type="number" class="field" id="inclination" value="28.5" min="0" max="180" step="0.1" oninput="markOrbitUserDefined()"></div>
               <div class="cfg-item"><label>Parking Alt (km)</label><input type="number" class="field" id="parking-alt" value="185" min="100" oninput="drawOrbitDiagram()"></div>
+              <div class="cfg-item"><label>LAN &Omega; (°, optional)</label><input type="number" class="field" id="orbit-lan" placeholder="unauthored" min="0" max="360" step="0.1" oninput="markOrbitUserDefined()"></div>
+              <div class="cfg-item"><label>Arg. periapsis &omega; (°, optional)</label><input type="number" class="field" id="orbit-argp" placeholder="unauthored" min="0" max="360" step="0.1" oninput="markOrbitUserDefined()"></div>
             </div>
             <div class="cfg-item">
               <label>Trajectory</label>

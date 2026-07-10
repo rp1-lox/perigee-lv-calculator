@@ -62,6 +62,16 @@ function commitMathInput(input){
   return valid;
 }
 function gv(id){return mathValue(document.getElementById(id)?.value,0);}
+// R3.2: optional numeric read — blank input means "unauthored" (null), not 0.
+// Used for lan_deg/argp_deg fields where absence is a meaningful third state.
+function gvOpt(id){
+  const el=document.getElementById(id);
+  if(!el)return null;
+  const raw=(el.value??'').trim();
+  if(raw==='')return null;
+  const r=parseMathExpression(raw);
+  return Number.isFinite(r)?r:null;
+}
 
 // ── Shared launch performance (Townsend-Schilling) — single source of truth for
 //    BOTH the LV calculator (evalAtPayload) and the Program/mission launch. Pure: no

@@ -1374,6 +1374,8 @@ button,input,select,textarea{font-family:inherit;}
               <div class="cfg-item"><label>Perigee (km)</label><input type="number" class="field" id="perigee" value="400" min="100" oninput="markOrbitUserDefined();drawOrbitDiagram()"></div>
               <div class="cfg-item"><label>Inclination (°)</label><input type="number" class="field" id="inclination" value="28.5" min="0" max="180" step="0.1" oninput="markOrbitUserDefined()"></div>
               <div class="cfg-item"><label>Parking Alt (km)</label><input type="number" class="field" id="parking-alt" value="185" min="100" oninput="drawOrbitDiagram()"></div>
+              <div class="cfg-item"><label>LAN &Omega; (°, optional)</label><input type="number" class="field" id="orbit-lan" placeholder="unauthored" min="0" max="360" step="0.1" oninput="markOrbitUserDefined()"></div>
+              <div class="cfg-item"><label>Arg. periapsis &omega; (°, optional)</label><input type="number" class="field" id="orbit-argp" placeholder="unauthored" min="0" max="360" step="0.1" oninput="markOrbitUserDefined()"></div>
             </div>
             <div class="cfg-item">
               <label>Trajectory</label>
@@ -3385,6 +3387,10 @@ function loadOrbitPreset(o,key){
     const inc=o.incTracksLat&&site ? siteEffectiveInc(site) : o.inc;
     document.getElementById('inclination').value=inc;
     document.getElementById('parking-alt').value=o.parking??185;
+    // R3.2: authored orientation round-trips; absent fields clear the inputs
+    // back to blank (unauthored), not 0 — see collectCurrentOrbit/gvOpt.
+    document.getElementById('orbit-lan').value=o.lan_deg!=null?o.lan_deg:'';
+    document.getElementById('orbit-argp').value=o.argp_deg!=null?o.argp_deg:'';
   }
   buildOrbitCategories();
   drawOrbitDiagram();
@@ -3436,7 +3442,13 @@ function doSaveOrbit(){
 
 function collectCurrentOrbit(){
   if(destMode==='escape')return{mode:'escape',c3:gv('c3'),decl:gv('decl'),perigee:gv('escape-perigee')};
-  return{mode:'orbit',apogee:gv('apogee'),perigee:gv('perigee'),inc:gv('inclination'),parking:gv('parking-alt')};
+  // R3.2: lan_deg/argp_deg are OPTIONAL — blank fields stay absent from the
+  // saved spec (unauthored), never coerced to 0 (see MATH.md §7i tier 1).
+  const o={mode:'orbit',apogee:gv('apogee'),perigee:gv('perigee'),inc:gv('inclination'),parking:gv('parking-alt')};
+  const lan=gvOpt('orbit-lan'), argp=gvOpt('orbit-argp');
+  if(lan!=null)o.lan_deg=lan;
+  if(argp!=null)o.argp_deg=argp;
+  return o;
 }
 
 function loadOrbitFile(input){
@@ -3520,6 +3532,16 @@ function commitMathInput(input){
   return valid;
 }
 function gv(id){return mathValue(document.getElementById(id)?.value,0);}
+// R3.2: optional numeric read — blank input means "unauthored" (null), not 0.
+// Used for lan_deg/argp_deg fields where absence is a meaningful third state.
+function gvOpt(id){
+  const el=document.getElementById(id);
+  if(!el)return null;
+  const raw=(el.value??'').trim();
+  if(raw==='')return null;
+  const r=parseMathExpression(raw);
+  return Number.isFinite(r)?r:null;
+}
 
 // ── Shared launch performance (Townsend-Schilling) — single source of truth for
 //    BOTH the LV calculator (evalAtPayload) and the Program/mission launch. Pure: no
@@ -13324,7 +13346,7 @@ function _nmOrbitVAtR(body, orbit, r_km) {
  * Reads perigee/apogee directly (not the type label), so a slightly-elliptical "circular"
  * node is still handled correctly.
  */
-function _nmCoaxialTransferDv(body, oa, ob) {
+function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   const b = PROG_BODIES[body]; if (!b) return null;
   const apsOf = o => {
     const r1 = b.R + (o.perigee ?? o.apogee ?? 0), r2 = b.R + (o.apogee ?? o.perigee ?? 0);
@@ -13347,6 +13369,27 @@ function _nmCoaxialTransferDv(body, oa, ob) {
       if (d < best) { best = d; dv1b = d; dv2b = 0; single = true; }
     }
   }));
+  // R3.2 edge-cost flag (guarded, OPT-IN, default OFF): today this transfer
+  // is purely coaxial — it never charges anything for the two orbits being
+  // in different planes (critique 5's "assumes latitude-derived planes" gap,
+  // here it's worse — no plane term at all for same-body node edges). When
+  // EITHER node's spec sets priceOrientation:true, add the REAL plane-change
+  // angle between the authored {i, Ω} pairs (progDvPlaneChangeFull, spherical
+  // law of cosines) at burn 1's radius, combined vectorially with the
+  // existing tangential burn (progDvCombined's sqrt-sum convention) — this
+  // repricing is OFF by default so no existing mission's ΔV total moves;
+  // absent lan_deg on either side is treated as Ω=0 (same convention the
+  // renderer/physics fall back to).
+  if (priceOrientation && best < Infinity) {
+    const i1 = oa.inclination || 0, lan1 = oa.lan_deg || 0;
+    const i2 = ob.inclination || 0, lan2 = ob.lan_deg || 0;
+    if (Math.abs(i1 - i2) > 1e-9 || Math.abs(lan1 - lan2) > 1e-9) {
+      const dvPlane_kms = progDvPlaneChangeFull(body, Math.min(A.rp, A.ra) - b.R, i1, lan1, i2, lan2) / 1000;
+      const dv1Combined_kms = Math.sqrt(dv1b * dv1b + dvPlane_kms * dvPlane_kms);
+      best = dv1Combined_kms + dv2b; // plane surcharge folds into burn 1, burn 2 unchanged
+      dv1b = dv1Combined_kms;
+    }
+  }
   return { total_ms: best * 1000, dv1_ms: dv1b * 1000, dv2_ms: dv2b * 1000, single };
 }
 
@@ -13374,6 +13417,9 @@ function progNmComputeEdgeDv(fromId, toId) {
     ...PROG_NM_NODES,
     ...(PROG_ACTIVE_PROGRAM?.nodeMapCustomNodes || []).map(cn => ({
       id: cn.nodeId, orbit: cn.orbit || null,
+      // R3.2 edge-cost flag: OPT-IN per node, absent = false (never on for
+      // built-ins, which carry no priceOrientation field at all).
+      priceOrientation: !!cn.priceOrientation,
     })),
   ];
   const nA = allNodes.find(n => n.id === fromId);
@@ -13448,7 +13494,7 @@ function _nmDvPhysics(nA, nB) {
     // (both perigee AND apogee matter). Guard: actual orbits only, not transit/escape.
     if ((oa.type === 'circular' || oa.type === 'elliptic') &&
         (ob.type === 'circular' || ob.type === 'elliptic')) {
-      const t = _nmCoaxialTransferDv(body, oa, ob);
+      const t = _nmCoaxialTransferDv(body, oa, ob, !!(nA.priceOrientation || nB.priceOrientation));
       if (!t) return null;
       if (t.total_ms < 1) return { dv: 0, note: 'Same orbit', method: 'trivial' };
       const bothCirc = oa.type === 'circular' && ob.type === 'circular';
@@ -14716,7 +14762,12 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // R3: departure state in the authored orbit plane (Ω=0 convention, same as
   // the R2 ring rendering); prograde unit = v̂ of the inclined state.
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
-  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0);
+  // R3.2: an authored departure plane (lan_deg) is fixed geometry, not a
+  // solve target — physShootLegAim's raan solve is skipped entirely for an
+  // authored fromOrbit (see there); this single-burn (samebody) construction
+  // just needs to honor the same authored raan for consistency.
+  const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0, raanFixed);
   const bodies = destPlanet ? ['Sun', 'Earth', destPlanet]
     : (destMoon ? [PROG_MOON_ORBITS[destMoon].parent, destMoon, 'Sun'] : [fromBody]);
   return {
@@ -14971,8 +15022,15 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // with a = m̂x·sin i, b = −m̂y·sin i, c = −m̂z·cos i → two roots (ascending /
   // descending geometry), both tried in the seed grid. No solution (i smaller
   // than the target's latitude) or interplanetary legs keep Ω = 0.
-  const raanRoots = [0];
-  if (burn0.kind === 'moon' && incRad > 1e-6) {
+  // R3.2 tier 1: an AUTHORED departure plane (fromOrbit.lan_deg) is fixed
+  // geometry — it IS the orbit, not a target for the solve. Skip the raan
+  // solve entirely (raanRoots = [authored], single root, no ascending/
+  // descending ambiguity to try) so a plane the fixed |Δv| genuinely cannot
+  // reach honestly reports converged:false downstream rather than silently
+  // being re-aimed onto a different plane the user didn't author.
+  const raanAuthored = fromOrbit.lan_deg != null;
+  const raanRoots = raanAuthored ? [(fromOrbit.lan_deg * Math.PI) / 180] : [0];
+  if (!raanAuthored && burn0.kind === 'moon' && incRad > 1e-6) {
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
     if (mMag > 0) {
@@ -15010,12 +15068,37 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     }
     theta0 = bestTheta;
   }
-  // 1-DOF: burn anomaly only
+  // R3.2: an AUTHORED arrival plane (toOrbit.lan_deg + .inclination) adds a
+  // plane-alignment component to the miss vector — insertion into "LLO i=90
+  // Ω=X" is a genuinely different target than "any 100 km LLO" (spec, R3.2).
+  // Conditioning: angle between the arrival h-vector (osculating, via the
+  // existing physArrivalOsculatingElements helper) and the authored target
+  // plane's normal, scaled to km by angle_rad × SOI — a hand-tuned scale that
+  // puts a full-turn plane miss (π rad) at the same order of magnitude as the
+  // SOI-scale radial/timing misses already in the vector, so no single
+  // component dominates the Newton step. Documented here per the plan's
+  // "document the constant as hand-tuned" instruction.
+  const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
+    ? { i: (toOrbit.inclination * Math.PI) / 180, raan: (toOrbit.lan_deg * Math.PI) / 180 } : null;
+  const planeMissKm = res => {
+    if (!toAuthoredPlane) return 0;
+    const muDest = PROG_BODIES[dest] && PROG_BODIES[dest].mu;
+    if (!muDest) return 0;
+    const osc = physArrivalOsculatingElements(res, dest, muDest);
+    if (!osc) return soi; // no captured arrival yet -> large residual, keeps escalation honest
+    const nA = [Math.sin(osc.raan) * Math.sin(osc.i), -Math.cos(osc.raan) * Math.sin(osc.i), Math.cos(osc.i)];
+    const nT = [Math.sin(toAuthoredPlane.raan) * Math.sin(toAuthoredPlane.i), -Math.cos(toAuthoredPlane.raan) * Math.sin(toAuthoredPlane.i), Math.cos(toAuthoredPlane.i)];
+    const dot = Math.max(-1, Math.min(1, nA[0] * nT[0] + nA[1] * nT[1] + nA[2] * nT[2]));
+    return Math.acos(dot) * soi;
+  };
+  // 1-DOF: burn anomaly only. An authored arrival plane is NOT checked by
+  // this stage (no yaw DOF to satisfy it yet) — skip its early-converged
+  // return so the ladder always escalates to the plane-aware 3-DOF stage.
   const sol1 = physShootToTarget(
     x => physAimBurnState(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
     res => [physClosestApproachKm(res, dest, overrides).dKm - targetR],
     [theta0], { propagate, tolKm, eps: [1e-3], maxIter: opts.maxIter || 12, maxProps: 12 });
-  if (sol1.converged) {
+  if (sol1.converged && !toAuthoredPlane) {
     return { converged: true, theta: sol1.x[0], pitch: 0, yaw: 0, raan: raan0, missKm: sol1.missKm, iters: sol1.iters, propagations: sol1.propagations, dof: 1 };
   }
   // 2-DOF escalation: theta + pitch; second miss component pins the
@@ -15028,17 +15111,20 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
       return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9]; // seconds × 0.5 km/s → km scale
     },
     [sol1.x[0], 0], { propagate, tolKm, eps: [1e-3, 1e-3], maxIter: opts.maxIter || 12, maxProps: 16 });
-  if (sol2.converged) {
+  if (sol2.converged && !toAuthoredPlane) {
     return { converged: true, theta: sol2.x[0], pitch: sol2.x[1] || 0, yaw: 0, raan: raan0, missKm: sol2.missKm,
       iters: sol1.iters + sol2.iters, propagations: sol1.propagations + sol2.propagations, dof: 2 };
   }
   // 3-DOF escalation (R3): theta + pitch + yaw; third miss component is the
-  // out-of-plane miss at closest approach so yaw gets a dedicated equation.
+  // out-of-plane miss at closest approach (R3) UNLESS the arrival target
+  // authored its own plane (R3.2), in which case that component becomes the
+  // plane-alignment residual above — same DOF, same slot, different target.
   const sol3 = physShootToTarget(
     x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
-      return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9, ca.dz || 0];
+      const thirdMiss = toAuthoredPlane ? planeMissKm(res) : (ca.dz || 0);
+      return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9, thirdMiss];
     },
     [sol2.x[0], sol2.x[1] || 0, 0],
     { propagate, tolKm, eps: [1e-3, 1e-3, 1e-3], maxIter: opts.maxIter || 12, maxProps: 30 });
@@ -15049,8 +15135,15 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     { s: sol2, dof: 2, pitch: sol2.x[1] || 0, yaw: 0 },
     { s: sol3, dof: 3, pitch: sol3.x[1] || 0, yaw: sol3.x[2] || 0 },
   ];
-  let bestStage = stages[0];
-  for (const st of stages) if (st.s.missKm < bestStage.s.missKm) bestStage = st;
+  // R3.2: when the arrival plane is authored, only sol3's residual actually
+  // CHECKS the plane (its 3rd component is the plane-alignment miss) — a
+  // lower-DOF stage that happens to have a small radial/timing miss says
+  // nothing about whether the authored plane was reached, so it must not win
+  // the "best stage" comparison (that would report converged:true for a leg
+  // that silently missed the authored plane).
+  const eligible = toAuthoredPlane ? [stages[2]] : stages;
+  let bestStage = eligible[0];
+  for (const st of eligible) if (st.s.missKm < bestStage.s.missKm) bestStage = st;
   return { converged: bestStage.s.converged || bestStage.s.missKm <= acceptKm,
     theta: bestStage.s.x[0], pitch: bestStage.pitch, yaw: bestStage.yaw, raan: raan0,
     missKm: bestStage.s.missKm, iters: sol1.iters + sol2.iters + sol3.iters,
@@ -15274,7 +15367,11 @@ function physRebuildMissionTrajectories(m) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * burnMet) % (2 * Math.PI);
       const incMn = ((o.inclination || 0) * Math.PI) / 180;
-      const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0);
+      // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
+      // the MNODE builder reconstructs the burn frame in THAT plane too —
+      // same precedence thread as the departure/arrival cases above.
+      const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
+      const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
       const dvVec = physAdd(physAdd(
         physScale(bs.vHat, (e.dvPro_ms || 0) / 1000),
         physScale(bs.rHat, (e.dvRad_ms || 0) / 1000)),
@@ -19621,8 +19718,13 @@ function _missionOrbitToNodeOrbit(o, planet) {
   }
   const peri = o.perigee ?? o.apogee ?? 0;
   const apo  = o.apogee ?? o.perigee ?? 0;
-  return { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
+  const spec = { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
            body: planet, perigee: peri, apogee: apo, inclination: o.inc ?? 0 };
+  // R3.2: authored orientation is OPTIONAL — only carried over when the
+  // source orbit spec actually authored it (see MATH.md §7i tier 1).
+  if (o.lan_deg != null) spec.lan_deg = o.lan_deg;
+  if (o.argp_deg != null) spec.argp_deg = o.argp_deg;
+  return spec;
 }
 
 function _missionCreateCustomNode(label, orbit, x, y, sub) {
@@ -19724,6 +19826,10 @@ function missionOpenCustomNodeModal(missionId) {
         <input type="number" id="nmnode-apo" class="field" value="185" style="width:90px;"></div>
       <div class="cfg-item"><label class="cfg-label">Inc (deg)</label>
         <input type="number" id="nmnode-inc" class="field" value="28.5" style="width:80px;"></div>
+      <div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg, optional)</label>
+        <input type="number" id="nmnode-lan" class="field" placeholder="unauthored" style="width:110px;"></div>
+      <div class="cfg-item"><label class="cfg-label">Arg. periapsis &omega; (deg, optional)</label>
+        <input type="number" id="nmnode-argp" class="field" placeholder="unauthored" style="width:130px;"></div>
     </div>
     <div id="nmnode-escape-fields" class="cfg-row" style="display:none;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
       <div class="cfg-item"><label class="cfg-label">C3 (km²/s²)</label>
@@ -19753,6 +19859,11 @@ function missionSaveCustomNode() {
     const peri = parseFloat(document.getElementById('nmnode-peri')?.value) || 0;
     const apo  = parseFloat(document.getElementById('nmnode-apo')?.value) || peri;
     orbit = { type: t, body, perigee: peri, apogee: apo, inclination: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
+    // R3.2: LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
+    const lanRaw = (document.getElementById('nmnode-lan')?.value ?? '').trim();
+    const argpRaw = (document.getElementById('nmnode-argp')?.value ?? '').trim();
+    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lan_deg = parseFloat(lanRaw);
+    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argp_deg = parseFloat(argpRaw);
   }
   // place new node in open space mid-canvas; user can drag it
   _missionCreateCustomNode(label, orbit, 550 + Math.round((Math.random()-0.5)*120), 300 + Math.round((Math.random()-0.5)*80));
@@ -19760,6 +19871,41 @@ function missionSaveCustomNode() {
   const m = _missionGet(missionId);
   const va = document.querySelector('.mcc-view-area');
   if (va && m) va.innerHTML = _missionNodeMapHTML(m);
+}
+
+// R3.2: node-card orientation badge (tooltip line) — same three-tier
+// precedence as the ring renderer's _trajRingOrientationFor (MATH.md §7i),
+// but resolved from a NODE (not a drawn ring): authored (spec carries
+// lan_deg) beats derived (a converged physics leg touched this exact
+// (body, peri, apo)) beats default (Ω=0 convention). Compact one-line text,
+// e.g. "i 5.3° Ω 141° — from flight" so users discover orientation matters.
+function _missionOrientationBadge(n, missionId) {
+  const o = n && n.orbit;
+  if (!o || o.surface || o.type === 'surface' || o.type === 'transit' || o.type === 'escape') return '';
+  const inc = o.inclination || 0;
+  if (o.lan_deg != null) {
+    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+o.lan_deg).toFixed(1)}&deg; (authored)`;
+  }
+  if (missionId != null && typeof _physTrajByMission !== 'undefined' && typeof _trajOrbitKey === 'function') {
+    const legs = (_physTrajByMission[missionId] && _physTrajByMission[missionId].legs) || [];
+    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const key = _trajOrbitKey(o.body, peri, apo);
+    for (const L of legs) {
+      if (!L.converged) continue;
+      if (L.departElements && n.id && L.fromNode === n.id) {
+        const d = L.departElements;
+        return ` — i ${(d.i * 180 / Math.PI).toFixed(1)}&deg; &Omega; ${(d.raan * 180 / Math.PI).toFixed(1)}&deg; — from flight`;
+      }
+      if (L.arrivalElements && L.dest && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[L.dest]) {
+        const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
+        const p = el.a * (1 - el.e) - Rd, a2 = el.a * (1 + el.e) - Rd;
+        if (_trajOrbitKey(L.dest, p, a2) === key) {
+          return ` — i ${(el.i * 180 / Math.PI).toFixed(1)}&deg; &Omega; ${(el.raan * 180 / Math.PI).toFixed(1)}&deg; — from flight`;
+        }
+      }
+    }
+  }
+  return ` — default (&Omega;=0)`;
 }
 
 function _missionNodeMapHTML(m) {
@@ -19869,7 +20015,7 @@ function _missionNodeMapHTML(m) {
     const sw = (isFrom || isCurrent) ? 3 : (inPath ? 2.5 : 1.5);
     const dash = n.dashed ? ' stroke-dasharray="4 3"' : '';
     const labelColor = inPath ? 'var(--text-bright)' : 'var(--text-dim)';
-    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}</title>`;
+    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}${_missionOrientationBadge(n, id)}</title>`;
     nodesHTML += `<circle cx="${x}" cy="${y}" r="${r}" fill="${stroke}" fill-opacity="0.18" stroke="${stroke}" stroke-width="${sw}"${dash}/>`;
     if (isCurrent) nodesHTML += `<circle cx="${x}" cy="${y}" r="${r + 5}" fill="none" stroke="var(--accent)" stroke-width="1" opacity="0.5"/>`;
     nodesHTML += `<text x="${x}" y="${y + 3}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="${labelColor}">${n.label}</text>`;
@@ -19888,7 +20034,7 @@ function _missionNodeMapHTML(m) {
     const sw = (isFrom || isCurrent) ? 3 : (inPath ? 2.5 : 1.5);
     const dash = n.dashed ? ' stroke-dasharray="4 3"' : '';
     const labelColor = inPath ? 'var(--text-bright)' : 'var(--text-dim)';
-    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''} (custom — right-drag to move)</title>`;
+    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}${_missionOrientationBadge(n, id)} (custom — right-drag to move)</title>`;
     nodesHTML += `<rect x="${x - r}" y="${y - r}" width="${r * 2}" height="${r * 2}" rx="3" fill="${stroke}" fill-opacity="0.18" stroke="${stroke}" stroke-width="${sw}"${dash}/>`;
     if (isCurrent) nodesHTML += `<rect x="${x - r - 4}" y="${y - r - 4}" width="${(r + 4) * 2}" height="${(r + 4) * 2}" rx="4" fill="none" stroke="var(--accent)" stroke-width="1" opacity="0.5"/>`;
     nodesHTML += `<text x="${x}" y="${y + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${labelColor}">${n.label}</text>`;
@@ -20951,7 +21097,7 @@ function _trajExtractMission(m) {
     }
   });
 
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
     if (body == null || peri == null || apo == null) return null;
     if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
@@ -20969,6 +21115,15 @@ function _trajExtractMission(m) {
       });
     }
     const rec = sc.orbits.get(key);
+    // R3.2 tier 1: an orbit spec that AUTHORED Ω/ω wins outright — stamped at
+    // ring creation so the R3.1 state-derived pass below (which only sets
+    // rec.elements when absent) can never override it. Precedence enforced by
+    // write order: authored (here) -> flight-derived (§7i pass) -> default
+    // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
+    if (!rec.elements && lan_deg != null) {
+      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
+        argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
+    }
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
     if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
     (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
@@ -20982,7 +21137,7 @@ function _trajExtractMission(m) {
       const o = v.orbit;
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
     });
   });
 
@@ -21296,6 +21451,22 @@ function _trajCullPositionOffscreen(renderX, renderY, viewportDiagPx) {
 // rendering brief. This is the ring's OWN fade authority combining with the
 // LOD ramp by simple multiplication (both describe the SAME feature, not a
 // parent/child pair, so this does not violate the one-fade-authority rule).
+/** R3.2: pure orientation resolver for a ring record — the ONE place the
+ *  three-tier precedence rule (MATH.md §7i) is decided, factored out so it's
+ *  unit-testable without constructing a full SVG. tier 1 (authored, source
+ *  'authored') and tier 2 (state-derived, source 'flight') are both carried
+ *  on rec.elements already (write-order enforced in _trajExtractMission —
+ *  authored is stamped at ring creation, before the flight-derived pass can
+ *  touch it); this function only has to fall through to tier 3 (default,
+ *  Ω=ω=0) when neither is present. Returns {i, raan, argp, source} in RADIANS. */
+function _trajRingOrientationFor(rec) {
+  if (rec && rec.elements) {
+    return { i: rec.elements.i || 0, raan: rec.elements.raan || 0, argp: rec.elements.argp || 0,
+      source: rec.elements.source || 'flight' };
+  }
+  return { i: ((rec && rec.inc) || 0) * Math.PI / 180, raan: 0, argp: 0, source: 'default' };
+}
+
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -21328,8 +21499,8 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // plane was matched to a converged physics leg's departure/arrival state
   // samples with THAT (i, raan, argp) instead of the Ω=ω=0 convention; size
   // (a, e) always stays authored (rec.peri/rec.apo above — accounting truth).
-  let incRad = (rec.inc || 0) * Math.PI / 180, raanRad = 0, argpRad = 0;
-  if (rec.elements) { incRad = rec.elements.i || 0; raanRad = rec.elements.raan || 0; argpRad = rec.elements.argp || 0; }
+  const orient = _trajRingOrientationFor(rec);
+  const incRad = orient.i, raanRad = orient.raan, argpRad = orient.argp;
   const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
   let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
   for (let k = 0; k < pts.length; k++) {
@@ -21340,7 +21511,9 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     if (y < topY) { topY = y; topX = x; }
     if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
   }
-  const incTxt = rec.elements
+  const incTxt = orient.source === 'authored'
+    ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (&Omega;,&omega; authored)`
+    : orient.source === 'flight'
     ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (plane from flight)`
     : (rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '');
   const hitArea = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';

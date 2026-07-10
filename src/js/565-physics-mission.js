@@ -152,7 +152,12 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // R3: departure state in the authored orbit plane (Ω=0 convention, same as
   // the R2 ring rendering); prograde unit = v̂ of the inclined state.
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
-  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0);
+  // R3.2: an authored departure plane (lan_deg) is fixed geometry, not a
+  // solve target — physShootLegAim's raan solve is skipped entirely for an
+  // authored fromOrbit (see there); this single-burn (samebody) construction
+  // just needs to honor the same authored raan for consistency.
+  const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0, raanFixed);
   const bodies = destPlanet ? ['Sun', 'Earth', destPlanet]
     : (destMoon ? [PROG_MOON_ORBITS[destMoon].parent, destMoon, 'Sun'] : [fromBody]);
   return {
@@ -407,8 +412,15 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // with a = m̂x·sin i, b = −m̂y·sin i, c = −m̂z·cos i → two roots (ascending /
   // descending geometry), both tried in the seed grid. No solution (i smaller
   // than the target's latitude) or interplanetary legs keep Ω = 0.
-  const raanRoots = [0];
-  if (burn0.kind === 'moon' && incRad > 1e-6) {
+  // R3.2 tier 1: an AUTHORED departure plane (fromOrbit.lan_deg) is fixed
+  // geometry — it IS the orbit, not a target for the solve. Skip the raan
+  // solve entirely (raanRoots = [authored], single root, no ascending/
+  // descending ambiguity to try) so a plane the fixed |Δv| genuinely cannot
+  // reach honestly reports converged:false downstream rather than silently
+  // being re-aimed onto a different plane the user didn't author.
+  const raanAuthored = fromOrbit.lan_deg != null;
+  const raanRoots = raanAuthored ? [(fromOrbit.lan_deg * Math.PI) / 180] : [0];
+  if (!raanAuthored && burn0.kind === 'moon' && incRad > 1e-6) {
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
     if (mMag > 0) {
@@ -446,12 +458,37 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     }
     theta0 = bestTheta;
   }
-  // 1-DOF: burn anomaly only
+  // R3.2: an AUTHORED arrival plane (toOrbit.lan_deg + .inclination) adds a
+  // plane-alignment component to the miss vector — insertion into "LLO i=90
+  // Ω=X" is a genuinely different target than "any 100 km LLO" (spec, R3.2).
+  // Conditioning: angle between the arrival h-vector (osculating, via the
+  // existing physArrivalOsculatingElements helper) and the authored target
+  // plane's normal, scaled to km by angle_rad × SOI — a hand-tuned scale that
+  // puts a full-turn plane miss (π rad) at the same order of magnitude as the
+  // SOI-scale radial/timing misses already in the vector, so no single
+  // component dominates the Newton step. Documented here per the plan's
+  // "document the constant as hand-tuned" instruction.
+  const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
+    ? { i: (toOrbit.inclination * Math.PI) / 180, raan: (toOrbit.lan_deg * Math.PI) / 180 } : null;
+  const planeMissKm = res => {
+    if (!toAuthoredPlane) return 0;
+    const muDest = PROG_BODIES[dest] && PROG_BODIES[dest].mu;
+    if (!muDest) return 0;
+    const osc = physArrivalOsculatingElements(res, dest, muDest);
+    if (!osc) return soi; // no captured arrival yet -> large residual, keeps escalation honest
+    const nA = [Math.sin(osc.raan) * Math.sin(osc.i), -Math.cos(osc.raan) * Math.sin(osc.i), Math.cos(osc.i)];
+    const nT = [Math.sin(toAuthoredPlane.raan) * Math.sin(toAuthoredPlane.i), -Math.cos(toAuthoredPlane.raan) * Math.sin(toAuthoredPlane.i), Math.cos(toAuthoredPlane.i)];
+    const dot = Math.max(-1, Math.min(1, nA[0] * nT[0] + nA[1] * nT[1] + nA[2] * nT[2]));
+    return Math.acos(dot) * soi;
+  };
+  // 1-DOF: burn anomaly only. An authored arrival plane is NOT checked by
+  // this stage (no yaw DOF to satisfy it yet) — skip its early-converged
+  // return so the ladder always escalates to the plane-aware 3-DOF stage.
   const sol1 = physShootToTarget(
     x => physAimBurnState(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
     res => [physClosestApproachKm(res, dest, overrides).dKm - targetR],
     [theta0], { propagate, tolKm, eps: [1e-3], maxIter: opts.maxIter || 12, maxProps: 12 });
-  if (sol1.converged) {
+  if (sol1.converged && !toAuthoredPlane) {
     return { converged: true, theta: sol1.x[0], pitch: 0, yaw: 0, raan: raan0, missKm: sol1.missKm, iters: sol1.iters, propagations: sol1.propagations, dof: 1 };
   }
   // 2-DOF escalation: theta + pitch; second miss component pins the
@@ -464,17 +501,20 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
       return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9]; // seconds × 0.5 km/s → km scale
     },
     [sol1.x[0], 0], { propagate, tolKm, eps: [1e-3, 1e-3], maxIter: opts.maxIter || 12, maxProps: 16 });
-  if (sol2.converged) {
+  if (sol2.converged && !toAuthoredPlane) {
     return { converged: true, theta: sol2.x[0], pitch: sol2.x[1] || 0, yaw: 0, raan: raan0, missKm: sol2.missKm,
       iters: sol1.iters + sol2.iters, propagations: sol1.propagations + sol2.propagations, dof: 2 };
   }
   // 3-DOF escalation (R3): theta + pitch + yaw; third miss component is the
-  // out-of-plane miss at closest approach so yaw gets a dedicated equation.
+  // out-of-plane miss at closest approach (R3) UNLESS the arrival target
+  // authored its own plane (R3.2), in which case that component becomes the
+  // plane-alignment residual above — same DOF, same slot, different target.
   const sol3 = physShootToTarget(
     x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
-      return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9, ca.dz || 0];
+      const thirdMiss = toAuthoredPlane ? planeMissKm(res) : (ca.dz || 0);
+      return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9, thirdMiss];
     },
     [sol2.x[0], sol2.x[1] || 0, 0],
     { propagate, tolKm, eps: [1e-3, 1e-3, 1e-3], maxIter: opts.maxIter || 12, maxProps: 30 });
@@ -485,8 +525,15 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     { s: sol2, dof: 2, pitch: sol2.x[1] || 0, yaw: 0 },
     { s: sol3, dof: 3, pitch: sol3.x[1] || 0, yaw: sol3.x[2] || 0 },
   ];
-  let bestStage = stages[0];
-  for (const st of stages) if (st.s.missKm < bestStage.s.missKm) bestStage = st;
+  // R3.2: when the arrival plane is authored, only sol3's residual actually
+  // CHECKS the plane (its 3rd component is the plane-alignment miss) — a
+  // lower-DOF stage that happens to have a small radial/timing miss says
+  // nothing about whether the authored plane was reached, so it must not win
+  // the "best stage" comparison (that would report converged:true for a leg
+  // that silently missed the authored plane).
+  const eligible = toAuthoredPlane ? [stages[2]] : stages;
+  let bestStage = eligible[0];
+  for (const st of eligible) if (st.s.missKm < bestStage.s.missKm) bestStage = st;
   return { converged: bestStage.s.converged || bestStage.s.missKm <= acceptKm,
     theta: bestStage.s.x[0], pitch: bestStage.pitch, yaw: bestStage.yaw, raan: raan0,
     missKm: bestStage.s.missKm, iters: sol1.iters + sol2.iters + sol3.iters,
@@ -710,7 +757,11 @@ function physRebuildMissionTrajectories(m) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * burnMet) % (2 * Math.PI);
       const incMn = ((o.inclination || 0) * Math.PI) / 180;
-      const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0);
+      // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
+      // the MNODE builder reconstructs the burn frame in THAT plane too —
+      // same precedence thread as the departure/arrival cases above.
+      const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
+      const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
       const dvVec = physAdd(physAdd(
         physScale(bs.vHat, (e.dvPro_ms || 0) / 1000),
         physScale(bs.rHat, (e.dvRad_ms || 0) / 1000)),

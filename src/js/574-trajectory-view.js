@@ -456,7 +456,7 @@ function _trajExtractMission(m) {
     }
   });
 
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
     if (body == null || peri == null || apo == null) return null;
     if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
@@ -474,6 +474,15 @@ function _trajExtractMission(m) {
       });
     }
     const rec = sc.orbits.get(key);
+    // R3.2 tier 1: an orbit spec that AUTHORED Ω/ω wins outright — stamped at
+    // ring creation so the R3.1 state-derived pass below (which only sets
+    // rec.elements when absent) can never override it. Precedence enforced by
+    // write order: authored (here) -> flight-derived (§7i pass) -> default
+    // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
+    if (!rec.elements && lan_deg != null) {
+      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
+        argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
+    }
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
     if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
     (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
@@ -487,7 +496,7 @@ function _trajExtractMission(m) {
       const o = v.orbit;
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
     });
   });
 
@@ -801,6 +810,22 @@ function _trajCullPositionOffscreen(renderX, renderY, viewportDiagPx) {
 // rendering brief. This is the ring's OWN fade authority combining with the
 // LOD ramp by simple multiplication (both describe the SAME feature, not a
 // parent/child pair, so this does not violate the one-fade-authority rule).
+/** R3.2: pure orientation resolver for a ring record — the ONE place the
+ *  three-tier precedence rule (MATH.md §7i) is decided, factored out so it's
+ *  unit-testable without constructing a full SVG. tier 1 (authored, source
+ *  'authored') and tier 2 (state-derived, source 'flight') are both carried
+ *  on rec.elements already (write-order enforced in _trajExtractMission —
+ *  authored is stamped at ring creation, before the flight-derived pass can
+ *  touch it); this function only has to fall through to tier 3 (default,
+ *  Ω=ω=0) when neither is present. Returns {i, raan, argp, source} in RADIANS. */
+function _trajRingOrientationFor(rec) {
+  if (rec && rec.elements) {
+    return { i: rec.elements.i || 0, raan: rec.elements.raan || 0, argp: rec.elements.argp || 0,
+      source: rec.elements.source || 'flight' };
+  }
+  return { i: ((rec && rec.inc) || 0) * Math.PI / 180, raan: 0, argp: 0, source: 'default' };
+}
+
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -833,8 +858,8 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // plane was matched to a converged physics leg's departure/arrival state
   // samples with THAT (i, raan, argp) instead of the Ω=ω=0 convention; size
   // (a, e) always stays authored (rec.peri/rec.apo above — accounting truth).
-  let incRad = (rec.inc || 0) * Math.PI / 180, raanRad = 0, argpRad = 0;
-  if (rec.elements) { incRad = rec.elements.i || 0; raanRad = rec.elements.raan || 0; argpRad = rec.elements.argp || 0; }
+  const orient = _trajRingOrientationFor(rec);
+  const incRad = orient.i, raanRad = orient.raan, argpRad = orient.argp;
   const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
   let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
   for (let k = 0; k < pts.length; k++) {
@@ -845,7 +870,9 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     if (y < topY) { topY = y; topX = x; }
     if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
   }
-  const incTxt = rec.elements
+  const incTxt = orient.source === 'authored'
+    ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (&Omega;,&omega; authored)`
+    : orient.source === 'flight'
     ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (plane from flight)`
     : (rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '');
   const hitArea = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';

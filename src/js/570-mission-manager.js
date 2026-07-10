@@ -4167,8 +4167,13 @@ function _missionOrbitToNodeOrbit(o, planet) {
   }
   const peri = o.perigee ?? o.apogee ?? 0;
   const apo  = o.apogee ?? o.perigee ?? 0;
-  return { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
+  const spec = { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
            body: planet, perigee: peri, apogee: apo, inclination: o.inc ?? 0 };
+  // R3.2: authored orientation is OPTIONAL — only carried over when the
+  // source orbit spec actually authored it (see MATH.md §7i tier 1).
+  if (o.lan_deg != null) spec.lan_deg = o.lan_deg;
+  if (o.argp_deg != null) spec.argp_deg = o.argp_deg;
+  return spec;
 }
 
 function _missionCreateCustomNode(label, orbit, x, y, sub) {
@@ -4270,6 +4275,10 @@ function missionOpenCustomNodeModal(missionId) {
         <input type="number" id="nmnode-apo" class="field" value="185" style="width:90px;"></div>
       <div class="cfg-item"><label class="cfg-label">Inc (deg)</label>
         <input type="number" id="nmnode-inc" class="field" value="28.5" style="width:80px;"></div>
+      <div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg, optional)</label>
+        <input type="number" id="nmnode-lan" class="field" placeholder="unauthored" style="width:110px;"></div>
+      <div class="cfg-item"><label class="cfg-label">Arg. periapsis &omega; (deg, optional)</label>
+        <input type="number" id="nmnode-argp" class="field" placeholder="unauthored" style="width:130px;"></div>
     </div>
     <div id="nmnode-escape-fields" class="cfg-row" style="display:none;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
       <div class="cfg-item"><label class="cfg-label">C3 (km²/s²)</label>
@@ -4299,6 +4308,11 @@ function missionSaveCustomNode() {
     const peri = parseFloat(document.getElementById('nmnode-peri')?.value) || 0;
     const apo  = parseFloat(document.getElementById('nmnode-apo')?.value) || peri;
     orbit = { type: t, body, perigee: peri, apogee: apo, inclination: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
+    // R3.2: LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
+    const lanRaw = (document.getElementById('nmnode-lan')?.value ?? '').trim();
+    const argpRaw = (document.getElementById('nmnode-argp')?.value ?? '').trim();
+    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lan_deg = parseFloat(lanRaw);
+    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argp_deg = parseFloat(argpRaw);
   }
   // place new node in open space mid-canvas; user can drag it
   _missionCreateCustomNode(label, orbit, 550 + Math.round((Math.random()-0.5)*120), 300 + Math.round((Math.random()-0.5)*80));
@@ -4306,6 +4320,41 @@ function missionSaveCustomNode() {
   const m = _missionGet(missionId);
   const va = document.querySelector('.mcc-view-area');
   if (va && m) va.innerHTML = _missionNodeMapHTML(m);
+}
+
+// R3.2: node-card orientation badge (tooltip line) — same three-tier
+// precedence as the ring renderer's _trajRingOrientationFor (MATH.md §7i),
+// but resolved from a NODE (not a drawn ring): authored (spec carries
+// lan_deg) beats derived (a converged physics leg touched this exact
+// (body, peri, apo)) beats default (Ω=0 convention). Compact one-line text,
+// e.g. "i 5.3° Ω 141° — from flight" so users discover orientation matters.
+function _missionOrientationBadge(n, missionId) {
+  const o = n && n.orbit;
+  if (!o || o.surface || o.type === 'surface' || o.type === 'transit' || o.type === 'escape') return '';
+  const inc = o.inclination || 0;
+  if (o.lan_deg != null) {
+    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+o.lan_deg).toFixed(1)}&deg; (authored)`;
+  }
+  if (missionId != null && typeof _physTrajByMission !== 'undefined' && typeof _trajOrbitKey === 'function') {
+    const legs = (_physTrajByMission[missionId] && _physTrajByMission[missionId].legs) || [];
+    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const key = _trajOrbitKey(o.body, peri, apo);
+    for (const L of legs) {
+      if (!L.converged) continue;
+      if (L.departElements && n.id && L.fromNode === n.id) {
+        const d = L.departElements;
+        return ` — i ${(d.i * 180 / Math.PI).toFixed(1)}&deg; &Omega; ${(d.raan * 180 / Math.PI).toFixed(1)}&deg; — from flight`;
+      }
+      if (L.arrivalElements && L.dest && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[L.dest]) {
+        const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
+        const p = el.a * (1 - el.e) - Rd, a2 = el.a * (1 + el.e) - Rd;
+        if (_trajOrbitKey(L.dest, p, a2) === key) {
+          return ` — i ${(el.i * 180 / Math.PI).toFixed(1)}&deg; &Omega; ${(el.raan * 180 / Math.PI).toFixed(1)}&deg; — from flight`;
+        }
+      }
+    }
+  }
+  return ` — default (&Omega;=0)`;
 }
 
 function _missionNodeMapHTML(m) {
@@ -4415,7 +4464,7 @@ function _missionNodeMapHTML(m) {
     const sw = (isFrom || isCurrent) ? 3 : (inPath ? 2.5 : 1.5);
     const dash = n.dashed ? ' stroke-dasharray="4 3"' : '';
     const labelColor = inPath ? 'var(--text-bright)' : 'var(--text-dim)';
-    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}</title>`;
+    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}${_missionOrientationBadge(n, id)}</title>`;
     nodesHTML += `<circle cx="${x}" cy="${y}" r="${r}" fill="${stroke}" fill-opacity="0.18" stroke="${stroke}" stroke-width="${sw}"${dash}/>`;
     if (isCurrent) nodesHTML += `<circle cx="${x}" cy="${y}" r="${r + 5}" fill="none" stroke="var(--accent)" stroke-width="1" opacity="0.5"/>`;
     nodesHTML += `<text x="${x}" y="${y + 3}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="${labelColor}">${n.label}</text>`;
@@ -4434,7 +4483,7 @@ function _missionNodeMapHTML(m) {
     const sw = (isFrom || isCurrent) ? 3 : (inPath ? 2.5 : 1.5);
     const dash = n.dashed ? ' stroke-dasharray="4 3"' : '';
     const labelColor = inPath ? 'var(--text-bright)' : 'var(--text-dim)';
-    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''} (custom — right-drag to move)</title>`;
+    nodesHTML += `<g style="cursor:pointer" onclick="missionNodeClick('${id}','${n.id}')" onmousedown="missionNmNodeDown(event,'${id}','${n.id}')" oncontextmenu="return false;"><title>${n.label}${n.sub ? ' — ' + n.sub : ''}${_missionOrientationBadge(n, id)} (custom — right-drag to move)</title>`;
     nodesHTML += `<rect x="${x - r}" y="${y - r}" width="${r * 2}" height="${r * 2}" rx="3" fill="${stroke}" fill-opacity="0.18" stroke="${stroke}" stroke-width="${sw}"${dash}/>`;
     if (isCurrent) nodesHTML += `<rect x="${x - r - 4}" y="${y - r - 4}" width="${(r + 4) * 2}" height="${(r + 4) * 2}" rx="4" fill="none" stroke="var(--accent)" stroke-width="1" opacity="0.5"/>`;
     nodesHTML += `<text x="${x}" y="${y + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${labelColor}">${n.label}</text>`;

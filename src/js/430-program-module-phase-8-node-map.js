@@ -197,7 +197,7 @@ function _nmOrbitVAtR(body, orbit, r_km) {
  * Reads perigee/apogee directly (not the type label), so a slightly-elliptical "circular"
  * node is still handled correctly.
  */
-function _nmCoaxialTransferDv(body, oa, ob) {
+function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   const b = PROG_BODIES[body]; if (!b) return null;
   const apsOf = o => {
     const r1 = b.R + (o.perigee ?? o.apogee ?? 0), r2 = b.R + (o.apogee ?? o.perigee ?? 0);
@@ -220,6 +220,27 @@ function _nmCoaxialTransferDv(body, oa, ob) {
       if (d < best) { best = d; dv1b = d; dv2b = 0; single = true; }
     }
   }));
+  // R3.2 edge-cost flag (guarded, OPT-IN, default OFF): today this transfer
+  // is purely coaxial — it never charges anything for the two orbits being
+  // in different planes (critique 5's "assumes latitude-derived planes" gap,
+  // here it's worse — no plane term at all for same-body node edges). When
+  // EITHER node's spec sets priceOrientation:true, add the REAL plane-change
+  // angle between the authored {i, Ω} pairs (progDvPlaneChangeFull, spherical
+  // law of cosines) at burn 1's radius, combined vectorially with the
+  // existing tangential burn (progDvCombined's sqrt-sum convention) — this
+  // repricing is OFF by default so no existing mission's ΔV total moves;
+  // absent lan_deg on either side is treated as Ω=0 (same convention the
+  // renderer/physics fall back to).
+  if (priceOrientation && best < Infinity) {
+    const i1 = oa.inclination || 0, lan1 = oa.lan_deg || 0;
+    const i2 = ob.inclination || 0, lan2 = ob.lan_deg || 0;
+    if (Math.abs(i1 - i2) > 1e-9 || Math.abs(lan1 - lan2) > 1e-9) {
+      const dvPlane_kms = progDvPlaneChangeFull(body, Math.min(A.rp, A.ra) - b.R, i1, lan1, i2, lan2) / 1000;
+      const dv1Combined_kms = Math.sqrt(dv1b * dv1b + dvPlane_kms * dvPlane_kms);
+      best = dv1Combined_kms + dv2b; // plane surcharge folds into burn 1, burn 2 unchanged
+      dv1b = dv1Combined_kms;
+    }
+  }
   return { total_ms: best * 1000, dv1_ms: dv1b * 1000, dv2_ms: dv2b * 1000, single };
 }
 
@@ -247,6 +268,9 @@ function progNmComputeEdgeDv(fromId, toId) {
     ...PROG_NM_NODES,
     ...(PROG_ACTIVE_PROGRAM?.nodeMapCustomNodes || []).map(cn => ({
       id: cn.nodeId, orbit: cn.orbit || null,
+      // R3.2 edge-cost flag: OPT-IN per node, absent = false (never on for
+      // built-ins, which carry no priceOrientation field at all).
+      priceOrientation: !!cn.priceOrientation,
     })),
   ];
   const nA = allNodes.find(n => n.id === fromId);
@@ -321,7 +345,7 @@ function _nmDvPhysics(nA, nB) {
     // (both perigee AND apogee matter). Guard: actual orbits only, not transit/escape.
     if ((oa.type === 'circular' || oa.type === 'elliptic') &&
         (ob.type === 'circular' || ob.type === 'elliptic')) {
-      const t = _nmCoaxialTransferDv(body, oa, ob);
+      const t = _nmCoaxialTransferDv(body, oa, ob, !!(nA.priceOrientation || nB.priceOrientation));
       if (!t) return null;
       if (t.total_ms < 1) return { dv: 0, note: 'Same orbit', method: 'trivial' };
       const bothCirc = oa.type === 'circular' && ob.type === 'circular';

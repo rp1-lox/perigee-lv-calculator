@@ -142,6 +142,10 @@ function loadOrbitPreset(o,key){
     const inc=o.incTracksLat&&site ? siteEffectiveInc(site) : o.inc;
     document.getElementById('inclination').value=inc;
     document.getElementById('parking-alt').value=o.parking??185;
+    // R3.2: authored orientation round-trips; absent fields clear the inputs
+    // back to blank (unauthored), not 0 — see collectCurrentOrbit/gvOpt.
+    document.getElementById('orbit-lan').value=o.lan_deg!=null?o.lan_deg:'';
+    document.getElementById('orbit-argp').value=o.argp_deg!=null?o.argp_deg:'';
   }
   buildOrbitCategories();
   drawOrbitDiagram();
