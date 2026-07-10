@@ -776,6 +776,9 @@ function physRebuildMissionTrajectories(m) {
       const el = physStateToElements(state.r, state.v, mu);
       if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(o.body) * 0.8)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
+      // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
+      // what the gizmo's full-fidelity preview showed before commit.
+      else if (el && (el.a < 0 || el.ra >= physSoiRadius(o.body) * 0.8)) horizon = 90 * 86400;
       const res = physPropagateSegment(state, burnMet, burnMet + horizon,
         { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 256 });
       legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,

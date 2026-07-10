@@ -15583,6 +15583,9 @@ function physRebuildMissionTrajectories(m) {
       const el = physStateToElements(state.r, state.v, mu);
       if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(o.body) * 0.8)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
+      // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
+      // what the gizmo's full-fidelity preview showed before commit.
+      else if (el && (el.a < 0 || el.ra >= physSoiRadius(o.body) * 0.8)) horizon = 90 * 86400;
       const res = physPropagateSegment(state, burnMet, burnMet + horizon,
         { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 256 });
       legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,
@@ -21856,6 +21859,12 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0); // R2: samples are 3D (Moon-frame patches carry real z)
     const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
+    // R3.5.2 (viewClampUnits): drop samples far outside the viewport instead
+    // of drawing them — keeps the on-screen portion of an oversize leg visible
+    // at close zoom WITHOUT emitting huge coordinates (software-rasterizer
+    // hazard, see the render-unit invariant) and without the oversize cull
+    // below hiding the whole leg. The run simply breaks where it exits.
+    if (opts.viewClampUnits && (Math.abs(x) > opts.viewClampUnits || Math.abs(y) > opts.viewClampUnits)) { cur = null; lastPt = null; continue; }
     // Frame handoff: BREAK the polyline (the two gluings disagree by the
     // body's drift between sample.t and viewTime — a straight chord across
     // that gap reads as a phantom burn; user-reported) and record a seam
@@ -21957,6 +21966,34 @@ function _trajPhysInjectionLegFor(m, arrAuthIdx, body) {
  *  leg's schematic record has met === metArrive; the polyline spans the real
  *  coast). Returns the SVG string, '' when LOD-hidden, or null when the
  *  physics leg has nothing drawable in this frame (schematic fallback). */
+// ── P4/R3.5.2: MNODE (vector-burn) legs — shared renderer. Called from TWO
+// places with different filters: (a) inside _trajBodyFrameContent for the
+// leg's home body (all mnode legs — the normal zoomed-in case, faded by the
+// caller's zoiAlpha wrapper like all embedded content), and (b) from the
+// planet loop OUTSIDE the zoiAlpha gate for MULTI-FRAME (escape) legs only,
+// at opacity (1 − zoiAlpha) — so an escape trajectory stays visible at
+// heliocentric zoom where the home body's zone-of-influence content has
+// faded to nothing (the two calls cross-fade; no double-draw at either end).
+function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, onlyMultiFrame) {
+  const id = m && m.missionId;
+  if (!id || typeof _physTrajByMission === 'undefined' || !_physTrajByMission[id]) return '';
+  let out = '';
+  (_physTrajByMission[id].legs || []).forEach(L => {
+    if (L.kind !== 'mnode' || !L.samples || !L.samples.length) return;
+    const home = L.homeFrame || (L.samples[0] && L.samples[0].frame);
+    if (home !== body) return;
+    if (onlyMultiFrame && !L.samples.some(s0 => s0.frame !== home)) return;
+    const ev = (m.log || [])[L.authIdx];
+    const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
+    const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
+    const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
+    const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
+      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: true, arrMarker: false, calib, noHighFade: true });
+    if (phys) out += phys;
+  });
+  return out;
+}
+
 function _trajPhysLegRender(ctx) {
   const { m, leg, physLeg, body, ox, oy, zoom, viewportDiagPx, vt, emphasized } = ctx;
   const id = m.missionId;
@@ -21975,14 +22012,22 @@ function _trajPhysLegRender(ctx) {
     const q = _trajProj3(w.x - bodyWorld.x, w.y - bodyWorld.y, (w.z || 0) - (bodyWorld.z || 0)); // R2: 3D world delta
     return (anchorCache[frame] = { x: ox + q.x * zoom, y: oy + q.y * zoom });
   };
-  const poly = _trajPolylineSVG(physLeg, anchorOf, zoom, { clipT, viewportDiagPx });
+  // MNODE legs (noHighFade): clamp to a 3-viewbox neighborhood so the near-
+  // body portion draws at parking-orbit zoom (see viewClampUnits above).
+  const poly = _trajPolylineSVG(physLeg, anchorOf, zoom, { clipT, viewportDiagPx, viewClampUnits: ctx.noHighFade ? 3 * _TRAJ_VB : null });
   if (!poly) return null;
   if (poly.hidden) return '';
   const tDep = physLeg.met != null ? physLeg.met : poly.tFirst;
   const tArr = isFinite(clipT) ? clipT : poly.tLast;
   const legState = vt >= tArr ? 'history' : (vt >= tDep ? 'current' : 'planned');
   const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
-  const alpha = emphasized ? 1 : _trajLodOpacity(poly.extentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
+  // R3.5.2: MNODE legs opt out of the HIGH-side fade (ctx.noHighFade) — a
+  // vector burn's near-body portion is real geometry the user needs to see at
+  // parking-orbit zoom (its extent is "too big" for the transferArc window
+  // there, which used to fade the leg AND its burn marker to nothing until
+  // the user zoomed way out). Low-side fade (sub-pixel legs) still applies.
+  const alpha = emphasized ? 1 : _trajLodOpacity(poly.extentPx, _TRAJ_LOD_WIN.transferArc[0],
+    ctx.noHighFade ? Infinity : _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
   if (alpha <= 0) return '';
   const clickIdx = leg.authIdx;
   const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)"` : '';
@@ -22505,20 +22550,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   // ballistic path IS the content — user-authored intent, drawn wherever it
   // goes. Same _trajPhysLegRender path (continuous multi-frame anchorOf
   // gluing, transferArc LOD window, click selects the MNODE event).
-  if (typeof _physTrajByMission !== 'undefined' && _physTrajByMission[id]) {
-    (_physTrajByMission[id].legs || []).forEach(L => {
-      if (L.kind !== 'mnode' || !L.samples || !L.samples.length) return;
-      const home = L.homeFrame || (L.samples[0] && L.samples[0].frame);
-      if (home !== body) return;
-      const ev = (m.log || [])[L.authIdx];
-      const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
-      const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
-      const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
-      const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
-        emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: true, arrMarker: false, calib });
-      if (phys) out += phys;
-    });
-  }
+  out += _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, false);
 
   // surface events (fixed-px marker + LOD-gated label, like burn markers)
   sc.surface.forEach(s => {
@@ -22742,6 +22774,12 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     if (zoiAlpha > 0) {
       const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
       s += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
+    }
+    // R3.5.2: escape (multi-frame) MNODE legs must survive heliocentric zoom —
+    // cross-fade them back in as the zone-of-influence content fades out.
+    if (zoiAlpha < 1 && m) {
+      const escSvg = _trajMnodeLegsSVG(m, body, zoom, p.x, p.y, viewportDiagPx, viewT, calib, _trajSelectedAuthIdx(m), true);
+      if (escSvg) s += `<g opacity="${(1 - zoiAlpha).toFixed(3)}">${escSvg}</g>`;
     }
     emit(p.depth, s);
   });
