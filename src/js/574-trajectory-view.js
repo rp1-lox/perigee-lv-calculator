@@ -113,18 +113,40 @@ function _trajMoonsOf(body) {
 
 // ── camera helpers ─────────────────────────────────────────────────────────
 function _trajCam(id) {
-  return _trajCamByMission[id] || { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _TRAJ_VB };
+  return _trajCamByMission[id] || { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _TRAJ_VB, az: 0, el: Math.PI / 2 };
 }
 function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
+
+// ── R2: 3D projection (ONE seam) ────────────────────────────────────────────
+// Pure orthographic camera: rotate about the ecliptic normal by az, then tilt
+// from top-down by (π/2 − el) about the screen-x axis, drop the view axis as
+// depth. At el = π/2, az = 0 this is EXACTLY the pre-R2 mapping (u=x, v=y) —
+// 3D is a superset, not a re-projection. Linear, so planar LOCAL geometry
+// (arcs, spurs, ring offsets around a body) can be projected as offsets and
+// added to the body's already-projected anchor.
+function _trajProjectVec(x, y, z, az, el) {
+  const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
+  const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
+  const ct = Math.cos(t), st = Math.sin(t);
+  const xa = x * ca - y * sa, ya = x * sa + y * ca;
+  return { x: xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
+}
+// Per-render-pass projection context (set by _trajWorldSVG from the camera;
+// helpers below read it so every emission site shares ONE projection).
+let _trajProjCtx = { az: 0, el: Math.PI / 2 };
+/** Project a 3D vector (any consistent units) through the pass camera. */
+function _trajProj3(x, y, z) { return _trajProjectVec(x, y, z, _trajProjCtx.az, _trajProjCtx.el); }
+/** Project a PLANAR (ecliptic z=0) local offset through the pass camera. */
+function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProjCtx.az, _trajProjCtx.el); return { x: p.x, y: p.y }; }
 
 // Effective camera center in heliocentric km at the given view time — the
 // ONE place anchor + offset combine. Everything else in the render path
 // subtracts this from world km to get floating-origin render coords.
-// `overrides` is a retired R1 vestige (planet-phase calibration is gone);
-// accepted and ignored so existing call sites keep compiling.
+// z rides along (R2): the anchor body's real out-of-plane position keeps it
+// centered under tilt. `overrides` is a retired R1 vestige, ignored.
 function _trajCamCenterKm(cam, viewT, overrides) {
   const p = progBodyWorldPos(cam.anchorBody, viewT);
-  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0) };
+  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0), z: p.z || 0 };
 }
 
 // Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
@@ -179,7 +201,8 @@ function _trajFitWKmForBody(body, m) {
 function trajSetFocus(id, body) {
   const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
   const wKm = _trajFitWKmForBody(body, m);
-  _trajCamByMission[id] = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm };
+  const prev = _trajCam(id); // fly-to keeps the user's 3D orientation
+  _trajCamByMission[id] = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
   missionRenderDetail();
 }
 
@@ -187,7 +210,8 @@ function trajResetView(id) {
   const cam = _trajCam(id);
   const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
   const wKm = _trajFitWKmForBody(cam.anchorBody, m);
-  _trajCamByMission[id] = { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm };
+  // Reset returns to the canonical top-down view (az/el included).
+  _trajCamByMission[id] = { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 };
   missionRenderDetail();
 }
 
@@ -223,6 +247,8 @@ function _trajApplyCam(id, cam) {
       overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
     }
   }
+  const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
+  if (footEl) footEl.innerHTML = _trajFooterHTML(cam);
 }
 
 function trajWheelZoom(ev, id) {
@@ -246,16 +272,21 @@ function trajWheelZoom(ev, id) {
       const h = cam.wKm * aspect;
       const fx = (ev.clientX - rect.left) / rect.width;  // 0..1 across the svg
       const fy = (ev.clientY - rect.top) / rect.height;
-      // render-space point under cursor (render coords are offset-relative
-      // since the anchor's own world pos is the floating origin)
-      const rx = (-cam.wKm / 2) + fx * cam.wKm;
-      const ry = (-h / 2) + fy * h;
+      // Screen-plane point under the cursor, offset-relative. R2: the pan
+      // offset lives in the ECLIPTIC plane — un-project the screen delta
+      // (divide v by sin(el) to undo foreshortening, then inverse-az rotate)
+      // so cursor-anchored zoom keeps tracking under tilt.
+      const el0 = cam.el != null ? cam.el : Math.PI / 2;
+      const sinEl = Math.max(Math.sin(el0), 0.15);
+      const ca = Math.cos(cam.az || 0), sa = Math.sin(cam.az || 0);
       const nextH = nextW * aspect;
-      offX = offX + rx - (fx - 0.5) * nextW;
-      offY = offY + ry - (fy - 0.5) * nextH;
+      const su = ((-cam.wKm / 2) + fx * cam.wKm) - (fx - 0.5) * nextW;
+      const sv = (((-h / 2) + fy * h) - (fy - 0.5) * nextH) / sinEl;
+      offX += su * ca + sv * sa;
+      offY += -su * sa + sv * ca;
     }
   }
-  _trajApplyCam(id, { anchorBody: cam.anchorBody, relOffsetKm: { x: offX, y: offY }, wKm: nextW });
+  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: offX, y: offY }, wKm: nextW }));
 }
 
 let _trajDrag = null;
@@ -265,33 +296,55 @@ let _trajDrag = null;
 // disambiguation, per the node map / library-browser _didDrag pattern).
 let _trajJustDragged = false;
 function trajPanStart(ev, id) {
-  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
+  // R2: Shift-drag or right-button drag rotates the 3D camera; plain drag pans.
+  const mode = (ev.shiftKey || ev.button === 2) ? 'rotate' : 'pan';
+  _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
   const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
   if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
   ev.preventDefault();
 }
+// Rotate re-renders per move (same cost class as wheel zoom); throttle to
+// ~one render per animation-frame-ish interval so slow machines stay live.
+let _trajRotLastMs = 0;
 function trajPanMove(ev) {
   if (!_trajDrag) return;
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
+  if (_trajDrag.mode === 'rotate') {
+    const cam0 = _trajDrag.cam0;
+    const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
+    const el = Math.max(0.087, Math.min(Math.PI / 2, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
+    const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
+    const now = performance.now();
+    if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
+    else _trajCamByMission[_trajDrag.id] = cam;
+    return;
+  }
   const rectW = _trajDrag.rectW || 400, rectH = _trajDrag.rectH || 400;
   // Screen-px delta -> world-unit (km) delta at the CURRENT camera width (drag
   // pan shifts relOffsetKm directly, opposite the pointer delta since dragging
-  // right should reveal content to the left).
-  const worldDx = -dx * (_trajDrag.cam0.wKm / rectW);
+  // right should reveal content to the left). Under tilt, a screen-vertical px
+  // spans MORE ecliptic km (foreshortening) — divide by sin(el), and rotate
+  // the screen delta back through az so panning still tracks the cursor.
+  const cam0 = _trajDrag.cam0;
+  const el0 = cam0.el != null ? cam0.el : Math.PI / 2;
+  const sinEl = Math.max(Math.sin(el0), 0.15);
   const aspect = rectH / rectW;
-  const worldDy = -dy * (_trajDrag.cam0.wKm * aspect / rectH);
-  const cam = { anchorBody: _trajDrag.cam0.anchorBody, relOffsetKm: { x: _trajDrag.cam0.relOffsetKm.x + worldDx, y: _trajDrag.cam0.relOffsetKm.y + worldDy }, wKm: _trajDrag.cam0.wKm };
+  const su = -dx * (cam0.wKm / rectW);
+  const sv = -dy * (cam0.wKm * aspect / rectH) / sinEl;
+  const ca = Math.cos(cam0.az || 0), sa = Math.sin(cam0.az || 0);
+  const worldDx = su * ca + sv * sa, worldDy = -su * sa + sv * ca; // inverse az rotation
+  const cam = Object.assign({}, cam0, { relOffsetKm: { x: cam0.relOffsetKm.x + worldDx, y: cam0.relOffsetKm.y + worldDy } });
   _trajCamByMission[_trajDrag.id] = cam;
   const svgEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${_trajDrag.id}"] svg.traj-svg`);
   if (svgEl) {
     // Geometry was emitted in render units at cam0's center; slide the
-    // constant-unit viewBox by the offset delta converted km -> units.
-    const zoom0 = _trajZoomFromCam(_trajDrag.cam0);
-    const du = (cam.relOffsetKm.x - _trajDrag.cam0.relOffsetKm.x) * zoom0;
-    const dv = (cam.relOffsetKm.y - _trajDrag.cam0.relOffsetKm.y) * zoom0;
+    // constant-unit viewBox by the PROJECTED offset delta (projection is
+    // linear and the pan offset is planar, so this stays exact under tilt).
+    const zoom0 = _trajZoomFromCam(cam0);
+    const q = _trajProjectVec(worldDx, worldDy, 0, cam0.az || 0, el0);
     const vbH = _TRAJ_VB * aspect;
-    svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2 + du).toFixed(3)} ${(-vbH / 2 + dv).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
+    svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2 + q.x * zoom0).toFixed(3)} ${(-vbH / 2 + q.y * zoom0).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
   }
   // Overlay anchors are NOT re-projected during the drag (that would re-run
   // LOD/collision every mousemove tick) — but pan is a pure translation, so
@@ -403,7 +456,7 @@ function _trajExtractMission(m) {
     }
   });
 
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc) => {
     if (body == null || peri == null || apo == null) return null;
     if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
@@ -413,6 +466,7 @@ function _trajExtractMission(m) {
     if (!sc.orbits.has(key)) {
       sc.orbits.set(key, {
         key, body, peri, apo,
+        inc: inc || 0,   // authored inclination (deg) — drawn for real since R2 (Ω,ω assumed 0)
         label: _trajOrbitLabel(body, peri, apo),
         colors: new Set(), names: new Set(),
         firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
@@ -433,7 +487,7 @@ function _trajExtractMission(m) {
       const o = v.orbit;
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination);
     });
   });
 
@@ -714,8 +768,6 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const zoom = opts.zoom || 1;
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
-  const g = _trajEllipseGeom(rec.peri, rec.apo, R);
-  const isCircle = Math.abs(rec.apo - rec.peri) < Math.max(1, R * 0.001);
   const emphasized = !!opts.emphasized;
   const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
   const strokeW = emphasized ? 1.4 : 0.7;
@@ -727,36 +779,36 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
-  if (isCircle) {
-    const r = ((rec.peri + rec.apo) / 2 + R) * scale; // scale = km->render units (zoom folded in by caller)
-    const screenSize = r;
-    if (_trajCullByExtent(screenSize)) return '';
-    if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
-    const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
-    const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
-    if (lodAlpha <= 0) return '';
-    const hitArea = opts.authIdx != null ? `<circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
-    const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
-    _trajRegisterLabel(ox, oy - r, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
-    if (coastTxt) _trajRegisterLabel(ox - g.c * scale, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
-    return `<g${clickAttr}>
-      <circle cx="${ox}" cy="${oy}" r="${r.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></circle>
-      ${hitArea}
-    </g>`;
-  }
-  const cx = ox - g.c * scale, cy = oy, rx = g.a * scale, ry = g.b * scale;
-  const screenSize = Math.max(rx, ry);
+  // R2: TRUE-GEOMETRY ring — sampled ellipse from elements {a, e from
+  // peri/apo, i = authored inclination}, Ω = ω = 0 by convention (launch-time
+  // modeling would pin RAAN; annotated in the tooltip rather than faked),
+  // projected through the pass camera. Replaces the circle/ellipse emitters.
+  const rp = R + Math.min(rec.peri, rec.apo), ra = R + Math.max(rec.peri, rec.apo);
+  const a = (rp + ra) / 2, ecc = (ra - rp) / (ra + rp);
+  const screenSize = ra * scale; // max radius in render units — LOD/cull metric (matches pre-R2 semantics)
   if (_trajCullByExtent(screenSize)) return '';
   if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
   const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
   if (lodAlpha <= 0) return '';
   const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
-  const hitArea = opts.authIdx != null ? `<ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+  const incRad = (rec.inc || 0) * Math.PI / 180;
+  const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: 0, argp: 0 }, 96);
+  let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
+  for (let k = 0; k < pts.length; k++) {
+    const q = _trajProj3(pts[k][0] * scale, pts[k][1] * scale, pts[k][2] * scale);
+    const x = ox + q.x, y = oy + q.y;
+    if (!isFinite(x) || !isFinite(y)) return '';
+    d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    if (y < topY) { topY = y; topX = x; }
+    if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
+  }
+  const incTxt = rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '';
+  const hitArea = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
-  _trajRegisterLabel(cx, cy - ry, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
-  if (coastTxt) _trajRegisterLabel(cx, oy - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+  _trajRegisterLabel(topX, topY, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+  if (coastTxt) _trajRegisterLabel(periX, periY - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
   return `<g${clickAttr}>
-    <ellipse cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}</title></ellipse>
+    <path d="${d}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>${title}${incTxt}</title></path>
     ${hitArea}
   </g>`;
 }
@@ -780,6 +832,26 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg, ox, oy) {
   const rotDegAttr = rot.toFixed(1);
   return { d: `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${rx} ${ry} ${rotDegAttr} 0 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
            depX: p1.x, depY: p1.y, arrX: p2.x, arrY: p2.y };
+}
+
+// R2: camera-projected variant of the schematic transfer arc — samples the
+// half-ellipse (planar, ecliptic z=0) and projects each point through the
+// pass camera so unconverged/schematic legs tilt coherently with the world.
+// (_trajTransferArcPath itself stays flat — 230's mini-diagram uses it with
+// its own top-down camera.) Same return contract: {d, depX, depY, arrX, arrY}.
+function _trajArcProjectedPath(r1, r2, scale, rotDeg, ox, oy) {
+  const N = 64;
+  let d = '';
+  let dep = null, arr = null;
+  for (let k = 0; k <= N; k++) {
+    const p = _trajArcPointAt(r1, r2, scale, rotDeg, 0, 0, k / N); // planar local
+    const q = _trajProjLocal(p.x, p.y);
+    const x = ox + q.x, y = oy + q.y;
+    d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    if (k === 0) dep = { x, y };
+    if (k === N) arr = { x, y };
+  }
+  return { d, depX: dep.x, depY: dep.y, arrX: arr.x, arrY: arr.y };
 }
 
 // ── Moon-lead arc orientation (pure geometry) ──────────────────────────────
@@ -859,7 +931,8 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     if (s.t > clipT) { cur = null; continue; }
     const a = anchorOf(s.frame);
     if (!a) { cur = null; continue; }
-    const x = a.x + s.r[0] * zoom, y = a.y + s.r[1] * zoom;
+    const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0); // R2: samples are 3D (Moon-frame patches carry real z)
+    const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
     if (!cur) { cur = []; runs.push(cur); }
     cur.push({ x, y, t: s.t });
@@ -893,7 +966,8 @@ function _trajPolylinePointAt(physLeg, anchorOf, zoom, tQuery) {
   const project = s => {
     const a = anchorOf(s.frame);
     if (!a) return null;
-    const x = a.x + s.r[0] * zoom, y = a.y + s.r[1] * zoom;
+    const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0);
+    const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     return (isFinite(x) && isFinite(y)) ? { x, y } : null;
   };
   let prev = null;
@@ -967,7 +1041,8 @@ function _trajPhysLegRender(ctx) {
     if (anchorCache[frame]) return anchorCache[frame];
     const w = progBodyWorldPosCalibrated(frame, vt, overrides);
     if (!w) return null;
-    return (anchorCache[frame] = { x: ox + (w.x - bodyWorld.x) * zoom, y: oy + (w.y - bodyWorld.y) * zoom });
+    const q = _trajProj3(w.x - bodyWorld.x, w.y - bodyWorld.y, (w.z || 0) - (bodyWorld.z || 0)); // R2: 3D world delta
+    return (anchorCache[frame] = { x: ox + q.x * zoom, y: oy + q.y * zoom });
   };
   const poly = _trajPolylineSVG(physLeg, anchorOf, zoom, { clipT, viewportDiagPx });
   if (!poly) return null;
@@ -1014,7 +1089,10 @@ function _trajEscapeSpurSVG(body, rpKm, c3, farAngleRad, mirror, zoom, ox, oy, v
   const far = raw[raw.length - 1];
   const rot = farAngleRad - Math.atan2(far[1], far[0]);
   const cr = Math.cos(rot), sr = Math.sin(rot);
-  const pts = raw.map(p => ({ x: ox + (p[0] * cr - p[1] * sr) * zoom, y: oy + (p[0] * sr + p[1] * cr) * zoom }));
+  const pts = raw.map(p => { // R2: rotate in the ecliptic plane, then project the planar offset
+    const q = _trajProjLocal((p[0] * cr - p[1] * sr) * zoom, (p[0] * sr + p[1] * cr) * zoom);
+    return { x: ox + q.x, y: oy + q.y };
+  });
   if (pts.some(p => !isFinite(p.x) || !isFinite(p.y))) return null;
   const extentPx = rSoi * zoom;
   if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return { svg: '', hidden: true };
@@ -1280,21 +1358,21 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
 
       let rotAng = _trajPlanetAngle(leg.fromO.body);
       let ghostP = null, arrivalTargetP = null;
-      if (destBody && PROG_HELIO_R[destBody] != null && typeof progBodyWorldPosCalibrated === 'function') {
-        // Calibrated position at arrival — for a 'calibrating' first leg this
-        // is DERIVED to make the arc connect exactly (offset solved for
-        // that purpose), so the arc's rotation is now self-consistent by
-        // construction. For a planet with no calibrating leg, overrides has
-        // no entry for it and this is identical to plain progBodyWorldPos.
-        const arrWorld = progBodyWorldPosCalibrated(destBody, tArrive, overrides);
-        arrivalTargetP = { x: ox + arrWorld.x * zoom, y: oy + arrWorld.y * zoom };
-        rotAng = _trajArcRotationForTarget(ox, oy, arrivalTargetP.x, arrivalTargetP.y);
-        const viewWorld = progBodyWorldPosCalibrated(destBody, vt, overrides);
-        const viewP = { x: ox + viewWorld.x * zoom, y: oy + viewWorld.y * zoom };
+      if (destBody && PROG_HELIO_R[destBody] != null && typeof progBodyWorldPos === 'function') {
+        // R2: the arc's ROTATION is planar geometry (solved in the unprojected
+        // ecliptic plane); marker/ghost POSITIONS project through the camera
+        // so they land on the drawn planet under tilt.
+        const arrWorld = progBodyWorldPos(destBody, tArrive);
+        rotAng = _trajArcRotationForTarget(0, 0, arrWorld.x, arrWorld.y); // planar
+        const aq = _trajProj3(arrWorld.x, arrWorld.y, arrWorld.z || 0);
+        arrivalTargetP = { x: ox + aq.x * zoom, y: oy + aq.y * zoom };
+        const viewWorld = progBodyWorldPos(destBody, vt);
+        const vq = _trajProj3(viewWorld.x, viewWorld.y, viewWorld.z || 0);
+        const viewP = { x: ox + vq.x * zoom, y: oy + vq.y * zoom };
         if (Math.hypot(viewP.x - arrivalTargetP.x, viewP.y - arrivalTargetP.y) > 3) ghostP = arrivalTargetP;
       }
-      const arc = _trajTransferArcPath(r1, r2, scale, rotAng, ox, oy);
-      const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2;
+      const arc = _trajArcProjectedPath(r1, r2, scale, rotAng, ox, oy);
+      const arcExtentPx = Math.hypot(arc.depX - arc.arrX, arc.depY - arc.arrY) / 2;
       if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
       const arcAlpha = emphasized ? 1 : _trajLodOpacity(arcExtentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
       if (arcAlpha <= 0) return;
@@ -1308,8 +1386,9 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {
         const frac = _trajLegPathFraction(leg.met, leg.metArrive - leg.met, vt);
-        const dotP = _trajArcPointAt(r1, r2, scale, rotAng, ox, oy, frac);
-        out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
+        const dl = _trajArcPointAt(r1, r2, scale, rotAng, 0, 0, frac);
+        const dq = _trajProjLocal(dl.x, dl.y);
+        out += `<circle cx="${(ox + dq.x).toFixed(2)}" cy="${(oy + dq.y).toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
       }
       if (ghostP) out += _trajGhostMarker(ghostP.x, ghostP.y, destBody, zoom, arcAlpha * stateAlpha);
       return;
@@ -1398,15 +1477,19 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     let rotAng = 0, ghostLocal = null;
     if (destMoon && PROG_MOON_ORBITS[destMoon] && PROG_MOON_ORBITS[destMoon].parent === body) {
       const tArrive = leg.metArrive != null ? leg.metArrive : vt;
+      // R2: rotation solved in the PLANAR ecliptic (arc geometry lives there);
+      // marker/ghost positions project through the pass camera.
       const arrTheta = progBodyAngleAt(destMoon, tArrive);
-      const arrLocal = { x: ox + PROG_MOON_ORBITS[destMoon].r * scale * Math.cos(arrTheta), y: oy + PROG_MOON_ORBITS[destMoon].r * scale * Math.sin(arrTheta) };
-      rotAng = _trajArcRotationForTarget(ox, oy, arrLocal.x, arrLocal.y);
+      const rL = PROG_MOON_ORBITS[destMoon].r * scale;
+      rotAng = _trajArcRotationForTarget(0, 0, rL * Math.cos(arrTheta), rL * Math.sin(arrTheta)); // planar
+      const aq = _trajProjLocal(rL * Math.cos(arrTheta), rL * Math.sin(arrTheta));
+      const arrLocal = { x: ox + aq.x, y: oy + aq.y };
       const viewTheta = progBodyAngleAt(destMoon, vt);
-      const viewLocal = { x: ox + PROG_MOON_ORBITS[destMoon].r * scale * Math.cos(viewTheta), y: oy + PROG_MOON_ORBITS[destMoon].r * scale * Math.sin(viewTheta) };
-      if (Math.hypot(viewLocal.x - arrLocal.x, viewLocal.y - arrLocal.y) > 3) ghostLocal = { p: arrLocal, body: destMoon };
+      const vq = _trajProjLocal(rL * Math.cos(viewTheta), rL * Math.sin(viewTheta));
+      if (Math.hypot(vq.x - aq.x, vq.y - aq.y) > 3) ghostLocal = { p: arrLocal, body: destMoon };
     }
-    const arc = _trajTransferArcPath(fromR, arcToR, scale, rotAng, ox, oy);
-    const arcExtentPx = Math.abs(arc.depX - arc.arrX) / 2;
+    const arc = _trajArcProjectedPath(fromR, arcToR, scale, rotAng, ox, oy);
+    const arcExtentPx = Math.hypot(arc.depX - arc.arrX, arc.depY - arc.arrY) / 2;
     if (_trajCullByExtent(arcExtentPx) || _trajCullRingByDiagonal(arcExtentPx, viewportDiagPx)) return;
     const arcAlpha = emphasized ? 1 : _trajLodOpacity(arcExtentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
     if (arcAlpha <= 0) return;
@@ -1421,8 +1504,9 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {
         const frac = _trajLegPathFraction(leg.met, leg.metArrive - leg.met, vt);
-        const dotP = _trajArcPointAt(fromR, arcToR, scale, rotAng, ox, oy, frac);
-        out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
+        const dl = _trajArcPointAt(fromR, arcToR, scale, rotAng, 0, 0, frac);
+        const dq = _trajProjLocal(dl.x, dl.y);
+        out += `<circle cx="${(ox + dq.x).toFixed(2)}" cy="${(oy + dq.y).toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (schematic — linear path fraction, not true orbital speed)</title></circle>`;
       }
     } else {
       _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
@@ -1617,102 +1701,143 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   const rectW = (rect && rect.width > 0) ? rect.width : 400, rectH = (rect && rect.height > 0) ? rect.height : 400;
   const viewportDiagPx = Math.sqrt(rectW * rectW + rectH * rectH);
 
-  // World-to-render: heliocentric km -> render UNITS (floating origin, then
-  // ×zoom so the emitted coordinate space is always ~viewBox-sized). Raw-km
-  // render coords put e9-magnitude floats in SVG attributes at solar zooms —
-  // fine on GPU rasterizers, silently invisible (and slow) on software ones.
-  // Normalizing here bounds every attribute to ~20x the viewport, the same
-  // precision discipline the floating origin applies to POSITIONS.
-  const toRender = (worldX, worldY) => ({ x: (worldX - camCenter.x) * zoom, y: (worldY - camCenter.y) * zoom });
+  // R2: arm the pass projection context — EVERY emission below (positions,
+  // rings, arcs, spurs, physics samples, grid) projects through it.
+  _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
+  const tilt = Math.PI / 2 - _trajProjCtx.el;
 
-  let out = '';
+  // World-to-render: heliocentric km -> PROJECTED render units (floating
+  // origin, 3D camera rotation, then ×zoom so the emitted coordinate space is
+  // always ~viewBox-sized — the software-rasterizer precision discipline).
+  // Carries `depth` (km, camera view axis) for painter sorting.
+  const toRender = (worldX, worldY, worldZ) => {
+    const p = _trajProj3(worldX - camCenter.x, worldY - camCenter.y, (worldZ || 0) - camCenter.z);
+    return { x: p.x * zoom, y: p.y * zoom, depth: p.depth };
+  };
+
+  // R2 painter records: {depth, svg}. Rings/grid use -Infinity (always behind
+  // glyphs — a ring spans all depths, exact painter order is undefined for it
+  // anyway); bodies use their projected center depth. STABLE sort keeps the
+  // pre-R2 layering as the tiebreak at el=90° where depths degenerate.
+  const records = [];
+  const emit = (depth, svg) => { if (svg) records.push({ depth, svg }); };
+
+  // ── ecliptic reference grid (visible only when tilted) ────────────────────
+  if (tilt > 0.17) {
+    const gridAlpha = Math.min(0.35, Math.sin(tilt) * 0.4);
+    let step = Math.pow(10, Math.floor(Math.log10(cam.wKm / 4)));
+    if (cam.wKm / step > 8) step *= 2;
+    let g = '';
+    for (let k = 1; k <= 4; k++) {
+      const rKm = step * k;
+      const pts = [];
+      for (let s = 0; s <= 72; s++) {
+        const a = 2 * Math.PI * s / 72;
+        const q = _trajProjLocal(Math.cos(a) * rKm * zoom, Math.sin(a) * rKm * zoom);
+        pts.push((s ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2));
+      }
+      g += `<path d="${pts.join(' ')}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="${gridAlpha.toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
+    }
+    const ax = _trajProjLocal(step * 4 * zoom, 0), ay = _trajProjLocal(0, step * 4 * zoom);
+    g += `<line x1="${(-ax.x).toFixed(2)}" y1="${(-ax.y).toFixed(2)}" x2="${ax.x.toFixed(2)}" y2="${ax.y.toFixed(2)}" stroke="var(--border)" stroke-width="0.5" opacity="${(gridAlpha * 0.7).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
+    g += `<line x1="${(-ay.x).toFixed(2)}" y1="${(-ay.y).toFixed(2)}" x2="${ay.x.toFixed(2)}" y2="${ay.y.toFixed(2)}" stroke="var(--border)" stroke-width="0.5" opacity="${(gridAlpha * 0.7).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
+    emit(-Infinity, g);
+  }
+
+  // ── true-geometry orbit ring (R2): sampled real ellipse, projected ────────
+  // centerP = the PRIMARY's projected render position; el = orbit elements.
+  const trueRingPath = (el, centerP, alphaStr, color) => {
+    const pts = progOrbitSamplePoints(el, 120);
+    let d = '';
+    for (let k = 0; k < pts.length; k++) {
+      const q = _trajProj3(pts[k][0], pts[k][1], pts[k][2]);
+      const x = centerP.x + q.x * zoom, y = centerP.y + q.y * zoom;
+      if (!isFinite(x) || !isFinite(y)) return '';
+      d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    }
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="0.6" opacity="${alphaStr}" vector-effect="non-scaling-stroke"/>`;
+  };
 
   // ── Sun (drawn unless off-screen — the heliocentric origin) ───────────────
   {
-    const p = toRender(0, 0);
+    const p = toRender(0, 0, 0);
     if (!_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) {
       const sunScale = _trajLocalScaleFor('Sun', m) * zoom; // km -> render units
-      out += _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun');
-      out += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
+      let s = _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun');
+      s += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
+      emit(p.depth, s);
     }
   }
 
-  // ── planets: heliocentric ring + glyph, each with its own local scale for
-  // embedded mission content (its own orbit rings etc. — same concept as the
-  // old per-scene `scale`, just computed per body instead of per active scene) ──
+  // ── planets: TRUE heliocentric orbit + glyph + embedded mission content ───
   Object.keys(PROG_HELIO_R).forEach(body => {
-    const worldR = PROG_HELIO_R[body];
-    const ringScreenR = worldR * zoom; // ring radius in render units (~px) — culling AND emission use this
-    const sunP = toRender(0, 0);
+    const worldR = PROG_HELIO_R[body]; // mean radius — LOD/culling only; drawing is true-geometry
+    const ringScreenR = worldR * zoom;
+    const sunP = toRender(0, 0, 0);
     const sunOffscreen = _trajCullPositionOffscreen(sunP.x, sunP.y, viewportDiagPx);
     const ringAlpha = _trajLodOpacity(ringScreenR, _TRAJ_LOD_WIN.heliocentricRing[0], _trajWindowHi(_TRAJ_LOD_WIN.heliocentricRing[1], viewportDiagPx));
     if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && ringAlpha > 0) {
-      out += `<circle cx="${sunP.x.toFixed(2)}" cy="${sunP.y.toFixed(2)}" r="${ringScreenR.toFixed(2)}" fill="none" stroke="${_trajBodyColor(body)}" stroke-width="0.6" opacity="${(0.55 * ringAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
+      const oel = progBodyOrbitElementsAt(body, viewT);
+      if (oel) emit(-1e17, trueRingPath(oel, sunP, (0.55 * ringAlpha).toFixed(3), _trajBodyColor(body)));
     }
-    const wp = progBodyWorldPosCalibrated(body, viewT, overrides);
-    const p = toRender(wp.x, wp.y);
+    const wp = progBodyWorldPos(body, viewT);
+    const p = toRender(wp.x, wp.y, wp.z);
     if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
-    const trueR = 3; // schematic glyph radius, world units == km at scale=1 for the heliocentric ring layer
-    // "Far representation" (C2 — fixes the C1b handoff): the body's own disc
-    // never fades (existing clamp+true-scale invariant, unchanged); its NAME
-    // label is force-eligible (always shows, size-gate bypassed) whenever the
-    // disc has hit its min-px clamp — i.e. we're zoomed out far enough
-    // relative to THIS body that its true-scale disc would be imperceptible,
-    // so it's rendered as glyph+name instead. This is per-body (not tied to
-    // the ring's own fade window) specifically so ALL 9 planets keep their
-    // names at full solar zoom-out even though their heliocentric rings span
-    // wildly different radii (Mercury's ring is tiny next to Neptune's, but
-    // both bodies are equally "far" from the camera at that zoom).
+    const trueR = 3;
+    // "Far representation" (C2): the NAME label is force-eligible whenever the
+    // disc has hit its min-px clamp — all planets keep names at solar zoom.
     const forceLabel = (trueR * zoom) < _TRAJ_MIN_BODY_PX;
+    let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      out += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel);
+      s += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel);
     }
-    // Zone-of-influence content (this body's moons + mission content) fades
-    // IN as the body's own neighborhood extent exceeds ~30px — a single fade
-    // authority for everything embedded at this body's position (moons drawn
-    // in the next pass check the SAME gate via zoiAlpha, never multiplying a
-    // second window on top — one fade authority per feature, per the brief).
+    // Zone-of-influence content: single fade authority for everything embedded
+    // at this body (moons in the next pass share the same gate via zoiAlpha).
     const localScale = _trajLocalScaleFor(body, m) * zoom; // km -> render units
-    const neighborhoodExtentPx = _trajBodyPxR(trueR, zoom); // conservative floor; refined per-body below via moon ring extents
+    const neighborhoodExtentPx = _trajBodyPxR(trueR, zoom);
     const zoiAlpha = _trajLodOpacity(Math.max(neighborhoodExtentPx, _trajBodyNeighborhoodPx(body, zoom, m)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (zoiAlpha > 0) {
       const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
-      out += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
+      s += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
     }
+    emit(p.depth, s);
   });
 
-  // ── moons: ring around parent + glyph, embedded mission content ───────────
+  // ── moons: TRUE orbit around parent + glyph, embedded mission content ─────
   Object.entries(PROG_MOON_ORBITS || {}).forEach(([name, mo]) => {
-    // Parent position resolves through the SAME calibrated path (moons move
-    // WITH a calibrated parent — see progBodyWorldPosCalibrated's recursion).
-    const parentWP = progBodyWorldPosCalibrated(mo.parent, viewT, overrides);
-    const parentP = toRender(parentWP.x, parentWP.y);
+    const parentWP = progBodyWorldPos(mo.parent, viewT);
+    const parentP = toRender(parentWP.x, parentWP.y, parentWP.z);
     const parentOffscreen = _trajCullPositionOffscreen(parentP.x, parentP.y, viewportDiagPx);
     const ringScreenR = mo.r * zoom;
-    // Moon ring is part of its PARENT's zone-of-influence — inherits the
-    // parent's zoiAlpha (single fade authority: the moon ring is a CHILD of
-    // the parent's neighborhood, so it does NOT also apply its own window on
-    // top; see _TRAJ_LOD_WIN.moonRing used only for the moon's OWN mission
-    // content children, analogous one level down).
+    // Moon ring is part of its PARENT's zone-of-influence (single fade authority).
     const parentZoiAlpha = _trajLodOpacity(Math.max(ringScreenR, _trajBodyPxR(3, zoom)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR) && parentZoiAlpha > 0) {
-      out += `<circle cx="${parentP.x.toFixed(2)}" cy="${parentP.y.toFixed(2)}" r="${ringScreenR.toFixed(2)}" fill="none" stroke="${_trajBodyColor(name)}" stroke-width="0.6" opacity="${(0.55 * parentZoiAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
+      const oel = progBodyOrbitElementsAt(name, viewT);
+      if (oel) emit(-1e17, trueRingPath(oel, parentP, (0.55 * parentZoiAlpha).toFixed(3), _trajBodyColor(name)));
     }
-    if (parentZoiAlpha <= 0) return; // moon (and its content) hidden with its parent's ZOI — no separate cull needed
-    const wp = progBodyWorldPosCalibrated(name, viewT, overrides); // moon's own angle unaffected; parent input flows through
-    const p = toRender(wp.x, wp.y);
+    if (parentZoiAlpha <= 0) return; // moon (and its content) hidden with its parent's ZOI
+    const wp = progBodyWorldPos(name, viewT);
+    const p = toRender(wp.x, wp.y, wp.z);
     if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
     const trueR = 3;
+    let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
       const glyphSvg = _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name, false);
-      out += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
+      s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m) * zoom; // km -> render units
     const contentSvg = _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
-    out += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
+    s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
+    emit(p.depth, s);
   });
 
-  return out;
+  // painter: back-to-front (ascending depth), STABLE — emission order is the
+  // tiebreak, preserving pre-R2 layering at el=90° where depths degenerate.
+  return records
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => (a.r.depth - b.r.depth) || (a.i - b.i))
+    .map(x => x.r.svg)
+    .join('');
 }
 
 // A body's "neighborhood" radius in km — the ONE definition shared by the
@@ -1878,11 +2003,11 @@ function _missionTrajViewHTML(m) {
     <div class="traj-wrap" data-mid="${id}">
       <div class="traj-toolbar">
         <div class="seg traj-focus-seg">${focusSeg}</div>
-        <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan">&#x21BA; Reset</button>
+        <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan/orientation (top-down)">&#x21BA; Reset</button>
       </div>
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"
            onmousedown="trajPanStart(event,'${id}')" onmousemove="trajPanMove(event)"
-           onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()">
+           onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()" oncontextmenu="return false">
         ${hintChip}
         <svg class="traj-svg" data-mid="${id}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet">
           <g class="traj-scene" data-mid="${id}">
@@ -1891,8 +2016,17 @@ function _missionTrajViewHTML(m) {
         </svg>
         <svg class="traj-overlay" data-mid="${id}" preserveAspectRatio="none"></svg>
       </div>
-      <div class="traj-footer">top-down ecliptic projection — real ephemeris positions (JPL mean elements) &middot; rings still schematic circles, so eccentric planets sit slightly off their ring &middot; body sizes clamped for visibility</div>
+      <div class="traj-footer">${_trajFooterHTML(cam)}</div>
     </div>`;
+}
+
+// R2: footer text incl. the orientation readout — also refreshed by
+// _trajApplyCam so rotate-drag keeps it live without a full panel rebuild.
+function _trajFooterHTML(cam) {
+  const elDeg = Math.round(((cam.el != null ? cam.el : Math.PI / 2) * 180 / Math.PI));
+  const azDeg = Math.round((((cam.az || 0) * 180 / Math.PI) % 360 + 360) % 360);
+  const orientTxt = elDeg < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
+  return `${orientTxt}true-geometry orbits (JPL mean elements; mission orbits &Omega;,&omega; assumed 0) &middot; shift/right-drag rotates &middot; vessel trajectories coplanar until R3 &middot; body sizes clamped for visibility`;
 }
 
 // Focus-flyout open state: 'missionId|sceneId' of the currently-open dropdown,

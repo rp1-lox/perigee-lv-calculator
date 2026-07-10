@@ -177,6 +177,54 @@ function progBodyLocalEphemState(body, t_s) {
   return { r: [0, 0, 0], v: [0, 0, 0] };
 }
 
+/** Osculating mean elements of a body at mission time t_s (R2): {a km, e,
+ *  i rad, raan rad, argp rad} — the SHAPE of the orbit (no anomaly), for
+ *  true-geometry ring sampling. null for the Sun / unknown bodies. Pure. */
+function progBodyOrbitElementsAt(body, t_s) {
+  const t = t_s || 0;
+  const el = PROG_BODY_ELEMENTS[body];
+  if (el) {
+    const T = (progEpochJD() - PROG_J2000_JD + t / 86400) / 36525;
+    const wbar = (el.wbar0 + el.wbarDot * T) * _PROG_D2R;
+    const Om = (el.Om0 + el.OmDot * T) * _PROG_D2R;
+    return { a: (el.a0 + el.aDot * T) * PROG_AU_KM, e: el.e0 + el.eDot * T,
+             i: (el.I0 + el.IDot * T) * _PROG_D2R, raan: Om, argp: wbar - Om };
+  }
+  const mel = PROG_MOON_ELEMENTS[body];
+  if (mel) {
+    const d = progEpochJD() - PROG_J2000_JD + t / 86400;
+    const wbar = (mel.wbar0 + mel.wbarDot * d) * _PROG_D2R;
+    const Om = (mel.Om0 + mel.OmDot * d) * _PROG_D2R;
+    return { a: mel.a, e: mel.e, i: mel.I0 * _PROG_D2R, raan: Om, argp: wbar - Om };
+  }
+  return null;
+}
+
+/** Sample a full orbit ellipse from elements into n 3D points (km, relative
+ *  to the primary — heliocentric for planets, parent-centric for moons).
+ *  Uniform eccentric anomaly (denser near periapsis where curvature lives).
+ *  Closed: last point repeats the first. Pure geometry, no Kepler solve. */
+function progOrbitSamplePoints(el, n) {
+  const N = Math.max(8, n || 120);
+  const { a, e, i, raan, argp } = el;
+  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
+  const cO = Math.cos(raan), sO = Math.sin(raan);
+  const ci = Math.cos(i), si = Math.sin(i);
+  const cw = Math.cos(argp), sw = Math.sin(argp);
+  const R = [
+    [cO * cw - sO * sw * ci, -cO * sw - sO * cw * ci],
+    [sO * cw + cO * sw * ci, -sO * sw + cO * cw * ci],
+    [sw * si,                 cw * si               ],
+  ];
+  const pts = [];
+  for (let k = 0; k <= N; k++) {
+    const E = 2 * Math.PI * k / N;
+    const x = a * (Math.cos(E) - e), y = b * Math.sin(E);
+    pts.push([R[0][0] * x + R[0][1] * y, R[1][0] * x + R[1][1] * y, R[2][0] * x + R[2][1] * y]);
+  }
+  return pts;
+}
+
 /** HELIOCENTRIC element-evaluated 3D state {r:[3], v:[3]} of any body at
  *  mission time t_s. Recursive for moons (parent state + local state). The
  *  ONE body-position source — physics, porkchop, and renderer all resolve

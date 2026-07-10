@@ -1129,6 +1129,58 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R2 — 3D projection + true-geometry orbit sampling (574 + 360)
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const { _trajProjectVec, progOrbitSamplePoints } =
+    vm.runInContext('({ _trajProjectVec, progOrbitSamplePoints })', sandbox);
+
+  // el=π/2, az=0 is EXACTLY the pre-R2 mapping (u=x, v=y, depth=z)
+  {
+    const p = _trajProjectVec(3, 7, 11, 0, Math.PI / 2);
+    approx('R2 proj: el=90 identity u=x', p.x, 3, 1e-12);
+    approx('R2 proj: el=90 identity v=y', p.y, 7, 1e-12);
+    approx('R2 proj: el=90 identity depth=z', p.depth, 11, 1e-12);
+  }
+  // el=0 (edge-on): v = -z (world +z projects up-screen — SVG y is down), depth = y
+  {
+    const p = _trajProjectVec(3, 7, 11, 0, 0);
+    approx('R2 proj: el=0 u=x', p.x, 3, 1e-12);
+    approx('R2 proj: el=0 v=-z', p.y, -11, 1e-12);
+    approx('R2 proj: el=0 depth=y', p.depth, 7, 1e-12);
+  }
+  // az=π/2 at top-down: x-axis rotates onto -y-screen... pin the convention:
+  // xa = x·cos(az) − y·sin(az), ya = x·sin(az) + y·cos(az)
+  {
+    const p = _trajProjectVec(1, 0, 0, Math.PI / 2, Math.PI / 2);
+    approx('R2 proj: az=90 maps +x to u=0', p.x, 0, 1e-12);
+    approx('R2 proj: az=90 maps +x to v=+1', p.y, 1, 1e-12);
+  }
+  // tilt foreshortening: an ecliptic circle's v-extent scales by sin(el)
+  {
+    const el30 = Math.PI / 6;
+    const top = _trajProjectVec(0, 1, 0, 0, el30);
+    approx('R2 proj: el=30 foreshortens v by sin(30)=0.5', Math.abs(top.y), 0.5, 1e-12);
+  }
+
+  // orbit sampler: closed, correct periapsis/apoapsis, inclination lifts z
+  {
+    const el = { a: 10000, e: 0.3, i: 0.5, raan: 0.7, argp: 1.1 };
+    const pts = progOrbitSamplePoints(el, 96);
+    ok('R2 sampler: closed polyline (last === first)',
+      Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1], pts[0][2] - pts[pts.length - 1][2]) < 1e-6);
+    const radii = pts.map(p => Math.hypot(p[0], p[1], p[2]));
+    approx('R2 sampler: min radius = a(1-e)', Math.min(...radii), el.a * (1 - el.e), 1);
+    approx('R2 sampler: max radius = a(1+e)', Math.max(...radii), el.a * (1 + el.e), 1);
+    const zMax = Math.max(...pts.map(p => Math.abs(p[2])));
+    ok(`R2 sampler: inclination lifts z (max|z| ${zMax.toFixed(0)} km > 0.3a·sin(i))`, zMax > 0.3 * el.a * Math.sin(el.i));
+    const flat = progOrbitSamplePoints({ a: 10000, e: 0, i: 0, raan: 0, argp: 0 }, 32);
+    ok('R2 sampler: i=0 stays in the ecliptic', flat.every(p => Math.abs(p[2]) < 1e-9));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

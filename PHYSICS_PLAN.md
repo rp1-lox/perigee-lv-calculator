@@ -100,7 +100,7 @@ User directive after P4 shipped: *"each orbit should be accurate EXACTLY to how 
 - **Goldens re-derived** (same commit, dated): free-return seed re-scanned against the real inclined Moon; TOF/kinematics pins updated; porkchop C3 grid re-goldened. Two-body/Jacobi/determinism tests unaffected (synthetic rails).
 - Gate: element evaluation vs published J2000 positions (spot longitude checks); Moon inclination visible in state (z ≠ 0); energy/h invariance unchanged.
 
-### R2 — 3D camera + true-geometry rendering (574)
+### R2 — 3D camera + true-geometry rendering (574) — SHIPPED 2026-07-09
 
 - Camera gains `az, el` (defaults el=90° top-down). ONE projection seam: rotate world km by az/el → orthographic drop → {x, y, depth}; emissions become {depth, svg} records, painter-sorted.
 - **Rings stop being circles**: heliocentric rings, moon rings, and mission-orbit rings render as SAMPLED POLYLINES from real elements (eccentric, inclined, projected through the camera). The `<circle>`/`<ellipse>`+arc-flag emitters retire for orbits.
