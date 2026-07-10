@@ -83,6 +83,7 @@ const {
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
   physMissionLeg, _trajGizmoClosestApproach, physEscapeHorizonS,
   _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation, _trajEventNodeInfo,
+  _trajLatLonUnit, _trajSpinRotate, _trajBodySpinAngle, _trajTrueBodyRadiusKm,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -1948,6 +1949,47 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('R6.1 _trajEventNodeInfo: entry with no stamped metStart -> null', _trajEventNodeInfo(mNode, 5) === null);
   ok('R6.1 _trajEventNodeInfo: out-of-range index -> null', _trajEventNodeInfo(mNode, 99) === null);
   ok('R6.1 _trajEventNodeInfo: null mission -> null', _trajEventNodeInfo(null, 0) === null);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R6.2 — planetary surface LOD ladder: pure geometry helpers (2026-07-10)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // lat/lon -> unit sphere: sub-solar-style points land where expected.
+  const eq0 = _trajLatLonUnit(0, 0);
+  approx('R6.2 _trajLatLonUnit(0,0) -> +x', eq0[0], 1, 1e-9);
+  approx('R6.2 _trajLatLonUnit(0,0) -> y=0', eq0[1], 0, 1e-9);
+  approx('R6.2 _trajLatLonUnit(0,0) -> z=0', eq0[2], 0, 1e-9);
+
+  const eq90 = _trajLatLonUnit(0, 90);
+  approx('R6.2 _trajLatLonUnit(0,90) -> +y', eq90[1], 1, 1e-9);
+
+  const pole = _trajLatLonUnit(90, 0);
+  approx('R6.2 _trajLatLonUnit(90,0) -> +z (north pole)', pole[2], 1, 1e-9);
+  ok('R6.2 _trajLatLonUnit is unit length', Math.abs(Math.hypot(...pole) - 1) < 1e-9 && Math.abs(Math.hypot(...eq90) - 1) < 1e-9);
+
+  // spin rotation about +z: a quarter turn moves +x to +y (or -y), never touches z.
+  const spun = _trajSpinRotate([1, 0, 0], Math.PI / 2);
+  approx('R6.2 _trajSpinRotate(+x, 90deg) -> y=1', spun[1], 1, 1e-9);
+  approx('R6.2 _trajSpinRotate(+x, 90deg) -> x=0', spun[0], 0, 1e-9);
+  const poleSpun = _trajSpinRotate([0, 0, 1], Math.PI / 3);
+  approx('R6.2 _trajSpinRotate leaves the pole (+z) fixed', poleSpun[2], 1, 1e-9);
+
+  // spin angle: Earth advances monotonically with viewT; Moon's spin tracks
+  // its own orbital position angle (+ pi) so the nearside always faces Earth.
+  ok('R6.2 _trajBodySpinAngle(Earth) advances with viewT', _trajBodySpinAngle('Earth', 86164.1) > _trajBodySpinAngle('Earth', 0));
+  ok('R6.2 _trajBodySpinAngle(Mars) advances with viewT', _trajBodySpinAngle('Mars', 88642.66) > _trajBodySpinAngle('Mars', 0));
+  ok('R6.2 _trajBodySpinAngle(Venus) is 0 (no vector surface)', _trajBodySpinAngle('Venus', 12345) === 0);
+  {
+    const t = 3.7e6;
+    const expectMoon = progBodyAngleAt('Moon', t) + Math.PI;
+    approx('R6.2 _trajBodySpinAngle(Moon) = orbital position angle + pi (tidal lock)', _trajBodySpinAngle('Moon', t), expectMoon, 1e-9);
+  }
+
+  // real physical body radii feed the LOD tiers (not the old schematic "3").
+  approx('R6.2 _trajTrueBodyRadiusKm(Earth) = PROG_BODIES.Earth.R', _trajTrueBodyRadiusKm('Earth'), PROG_BODIES.Earth.R, 1e-9);
+  approx('R6.2 _trajTrueBodyRadiusKm(Moon) = PROG_BODIES.Moon.R', _trajTrueBodyRadiusKm('Moon'), PROG_BODIES.Moon.R, 1e-9);
+  ok('R6.2 _trajTrueBodyRadiusKm(Sun) is the IAU mean solar radius', _trajTrueBodyRadiusKm('Sun') === 696000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

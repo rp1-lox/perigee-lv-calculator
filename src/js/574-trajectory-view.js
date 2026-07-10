@@ -2038,6 +2038,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   // rings, arcs, spurs, physics samples, grid) projects through it.
   _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
   const tilt = Math.PI / 2 - _trajProjCtx.el;
+  _trajGeoIdSeq = 0; // R6.2: fresh unique gradient ids each render pass
 
   // World-to-render: heliocentric km -> PROJECTED render units (floating
   // origin, 3D camera rotation, then ×zoom so the emitted coordinate space is
@@ -2116,13 +2117,15 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const wp = progBodyWorldPos(body, viewT);
     const p = toRender(wp.x, wp.y, wp.z);
     if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
-    const trueR = 3;
+    const trueR = _trajTrueBodyRadiusKm(body); // R6.2: real physical radius (was schematic 3)
+    const trueRpx = trueR * zoom;
     // "Far representation" (C2): the NAME label is force-eligible whenever the
     // disc has hit its min-px clamp — all planets keep names at solar zoom.
-    const forceLabel = (trueR * zoom) < _TRAJ_MIN_BODY_PX;
+    const forceLabel = trueRpx < _TRAJ_MIN_BODY_PX;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      s += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId);
+      const sunDirAngle = Math.atan2(sunP.y - p.y, sunP.x - p.x);
+      s += _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId, viewT, sunDirAngle, viewportDiagPx);
     }
     // Zone-of-influence content: single fade authority for everything embedded
     // at this body (moons in the next pass share the same gate via zoiAlpha).
@@ -2158,10 +2161,13 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const wp = progBodyWorldPos(name, viewT);
     const p = toRender(wp.x, wp.y, wp.z);
     if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
-    const trueR = 3;
+    const trueR = _trajTrueBodyRadiusKm(name); // R6.2: real physical radius (was schematic 3)
+    const trueRpx = trueR * zoom;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      const glyphSvg = _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name, false, m && m.missionId);
+      const sunP0 = toRender(0, 0, 0);
+      const sunDirAngle = Math.atan2(sunP0.y - p.y, sunP0.x - p.x);
+      const glyphSvg = _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(name), name, zoom, cam.anchorBody === name, false, m && m.missionId, viewT, sunDirAngle, viewportDiagPx);
       s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m) * zoom; // km -> render units
@@ -2274,6 +2280,206 @@ const _TRAJ_MIN_BODY_PX = 6;
 function _trajBodyPxR(trueR, zoom) {
   const z = zoom || 1;
   return Math.max(trueR * z, _TRAJ_MIN_BODY_PX);
+}
+
+// ── R6.2: planetary surface rendering + body LOD ladder ────────────────────
+// Three tiers by TRUE (unclamped) apparent screen radius (trueR_km * zoom):
+//   >= _TRAJ_SURFACE_PX : surfaced disc — base color + coastlines/maria/region
+//                          ellipses/cloud bands + a limb-darkening overlay.
+//   >= _TRAJ_CHIP_PX     : plain clamped disc (pre-existing behavior, unchanged
+//                          — _trajBodyPxR's Math.max floor already holds a
+//                          CONSTANT _TRAJ_MIN_BODY_PX screen size as trueR*zoom
+//                          shrinks below the floor).
+//   <  _TRAJ_CHIP_PX      : symbol chip — constant-radius outlined circle +
+//                          astronomical glyph (deep zoom-out, e.g. heliocentric).
+// Cross-fade is NOT implemented (a clean pop at each threshold, per spec).
+const _TRAJ_SURFACE_PX = 24;
+const _TRAJ_CHIP_PX = 2;
+const _TRAJ_CHIP_R = 7; // constant screen radius (px/render-unit) for the chip tier
+
+// Astronomical glyphs — reuses the same symbols as the Orbits page destination
+// picker (060-orbit-categories.js ORBIT_CATEGORIES icons) for Earth/Moon/Mars/
+// Venus/Mercury/Jupiter/Saturn/Uranus/Neptune so a body reads the same symbol
+// everywhere in the app; Sun/Titan added here (no picker entry exists for them).
+const _TRAJ_BODY_GLYPH = {
+  Sun: '☉', Mercury: '☿', Venus: '♀', Earth: '⊕', Moon: '☽',
+  Mars: '♂', Jupiter: '♃', Saturn: '♄', Uranus: '♅', Neptune: '♆', Titan: 'T',
+};
+
+// Body true physical radius (km) for LOD apparent-size math. Sun's value
+// (696,000 km, IAU mean) is display-schematic only — the Sun still renders
+// through its own plain-glyph path (_trajGlyph), never this ladder.
+function _trajTrueBodyRadiusKm(body) {
+  if (body === 'Sun') return 696000;
+  return (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[body] && PROG_BODIES[body].R) || 3;
+}
+
+// lat/lon (deg) -> unit-sphere point in the body's OWN unrotated frame
+// (lon measured east from the body's lon=0 meridian, +z = spin axis).
+// APPROXIMATION (2026-07-10, presentation layer only — see MATH.md §7g): no
+// body's axial tilt is modeled; every spin axis is assumed coincident with
+// the ecliptic normal (+z world axis), so this is a simplified top-down
+// globe, not a true axial-tilt globe.
+function _trajLatLonUnit(latDeg, lonDeg) {
+  const lat = latDeg * _PROG_D2R, lon = lonDeg * _PROG_D2R;
+  const cl = Math.cos(lat);
+  return [cl * Math.cos(lon), cl * Math.sin(lon), Math.sin(lat)];
+}
+// Rotate a unit-sphere body-frame point by spin angle (rad) about the +z
+// (ecliptic-normal) axis, giving its WORLD-frame direction.
+function _trajSpinRotate(pt, spinRad) {
+  const c = Math.cos(spinRad), s = Math.sin(spinRad);
+  return [pt[0] * c - pt[1] * s, pt[0] * s + pt[1] * c, pt[2]];
+}
+// Body spin angle (rad) at mission time viewT_s. Earth/Mars: sidereal
+// rotation from viewT with a fixed (uncalibrated — display flavor only, not
+// tied to a real prime-meridian epoch) offset of 0. Moon: tidally locked —
+// its nearside meridian (lon 0) is kept facing Earth via the Moon's own
+// orbital position angle about Earth (+ π, since progBodyAngleAt gives the
+// Earth->Moon direction and the nearside must face the opposite way, Moon-
+// >Earth). Other bodies: 0 (no vector surface features drawn for them).
+function _trajBodySpinAngle(body, viewT_s) {
+  const t = viewT_s || 0;
+  if (body === 'Earth') return (t / 86164.1) * 2 * Math.PI;
+  if (body === 'Mars') return (t / 88642.66) * 2 * Math.PI;
+  if (body === 'Moon' && typeof progBodyAngleAt === 'function') return progBodyAngleAt('Moon', t) + Math.PI;
+  return 0;
+}
+// Project a body-local (already spin-rotated) UNIT direction through the pass
+// camera and scale by the disc's screen radius — linear, so this is exactly
+// equivalent to projecting the rPx-scaled vector (same seam as _trajProj3).
+function _trajSurfacePoint(unitDir, cx, cy, rPx) {
+  const q = _trajProj3(unitDir[0], unitDir[1], unitDir[2]);
+  return { x: cx + q.x * rPx, y: cy + q.y * rPx, depth: q.depth };
+}
+// Flat [lon0,lat0,lon1,lat1,...] TENTHS-of-degree polygon (PROG_GEO_EARTH) ->
+// an SVG path `d` string, front-hemisphere points only (camera depth >= 0);
+// runs break (new M) at the limb — filled paths with limb breaks are
+// acceptable/rudimentary by design (238-geo-data.js header).
+function _trajGeoPolyPath(lonLatTenths, spinAngle, cx, cy, rPx) {
+  let d = '', started = false;
+  for (let i = 0; i < lonLatTenths.length; i += 2) {
+    const lon = lonLatTenths[i] / 10, lat = lonLatTenths[i + 1] / 10;
+    const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle), cx, cy, rPx);
+    if (q.depth < 0) { started = false; continue; }
+    d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
+    started = true;
+  }
+  return d;
+}
+// PROG_GEO_FEATURES ellipse {lat,lon,rLat,rLon} -> sampled SVG path `d`
+// string, same front-hemisphere/limb-break treatment as the coastline path.
+function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx) {
+  const n = 20;
+  let d = '', started = false;
+  const lonScale = Math.max(0.15, Math.cos(feat.lat * _PROG_D2R)); // lon degrees compress toward the poles
+  for (let k = 0; k <= n; k++) {
+    const a = 2 * Math.PI * k / n;
+    const lat = feat.lat + feat.rLat * Math.sin(a);
+    const lon = feat.lon + (feat.rLon * Math.cos(a)) / lonScale;
+    const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle), cx, cy, rPx);
+    if (q.depth < 0) { started = false; continue; }
+    d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
+    started = true;
+  }
+  return d;
+}
+let _trajGeoIdSeq = 0; // unique <radialGradient> ids per render pass (reset in _trajWorldSVG)
+// Shared limb-darkening overlay: transparent center -> ~35% black rim,
+// center offset toward the Sun's SCREEN direction (cheap 2D dot from already-
+// projected positions) for a rudimentary day-side/terminator feel.
+function _trajLimbGradientDef(gradId, body, sunDirAngle) {
+  const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
+  const limbColor = style.limb || 'rgba(0,0,0,.35)';
+  const off = 0.32;
+  const ox = Math.cos(sunDirAngle || 0) * off, oy = Math.sin(sunDirAngle || 0) * off;
+  return `<radialGradient id="${gradId}" cx="${(50 + ox * 50).toFixed(1)}%" cy="${(50 + oy * 50).toFixed(1)}%" r="78%">` +
+    `<stop offset="30%" stop-color="${limbColor}" stop-opacity="0"/>` +
+    `<stop offset="100%" stop-color="${limbColor}" stop-opacity="1"/></radialGradient>`;
+}
+// Full surfaced-disc render (tier 1): base color + surface geometry (per body
+// kind) + limb-shading overlay. `rPx` is the disc's TRUE (unclamped) screen
+// radius. Perf clamp: an absurdly huge disc (camera zoomed deep into the
+// body, disc mostly off-screen) skips surface geometry sampling entirely —
+// same spirit as the polyline viewClampUnits pattern — so path strings stay
+// bounded; the base-color fill alone still reads correctly at that zoom.
+function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewportDiagPx) {
+  const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
+  const skipGeometry = viewportDiagPx && rPx > viewportDiagPx * 4;
+  const baseFill = style.base || (style.bands && style.bands[0]) || _trajBodyColor(body);
+  let inner = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="${baseFill}"/>`;
+  if (!skipGeometry) {
+    if (body === 'Earth' && typeof PROG_GEO_EARTH !== 'undefined') {
+      PROG_GEO_EARTH.forEach(poly => {
+        const d = _trajGeoPolyPath(poly, spinAngle, cx, cy, rPx);
+        if (d) inner += `<path d="${d}Z" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
+      });
+    } else if (body === 'Moon' && typeof PROG_GEO_FEATURES !== 'undefined') {
+      (PROG_GEO_FEATURES.Moon || []).forEach(f => {
+        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
+        if (d) inner += `<path d="${d}Z" fill="${style.mare || '#7d7566'}" stroke="none"/>`;
+      });
+    } else if (body === 'Mars' && typeof PROG_GEO_FEATURES !== 'undefined') {
+      (PROG_GEO_FEATURES.Mars || []).forEach(f => {
+        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
+        const fill = style[f.kind] || style.base;
+        if (d) inner += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
+      });
+    } else if ((body === 'Jupiter' || body === 'Saturn') && style.bands) {
+      const bands = style.bands, nBands = bands.length, nSeg = 16;
+      for (let b = 0; b < nBands; b++) {
+        const lat0 = -90 + (180 * b) / nBands, lat1 = -90 + (180 * (b + 1)) / nBands;
+        let d = '', started = false;
+        for (let k = 0; k <= nSeg; k++) {
+          const lon = -180 + (360 * k) / nSeg;
+          const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat1, lon), spinAngle), cx, cy, rPx);
+          if (q.depth < 0) { started = false; continue; }
+          d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
+          started = true;
+        }
+        for (let k = nSeg; k >= 0; k--) {
+          const lon = -180 + (360 * k) / nSeg;
+          const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat0, lon), spinAngle), cx, cy, rPx);
+          if (q.depth < 0) { started = false; continue; }
+          d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
+          started = true;
+        }
+        if (d) inner += `<path d="${d}Z" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
+      }
+    }
+    // Venus/Mercury/Titan: base disc only (Venus's base fill is already a
+    // brightened tint via PROG_GEO_STYLE.Venus).
+  }
+  _trajGeoIdSeq++;
+  const gradId = `trajLimb${_trajGeoIdSeq}`;
+  return `<defs>${_trajLimbGradientDef(gradId, body, sunDirAngle)}</defs>` +
+    `<g>${inner}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
+    `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/></g>`;
+}
+// Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
+// planets/moons (Sun keeps its own plain _trajGlyph path, untouched). Picks
+// one of the three LOD tiers from the TRUE apparent radius (trueRpx,
+// unclamped) and returns the disc svg, wrapped in the same fly-to click
+// handler as _trajGlyph. Registers the body-name label exactly as before.
+function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceLabel, clickId, viewT, sunDirAngle, viewportDiagPx) {
+  const labelSize = Math.max(trueRpx, _TRAJ_CHIP_R);
+  _trajRegisterLabel(cx, cy - labelSize, [{ text: body, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
+    { screenSize: labelSize, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
+  const clickAttr = clickId ? ` class="traj-body-glyph" style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${body}')"` : '';
+  let disc;
+  if (trueRpx >= _TRAJ_SURFACE_PX) {
+    const spin = _trajBodySpinAngle(body, viewT);
+    disc = _trajSurfacedDiscSVG(body, cx, cy, trueRpx, spin, sunDirAngle, viewportDiagPx);
+  } else if (trueRpx >= _TRAJ_CHIP_PX) {
+    const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX); // tier 2: same constant-floor clamp as _trajBodyPxR
+    disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
+  } else {
+    const glyph = _TRAJ_BODY_GLYPH[body] || '•';
+    disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${_TRAJ_CHIP_R}" fill="var(--nm-bg)" fill-opacity="0.15" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>` +
+      `<text x="${cx.toFixed(2)}" y="${(cy + 3.2).toFixed(2)}" text-anchor="middle" font-size="9" fill="${color}">${glyph}</text>`;
+  }
+  const hit = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(trueRpx, 7).toFixed(2)}" fill="transparent"/>`;
+  return clickId ? `<g${clickAttr}>${disc}${hit}</g>` : `<g>${disc}</g>`;
 }
 
 // Which body-frame(s) hold content (an orbit ring or a transfer leg) tied to
