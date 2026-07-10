@@ -13883,6 +13883,19 @@ function loadProgramFile(input) {
 
 function applyProgramObject(obj) {
   _scEdSC       = Array.isArray(obj.spacecraft) ? obj.spacecraft : [];
+  // Builtin presets are seeded with fresh UUIDs each session, so a restored blob
+  // that predates them (or was saved with them deleted) silently wipes them.
+  // Re-seed any builtin missing by name.
+  if (typeof _PROG_SC_PRESETS !== 'undefined') {
+    const have = new Set(_scEdSC.map(s => s.name));
+    _PROG_SC_PRESETS.forEach(p => {
+      if (!have.has(p.name)) _scEdSC.push({
+        spacecraftId: progUUID(),
+        name: p.name,
+        stages: p.stages.map(s => ({ stageId: progUUID(), ...s })),
+      });
+    });
+  }
   _fleetEntries = Array.isArray(obj.fleet)      ? obj.fleet      : [];
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
