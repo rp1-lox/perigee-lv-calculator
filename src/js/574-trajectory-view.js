@@ -120,15 +120,10 @@ function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
 // Effective camera center in heliocentric km at the given view time — the
 // ONE place anchor + offset combine. Everything else in the render path
 // subtracts this from world km to get floating-origin render coords.
-// `overrides` (optional) = the current mission's planet-phase calibration
-// map (see _trajGetPlanetCalibration) — when the camera is anchored on a
-// calibrated planet, the camera itself must resolve through the SAME
-// calibrated position so the anchor body stays centered (coherence: glyph
-// position, ZOI anchor, and camera center must all agree, per the render
-// integration brief). Falls back to plain progBodyWorldPos when omitted or
-// when the anchor has no override.
+// `overrides` is a retired R1 vestige (planet-phase calibration is gone);
+// accepted and ignored so existing call sites keep compiling.
 function _trajCamCenterKm(cam, viewT, overrides) {
-  const p = overrides ? progBodyWorldPosCalibrated(cam.anchorBody, viewT, overrides) : progBodyWorldPos(cam.anchorBody, viewT);
+  const p = progBodyWorldPos(cam.anchorBody, viewT);
   return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0) };
 }
 
@@ -962,9 +957,9 @@ function _trajPhysLegRender(ctx) {
   const id = m.missionId;
   const clipT = _trajPhysClipT(m, physLeg);
   // Frame-anchor resolver: this pass knows only ITS body's drawn position
-  // (ox,oy); sibling frames' drawn positions follow from the calibrated world
-  // delta at viewTime × zoom (same position source as the glyphs — coherence).
-  const overrides = (ctx.calib && ctx.calib.overrides) || _trajGetPlanetCalibration(m).overrides;
+  // (ox,oy); sibling frames' drawn positions follow from the real-ephemeris
+  // world delta at viewTime × zoom (same position source as the glyphs).
+  const overrides = {}; // R1: calibration retired — alias ignores this anyway
   const bodyWorld = progBodyWorldPosCalibrated(body, vt, overrides);
   const anchorCache = {};
   const anchorOf = frame => {
@@ -1155,67 +1150,15 @@ function _trajGetExtraction(m) {
   return data;
 }
 
-// ── Planet-phase calibration (per-mission, render-pass-only derived state) ──
-// See MATH.md §7a "planet phase calibration" for the full rule set; spec
-// recap: a mission's FIRST Sun-frame leg to a given heliocentric destination
-// planet calibrates that planet's theta0 (via progCalibratedTheta0, 360) so
-// its true-shape Hohmann arc visually connects. A SECOND leg to the SAME
-// planet within the same mission can't also be satisfied — it's flagged
-// 'second' so the render pass draws ghost endpoints + a dotted line instead
-// of a connecting arc. Legs to planets that never get a calibrating leg keep
-// table theta0s untouched (offset 0, simply absent from the overrides map).
-// NOT persisted (m.log/autosave untouched), NOT written into the global
-// PROG_BODY_KINEMATICS table — recomputed fresh every render pass, keyed to
-// THIS mission's extraction cache so other missions/the porkchop plotter are
-// completely unaffected.
-let _trajCalibrationCache = { missionId: null, data: null };
-function _trajGetPlanetCalibration(m) {
-  if (!m) return { overrides: {}, legFlags: {}, active: false };
-  if (_trajCalibrationCache.missionId === m.missionId && _trajCalibrationCache.data) return _trajCalibrationCache.data;
-  const frames = _trajGetExtraction(m);
-  const overrides = {};      // { bodyName: offsetRadians } — heliocentric planets only
-  const legFlags = {};       // leg.key -> 'calibrating' | 'second'
-  // A true interplanetary transit leg has fromO.body === 'Sun' (per
-  // PROG_NM_NODES, 430 — e.g. mars-transfer's orbit is
-  // {type:'transit', body:'Sun', destination:'Mars'}), but per
-  // _trajFrameForOrbit(toO) it's extracted into the DESTINATION's OWN frame
-  // (frameId === destBody, e.g. 'Mars'), not a 'Sun' frameId — only the
-  // (impulsive, met===metArrive) injection leg that ENTERS the corridor
-  // lands in a Sun-adjacent frameId. So candidates must be gathered by
-  // scanning EVERY body frame's legs for fromO.body === 'Sun', not by
-  // assuming a single 'Sun' frame holds them. Legs within each frame's
-  // array are already in log/authored order (see _trajExtractMission); to
-  // get correct MISSION-WIDE authored order across frames (needed so the
-  // true first-in-time leg to a planet is the one that calibrates it, not
-  // just the first one encountered by frame-iteration order), sort
-  // candidates by leg.authIdx before assigning calibrating/second.
-  const candidates = [];
-  Object.keys(frames).forEach(frameId => {
-    (frames[frameId].legs || []).forEach(leg => {
-      if (!leg.fromO || leg.fromO.body !== 'Sun') return; // only real heliocentric transit legs
-      const destBody = leg.toO && (leg.toO.destination || leg.toO.body);
-      // Only heliocentric planets (PROG_HELIO_R) are calibration candidates —
-      // explicitly excludes anything in PROG_MOON_ORBITS (moons are handled
-      // by the existing Moon-lead logic, calibration is planet-ring-only).
-      if (!destBody || PROG_HELIO_R[destBody] == null || (PROG_MOON_ORBITS && PROG_MOON_ORBITS[destBody])) return;
-      if (leg.met == null || leg.metArrive == null) return; // no timing to calibrate against
-      const departBody = leg.fromO.departure_body || 'Earth';
-      candidates.push({ leg, destBody, departBody });
-    });
-  });
-  candidates.sort((a, b) => (a.leg.authIdx != null ? a.leg.authIdx : 0) - (b.leg.authIdx != null ? b.leg.authIdx : 0));
-  candidates.forEach(({ leg, destBody, departBody }) => {
-    if (overrides[destBody] == null) {
-      overrides[destBody] = (typeof progCalibratedTheta0 === 'function') ? progCalibratedTheta0(destBody, leg.met, leg.metArrive, departBody) : 0;
-      legFlags[leg.key] = 'calibrating';
-    } else {
-      legFlags[leg.key] = 'second';
-    }
-  });
-  const data = { overrides, legFlags, active: Object.keys(overrides).length > 0 };
-  _trajCalibrationCache = { missionId: m.missionId, data };
-  return data;
-}
+// ── Planet-phase calibration — RETIRED (R1, 2026-07-09) ─────────────────────
+// The per-mission calibration fiction (_trajGetPlanetCalibration /
+// progCalibratedTheta0, old MATH.md §7a) existed only because the rails were
+// schematic circles: a Hohmann arc could not otherwise land on its planet.
+// With real ephemeris rails (360), real phases connect (or honestly don't —
+// a leg that can't connect at its authored MET renders converged:false via
+// the physics side-table, and the schematic fallback arc shows a ghost
+// marker at the true arrival position). progBodyWorldPosCalibrated survives
+// as a thin alias that ignores its overrides argument.
 
 function _trajSelectedAuthIdx(m) {
   if (!m || !m.log) return null;
@@ -1263,7 +1206,6 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   scale = scale || 1;
   zoom = zoom || 1;
   overrides = overrides || {};
-  const legFlags = (calib && calib.legFlags) || {};
   const id = m.missionId;
   const selAuthIdx = _trajSelectedAuthIdx(m);
 
@@ -1318,32 +1260,8 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       const destBody = leg.toO.destination || leg.toO.body || leg.toLabel;
       const tArrive = leg.metArrive != null ? leg.metArrive : vt;
 
-      // ── Second-leg-to-the-same-planet case (planet-phase calibration rule
-      // 3, MATH.md §7a): only the FIRST leg to a given heliocentric
-      // destination gets to calibrate that planet's theta0 for this mission's
-      // render; a second leg's own departure/arrival timing generally won't
-      // land on the (already-fixed) calibrated position, so it can't render a
-      // real connecting arc — draw schematic ghost endpoints + a dotted line
-      // instead, per the C2 ghost-marker pattern.
-      if (legFlags[leg.key] === 'second' && destBody && PROG_HELIO_R[destBody] != null) {
-        const depWorld = progBodyWorldPosCalibrated(leg.fromO.body || 'Earth', leg.met, overrides);
-        const depP = { x: ox + depWorld.x * zoom, y: oy + depWorld.y * zoom }; // Sun frame: ox,oy IS the Sun's render pos; world km -> units via zoom
-        const arrWorld = progBodyWorldPosCalibrated(destBody, leg.metArrive, overrides); // reads the FIRST leg's already-fixed calibration for this body
-        const arrP = { x: ox + arrWorld.x * zoom, y: oy + arrWorld.y * zoom };
-        const ghostTitle = `phase not shown — planet position calibrated to the first ${destBody} transfer`;
-        const dashLine = `<line x1="${depP.x.toFixed(2)}" y1="${depP.y.toFixed(2)}" x2="${arrP.x.toFixed(2)}" y2="${arrP.y.toFixed(2)}" stroke="var(--text-dim)" stroke-width="0.6" stroke-dasharray="1,2" opacity="${(0.5 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"><title>${ghostTitle}</title></line>`;
-        out += dashLine;
-        const ghostMarkerSvg = (px, py) => {
-          const r = _trajBodyPxR(2.5, zoom);
-          return `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="auto"><title>${ghostTitle}</title></circle>`;
-        };
-        _trajRegisterLabel(depP.x, depP.y, [{ text: `${leg.fromLabel} → ${leg.toLabel}`, dy: -4 - _trajBodyPxR(2.5, zoom), fontPx: 9, color: 'var(--text-dim)' }], 'zone',
-          { screenSize: _trajBodyPxR(2.5, zoom), minSize: 0, selected: false, marker: ghostMarkerSvg(depP.x, depP.y), opacity: 0.7 * stateAlpha });
-        _trajBurnMarker(depP.x, depP.y, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(0), { opacity: 0.7 * stateAlpha, title: ghostTitle }));
-        _trajRegisterLabel(arrP.x, arrP.y, [{ text: `${destBody} (2nd leg)`, dy: -4 - _trajBodyPxR(2.5, zoom), fontPx: 9, color: 'var(--text-dim)' }], 'zone',
-          { screenSize: _trajBodyPxR(2.5, zoom), minSize: 0, selected: false, marker: ghostMarkerSvg(arrP.x, arrP.y), opacity: 0.7 * stateAlpha });
-        return;
-      }
+      // (R1: the 'second leg to the same planet' ghost treatment retired with
+      // the calibration — every leg renders against the same real ephemeris.)
 
       // ── P3: physics polyline (heliocentric leg) — drawn ONLY when the
       // propagation actually reached its destination SOI (converged). An
@@ -1397,31 +1315,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       return;
     }
 
-    // ── Second-leg-to-the-same-planet case, LOCAL-FRAME variant (planet-phase
-    // calibration rule 3, MATH.md §7a): the leg that actually carries
-    // interplanetary coast time (fromO.body==='Sun') is extracted into the
-    // DESTINATION's own local frame (see _trajFrameForOrbit — a transit leg's
-    // frame is the toO body, not literally 'Sun'), so the second-leg ghost
-    // treatment has to be checked here too, not only in the isSun branch
-    // above (which only ever sees the impulsive corridor-injection leg, whose
-    // met===metArrive gives it no timing to calibrate against in the first
-    // place). Only the FIRST such leg to this planet renders a real
-    // (schematic SOI-fallback) arc; a second gets ghost endpoints + a dotted
-    // line, matching the isSun branch's treatment.
-    if (leg.fromO && leg.fromO.body === 'Sun' && legFlags[leg.key] === 'second') {
-      const r = _trajLocalRadius(leg.fromO, body); // schematic SOI-edge departure point, still meaningful as a local anchor
-      const depLocal = (r != null) ? { x: ox + r * scale, y: oy } : { x: ox, y: oy };
-      const arrLocalR = _trajLocalRadius(leg.toO, body);
-      const arrLocal = (arrLocalR != null) ? { x: ox + arrLocalR * scale, y: oy } : { x: ox, y: oy };
-      const ghostTitle = `phase not shown — planet position calibrated to the first ${body} transfer`;
-      out += `<line x1="${depLocal.x.toFixed(2)}" y1="${depLocal.y.toFixed(2)}" x2="${arrLocal.x.toFixed(2)}" y2="${arrLocal.y.toFixed(2)}" stroke="var(--text-dim)" stroke-width="0.6" stroke-dasharray="1,2" opacity="${(0.5 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"><title>${ghostTitle}</title></line>`;
-      const gr = _trajBodyPxR(2.5, zoom);
-      const ghostMarkerSvg = `<circle cx="0" cy="0" r="${gr.toFixed(2)}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="auto"><title>${ghostTitle}</title></circle>`;
-      _trajRegisterLabel(depLocal.x, depLocal.y, [{ text: leg.fromLabel, dy: -4 - gr, fontPx: 9, color: 'var(--text-dim)' }], 'zone', { screenSize: gr, minSize: 0, selected: false, marker: ghostMarkerSvg, opacity: 0.7 * stateAlpha });
-      _trajBurnMarker(depLocal.x, depLocal.y, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(0), { opacity: 0.7 * stateAlpha, title: ghostTitle }));
-      _trajRegisterLabel(arrLocal.x, arrLocal.y, [{ text: `${leg.toLabel} (2nd leg)`, dy: -4 - gr, fontPx: 9, color: 'var(--text-dim)' }], 'zone', { screenSize: gr, minSize: 0, selected: false, marker: ghostMarkerSvg, opacity: 0.7 * stateAlpha });
-      return;
-    }
+    // (R1: local-frame 'second leg' ghost variant retired with calibration.)
 
     // ── P3: physics polyline, LOCAL-frame portion. Two cases:
     // (a) the leg's OWN physics record has samples in this frame (e.g. the
@@ -1679,9 +1573,8 @@ function _trajLocalRadius(o, body) {
 // layout (index order in PROG_HELIO_R, spread evenly) — kept in sync so
 // transfer arcs originate at the visually-drawn ring position. NOTE: this is
 // ONLY used for interplanetary transfer arc rotation, not for the planet's
-// actual drawn position any more (that now comes from progBodyWorldPos /
-// progBodyAngleAt, which uses the SAME schematic spread as theta0 for bodies
-// without porkchop-calibrated angles — see 360's PROG_BODY_KINEMATICS).
+// actual drawn position any more (that now comes from progBodyWorldPos —
+// real ephemeris since R1).
 function _trajPlanetAngle(body) {
   const bodies = Object.keys(PROG_HELIO_R);
   const i = bodies.indexOf(body);
@@ -1718,8 +1611,8 @@ function _trajViewTime(m) {
 // culling — falls back to a square guess pre-mount).
 function _trajWorldSVG(m, cam, zoom, rect) {
   const viewT = _trajViewTime(m);
-  const calib = _trajGetPlanetCalibration(m);
-  const overrides = calib.overrides;
+  const calib = null;      // R1: planet-phase calibration retired (real ephemeris)
+  const overrides = {};    // kept for downstream signature stability; ignored by the alias
   const camCenter = _trajCamCenterKm(cam, viewT, overrides); // heliocentric km — the ONE floating-origin subtraction point
   const rectW = (rect && rect.width > 0) ? rect.width : 400, rectH = (rect && rect.height > 0) ? rect.height : 400;
   const viewportDiagPx = Math.sqrt(rectW * rectW + rectH * rectH);
@@ -1928,7 +1821,6 @@ function _trajFocusGroups() {
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
   _trajExtractionCache = { missionId: null, data: null }; // force fresh extraction each render (mission log may have changed)
-  _trajCalibrationCache = { missionId: null, data: null }; // planet-phase calibration depends on extraction, invalidate together
 
   // ── camera: default-anchor-Earth fit-to-content on first access for this mission ──
   let cam = _trajCamByMission[id];
@@ -1965,7 +1857,6 @@ function _missionTrajViewHTML(m) {
   // resolve overlay px yet since the svg isn't measurable before mount).
   _trajResetLabels();
   const svgInner = _trajWorldSVG(m, cam, zoom, null);
-  const calibActive = _trajGetPlanetCalibration(m).active;
   // Constant-unit viewBox (geometry is emitted in km·zoom render units) —
   // square default; aspect corrected post-mount by _missionTrajAfterRender.
   const viewBox = `${(-_TRAJ_VB / 2).toFixed(3)} ${(-_TRAJ_VB / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${_TRAJ_VB.toFixed(3)}`;
@@ -2000,7 +1891,7 @@ function _missionTrajViewHTML(m) {
         </svg>
         <svg class="traj-overlay" data-mid="${id}" preserveAspectRatio="none"></svg>
       </div>
-      <div class="traj-footer">coplanar view — inclination/LAN annotated, not drawn &middot; planet positions schematic, body sizes clamped for visibility${calibActive ? ' &middot; planet phases calibrated to mission transfers' : ''}</div>
+      <div class="traj-footer">top-down ecliptic projection — real ephemeris positions (JPL mean elements) &middot; rings still schematic circles, so eccentric planets sit slightly off their ring &middot; body sizes clamped for visibility</div>
     </div>`;
 }
 
@@ -2055,7 +1946,6 @@ function _missionTrajAfterRender(m) {
       const zoom = _trajZoomFromCam(cam);
       _trajResetLabels();
       _trajExtractionCache = { missionId: null, data: null };
-      _trajCalibrationCache = { missionId: null, data: null };
       sceneEl.innerHTML = _trajWorldSVG(mm, cam, zoom, rect);
       if (overlayEl) {
         overlayEl.style.transform = ''; // clear any mid-drag pan slide

@@ -92,7 +92,7 @@ Gate: convergence suite (Earth→Moon, Earth→Mars seeds: miss <500 km in ≤12
 
 User directive after P4 shipped: *"each orbit should be accurate EXACTLY to how they are in real life. Accuracy to reality over the current model."* The original P5 (cosmetic 3D camera over the coplanar fiction) is replaced by a real-geometry series. Original P5/P6 text kept below for reference where still applicable.
 
-### R1 — Real ephemeris rails
+### R1 — Real ephemeris rails — ✅ SHIPPED 2026-07-09
 
 - Replace the circular-coplanar kinematics with **full Keplerian mean elements + secular rates per body** (JPL approximate-ephemeris table: a, e, i, Ω, ϖ, L at J2000 + centennial rates; Moon: mean elements about Earth incl. its 5.145° inclination, e=0.0549; Titan similar about Saturn). `physBodyStateAt`/`progBodyWorldPos*` become element-evaluated 3D states (Kepler's equation per call — cache per (body, t) if profiling demands).
 - **Program epoch**: MET 0 = `PROG_ACTIVE_PROGRAM.epochJD` (default J2000.0 + a sane modern date). Porkchop dep_day = days since epoch — departure windows become REAL dates. (Launch-date UI can come later; the default epoch is enough for correctness.)

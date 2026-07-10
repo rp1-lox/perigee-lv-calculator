@@ -90,6 +90,7 @@ function progMakeProgram(name) {
     nodeMapActiveNodes:    (typeof PROG_NM_NODES !== 'undefined' ? PROG_NM_NODES : []).filter(n => n.zone === 'earth' && n.orbit?.type !== 'surface').map(n => n.id), // earth orbitals on by default; surface nodes tied to planet discs
     performanceCases:      [],       // archived perf cases (Phase 10)
     warnings:              [],
+    epochJD:               (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5), // R1: absolute date of MET 0 (Julian date)
   };
 }
 

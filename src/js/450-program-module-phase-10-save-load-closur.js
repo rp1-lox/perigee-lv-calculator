@@ -57,6 +57,8 @@ function applyProgramObject(obj) {
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
+  // R1: programs saved before the epoch feature get the default epoch
+  if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
   _fleetSel   = (obj.sel && obj.sel.fleet)   || (_fleetEntries[0] && _fleetEntries[0].fleetId) || null;
   _scEdSel    = (_scEdSC[0] && _scEdSC[0].spacecraftId) || null;
   // Re-simulate every mission so PROG_ACTIVE_PROGRAM's runtime vehicles are

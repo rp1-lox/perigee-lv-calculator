@@ -135,14 +135,13 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
     // moon's railed angle (parent-centered) at arrival; burn diametrically opposite
     theta = physPhaseBurnAngle(progBodyAngleAt(destMoon, tDepart_s + coastTof));
   } else if (destPlanet) {
-    // heliocentric equivalent: destination planet's railed angle at arrival —
-    // including the mission's CALIBRATION offset (the renderer draws the
-    // planet at the calibrated angle; phasing against the uncalibrated table
-    // angle made physics and render disagree about where the planet IS —
-    // critique 35, fixed 2026-07-09). The LEO burn point is placed at the
-    // same schematic angle in the Earth frame (departure asymptote roughly
-    // opposite the arrival point). Deliberately coarse — P4's shooter refines.
-    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof) + (overrides[destPlanet] || 0));
+    // heliocentric equivalent: destination planet's REAL ephemeris angle at
+    // arrival (R1 — the calibration-offset threading retired with the real
+    // rails; `overrides` is signature-compat only). The LEO burn point is
+    // placed at the same schematic angle in the Earth frame (departure
+    // asymptote roughly opposite the arrival point). Deliberately coarse —
+    // P4's shooter refines.
+    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof));
   }
 
   const r = [r1 * Math.cos(theta), r1 * Math.sin(theta), 0];
@@ -300,7 +299,12 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   if (theta0 < 0) theta0 += 2 * Math.PI;
   const soi = physSoiRadius(dest);
   const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
-  const tolKm = Math.min(soi / 3, Math.max(1000, targetR * 0.25));
+  // R1: the burn is still in the ecliptic plane (z = 0) while real targets are
+  // INCLINED (Moon 5.15°, Mars 1.85°) — the closest approach can't go below
+  // the target's out-of-plane offset at encounter (up to sin(i)·r ≈ 34,000 km
+  // for the Moon). Tolerance = SOI/3 accepts the best a coplanar burn can do;
+  // R3's normal-direction DOF tightens this again.
+  const tolKm = soi / 3;
   const cutoff = tDepart_s + 1.5 * Math.max(burn0.coastTof_s, 3600);
   // heliocentric cruise: cap the step ladder so the encounter can't be
   // stepped over (see physStepFor ctx.dtMax) — fixed constant, deterministic
@@ -353,12 +357,15 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides) {
   const rp = RE_ + (leoAltKm || 185);
   const nMean = Math.sqrt(muE / (rp * rp * rp));
   const t0 = tDepart_s || 0;
-  // seed energy from the P1 golden (apo 455,000 km) and its burn angle
-  // rotated with the Moon's rail angle at departure
-  const aSeed = (rp + 455000) / 2;
+  // seed energy + burn angle from the R1 golden, re-scanned against the REAL
+  // (eccentric, 5.145°-inclined) Moon on 2026-07-09: apogee 445,000 km, burn
+  // angle 4.98 rad at t=0/default epoch, return perigee ≈ 201 km. (Old
+  // circular-rail P1 golden was apo 455,000 km / 4.5379 rad / ~62 km.)
+  // Rotated with the Moon's in-plane ephemeris angle at departure.
+  const aSeed = (rp + 445000) / 2;
   const dvSeed = Math.sqrt(muE * (2 / rp - 1 / aSeed)) - Math.sqrt(muE / rp);
   const twoPi = 2 * Math.PI;
-  let thetaSeed = (4.5379 + (progBodyAngleAt('Moon', t0) - progBodyAngleAt('Moon', 0))) % twoPi;
+  let thetaSeed = (4.98 + (progBodyAngleAt('Moon', t0) - progBodyAngleAt('Moon', 0))) % twoPi;
   if (thetaSeed < 0) thetaSeed += twoPi;
   const phase = (((thetaSeed - nMean * t0) % twoPi) + twoPi) % twoPi;
   const metSeed = t0 + phase / nMean;
@@ -428,11 +435,10 @@ function physLegTofFor(m, e, metNow) {
  */
 function physRebuildMissionTrajectories(m) {
   if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
-  // The mission's planet-phase calibration (574, render-layer derived state) —
-  // physics MUST use the same planet angles the renderer draws, or trajectories
-  // visibly detach from the planets they target (one position source, MATH.md
-  // §7a/§7f). Pure function of the schematic extraction; no physics circularity.
-  const calOverrides = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
+  // R1: planet-phase calibration retired — real ephemeris rails need no
+  // per-mission overrides. Kept as an empty map so downstream signatures
+  // (physSolveNodeBurn/physPropagateSegment ctx) stay unchanged.
+  const calOverrides = {};
   const legs = [];
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
   // destination-orbit mean altitude for a leg's dest body, from the first
@@ -545,8 +551,7 @@ function physRebuildMissionTrajectories(m) {
     // by leg signature so a warm recompute costs ~one propagation per leg.
     let st0 = burn.state, dvVec = burn.dvVec;
     {
-      const relevantOv = (burn.kind === 'interplanetary') ? (calOverrides[burn.dest] || 0) : 0;
-      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|${relevantOv.toFixed(6)}`;
+      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}`;
       let aim = _physShootCache[sig];
       if (!aim) {
         let sol = null;

@@ -96,7 +96,7 @@ function profReport(minMs) {
     'missionRecompute', 'missionRenderDetail', 'missionRunChecks',
     // trajectory view render path
     '_trajWorldSVG', '_trajBodyFrameContent', '_trajResolveLabels',
-    '_trajApplyCam', '_trajExtractMission', '_trajGetPlanetCalibration',
+    '_trajApplyCam', '_trajExtractMission',
     // calculators
     'lvPerformance', 'lvMaxPayload', 'destOnOrbitDV',
     // porkchop

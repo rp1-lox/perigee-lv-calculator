@@ -10817,127 +10817,189 @@ const PROG_MOON_ORBITS = {
   Titan: { parent: 'Saturn', r: 1221900 },
 };
 
-// ── Body kinematics (C1a) ────────────────────────────────────────────────────
-// Single source of truth for orbital PERIOD (seconds, canonical — kills the
-// seconds-vs-days unit bug class at the source) and phase angle at T=0
-// (theta0_rad) for every body the trajectory view / porkchop plotter draws.
-// A PARALLEL map (not a rework of PROG_HELIO_R) so existing consumers of
-// PROG_HELIO_R as plain numbers (progTransferTOF/TMI/etc.) are untouched.
+// ── Body kinematics (R1 — real ephemeris rails, 2026-07-09) ─────────────────
+// Replaces the C1a circular-coplanar model (PROG_BODY_KINEMATICS + theta0
+// calibration) with REAL Keplerian mean elements + secular rates, evaluated
+// at real absolute time. The planet-phase calibration fiction (MATH.md old
+// §7a) retires with it: real ephemeris = real phases. See MATH.md §7a (R1).
 //
-// Periods (days -> seconds, ×86400):
-//   Mercury 87.969d, Venus 224.701d, Earth 365.256d, Mars 686.971d,
-//   Jupiter 4332.59d, Saturn 10759.22d, Uranus 30688.5d, Neptune 60182d,
-//   Moon 27.3217d, Titan 15.9454d.
-//
-// theta0_rad:
-//   - Earth/Mars/Venus: taken directly FROM PROG_PORK_DATA (410) — those
-//     values are calibrated so a Hohmann departure lands near day 0. The
-//     porkchop module reads its theta0s from THIS table now (single source);
-//     see 410's PROG_PORK_DATA for the unification.
-//   - All other bodies (planets + Moon/Titan): the CURRENT schematic spread
-//     angles used by 574's Sun scene / body scenes, extracted verbatim so
-//     t=0 renders identically to today.
-//     Sun scene planets: spread evenly over Object.keys(PROG_HELIO_R),
-//     ang = (i/n)*2*Math.PI - Math.PI/2, n = 8 (Mercury..Neptune in
-//     PROG_HELIO_R's declared order).
-//     Moon/Titan (body scene moon rings): schematic angle 0 (drawn at
-//     cx=rr, cy=0 — see _trajBodySceneSVG in 574).
-const PROG_BODY_KINEMATICS = {
-  Mercury: { period_s: 87.969   * 86400, theta0_rad: (0/8) * 2*Math.PI - Math.PI/2 },
-  Venus:   { period_s: 224.701  * 86400, theta0_rad: 5.3390 },                        // porkchop-calibrated
-  Earth:   { period_s: 365.256  * 86400, theta0_rad: 0 },                             // porkchop-calibrated
-  Mars:    { period_s: 686.971  * 86400, theta0_rad: 0.7729 },                        // porkchop-calibrated
-  Jupiter: { period_s: 4332.59  * 86400, theta0_rad: (4/8) * 2*Math.PI - Math.PI/2 },
-  Saturn:  { period_s: 10759.22 * 86400, theta0_rad: (5/8) * 2*Math.PI - Math.PI/2 },
-  Uranus:  { period_s: 30688.5  * 86400, theta0_rad: (6/8) * 2*Math.PI - Math.PI/2 },
-  Neptune: { period_s: 60182    * 86400, theta0_rad: (7/8) * 2*Math.PI - Math.PI/2 },
-  Moon:    { period_s: 27.3217  * 86400, theta0_rad: 0 },
-  Titan:   { period_s: 15.9454  * 86400, theta0_rad: 0 },
+// Planets: JPL approximate mean elements (Standish, valid 1800–2050).
+//   Columns: a (AU), e, I (deg), L (mean longitude, deg), wbar (longitude of
+//   perihelion, deg), Om (ascending node, deg) + rates per Julian CENTURY
+//   from J2000 (JD 2451545.0). Frame: ecliptic-J2000, +x = vernal equinox.
+// Moon: simplified mean elements about Earth (mean-element-only — no
+//   evection/variation/solar perturbation terms), rates per DAY.
+// Titan: circular schematic in Saturn's orbital plane (documented critique).
+
+const PROG_J2000_JD = 2451545.0;          // J2000.0 epoch, Julian date
+const PROG_DEFAULT_EPOCH_JD = 2461230.5;  // 2026-07-09 00:00 UTC — default "missions start today"
+const PROG_AU_KM = 1.495978707e8;
+
+/** Program epoch (Julian date of MET 0). Reads PROG_ACTIVE_PROGRAM.epochJD
+ *  (persisted with the program object); default applied when absent. */
+function progEpochJD() {
+  const p = (typeof PROG_ACTIVE_PROGRAM !== 'undefined') ? PROG_ACTIVE_PROGRAM : null;
+  return (p && isFinite(p.epochJD)) ? p.epochJD : PROG_DEFAULT_EPOCH_JD;
+}
+
+// { a0 (AU), aDot (AU/cty), e0, eDot, I0 (deg), IDot, L0, LDot, wbar0, wbarDot, Om0, OmDot }
+const PROG_BODY_ELEMENTS = {
+  Mercury: { a0: 0.38709927, aDot:  0.00000037, e0: 0.20563593, eDot:  0.00001906, I0: 7.00497902,  IDot: -0.00594749, L0: 252.25032350,  LDot: 149472.67411175, wbar0: 77.45779628,  wbarDot: 0.16047689,  Om0: 48.33076593,  OmDot: -0.12534081 },
+  Venus:   { a0: 0.72333566, aDot:  0.00000390, e0: 0.00677672, eDot: -0.00004107, I0: 3.39467605,  IDot: -0.00078890, L0: 181.97909950,  LDot: 58517.81538729,  wbar0: 131.60246718, wbarDot: 0.00268329,  Om0: 76.67984255,  OmDot: -0.27769418 },
+  Earth:   { a0: 1.00000261, aDot:  0.00000562, e0: 0.01671123, eDot: -0.00004392, I0: -0.00001531, IDot: -0.01294668, L0: 100.46457166,  LDot: 35999.37244981,  wbar0: 102.93768193, wbarDot: 0.32327364,  Om0: 0.0,          OmDot: 0.0 },
+  Mars:    { a0: 1.52371034, aDot:  0.00001847, e0: 0.09339410, eDot:  0.00007882, I0: 1.84969142,  IDot: -0.00813131, L0: -4.55343205,   LDot: 19140.30268499,  wbar0: -23.94362959, wbarDot: 0.44441088,  Om0: 49.55953891,  OmDot: -0.29257343 },
+  Jupiter: { a0: 5.20288700, aDot: -0.00011607, e0: 0.04838624, eDot: -0.00013253, I0: 1.30439695,  IDot: -0.00183714, L0: 34.39644051,   LDot: 3034.74612775,   wbar0: 14.72847983,  wbarDot: 0.21252668,  Om0: 100.47390909, OmDot: 0.20469106 },
+  Saturn:  { a0: 9.53667594, aDot: -0.00125060, e0: 0.05386179, eDot: -0.00050991, I0: 2.48599187,  IDot: 0.00193609,  L0: 49.95424423,   LDot: 1222.49362201,   wbar0: 92.59887831,  wbarDot: -0.41897216, Om0: 113.66242448, OmDot: -0.28867794 },
+  Uranus:  { a0: 19.18916464,aDot: -0.00196176, e0: 0.04725744, eDot: -0.00004397, I0: 0.77263783,  IDot: -0.00242939, L0: 313.23810451,  LDot: 428.48202785,    wbar0: 170.95427630, wbarDot: 0.40805281,  Om0: 74.01692503,  OmDot: 0.04240589 },
+  Neptune: { a0: 30.06992276,aDot:  0.00026291, e0: 0.00859048, eDot:  0.00005105, I0: 1.77004347,  IDot: 0.00035372,  L0: -55.12002969,  LDot: 218.45945325,    wbar0: 44.96476227,  wbarDot: -0.32241464, Om0: 131.78422574, OmDot: -0.00508664 },
 };
 
-/** Body phase angle (radians, normalized to [0, 2π)) at time t_s (seconds since epoch). */
-function progBodyAngleAt(body, t_s) {
-  const k = PROG_BODY_KINEMATICS[body];
-  if (!k) return 0;
+// Moons: elements about the parent. a in km; angles deg AT J2000; rates per DAY.
+// Moon: standard mean elements (i = 5.145° to the ecliptic; e = 0.0549).
+// Titan: schematic — circular at 1,221,870 km IN SATURN'S ORBITAL PLANE
+// (I/Om copied from Saturn's J2000 elements; the real Titan orbits near
+// Saturn's EQUATOR, tilted ~26.7° from its orbital plane — known wrong,
+// accepted and critiqued in MATH.md).
+const PROG_MOON_ELEMENTS = {
+  Moon:  { parent: 'Earth',  a: 384400,  e: 0.0549, I0: 5.145,      L0: 218.316, LDot: 13.176358,          wbar0: 83.353, wbarDot: 0.111403, Om0: 125.080,       OmDot: -0.052954 },
+  Titan: { parent: 'Saturn', a: 1221870, e: 0,      I0: 2.48599187, L0: 0,       LDot: 360 / 15.9454,      wbar0: 0,      wbarDot: 0,        Om0: 113.66242448,  OmDot: 0 },
+};
+
+/** Solve Kepler's equation M = E − e·sinE (Newton, tol 1e-8). Angles rad. */
+function progKeplerSolveE(M, e) {
+  let E = e < 0.8 ? M : Math.PI;
+  for (let k = 0; k < 20; k++) {
+    const d = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
+    E -= d;
+    if (Math.abs(d) < 1e-8) break;
+  }
+  return E;
+}
+
+/**
+ * Evaluate one body's osculating mean elements into a 3D state {r:[3], v:[3]}
+ * (km, km/s) relative to its primary. Angles rad; nDot/OmDot/argpDot rad/s.
+ * VELOCITY IS ANALYTIC (no finite differencing): perifocal Ė-form using the
+ * TABLE's mean-motion rate (dM/dt = L̇ − ϖ̇, which for the Moon differs ~0.5%
+ * from √(μ/a³) because the real lunar rate is solar-perturbed), plus the
+ * secular frame-rotation terms Ω̇·(ẑ×r) + ω̇·(ĥ×r).
+ */
+function _progElementsEval(a, e, i, raan, argp, M, nDot, OmDot, argpDot) {
+  // normalize M to [-π, π] for the Newton solve
+  M = M % (2 * Math.PI);
+  if (M > Math.PI) M -= 2 * Math.PI;
+  if (M < -Math.PI) M += 2 * Math.PI;
+  const E = progKeplerSolveE(M, e);
+  const cE = Math.cos(E), sE = Math.sin(E);
+  const b = a * Math.sqrt(1 - e * e);
+  const xpf = a * (cE - e), ypf = b * sE;             // perifocal position
+  const Edot = nDot / (1 - e * cE);
+  const vxpf = -a * sE * Edot, vypf = b * cE * Edot;  // perifocal velocity
+  // perifocal -> inertial: R3(−Ω) R1(−i) R3(−ω)
+  const cO = Math.cos(raan), sO = Math.sin(raan);
+  const ci = Math.cos(i), si = Math.sin(i);
+  const cw = Math.cos(argp), sw = Math.sin(argp);
+  const R = [
+    [cO * cw - sO * sw * ci, -cO * sw - sO * cw * ci,  sO * si],
+    [sO * cw + cO * sw * ci, -sO * sw + cO * cw * ci, -cO * si],
+    [sw * si,                 cw * si,                  ci     ],
+  ];
+  const rot = v => [
+    R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+    R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2],
+    R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2],
+  ];
+  const r = rot([xpf, ypf, 0]);
+  let v = rot([vxpf, vypf, 0]);
+  // secular frame rotation: node regression about +z, apsidal precession about ĥ
+  if (OmDot) v = [v[0] - OmDot * r[1], v[1] + OmDot * r[0], v[2]];
+  if (argpDot) {
+    const h = rot([0, 0, 1]); // orbit-normal unit vector
+    v = [v[0] + argpDot * (h[1] * r[2] - h[2] * r[1]),
+         v[1] + argpDot * (h[2] * r[0] - h[0] * r[2]),
+         v[2] + argpDot * (h[0] * r[1] - h[1] * r[0])];
+  }
+  return { r, v };
+}
+
+const _PROG_D2R = Math.PI / 180;
+const _PROG_CTY_S = 36525 * 86400; // Julian century in seconds
+
+/** LOCAL element-evaluated state of a body relative to its PRIMARY at mission
+ *  time t_s (seconds past the program epoch). Planets: heliocentric.
+ *  Moons: parent-centric. Sun: zeros. 3D ecliptic-J2000 km / km/s. Pure. */
+function progBodyLocalEphemState(body, t_s) {
   const t = t_s || 0;
-  let theta = k.theta0_rad + 2 * Math.PI * t / k.period_s;
-  theta = theta % (2 * Math.PI);
+  const el = PROG_BODY_ELEMENTS[body];
+  if (el) {
+    const T = (progEpochJD() - PROG_J2000_JD + t / 86400) / 36525; // Julian centuries from J2000
+    const a = (el.a0 + el.aDot * T) * PROG_AU_KM;
+    const e = el.e0 + el.eDot * T;
+    const i = (el.I0 + el.IDot * T) * _PROG_D2R;
+    const L = (el.L0 + el.LDot * T) * _PROG_D2R;
+    const wbar = (el.wbar0 + el.wbarDot * T) * _PROG_D2R;
+    const Om = (el.Om0 + el.OmDot * T) * _PROG_D2R;
+    const nDot = (el.LDot - el.wbarDot) * _PROG_D2R / _PROG_CTY_S;
+    const OmDot = el.OmDot * _PROG_D2R / _PROG_CTY_S;
+    const argpDot = (el.wbarDot - el.OmDot) * _PROG_D2R / _PROG_CTY_S;
+    return _progElementsEval(a, e, i, Om, wbar - Om, L - wbar, nDot, OmDot, argpDot);
+  }
+  const mel = PROG_MOON_ELEMENTS[body];
+  if (mel) {
+    const d = progEpochJD() - PROG_J2000_JD + t / 86400;           // days from J2000
+    const L = (mel.L0 + mel.LDot * d) * _PROG_D2R;
+    const wbar = (mel.wbar0 + mel.wbarDot * d) * _PROG_D2R;
+    const Om = (mel.Om0 + mel.OmDot * d) * _PROG_D2R;
+    const nDot = (mel.LDot - mel.wbarDot) * _PROG_D2R / 86400;
+    const OmDot = mel.OmDot * _PROG_D2R / 86400;
+    const argpDot = (mel.wbarDot - mel.OmDot) * _PROG_D2R / 86400;
+    return _progElementsEval(mel.a, mel.e, mel.I0 * _PROG_D2R, Om, wbar - Om, L - wbar, nDot, OmDot, argpDot);
+  }
+  return { r: [0, 0, 0], v: [0, 0, 0] };
+}
+
+/** HELIOCENTRIC element-evaluated 3D state {r:[3], v:[3]} of any body at
+ *  mission time t_s. Recursive for moons (parent state + local state). The
+ *  ONE body-position source — physics, porkchop, and renderer all resolve
+ *  through this (via physBodyStateAt / progBodyWorldPos). Pure. */
+function progBodyEphemState(body, t_s) {
+  if (body === 'Sun') return { r: [0, 0, 0], v: [0, 0, 0] };
+  const local = progBodyLocalEphemState(body, t_s);
+  const mel = PROG_MOON_ELEMENTS[body];
+  if (mel) {
+    const p = progBodyEphemState(mel.parent, t_s);
+    return { r: [p.r[0] + local.r[0], p.r[1] + local.r[1], p.r[2] + local.r[2]],
+             v: [p.v[0] + local.v[0], p.v[1] + local.v[1], p.v[2] + local.v[2]] };
+  }
+  return local;
+}
+
+/** Body phase angle (radians, [0, 2π)) at mission time t_s — the in-ecliptic
+ *  atan2 of the REAL element-evaluated position (planets: heliocentric;
+ *  moons: parent-relative). Kept for callers that need an angle (phasing,
+ *  moon-lead arc rotation); the z component is projected away. */
+function progBodyAngleAt(body, t_s) {
+  const st = progBodyLocalEphemState(body, t_s);
+  if (!st.r[0] && !st.r[1]) return 0;
+  let theta = Math.atan2(st.r[1], st.r[0]);
   if (theta < 0) theta += 2 * Math.PI;
   return theta;
 }
 
-/** Heliocentric world position {x,y} km at time t_s. Sun={0,0}; planets on
- * their PROG_HELIO_R ring; moons = parent position + moon-ring offset. Pure. */
+/** Heliocentric world position {x, y, z} km at mission time t_s — REAL
+ *  element-evaluated position (z carried for 3D consumers; the current
+ *  top-down renderer reads x/y only — ecliptic projection). Pure. */
 function progBodyWorldPos(body, t_s) {
-  if (body === 'Sun') return { x: 0, y: 0 };
-  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
-  if (moonInfo) {
-    const parentPos = progBodyWorldPos(moonInfo.parent, t_s);
-    const theta = progBodyAngleAt(body, t_s);
-    return { x: parentPos.x + moonInfo.r * Math.cos(theta), y: parentPos.y + moonInfo.r * Math.sin(theta) };
-  }
-  const r = PROG_HELIO_R[body];
-  if (r == null) return { x: 0, y: 0 };
-  const theta = progBodyAngleAt(body, t_s);
-  return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
+  const st = progBodyEphemState(body, t_s);
+  return { x: st.r[0], y: st.r[1], z: st.r[2] };
 }
 
-/**
- * Per-mission planet-phase calibration offset (radians), NOT persisted and NOT
- * written into PROG_BODY_KINEMATICS — a pure derived-state helper consulted
- * only by the trajectory view's render pass (574). See MATH.md §7a "planet
- * phase calibration" for the full rule set.
- *
- * A true-shape Hohmann arc between two heliocentric rings only visually
- * connects (arrival endpoint lands exactly on the destination body) when the
- * phase angle between departure and destination body at t_dep happens to
- * equal the Hohmann geometry's required 180°-apart-at-arrival relationship.
- * With theta0s fixed per the table, an arbitrary mission MET generally will
- * NOT satisfy that. This function computes the ADDITIVE theta0 offset that
- * WOULD make it satisfy that, for one specific (t_dep, t_arr) leg — the
- * caller (574) applies this offset only to the FIRST leg's destination body,
- * for THIS mission's render pass only.
- *
- * required destination angle at arrival = departBody's angle at t_dep + PI
- * table destination angle at arrival    = theta0_table + 2*PI*t_arr/period
- * offset                                = required - table
- *
- * Returns 0 if destBody has no kinematics entry. Deliberately NOT normalized
- * — it's an additive correction to be added to theta0_table before feeding
- * progBodyAngleAt-equivalent math, not a freestanding angle-in-isolation.
- */
-function progCalibratedTheta0(destBody, t_dep_s, t_arr_s, departBody) {
-  const depAngle = progBodyAngleAt(departBody, t_dep_s);
-  const requiredArrivalAngle = depAngle + Math.PI;
-  const k = PROG_BODY_KINEMATICS[destBody];
-  if (!k) return 0;
-  const tableArrivalAngle = k.theta0_rad + 2 * Math.PI * t_arr_s / k.period_s;
-  return requiredArrivalAngle - tableArrivalAngle;
-}
-
-/** Heliocentric world position {x,y} km at time t_s for a body, with an extra
- * PER-MISSION calibration offset applied to each heliocentric planet's own
- * angle (moons still resolve their OWN angle normally, but their PARENT
- * position is computed through this same calibrated path recursively — so a
- * calibrated planet's moons move WITH it). `overrides` is a plain object
- * `{bodyName: offsetRadians}` — bodies absent from it behave exactly like
- * progBodyWorldPos (offset 0). Pure; does NOT modify progBodyWorldPos or its
- * signature/behavior — this is an ADDITIVE new function for 574's calibrated
- * render pass only. See MATH.md §7a. */
+/** R1 COMPATIBILITY ALIAS: the old per-mission planet-phase calibration
+ *  (progCalibratedTheta0 + overrides threading) retired with the real
+ *  ephemeris — real phases need no calibration. Every legacy call site keeps
+ *  compiling; `overrides` is accepted and IGNORED. */
 function progBodyWorldPosCalibrated(body, t_s, overrides) {
-  if (body === 'Sun') return { x: 0, y: 0 };
-  overrides = overrides || {};
-  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
-  if (moonInfo) {
-    const parentPos = progBodyWorldPosCalibrated(moonInfo.parent, t_s, overrides);
-    const theta = progBodyAngleAt(body, t_s); // moons are never calibrated themselves (heliocentric-planet-only concern)
-    return { x: parentPos.x + moonInfo.r * Math.cos(theta), y: parentPos.y + moonInfo.r * Math.sin(theta) };
-  }
-  const r = PROG_HELIO_R[body];
-  if (r == null) return { x: 0, y: 0 };
-  const offset = overrides[body] || 0;
-  const theta = progBodyAngleAt(body, t_s) + offset;
-  return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
+  return progBodyWorldPos(body, t_s);
 }
 
 // ── Propellant type registry ────────────────────────────────────────────────
@@ -11484,6 +11546,7 @@ function progMakeProgram(name) {
     nodeMapActiveNodes:    (typeof PROG_NM_NODES !== 'undefined' ? PROG_NM_NODES : []).filter(n => n.zone === 'earth' && n.orbit?.type !== 'surface').map(n => n.id), // earth orbitals on by default; surface nodes tied to planet discs
     performanceCases:      [],       // archived perf cases (Phase 10)
     warnings:              [],
+    epochJD:               (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5), // R1: absolute date of MET 0 (Julian date)
   };
 }
 
@@ -11851,29 +11914,14 @@ function physKeplerPropagate(r0, v0, dt, mu) {
 }
 
 // ── body rails state ─────────────────────────────────────────────────────────
-/** Heliocentric state {r:[3], v:[3]} of a body at time t_s.
- *  POSITION resolves through progBodyWorldPosCalibrated — the ONE body-position
- *  source shared with the renderer/porkchop (calibration coherence invariant;
- *  see PHYSICS_PLAN.md). VELOCITY is the analytic circular-rail tangent,
- *  v = ω·r ⊥ radius, recursive for moons (parent velocity + local). z = 0. */
+/** Heliocentric state {r:[3], v:[3]} of a body at time t_s — REAL ephemeris
+ *  rails (R1): full 3D element-evaluated position AND analytic velocity via
+ *  progBodyEphemState (360), the ONE body-position source shared with the
+ *  renderer/porkchop. The `overrides` param survives for signature
+ *  compatibility only — the planet-phase calibration it once threaded
+ *  retired with the real ephemeris; it is IGNORED. */
 function physBodyStateAt(body, t_s, overrides) {
-  if (body === 'Sun') return { r: [0, 0, 0], v: [0, 0, 0] };
-  overrides = overrides || {};
-  const t = t_s || 0;
-  const k = PROG_BODY_KINEMATICS[body];
-  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
-  const radius = moonInfo ? moonInfo.r : PROG_HELIO_R[body];
-  if (radius == null || !k) return { r: [0, 0, 0], v: [0, 0, 0] };
-  const omega = 2 * Math.PI / k.period_s;
-  // Same angle math as progBodyWorldPosCalibrated (moons never take offsets).
-  const theta = progBodyAngleAt(body, t) + (moonInfo ? 0 : (overrides[body] || 0));
-  const localR = [radius * Math.cos(theta), radius * Math.sin(theta), 0];
-  const localV = [-radius * omega * Math.sin(theta), radius * omega * Math.cos(theta), 0];
-  if (moonInfo) {
-    const parent = physBodyStateAt(moonInfo.parent, t, overrides);
-    return { r: physAdd(parent.r, localR), v: physAdd(parent.v, localV) };
-  }
-  return { r: localR, v: localV };
+  return progBodyEphemState(body, t_s);
 }
 
 // ── escape hyperbola geometry (P3) ───────────────────────────────────────────
@@ -12549,21 +12597,13 @@ function progVehicleDefToLiveStages(vdef) {
 // Lambert solver → C3 departure grid → canvas heatmap → click-to-select window.
 // Selected window sets PROG_ACTIVE_PROGRAM.launchWindow which drives COAST duration.
 //
-// Planet model: circular, coplanar ecliptic orbits.
-// theta0_rad: phase angle at T=0 calibrated so a Hohmann departure is near day 0.
+// Planet model (R1, 2026-07-09): REAL ephemeris (progBodyEphemState, 360),
+// PROJECTED TO THE ECLIPTIC PLANE (z dropped) because progLambert2D is 2D —
+// a small error for the planets plotted (i ≤ 7°; Mars 1.85°, Venus 3.39°),
+// critiqued in MATH.md. dep_day = days since the PROGRAM EPOCH
+// (PROG_ACTIVE_PROGRAM.epochJD) — departure days are now REAL dates.
 
 const PROG_PORK_MU = 1.32712440018e11;   // km³/s² — Sun
-
-// Planet data.  theta0_rad chosen so optimal (Hohmann) departure ≈ T+0.
-// theta0_rad now READS from the single-source PROG_BODY_KINEMATICS map (360)
-// — these ARE the calibrated values (Earth/Mars/Venus theta0 in that table
-// were taken FROM here originally; see 360's comment). Kept as a literal
-// fallback so this module still works if 360 loads after it or is absent.
-const PROG_PORK_DATA = {
-  Earth: { period_d: 365.256, r_km: 149597870.7, theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Earth.theta0_rad : 0)      },
-  Mars:  { period_d: 686.971, r_km: 227939200,   theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Mars.theta0_rad  : 0.7729) }, // 44.3°
-  Venus: { period_d: 224.701, r_km: 108208930,   theta0_rad: (typeof PROG_BODY_KINEMATICS !== 'undefined' ? PROG_BODY_KINEMATICS.Venus.theta0_rad : 5.3390) }, // 305.9°
-};
 
 // ── Stumpff functions ─────────────────────────────────────────────────────────
 // progStumpffC / progStumpffS moved to 385-physics-core.js (P0) — one shared
@@ -12646,23 +12686,20 @@ function progLambert2D(r1v, r2v, tof_s, mu) {
   };
 }
 
-// ── Planet state (circular orbit model) ──────────────────────────────────────
+// ── Planet state (real ephemeris, ecliptic-projected for the 2D Lambert) ─────
 
-/** Heliocentric position [x,y] km at t_days from epoch. */
+/** Heliocentric position [x,y] km at t_days past the program epoch (z dropped). */
 function progHelioPos(body, t_days) {
-  const d = PROG_PORK_DATA[body];
-  if (!d) return null;
-  const theta = d.theta0_rad + 2*Math.PI * t_days / d.period_d;
-  return [d.r_km * Math.cos(theta), d.r_km * Math.sin(theta)];
+  if (!PROG_BODY_ELEMENTS[body]) return null;
+  const st = progBodyEphemState(body, t_days * 86400);
+  return [st.r[0], st.r[1]];
 }
 
-/** Heliocentric velocity [vx,vy] km/s at t_days (tangential, CCW). */
+/** Heliocentric velocity [vx,vy] km/s at t_days past the program epoch (z dropped). */
 function progHelioVel(body, t_days) {
-  const d = PROG_PORK_DATA[body];
-  if (!d) return null;
-  const theta = d.theta0_rad + 2*Math.PI * t_days / d.period_d;
-  const v     = 2*Math.PI * d.r_km / (d.period_d * 86400);
-  return [-v * Math.sin(theta), v * Math.cos(theta)];
+  if (!PROG_BODY_ELEMENTS[body]) return null;
+  const st = progBodyEphemState(body, t_days * 86400);
+  return [st.v[0], st.v[1]];
 }
 
 // ── C3 grid computation ───────────────────────────────────────────────────────
@@ -12742,15 +12779,17 @@ function progPorkC3Color(c3, c3_min, c3_max) {
   return 'rgb(' + r + ',' + g + ',' + bl + ')';
 }
 
-// Cache of the last-built grid, keyed by destination, so hover/click handlers
-// don't need to re-run the Lambert solve on every mouse move.
-let _progPorkGridCache = { destination: null, grid: null };
+// Cache of the last-built grid, keyed by destination + program epoch (R1:
+// positions depend on epochJD now), so hover/click handlers don't re-run the
+// Lambert solve on every mouse move.
+let _progPorkGridCache = { key: null, grid: null };
 
 /** Build (or reuse the cached) porkchop grid for Earth -> destination. */
 function progPorkGetGrid(destination) {
-  if (_progPorkGridCache.destination === destination && _progPorkGridCache.grid) return _progPorkGridCache.grid;
+  const key = destination + '|' + progEpochJD();
+  if (_progPorkGridCache.key === key && _progPorkGridCache.grid) return _progPorkGridCache.grid;
   const grid = progPorkchopGrid('Earth', destination, {});
-  _progPorkGridCache = { destination, grid };
+  _progPorkGridCache = { key, grid };
   return grid;
 }
 
@@ -13603,6 +13642,8 @@ function applyProgramObject(obj) {
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
+  // R1: programs saved before the epoch feature get the default epoch
+  if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
   _fleetSel   = (obj.sel && obj.sel.fleet)   || (_fleetEntries[0] && _fleetEntries[0].fleetId) || null;
   _scEdSel    = (_scEdSC[0] && _scEdSC[0].spacecraftId) || null;
   // Re-simulate every mission so PROG_ACTIVE_PROGRAM's runtime vehicles are
@@ -14583,14 +14624,13 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
     // moon's railed angle (parent-centered) at arrival; burn diametrically opposite
     theta = physPhaseBurnAngle(progBodyAngleAt(destMoon, tDepart_s + coastTof));
   } else if (destPlanet) {
-    // heliocentric equivalent: destination planet's railed angle at arrival —
-    // including the mission's CALIBRATION offset (the renderer draws the
-    // planet at the calibrated angle; phasing against the uncalibrated table
-    // angle made physics and render disagree about where the planet IS —
-    // critique 35, fixed 2026-07-09). The LEO burn point is placed at the
-    // same schematic angle in the Earth frame (departure asymptote roughly
-    // opposite the arrival point). Deliberately coarse — P4's shooter refines.
-    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof) + (overrides[destPlanet] || 0));
+    // heliocentric equivalent: destination planet's REAL ephemeris angle at
+    // arrival (R1 — the calibration-offset threading retired with the real
+    // rails; `overrides` is signature-compat only). The LEO burn point is
+    // placed at the same schematic angle in the Earth frame (departure
+    // asymptote roughly opposite the arrival point). Deliberately coarse —
+    // P4's shooter refines.
+    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof));
   }
 
   const r = [r1 * Math.cos(theta), r1 * Math.sin(theta), 0];
@@ -14748,7 +14788,12 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   if (theta0 < 0) theta0 += 2 * Math.PI;
   const soi = physSoiRadius(dest);
   const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
-  const tolKm = Math.min(soi / 3, Math.max(1000, targetR * 0.25));
+  // R1: the burn is still in the ecliptic plane (z = 0) while real targets are
+  // INCLINED (Moon 5.15°, Mars 1.85°) — the closest approach can't go below
+  // the target's out-of-plane offset at encounter (up to sin(i)·r ≈ 34,000 km
+  // for the Moon). Tolerance = SOI/3 accepts the best a coplanar burn can do;
+  // R3's normal-direction DOF tightens this again.
+  const tolKm = soi / 3;
   const cutoff = tDepart_s + 1.5 * Math.max(burn0.coastTof_s, 3600);
   // heliocentric cruise: cap the step ladder so the encounter can't be
   // stepped over (see physStepFor ctx.dtMax) — fixed constant, deterministic
@@ -14801,12 +14846,15 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides) {
   const rp = RE_ + (leoAltKm || 185);
   const nMean = Math.sqrt(muE / (rp * rp * rp));
   const t0 = tDepart_s || 0;
-  // seed energy from the P1 golden (apo 455,000 km) and its burn angle
-  // rotated with the Moon's rail angle at departure
-  const aSeed = (rp + 455000) / 2;
+  // seed energy + burn angle from the R1 golden, re-scanned against the REAL
+  // (eccentric, 5.145°-inclined) Moon on 2026-07-09: apogee 445,000 km, burn
+  // angle 4.98 rad at t=0/default epoch, return perigee ≈ 201 km. (Old
+  // circular-rail P1 golden was apo 455,000 km / 4.5379 rad / ~62 km.)
+  // Rotated with the Moon's in-plane ephemeris angle at departure.
+  const aSeed = (rp + 445000) / 2;
   const dvSeed = Math.sqrt(muE * (2 / rp - 1 / aSeed)) - Math.sqrt(muE / rp);
   const twoPi = 2 * Math.PI;
-  let thetaSeed = (4.5379 + (progBodyAngleAt('Moon', t0) - progBodyAngleAt('Moon', 0))) % twoPi;
+  let thetaSeed = (4.98 + (progBodyAngleAt('Moon', t0) - progBodyAngleAt('Moon', 0))) % twoPi;
   if (thetaSeed < 0) thetaSeed += twoPi;
   const phase = (((thetaSeed - nMean * t0) % twoPi) + twoPi) % twoPi;
   const metSeed = t0 + phase / nMean;
@@ -14876,11 +14924,10 @@ function physLegTofFor(m, e, metNow) {
  */
 function physRebuildMissionTrajectories(m) {
   if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
-  // The mission's planet-phase calibration (574, render-layer derived state) —
-  // physics MUST use the same planet angles the renderer draws, or trajectories
-  // visibly detach from the planets they target (one position source, MATH.md
-  // §7a/§7f). Pure function of the schematic extraction; no physics circularity.
-  const calOverrides = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
+  // R1: planet-phase calibration retired — real ephemeris rails need no
+  // per-mission overrides. Kept as an empty map so downstream signatures
+  // (physSolveNodeBurn/physPropagateSegment ctx) stay unchanged.
+  const calOverrides = {};
   const legs = [];
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
   // destination-orbit mean altitude for a leg's dest body, from the first
@@ -14993,8 +15040,7 @@ function physRebuildMissionTrajectories(m) {
     // by leg signature so a warm recompute costs ~one propagation per leg.
     let st0 = burn.state, dvVec = burn.dvVec;
     {
-      const relevantOv = (burn.kind === 'interplanetary') ? (calOverrides[burn.dest] || 0) : 0;
-      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|${relevantOv.toFixed(6)}`;
+      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}`;
       let aim = _physShootCache[sig];
       if (!aim) {
         let sol = null;
@@ -18895,9 +18941,8 @@ function missionSolveFreeReturn(id) {
   const alt = ((os.perigee ?? 185) + (os.apogee ?? os.perigee ?? 185)) / 2;
   const metEl = document.getElementById('addev-mnode-met-' + id);
   const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
-  const calib = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
-  let sol = null;
-  try { sol = physFreeReturnSolve(alt, tDep, calib); } catch (err) { sol = null; }
+  let sol = null; // R1: calibration overrides retired — real ephemeris rails
+  try { sol = physFreeReturnSolve(alt, tDep, {}); } catch (err) { sol = null; }
   if (!sol || !sol.converged) {
     say(`// no free return found from ${Math.round(alt)} km at this departure — try a different MET`, true);
     return;
@@ -20224,15 +20269,10 @@ function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
 // Effective camera center in heliocentric km at the given view time — the
 // ONE place anchor + offset combine. Everything else in the render path
 // subtracts this from world km to get floating-origin render coords.
-// `overrides` (optional) = the current mission's planet-phase calibration
-// map (see _trajGetPlanetCalibration) — when the camera is anchored on a
-// calibrated planet, the camera itself must resolve through the SAME
-// calibrated position so the anchor body stays centered (coherence: glyph
-// position, ZOI anchor, and camera center must all agree, per the render
-// integration brief). Falls back to plain progBodyWorldPos when omitted or
-// when the anchor has no override.
+// `overrides` is a retired R1 vestige (planet-phase calibration is gone);
+// accepted and ignored so existing call sites keep compiling.
 function _trajCamCenterKm(cam, viewT, overrides) {
-  const p = overrides ? progBodyWorldPosCalibrated(cam.anchorBody, viewT, overrides) : progBodyWorldPos(cam.anchorBody, viewT);
+  const p = progBodyWorldPos(cam.anchorBody, viewT);
   return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0) };
 }
 
@@ -21066,9 +21106,9 @@ function _trajPhysLegRender(ctx) {
   const id = m.missionId;
   const clipT = _trajPhysClipT(m, physLeg);
   // Frame-anchor resolver: this pass knows only ITS body's drawn position
-  // (ox,oy); sibling frames' drawn positions follow from the calibrated world
-  // delta at viewTime × zoom (same position source as the glyphs — coherence).
-  const overrides = (ctx.calib && ctx.calib.overrides) || _trajGetPlanetCalibration(m).overrides;
+  // (ox,oy); sibling frames' drawn positions follow from the real-ephemeris
+  // world delta at viewTime × zoom (same position source as the glyphs).
+  const overrides = {}; // R1: calibration retired — alias ignores this anyway
   const bodyWorld = progBodyWorldPosCalibrated(body, vt, overrides);
   const anchorCache = {};
   const anchorOf = frame => {
@@ -21259,67 +21299,15 @@ function _trajGetExtraction(m) {
   return data;
 }
 
-// ── Planet-phase calibration (per-mission, render-pass-only derived state) ──
-// See MATH.md §7a "planet phase calibration" for the full rule set; spec
-// recap: a mission's FIRST Sun-frame leg to a given heliocentric destination
-// planet calibrates that planet's theta0 (via progCalibratedTheta0, 360) so
-// its true-shape Hohmann arc visually connects. A SECOND leg to the SAME
-// planet within the same mission can't also be satisfied — it's flagged
-// 'second' so the render pass draws ghost endpoints + a dotted line instead
-// of a connecting arc. Legs to planets that never get a calibrating leg keep
-// table theta0s untouched (offset 0, simply absent from the overrides map).
-// NOT persisted (m.log/autosave untouched), NOT written into the global
-// PROG_BODY_KINEMATICS table — recomputed fresh every render pass, keyed to
-// THIS mission's extraction cache so other missions/the porkchop plotter are
-// completely unaffected.
-let _trajCalibrationCache = { missionId: null, data: null };
-function _trajGetPlanetCalibration(m) {
-  if (!m) return { overrides: {}, legFlags: {}, active: false };
-  if (_trajCalibrationCache.missionId === m.missionId && _trajCalibrationCache.data) return _trajCalibrationCache.data;
-  const frames = _trajGetExtraction(m);
-  const overrides = {};      // { bodyName: offsetRadians } — heliocentric planets only
-  const legFlags = {};       // leg.key -> 'calibrating' | 'second'
-  // A true interplanetary transit leg has fromO.body === 'Sun' (per
-  // PROG_NM_NODES, 430 — e.g. mars-transfer's orbit is
-  // {type:'transit', body:'Sun', destination:'Mars'}), but per
-  // _trajFrameForOrbit(toO) it's extracted into the DESTINATION's OWN frame
-  // (frameId === destBody, e.g. 'Mars'), not a 'Sun' frameId — only the
-  // (impulsive, met===metArrive) injection leg that ENTERS the corridor
-  // lands in a Sun-adjacent frameId. So candidates must be gathered by
-  // scanning EVERY body frame's legs for fromO.body === 'Sun', not by
-  // assuming a single 'Sun' frame holds them. Legs within each frame's
-  // array are already in log/authored order (see _trajExtractMission); to
-  // get correct MISSION-WIDE authored order across frames (needed so the
-  // true first-in-time leg to a planet is the one that calibrates it, not
-  // just the first one encountered by frame-iteration order), sort
-  // candidates by leg.authIdx before assigning calibrating/second.
-  const candidates = [];
-  Object.keys(frames).forEach(frameId => {
-    (frames[frameId].legs || []).forEach(leg => {
-      if (!leg.fromO || leg.fromO.body !== 'Sun') return; // only real heliocentric transit legs
-      const destBody = leg.toO && (leg.toO.destination || leg.toO.body);
-      // Only heliocentric planets (PROG_HELIO_R) are calibration candidates —
-      // explicitly excludes anything in PROG_MOON_ORBITS (moons are handled
-      // by the existing Moon-lead logic, calibration is planet-ring-only).
-      if (!destBody || PROG_HELIO_R[destBody] == null || (PROG_MOON_ORBITS && PROG_MOON_ORBITS[destBody])) return;
-      if (leg.met == null || leg.metArrive == null) return; // no timing to calibrate against
-      const departBody = leg.fromO.departure_body || 'Earth';
-      candidates.push({ leg, destBody, departBody });
-    });
-  });
-  candidates.sort((a, b) => (a.leg.authIdx != null ? a.leg.authIdx : 0) - (b.leg.authIdx != null ? b.leg.authIdx : 0));
-  candidates.forEach(({ leg, destBody, departBody }) => {
-    if (overrides[destBody] == null) {
-      overrides[destBody] = (typeof progCalibratedTheta0 === 'function') ? progCalibratedTheta0(destBody, leg.met, leg.metArrive, departBody) : 0;
-      legFlags[leg.key] = 'calibrating';
-    } else {
-      legFlags[leg.key] = 'second';
-    }
-  });
-  const data = { overrides, legFlags, active: Object.keys(overrides).length > 0 };
-  _trajCalibrationCache = { missionId: m.missionId, data };
-  return data;
-}
+// ── Planet-phase calibration — RETIRED (R1, 2026-07-09) ─────────────────────
+// The per-mission calibration fiction (_trajGetPlanetCalibration /
+// progCalibratedTheta0, old MATH.md §7a) existed only because the rails were
+// schematic circles: a Hohmann arc could not otherwise land on its planet.
+// With real ephemeris rails (360), real phases connect (or honestly don't —
+// a leg that can't connect at its authored MET renders converged:false via
+// the physics side-table, and the schematic fallback arc shows a ghost
+// marker at the true arrival position). progBodyWorldPosCalibrated survives
+// as a thin alias that ignores its overrides argument.
 
 function _trajSelectedAuthIdx(m) {
   if (!m || !m.log) return null;
@@ -21367,7 +21355,6 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   scale = scale || 1;
   zoom = zoom || 1;
   overrides = overrides || {};
-  const legFlags = (calib && calib.legFlags) || {};
   const id = m.missionId;
   const selAuthIdx = _trajSelectedAuthIdx(m);
 
@@ -21422,32 +21409,8 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       const destBody = leg.toO.destination || leg.toO.body || leg.toLabel;
       const tArrive = leg.metArrive != null ? leg.metArrive : vt;
 
-      // ── Second-leg-to-the-same-planet case (planet-phase calibration rule
-      // 3, MATH.md §7a): only the FIRST leg to a given heliocentric
-      // destination gets to calibrate that planet's theta0 for this mission's
-      // render; a second leg's own departure/arrival timing generally won't
-      // land on the (already-fixed) calibrated position, so it can't render a
-      // real connecting arc — draw schematic ghost endpoints + a dotted line
-      // instead, per the C2 ghost-marker pattern.
-      if (legFlags[leg.key] === 'second' && destBody && PROG_HELIO_R[destBody] != null) {
-        const depWorld = progBodyWorldPosCalibrated(leg.fromO.body || 'Earth', leg.met, overrides);
-        const depP = { x: ox + depWorld.x * zoom, y: oy + depWorld.y * zoom }; // Sun frame: ox,oy IS the Sun's render pos; world km -> units via zoom
-        const arrWorld = progBodyWorldPosCalibrated(destBody, leg.metArrive, overrides); // reads the FIRST leg's already-fixed calibration for this body
-        const arrP = { x: ox + arrWorld.x * zoom, y: oy + arrWorld.y * zoom };
-        const ghostTitle = `phase not shown — planet position calibrated to the first ${destBody} transfer`;
-        const dashLine = `<line x1="${depP.x.toFixed(2)}" y1="${depP.y.toFixed(2)}" x2="${arrP.x.toFixed(2)}" y2="${arrP.y.toFixed(2)}" stroke="var(--text-dim)" stroke-width="0.6" stroke-dasharray="1,2" opacity="${(0.5 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"><title>${ghostTitle}</title></line>`;
-        out += dashLine;
-        const ghostMarkerSvg = (px, py) => {
-          const r = _trajBodyPxR(2.5, zoom);
-          return `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="auto"><title>${ghostTitle}</title></circle>`;
-        };
-        _trajRegisterLabel(depP.x, depP.y, [{ text: `${leg.fromLabel} → ${leg.toLabel}`, dy: -4 - _trajBodyPxR(2.5, zoom), fontPx: 9, color: 'var(--text-dim)' }], 'zone',
-          { screenSize: _trajBodyPxR(2.5, zoom), minSize: 0, selected: false, marker: ghostMarkerSvg(depP.x, depP.y), opacity: 0.7 * stateAlpha });
-        _trajBurnMarker(depP.x, depP.y, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(0), { opacity: 0.7 * stateAlpha, title: ghostTitle }));
-        _trajRegisterLabel(arrP.x, arrP.y, [{ text: `${destBody} (2nd leg)`, dy: -4 - _trajBodyPxR(2.5, zoom), fontPx: 9, color: 'var(--text-dim)' }], 'zone',
-          { screenSize: _trajBodyPxR(2.5, zoom), minSize: 0, selected: false, marker: ghostMarkerSvg(arrP.x, arrP.y), opacity: 0.7 * stateAlpha });
-        return;
-      }
+      // (R1: the 'second leg to the same planet' ghost treatment retired with
+      // the calibration — every leg renders against the same real ephemeris.)
 
       // ── P3: physics polyline (heliocentric leg) — drawn ONLY when the
       // propagation actually reached its destination SOI (converged). An
@@ -21501,31 +21464,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       return;
     }
 
-    // ── Second-leg-to-the-same-planet case, LOCAL-FRAME variant (planet-phase
-    // calibration rule 3, MATH.md §7a): the leg that actually carries
-    // interplanetary coast time (fromO.body==='Sun') is extracted into the
-    // DESTINATION's own local frame (see _trajFrameForOrbit — a transit leg's
-    // frame is the toO body, not literally 'Sun'), so the second-leg ghost
-    // treatment has to be checked here too, not only in the isSun branch
-    // above (which only ever sees the impulsive corridor-injection leg, whose
-    // met===metArrive gives it no timing to calibrate against in the first
-    // place). Only the FIRST such leg to this planet renders a real
-    // (schematic SOI-fallback) arc; a second gets ghost endpoints + a dotted
-    // line, matching the isSun branch's treatment.
-    if (leg.fromO && leg.fromO.body === 'Sun' && legFlags[leg.key] === 'second') {
-      const r = _trajLocalRadius(leg.fromO, body); // schematic SOI-edge departure point, still meaningful as a local anchor
-      const depLocal = (r != null) ? { x: ox + r * scale, y: oy } : { x: ox, y: oy };
-      const arrLocalR = _trajLocalRadius(leg.toO, body);
-      const arrLocal = (arrLocalR != null) ? { x: ox + arrLocalR * scale, y: oy } : { x: ox, y: oy };
-      const ghostTitle = `phase not shown — planet position calibrated to the first ${body} transfer`;
-      out += `<line x1="${depLocal.x.toFixed(2)}" y1="${depLocal.y.toFixed(2)}" x2="${arrLocal.x.toFixed(2)}" y2="${arrLocal.y.toFixed(2)}" stroke="var(--text-dim)" stroke-width="0.6" stroke-dasharray="1,2" opacity="${(0.5 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"><title>${ghostTitle}</title></line>`;
-      const gr = _trajBodyPxR(2.5, zoom);
-      const ghostMarkerSvg = `<circle cx="0" cy="0" r="${gr.toFixed(2)}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="auto"><title>${ghostTitle}</title></circle>`;
-      _trajRegisterLabel(depLocal.x, depLocal.y, [{ text: leg.fromLabel, dy: -4 - gr, fontPx: 9, color: 'var(--text-dim)' }], 'zone', { screenSize: gr, minSize: 0, selected: false, marker: ghostMarkerSvg, opacity: 0.7 * stateAlpha });
-      _trajBurnMarker(depLocal.x, depLocal.y, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(0), { opacity: 0.7 * stateAlpha, title: ghostTitle }));
-      _trajRegisterLabel(arrLocal.x, arrLocal.y, [{ text: `${leg.toLabel} (2nd leg)`, dy: -4 - gr, fontPx: 9, color: 'var(--text-dim)' }], 'zone', { screenSize: gr, minSize: 0, selected: false, marker: ghostMarkerSvg, opacity: 0.7 * stateAlpha });
-      return;
-    }
+    // (R1: local-frame 'second leg' ghost variant retired with calibration.)
 
     // ── P3: physics polyline, LOCAL-frame portion. Two cases:
     // (a) the leg's OWN physics record has samples in this frame (e.g. the
@@ -21783,9 +21722,8 @@ function _trajLocalRadius(o, body) {
 // layout (index order in PROG_HELIO_R, spread evenly) — kept in sync so
 // transfer arcs originate at the visually-drawn ring position. NOTE: this is
 // ONLY used for interplanetary transfer arc rotation, not for the planet's
-// actual drawn position any more (that now comes from progBodyWorldPos /
-// progBodyAngleAt, which uses the SAME schematic spread as theta0 for bodies
-// without porkchop-calibrated angles — see 360's PROG_BODY_KINEMATICS).
+// actual drawn position any more (that now comes from progBodyWorldPos —
+// real ephemeris since R1).
 function _trajPlanetAngle(body) {
   const bodies = Object.keys(PROG_HELIO_R);
   const i = bodies.indexOf(body);
@@ -21822,8 +21760,8 @@ function _trajViewTime(m) {
 // culling — falls back to a square guess pre-mount).
 function _trajWorldSVG(m, cam, zoom, rect) {
   const viewT = _trajViewTime(m);
-  const calib = _trajGetPlanetCalibration(m);
-  const overrides = calib.overrides;
+  const calib = null;      // R1: planet-phase calibration retired (real ephemeris)
+  const overrides = {};    // kept for downstream signature stability; ignored by the alias
   const camCenter = _trajCamCenterKm(cam, viewT, overrides); // heliocentric km — the ONE floating-origin subtraction point
   const rectW = (rect && rect.width > 0) ? rect.width : 400, rectH = (rect && rect.height > 0) ? rect.height : 400;
   const viewportDiagPx = Math.sqrt(rectW * rectW + rectH * rectH);
@@ -22032,7 +21970,6 @@ function _trajFocusGroups() {
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
   _trajExtractionCache = { missionId: null, data: null }; // force fresh extraction each render (mission log may have changed)
-  _trajCalibrationCache = { missionId: null, data: null }; // planet-phase calibration depends on extraction, invalidate together
 
   // ── camera: default-anchor-Earth fit-to-content on first access for this mission ──
   let cam = _trajCamByMission[id];
@@ -22069,7 +22006,6 @@ function _missionTrajViewHTML(m) {
   // resolve overlay px yet since the svg isn't measurable before mount).
   _trajResetLabels();
   const svgInner = _trajWorldSVG(m, cam, zoom, null);
-  const calibActive = _trajGetPlanetCalibration(m).active;
   // Constant-unit viewBox (geometry is emitted in km·zoom render units) —
   // square default; aspect corrected post-mount by _missionTrajAfterRender.
   const viewBox = `${(-_TRAJ_VB / 2).toFixed(3)} ${(-_TRAJ_VB / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${_TRAJ_VB.toFixed(3)}`;
@@ -22104,7 +22040,7 @@ function _missionTrajViewHTML(m) {
         </svg>
         <svg class="traj-overlay" data-mid="${id}" preserveAspectRatio="none"></svg>
       </div>
-      <div class="traj-footer">coplanar view — inclination/LAN annotated, not drawn &middot; planet positions schematic, body sizes clamped for visibility${calibActive ? ' &middot; planet phases calibrated to mission transfers' : ''}</div>
+      <div class="traj-footer">top-down ecliptic projection — real ephemeris positions (JPL mean elements) &middot; rings still schematic circles, so eccentric planets sit slightly off their ring &middot; body sizes clamped for visibility</div>
     </div>`;
 }
 
@@ -22159,7 +22095,6 @@ function _missionTrajAfterRender(m) {
       const zoom = _trajZoomFromCam(cam);
       _trajResetLabels();
       _trajExtractionCache = { missionId: null, data: null };
-      _trajCalibrationCache = { missionId: null, data: null };
       sceneEl.innerHTML = _trajWorldSVG(mm, cam, zoom, rect);
       if (overlayEl) {
         overlayEl.style.transform = ''; // clear any mid-drag pan slide

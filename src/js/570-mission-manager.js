@@ -3832,9 +3832,8 @@ function missionSolveFreeReturn(id) {
   const alt = ((os.perigee ?? 185) + (os.apogee ?? os.perigee ?? 185)) / 2;
   const metEl = document.getElementById('addev-mnode-met-' + id);
   const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
-  const calib = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
-  let sol = null;
-  try { sol = physFreeReturnSolve(alt, tDep, calib); } catch (err) { sol = null; }
+  let sol = null; // R1: calibration overrides retired — real ephemeris rails
+  try { sol = physFreeReturnSolve(alt, tDep, {}); } catch (err) { sol = null; }
   if (!sol || !sol.converged) {
     say(`// no free return found from ${Math.round(alt)} km at this departure — try a different MET`, true);
     return;

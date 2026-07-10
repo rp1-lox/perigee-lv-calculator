@@ -170,29 +170,14 @@ function physKeplerPropagate(r0, v0, dt, mu) {
 }
 
 // ── body rails state ─────────────────────────────────────────────────────────
-/** Heliocentric state {r:[3], v:[3]} of a body at time t_s.
- *  POSITION resolves through progBodyWorldPosCalibrated — the ONE body-position
- *  source shared with the renderer/porkchop (calibration coherence invariant;
- *  see PHYSICS_PLAN.md). VELOCITY is the analytic circular-rail tangent,
- *  v = ω·r ⊥ radius, recursive for moons (parent velocity + local). z = 0. */
+/** Heliocentric state {r:[3], v:[3]} of a body at time t_s — REAL ephemeris
+ *  rails (R1): full 3D element-evaluated position AND analytic velocity via
+ *  progBodyEphemState (360), the ONE body-position source shared with the
+ *  renderer/porkchop. The `overrides` param survives for signature
+ *  compatibility only — the planet-phase calibration it once threaded
+ *  retired with the real ephemeris; it is IGNORED. */
 function physBodyStateAt(body, t_s, overrides) {
-  if (body === 'Sun') return { r: [0, 0, 0], v: [0, 0, 0] };
-  overrides = overrides || {};
-  const t = t_s || 0;
-  const k = PROG_BODY_KINEMATICS[body];
-  const moonInfo = PROG_MOON_ORBITS && PROG_MOON_ORBITS[body];
-  const radius = moonInfo ? moonInfo.r : PROG_HELIO_R[body];
-  if (radius == null || !k) return { r: [0, 0, 0], v: [0, 0, 0] };
-  const omega = 2 * Math.PI / k.period_s;
-  // Same angle math as progBodyWorldPosCalibrated (moons never take offsets).
-  const theta = progBodyAngleAt(body, t) + (moonInfo ? 0 : (overrides[body] || 0));
-  const localR = [radius * Math.cos(theta), radius * Math.sin(theta), 0];
-  const localV = [-radius * omega * Math.sin(theta), radius * omega * Math.cos(theta), 0];
-  if (moonInfo) {
-    const parent = physBodyStateAt(moonInfo.parent, t, overrides);
-    return { r: physAdd(parent.r, localR), v: physAdd(parent.v, localV) };
-  }
-  return { r: localR, v: localV };
+  return progBodyEphemState(body, t_s);
 }
 
 // ── escape hyperbola geometry (P3) ───────────────────────────────────────────

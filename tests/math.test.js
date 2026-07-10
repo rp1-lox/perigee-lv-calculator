@@ -70,7 +70,8 @@ const {
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
   _s15BecoSplit, progBodyAngleAt, progBodyWorldPos,
-  progCalibratedTheta0, progBodyWorldPosCalibrated,
+  progBodyWorldPosCalibrated, progBodyEphemState, progBodyLocalEphemState,
+  progKeplerSolveE, progEpochJD, progHelioPos, progHelioVel, progPorkchopGrid,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
   _trajTransferArcPath, _trajCorridorMoon, _trajOrbitLabel, _trajLocalRadius,
   physV3, physAdd, physSub, physScale, physDot, physCross, physMag,
@@ -79,8 +80,8 @@ const {
   physSoiRadius, physFrameOf, physPatchState, physAccel, physStepFor,
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
 } = sandbox;
-const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA } =
-  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_KINEMATICS, PROG_PORK_DATA })', sandbox);
+const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
+  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // parseMathExpression
@@ -494,61 +495,110 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// C1a Body kinematics — progBodyAngleAt / progBodyWorldPos / porkchop θ0 unification
+// R1 real ephemeris rails (360) — element evaluation, epoch, porkchop dates.
+// Replaces the old C1a circular-kinematics + theta0-calibration pins
+// (2026-07-09: PROG_BODY_KINEMATICS / progCalibratedTheta0 retired).
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  // t=0 == theta0 for every body.
-  Object.keys(PROG_BODY_KINEMATICS).forEach(b => {
-    approx(`progBodyAngleAt(${b}, 0) == theta0_rad`, progBodyAngleAt(b, 0), ((PROG_BODY_KINEMATICS[b].theta0_rad % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI), 1e-9);
+  const mag3 = v => Math.hypot(v[0], v[1], v[2]);
+
+  ok('R1: all 8 planets have JPL elements', ['Mercury','Venus','Earth','Mars','Jupiter','Saturn','Uranus','Neptune'].every(b => !!PROG_BODY_ELEMENTS[b]));
+  ok('R1: Moon + Titan have moon elements', !!PROG_MOON_ELEMENTS.Moon && !!PROG_MOON_ELEMENTS.Titan);
+  approx('R1: default epoch JD = 2461230.5 (2026-07-09)', PROG_DEFAULT_EPOCH_JD, 2461230.5, 1e-9);
+  approx('R1: progEpochJD() falls back to default with no program', progEpochJD(), 2461230.5, 1e-9);
+
+  // Kepler solver sanity: E - e·sinE == M
+  [[0.3, 0.0167], [2.5, 0.2056], [-1.2, 0.0549], [3.0, 0.7]].forEach(([M, e]) => {
+    const E = progKeplerSolveE(M, e);
+    approx(`R1: Kepler solve residual ~0 (M=${M}, e=${e})`, E - e * Math.sin(E), M, 1e-7);
   });
 
-  // Moon: +2*pi after exactly one period (27.3217 days) -> back to theta0.
-  const moonPeriod = 27.3217 * 86400;
-  approx('progBodyAngleAt(Moon, one full period) == theta0 (wrapped)', progBodyAngleAt('Moon', moonPeriod), progBodyAngleAt('Moon', 0), 1e-6);
+  // Earth heliocentric distance at T=0 within the real range, and |r| VARIES
+  // over half a year (eccentricity is real, not a circle).
+  const rE0 = mag3(progBodyEphemState('Earth', 0).r);
+  ok(`R1: Earth |r| at epoch in [1.467e8, 1.53e8] km (got ${rE0.toExponential(4)})`, rE0 >= 1.467e8 && rE0 <= 1.53e8);
+  let rEmin = Infinity, rEmax = 0;
+  for (let d = 0; d < 366; d += 2) { const r = mag3(progBodyEphemState('Earth', d * 86400).r); rEmin = Math.min(rEmin, r); rEmax = Math.max(rEmax, r); }
+  ok(`R1: Earth |r| varies over a year (range ${((rEmax - rEmin)/1e6).toFixed(1)}e6 km > 3e6)`, rEmax - rEmin > 3e6);
+  ok('R1: Earth perihelion/aphelion in real bands', rEmin > 1.45e8 && rEmin < 1.48e8 && rEmax > 1.51e8 && rEmax < 1.53e8);
 
-  // Earth: +pi after half a year (365.256/2 days).
-  const halfYear_s = (365.256 / 2) * 86400;
-  const earthHalf = progBodyAngleAt('Earth', halfYear_s);
-  const earthExpected = ((PROG_BODY_KINEMATICS.Earth.theta0_rad + Math.PI) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
-  approx('progBodyAngleAt(Earth, half year) == theta0 + pi (normalized)', earthHalf, earthExpected, 1e-6);
+  // Mercury: e ≈ 0.2056 reflected in min/max radius over one Mercury year.
+  let rMmin = Infinity, rMmax = 0;
+  for (let d = 0; d < 88; d++) { const r = mag3(progBodyEphemState('Mercury', d * 86400).r); rMmin = Math.min(rMmin, r); rMmax = Math.max(rMmax, r); }
+  approx('R1: Mercury implied e = (rmax-rmin)/(rmax+rmin) ~ 0.2056', (rMmax - rMmin) / (rMmax + rMmin), 0.2056, 0.005);
 
-  // Normalization: result always in [0, 2*pi).
-  const bigT = 1e10;
-  const angBig = progBodyAngleAt('Mars', bigT);
-  ok('progBodyAngleAt normalizes to [0, 2*pi)', angBig >= 0 && angBig < 2*Math.PI);
+  // Moon: real 5.145° inclination shows as out-of-ecliptic z over a month
+  // (sin(5.145°)·384,400 ≈ 34,480 km amplitude; measured max 36,210 km with
+  // the eccentric radius — assert in [30000, 38000]).
+  let zMax = 0;
+  for (let h = 0; h < 28 * 24; h += 2) {
+    const loc = progBodyLocalEphemState('Moon', h * 3600).r;
+    zMax = Math.max(zMax, Math.abs(loc[2]));
+  }
+  ok(`R1: Moon |z| amplitude ${zMax.toFixed(0)} km in [30000, 38000]`, zMax >= 30000 && zMax <= 38000);
+  // Moon radius range covers the real perigee..apogee band (eccentric orbit)
+  let lrMin = Infinity, lrMax = 0;
+  for (let h = 0; h < 28 * 24; h += 2) { const lr = mag3(progBodyLocalEphemState('Moon', h * 3600).r); lrMin = Math.min(lrMin, lr); lrMax = Math.max(lrMax, lr); }
+  ok(`R1: Moon geocentric distance varies (${lrMin.toFixed(0)}..${lrMax.toFixed(0)} km)`, lrMin > 3.5e5 && lrMin < 3.7e5 && lrMax > 4.0e5 && lrMax < 4.1e5);
 
-  // progBodyWorldPos: Sun at origin.
+  // Velocity consistency: analytic v vs central-difference dr/dt < 1e-3 km/s.
+  const velErr = (body, t) => {
+    const h = 10;
+    const rp = progBodyEphemState(body, t + h).r, rm = progBodyEphemState(body, t - h).r;
+    const vn = [(rp[0] - rm[0]) / (2 * h), (rp[1] - rm[1]) / (2 * h), (rp[2] - rm[2]) / (2 * h)];
+    const va = progBodyEphemState(body, t).v;
+    return Math.hypot(vn[0] - va[0], vn[1] - va[1], vn[2] - va[2]);
+  };
+  ok(`R1: Earth velocity analytic == numeric (err ${velErr('Earth', 5e6).toExponential(1)} < 1e-3 km/s)`, velErr('Earth', 5e6) < 1e-3);
+  ok(`R1: Moon velocity analytic == numeric (err ${velErr('Moon', 5e6).toExponential(1)} < 1e-3 km/s)`, velErr('Moon', 5e6) < 1e-3);
+  ok(`R1: Titan velocity analytic == numeric (err ${velErr('Titan', 5e6).toExponential(1)} < 1e-3 km/s)`, velErr('Titan', 5e6) < 1e-3);
+
+  // Epoch: shifting epochJD by exactly one Earth year (365.25 d) returns
+  // Earth to ~the same position (< 2e5 km — sidereal-vs-Julian year residual).
+  const e0 = progBodyEphemState('Earth', 0);
+  sandbox.PROG_ACTIVE_PROGRAM = { epochJD: 2461230.5 + 365.25 };
+  const e1 = progBodyEphemState('Earth', 0);
+  sandbox.PROG_ACTIVE_PROGRAM = undefined;
+  const shiftKm = Math.hypot(e1.r[0] - e0.r[0], e1.r[1] - e0.r[1], e1.r[2] - e0.r[2]);
+  ok(`R1: epoch +365.25 d returns Earth to ~same position (${shiftKm.toFixed(0)} km < 2e5)`, shiftKm < 2e5);
+
+  // progBodyAngleAt: normalized, and Sun-relative geometry composes: Moon
+  // world pos == Earth world pos + Moon local pos.
+  const angBig = progBodyAngleAt('Mars', 1e10);
+  ok('R1: progBodyAngleAt normalizes to [0, 2π)', angBig >= 0 && angBig < 2 * Math.PI);
   const sunPos = progBodyWorldPos('Sun', 12345);
-  ok('progBodyWorldPos(Sun) == {0,0}', sunPos.x === 0 && sunPos.y === 0);
+  ok('R1: progBodyWorldPos(Sun) == origin', sunPos.x === 0 && sunPos.y === 0);
+  {
+    const t = 5 * 86400;
+    const eP = progBodyEphemState('Earth', t), mP = progBodyEphemState('Moon', t), mLoc = progBodyLocalEphemState('Moon', t);
+    approx('R1: Moon world = Earth world + Moon local (x)', mP.r[0], eP.r[0] + mLoc.r[0], 1e-6);
+    approx('R1: Moon world = Earth world + Moon local (z)', mP.r[2], eP.r[2] + mLoc.r[2], 1e-6);
+  }
 
-  // progBodyWorldPos: Earth at PROG_HELIO_R.Earth distance from origin (t=0).
-  const earthPos = progBodyWorldPos('Earth', 0);
-  approx('progBodyWorldPos(Earth, 0) distance == PROG_HELIO_R.Earth', Math.hypot(earthPos.x, earthPos.y), PROG_HELIO_R.Earth, 1e-3);
+  // progBodyWorldPosCalibrated is now a thin alias: overrides IGNORED.
+  {
+    const t = 9.87e6;
+    const a = progBodyWorldPos('Mars', t), b = progBodyWorldPosCalibrated('Mars', t, { Mars: 1.5 });
+    ok('R1: progBodyWorldPosCalibrated ignores overrides (alias)', a.x === b.x && a.y === b.y);
+  }
 
-  // progBodyWorldPos: Moon == Earth's position + moon-ring offset.
-  const tSample = 5 * 86400;
-  const earthP = progBodyWorldPos('Earth', tSample);
-  const moonP  = progBodyWorldPos('Moon', tSample);
-  const moonAng = progBodyAngleAt('Moon', tSample);
-  const expectedMoonX = earthP.x + PROG_MOON_ORBITS.Moon.r * Math.cos(moonAng);
-  const expectedMoonY = earthP.y + PROG_MOON_ORBITS.Moon.r * Math.sin(moonAng);
-  approx('progBodyWorldPos(Moon) == Earth pos + moon-ring offset (x)', moonP.x, expectedMoonX, 1e-3);
-  approx('progBodyWorldPos(Moon) == Earth pos + moon-ring offset (y)', moonP.y, expectedMoonY, 1e-3);
-
-  // Porkchop-consistency: Mars theta0 - Earth theta0 phase difference unchanged
-  // from the PRE-unification hardcoded values (Mars: 0.7729, Earth: 0, Venus: 5.3390).
-  const OLD_EARTH_THETA0 = 0;
-  const OLD_MARS_THETA0  = 0.7729;
-  const OLD_VENUS_THETA0 = 5.3390;
-  approx('PROG_PORK_DATA Mars-Earth theta0 phase diff unchanged post-unification',
-    PROG_PORK_DATA.Mars.theta0_rad - PROG_PORK_DATA.Earth.theta0_rad,
-    OLD_MARS_THETA0 - OLD_EARTH_THETA0, 1e-6);
-  approx('PROG_PORK_DATA Venus-Earth theta0 phase diff unchanged post-unification',
-    PROG_PORK_DATA.Venus.theta0_rad - PROG_PORK_DATA.Earth.theta0_rad,
-    OLD_VENUS_THETA0 - OLD_EARTH_THETA0, 1e-6);
-  ok('PROG_PORK_DATA.Earth.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Earth.theta0_rad === PROG_BODY_KINEMATICS.Earth.theta0_rad);
-  ok('PROG_PORK_DATA.Mars.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Mars.theta0_rad === PROG_BODY_KINEMATICS.Mars.theta0_rad);
-  ok('PROG_PORK_DATA.Venus.theta0_rad reads from PROG_BODY_KINEMATICS', PROG_PORK_DATA.Venus.theta0_rad === PROG_BODY_KINEMATICS.Venus.theta0_rad);
+  // Porkchop on real ephemeris: progHelioPos == ecliptic projection of the
+  // ephemeris; the Earth→Mars grid has a finite optimum at a REAL window
+  // (default epoch 2026-07-09: measured c3_min 8.90 km²/s² at dep_day 118,
+  // TOF 327 d ≈ the real late-2026 Mars window; old calibrated fiction pinned
+  // the optimum near dep_day 0 by construction).
+  {
+    const hp = progHelioPos('Earth', 42);
+    const st = progBodyEphemState('Earth', 42 * 86400);
+    approx('R1 porkchop: progHelioPos == ephemeris x (z dropped)', hp[0], st.r[0], 1e-6);
+    approx('R1 porkchop: progHelioPos == ephemeris y (z dropped)', hp[1], st.r[1], 1e-6);
+    const gm = progPorkchopGrid('Earth', 'Mars', {});
+    ok(`R1 porkchop golden: Mars c3_min ${gm.c3_min.toFixed(2)} in [5, 15] km²/s²`, gm.c3_min >= 5 && gm.c3_min <= 15);
+    ok(`R1 porkchop golden: Mars optimal dep_day ${gm.c3_min_dep.toFixed(0)} in [80, 160], tof ${gm.c3_min_tof.toFixed(0)} in [250, 400]`,
+      gm.c3_min_dep >= 80 && gm.c3_min_dep <= 160 && gm.c3_min_tof >= 250 && gm.c3_min_tof <= 400);
+    const gvGrid = progPorkchopGrid('Earth', 'Venus', {});
+    ok(`R1 porkchop golden: Venus c3_min ${gvGrid.c3_min.toFixed(2)} in [3, 12] km²/s²`, gvGrid.c3_min >= 3 && gvGrid.c3_min <= 12);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -654,60 +704,10 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     approx('_trajLocalRadius: parent-frame transit (Earth->Moon) still returns moon orbital radius, unaffected by the new fallback', _trajLocalRadius(transitToMoon, 'Earth'), PROG_MOON_ORBITS.Moon.r, 1e-6);
   }
 
-  // ── progCalibratedTheta0 / progBodyWorldPosCalibrated (planet-phase
-  // calibration for the trajectory view's first-leg-to-a-planet rule) ───────
-  {
-    // (a) golden: t_dep/t_arr consistent with the TABLE theta0s (a real
-    // Hohmann-timed Earth->Mars departure at t_dep=0) should need essentially
-    // no calibration offset — the arc already connects under the table values.
-    const aHelio = (PROG_HELIO_R.Earth + PROG_HELIO_R.Mars) / 2;
-    const tofHelio = Math.PI * Math.sqrt((aHelio * aHelio * aHelio) / PROG_MU_SUN);
-    // Tolerance is loose (1e-3 rad, ~0.06 deg) rather than 1e-9: Mars's table
-    // theta0 was calibrated against the porkchop plotter's actual Lambert
-    // solution (PROG_PORK_DATA, 410), not the pure-Hohmann TOF formula used
-    // here — the two agree to within a small residual, not bit-for-bit.
-    const offsetGolden = progCalibratedTheta0('Mars', 0, tofHelio, 'Earth');
-    approx('progCalibratedTheta0: Earth->Mars at table-consistent Hohmann timing -> offset ~0', offsetGolden, 0, 2e-3);
-
-    // (b) arbitrary time: assert the GEOMETRIC IDENTITY directly rather than
-    // trusting the formula derivation — destination's CALIBRATED angle at
-    // t_arr must equal departure's angle at t_dep + PI (both normalized).
-    const tDep = 12345678, tArr = tDep + 87654321;
-    const offsetArb = progCalibratedTheta0('Mars', tDep, tArr, 'Earth');
-    const norm = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    const kMars = PROG_BODY_KINEMATICS.Mars;
-    const calibratedMarsAngleAtArr = norm(kMars.theta0_rad + offsetArb + 2 * Math.PI * tArr / kMars.period_s);
-    const requiredAngle = norm(progBodyAngleAt('Earth', tDep) + Math.PI);
-    approx('progCalibratedTheta0: geometric identity — calibrated dest angle at t_arr == depart angle at t_dep + PI', calibratedMarsAngleAtArr, requiredAngle, 1e-9);
-
-    // progBodyWorldPosCalibrated: with offset 0 (no override), must exactly
-    // match progBodyWorldPos (drop-in identical behavior when uncalibrated).
-    const p0 = progBodyWorldPos('Mars', tArr);
-    const p0c = progBodyWorldPosCalibrated('Mars', tArr, {});
-    approx('progBodyWorldPosCalibrated: no override -> matches progBodyWorldPos (x)', p0c.x, p0.x, 1e-6);
-    approx('progBodyWorldPosCalibrated: no override -> matches progBodyWorldPos (y)', p0c.y, p0.y, 1e-6);
-
-    // With the calibration offset applied, Mars's world position at t_arr
-    // should land exactly on the "required" angle (180 deg from Earth's
-    // t_dep position) at Mars's orbital radius — i.e. the arc's arrival
-    // endpoint construction is self-consistent.
-    const pCal = progBodyWorldPosCalibrated('Mars', tArr, { Mars: offsetArb });
-    const expX = PROG_HELIO_R.Mars * Math.cos(requiredAngle), expY = PROG_HELIO_R.Mars * Math.sin(requiredAngle);
-    approx('progBodyWorldPosCalibrated: calibrated Mars position lands on required Hohmann-arrival angle (x)', pCal.x, expX, 1e-3);
-    approx('progBodyWorldPosCalibrated: calibrated Mars position lands on required Hohmann-arrival angle (y)', pCal.y, expY, 1e-3);
-
-    // Moon (a PROG_MOON_ORBITS body, not heliocentric) must move WITH a
-    // calibrated Earth if Earth were ever calibrated (it isn't, per spec —
-    // Earth is home base and never calibrated — but the recursion plumbing
-    // must still be correct: a moon's parent-position input goes through
-    // the SAME calibrated path). Verify with a synthetic non-zero Earth
-    // override to prove the recursion actually threads through.
-    const parentP = progBodyWorldPosCalibrated('Earth', tArr, { Earth: 0.5 });
-    const moonP = progBodyWorldPosCalibrated('Moon', tArr, { Earth: 0.5 });
-    const moonTheta = progBodyAngleAt('Moon', tArr);
-    approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (x)', moonP.x, parentP.x + PROG_MOON_ORBITS.Moon.r * Math.cos(moonTheta), 1e-6);
-    approx('progBodyWorldPosCalibrated: moon position = calibrated parent position + moon-ring offset (y)', moonP.y, parentP.y + PROG_MOON_ORBITS.Moon.r * Math.sin(moonTheta), 1e-6);
-  }
+  // (R1, 2026-07-09: progCalibratedTheta0 and the planet-phase calibration
+  // pins retired with the calibration itself — real ephemeris rails need no
+  // offsets; progBodyWorldPosCalibrated is a thin alias, pinned in the R1
+  // ephemeris block above.)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -798,18 +798,25 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     approx('physVisViva at periapsis matches state speed', physVisViva(r1, a, muE), physMag(st0.v), 1e-9);
   }
 
-  // body rails states
+  // body rails states — R1 re-goldened (2026-07-09): circular-rail pins
+  // (Moon 1.018 km/s exact, Earth 29.78 km/s, v⊥r, z=0) replaced by real
+  // element-evaluated values at FIXED t. Real Moon speed varies ~0.97–1.08
+  // km/s over its eccentric orbit (measured 1.0618 at t=0, default epoch);
+  // Earth speed at t=0 is 29.292 km/s (near aphelion in July).
   {
     const moon = physBodyStateAt('Moon', 0);
-    approx('physBodyStateAt: Moon rail speed ~1.018 km/s', physMag(physSub(moon.v, physBodyStateAt('Earth', 0).v)), 1.018, 0.01);
+    const moonRel = physMag(physSub(moon.v, physBodyStateAt('Earth', 0).v));
+    approx('physBodyStateAt: Moon speed rel Earth at t=0 (real rails; was 1.018 circular)', moonRel, 1.0618, 0.005);
     const earth = physBodyStateAt('Earth', 12345678);
-    const pos = progBodyWorldPosCalibrated('Earth', 12345678, {});
-    approx('physBodyStateAt: Earth position x = calibrated position source', earth.r[0], pos.x, 1e-6);
-    approx('physBodyStateAt: Earth position y = calibrated position source', earth.r[1], pos.y, 1e-6);
-    approx('physBodyStateAt: Earth rail speed ~29.78 km/s', physMag(earth.v), 29.78, 0.1);
-    // velocity is tangential: v . r = 0 for circular rails
-    approx('physBodyStateAt: rail velocity perpendicular to radius', physDot(earth.r, earth.v), 0, 1e-3 * physMag(earth.r));
-    ok('physBodyStateAt: z components are 0 (coplanar era)', earth.r[2] === 0 && earth.v[2] === 0);
+    const pos = progBodyWorldPos('Earth', 12345678);
+    approx('physBodyStateAt: Earth position x = the ONE position source', earth.r[0], pos.x, 1e-6);
+    approx('physBodyStateAt: Earth position y = the ONE position source', earth.r[1], pos.y, 1e-6);
+    approx('physBodyStateAt: Earth speed at epoch ~29.29 km/s (aphelion season; was 29.78 circular)', physMag(physBodyStateAt('Earth', 0).v), 29.292, 0.05);
+    ok('physBodyStateAt: Moon state is 3D (z ≠ 0 — real 5.145° inclination)',
+      Math.abs(physBodyStateAt('Moon', 7 * 86400).r[2] - physBodyStateAt('Earth', 7 * 86400).r[2]) > 1000);
+    // overrides are ignored (calibration retired) — same state either way
+    const a = physBodyStateAt('Mars', 1e6, {}), b = physBodyStateAt('Mars', 1e6, { Mars: 2.0 });
+    ok('physBodyStateAt: overrides ignored (R1 alias behavior)', a.r[0] === b.r[0] && a.v[1] === b.v[1]);
   }
 }
 
@@ -907,12 +914,15 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok(`integrator CR3BP: Jacobi constant drift ${maxRel.toExponential(1)} < 2e-3 over ${(t / 86400).toFixed(0)} d (e=0.95 lunar-grazing)`, maxRel < 2e-3 && t > 5 * 86400);
   }
 
-  // GOLDEN FREE RETURN (real rails): TLI from 185 km LEO, apogee 455,000 km,
-  // burn-point angle 4.5379 rad (seed found by scan, 2026-07-09) -> transits
-  // the Moon's SOI and returns to an Earth perigee at ~62 km altitude.
+  // GOLDEN FREE RETURN (REAL ephemeris rails): TLI from 185 km LEO.
+  // R1 re-scan (2026-07-09, same day as the original circular-rail scan):
+  // the real Moon is eccentric + inclined 5.145°, so the coplanar burn's
+  // geometry shifted — old golden apo 455,000 km / phi 4.5379 rad / ~62 km
+  // return perigee → NEW golden apo 445,000 km / phi 4.98 rad / ~201 km
+  // return perigee (scan: scratchpad r1_scan.js, apogee × burn-angle grid).
   {
     const rp = PROG_BODIES.Earth.R + 185;
-    const apo = 455000, phi = 4.5379;
+    const apo = 445000, phi = 4.98;
     const a = (rp + apo) / 2;
     const vP = Math.sqrt(muE * (2 / rp - 1 / a));
     const st0 = { r: [rp * Math.cos(phi), rp * Math.sin(phi), 0], v: [-vP * Math.sin(phi), vP * Math.cos(phi), 0] };
@@ -971,10 +981,13 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     Math.hypot(burnP.dvVec[0], burnP.dvVec[1], burnP.dvVec[2]), 3.15, 1e-12);
   ok('P2 solved burn: cislunar body set', burnP.bodies.includes('Earth') && burnP.bodies.includes('Moon'));
 
-  // GOLDEN — analytic phasing arrival: a true Hohmann burn placed by
-  // physSolveNodeBurn, propagated two-body for the schematic TOF, must land
-  // on the Moon's railed position at arrival (consistent inputs: same rails,
-  // same TOF; pure geometry, no perturbations).
+  // GOLDEN — analytic phasing arrival vs the REAL Moon. R1 re-golden
+  // (2026-07-09): the old circular-rail assertion (miss < 500 km) is
+  // unreachable against the real Moon — the coplanar mean-radius Hohmann
+  // aims at the Moon's in-plane ANGLE, but the real Moon's radius varies
+  // 363k–405k km and it sits up to ~36,000 km out of the ecliptic. Measured
+  // miss at tDep = 5 d (default epoch): 14,036 km — assert the phasing still
+  // delivers the arrival deep inside the Moon's SOI (< 25,000 km ≪ 66,183).
   {
     const tDep = 86400 * 5;
     const muE = PROG_BODIES.Earth.mu;
@@ -984,11 +997,12 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const b = physSolveNodeBurn(leo, tlc, tDep, dvHoh);
     const st = physKeplerPropagate(b.state.r, b.state.v, b.coastTof_s, muE);
     ok('P2 golden: Kepler propagation converged', !!st);
-    const moonAng = progBodyAngleAt('Moon', tDep + b.coastTof_s);
-    const moonPos = [r2 * Math.cos(moonAng), r2 * Math.sin(moonAng), 0];
+    const { progBodyEphemState } = sandbox;
+    const eSt = progBodyEphemState('Earth', tDep + b.coastTof_s), mSt = progBodyEphemState('Moon', tDep + b.coastTof_s);
+    const moonPos = [mSt.r[0] - eSt.r[0], mSt.r[1] - eSt.r[1], mSt.r[2] - eSt.r[2]];
     const missKm = Math.hypot(st.r[0] - moonPos[0], st.r[1] - moonPos[1], st.r[2] - moonPos[2]);
-    ok(`P2 golden: Hohmann arrival lands on the Moon's railed position (miss ${missKm.toFixed(1)} km < 500 km)`,
-      missKm < 500);
+    ok(`P2 golden (R1): Hohmann arrival lands inside the real Moon's SOI (miss ${missKm.toFixed(0)} km < 25,000; was <500 vs circular rails)`,
+      missKm < 25000);
   }
 
   // side-table accessor
