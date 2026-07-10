@@ -88,22 +88,36 @@ New:
 
 Gate: convergence suite (Earth→Moon, Earth→Mars seeds: miss <500 km in ≤12 iters); unreachable target → `converged:false`, fast; free-return solver reproduces the P1 golden. Browser: author a free return via UI, assert return-perigee readout.
 
-## P5 — 3D camera (574)
+## R-SERIES (supersedes the original P5/P6, 2026-07-09) — REALITY UPGRADE
 
-Changed:
-- Camera gains `az, el` (defaults 0, 90°). `_trajProject(p3, cam, rect)` supersedes `_trajWorldToScreen`: rotate az/el → orthographic z-drop → `{x, y, depth}`. One seam, as designed.
-- `_trajWorldSVG` emissions become `{depth, svg}` records, painter-sorted before join (the one real refactor: string concat → array).
-- `_trajEclipticGridSVG(cam, zoom)` reference grid; right-button/modifier drag rotates (mode field on `trajPanStart/Move`).
+User directive after P4 shipped: *"each orbit should be accurate EXACTLY to how they are in real life. Accuracy to reality over the current model."* The original P5 (cosmetic 3D camera over the coplanar fiction) is replaced by a real-geometry series. Original P5/P6 text kept below for reference where still applicable.
 
-Verify: **el=90° parity regression — DOM + screenshot identical to pre-P5** (3D provably a superset); depth-flip asserts (Moon in front/behind Earth at correct azimuths); rotate×zoom×pan×anchor matrix; frame render <16 ms.
+### R1 — Real ephemeris rails
 
-## P6 — J2 / orbital-economy layer
+- Replace the circular-coplanar kinematics with **full Keplerian mean elements + secular rates per body** (JPL approximate-ephemeris table: a, e, i, Ω, ϖ, L at J2000 + centennial rates; Moon: mean elements about Earth incl. its 5.145° inclination, e=0.0549; Titan similar about Saturn). `physBodyStateAt`/`progBodyWorldPos*` become element-evaluated 3D states (Kepler's equation per call — cache per (body, t) if profiling demands).
+- **Program epoch**: MET 0 = `PROG_ACTIVE_PROGRAM.epochJD` (default J2000.0 + a sane modern date). Porkchop dep_day = days since epoch — departure windows become REAL dates. (Launch-date UI can come later; the default epoch is enough for correctness.)
+- **Planet-phase calibration RETIRES**: real ephemeris = real phases; `progCalibratedTheta0`, `_trajGetPlanetCalibration`, calibration overrides threading (565/574), ghost second-leg rendering, and MATH.md §7a all come out. Arcs/polylines connect because reality connects them; a leg that CAN'T connect at the authored MET is now honest information (P4 shooter aims at real positions).
+- **Goldens re-derived** (same commit, dated): free-return seed re-scanned against the real inclined Moon; TOF/kinematics pins updated; porkchop C3 grid re-goldened. Two-body/Jacobi/determinism tests unaffected (synthetic rails).
+- Gate: element evaluation vs published J2000 positions (spot longitude checks); Moon inclination visible in state (z ≠ 0); energy/h invariance unchanged.
 
-New: `physJ2NodalRate(a, e, i, body)`, `physJ2ApsidalRate(a, e, i, body)` closed-form secular rates; readout chip in Define-an-Orbit + mission state panel ("nodal −0.986°/day — sun-synchronous ✓"); optional `physAccelJ2` term so P5 can DRAW the precession.
+### R2 — 3D camera + true-geometry rendering (574)
 
-Gate: 800 km @ 98.6° → ≈0.9856°/day nodal; Molniya 63.4° → apsidal ≈ 0.
+- Camera gains `az, el` (defaults el=90° top-down). ONE projection seam: rotate world km by az/el → orthographic drop → {x, y, depth}; emissions become {depth, svg} records, painter-sorted.
+- **Rings stop being circles**: heliocentric rings, moon rings, and mission-orbit rings render as SAMPLED POLYLINES from real elements (eccentric, inclined, projected through the camera). The `<circle>`/`<ellipse>`+arc-flag emitters retire for orbits.
+- Authored mission orbits: a,e,i from perigee/apogee/inclination; **Ω and ω default 0, annotated** (launch-time modeling would pin RAAN — documented honestly, not faked).
+- Ecliptic reference grid; right-drag/modifier rotates; reset returns to top-down.
+- Verify: top-down view shows REAL geometry (Mercury visibly eccentric, Moon ring visibly inclined when tilted); depth-flip asserts; rotate×zoom×pan×anchor matrix; frame <16 ms. (The old "el=90 parity" regression is replaced by "el=90 matches the R1 real-geometry top-down" — the schematic-circles view is intentionally gone.)
 
-Note: SSO nodal precession is inherently 3D — readout works from P6 regardless, drawing it requires P5.
+### R3 — 3D physics coherence
+
+- Vessel states leave z=0: parking orbits take their authored inclination (Ω=0 convention), MNODE's Normal component comes alive, and the shooter gains the normal-direction DOF for plane-mismatched targets (28.5° LEO → 5.1°-inclined Moon is no longer coplanar).
+- ΔV parity rule unchanged (magnitude from the node engine); the plane-change reality gap between the schematic ΔV model and 3D geometry gets an honest MATH.md critique (the node engine's plane-change model is still the accounting truth).
+- Gate: 3D free-return golden; shooter 3-DOF convergence suite; plane-mismatch case converges or fails cleanly.
+
+### R4 — J2 / orbital-economy layer (old P6, now fully drawable)
+
+- `physJ2NodalRate(a, e, i, body)`, `physJ2ApsidalRate(...)` closed-form; readout chip in Define-an-Orbit + mission state ("nodal −0.986°/day — sun-synchronous ✓"); optional `physAccelJ2` integrator term so R2 can DRAW the precession on real inclined orbits.
+- Gate: 800 km @ 98.6° → ≈0.9856°/day nodal; Molniya 63.4° → apsidal ≈ 0.
 
 ---
 
