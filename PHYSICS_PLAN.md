@@ -164,6 +164,15 @@ Replaces "type numbers into the Vector Burn form" as the primary authoring flow 
 - 3D interplay: handles project through the pass camera; normal drags are how users FEEL the new R3 out-of-plane capability.
 - Verify: drag prograde on a LEO node → apogee grows on screen and in the readout; normal drag tilts the predicted plane; release commits one undo step; escape/right-click cancels.
 
+### R6+ FUTURE BACKLOG (user, 2026-07-10 — unscoped, capture only)
+
+- **Real planet textures** ("don't have to be great, just real"): raster textures as embedded data-URIs (self-contained constraint — budget the file-size hit; tiny 128–256px equirect swatches or simple radial-gradient approximations of the real albedo may be the honest sweet spot; interacts with the SVG schematic aesthetic + theming — treat as data-not-chrome like PROG_BODY_COLORS).
+- **Real launches from lon/lat**: launch site (lat exists; add lon) → the LAUNCH event's departure point sits at the real surface location on the drawn body; ties into RAAN-from-launch-time modeling (critique 49's honest gap).
+- **Mock ascent path**: a schematic launch→parking-orbit curve (surface point to insertion point) so missions visually begin at the ground, not in orbit.
+- **Better time display for intercepts**: time ticks/labels along trajectories, scrubbable MET, encounter countdowns — make "when do these two things meet" readable at a glance (extends the R3.4 CA pair).
+- **Better control over launches**: launch-time/azimuth authoring (pins RAAN for real — closes critique 49), window hints.
+- **Every event as a draggable node on the flight plan**: generalize the R3.3/R3.4 gizmo — all mission events (maneuvers, separations, coasts) visible as nodes on the trajectory and draggable in time/space; the trajectory view becomes the primary flight-plan editor. (Big; probably the post-R5 epic.)
+
 ### R5 — Node-map coherence pass (570 `_missionNmLayout` + selection model)
 
 The node map and trajectory view become two projections of ONE dataset — topology (plan/budgets) vs geometry (execution/time).
