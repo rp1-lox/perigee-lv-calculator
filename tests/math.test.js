@@ -1001,6 +1001,48 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// P3 — escape hyperbola geometry (385): physEscapeGeometry
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physEscapeGeometry, physSoiRadius, PROG_BODIES } =
+    vm.runInContext('({ physEscapeGeometry, physSoiRadius, PROG_BODIES })', sandbox);
+
+  // closed forms across two (rp, c3) pairs (Earth departure, Mars-ish + fast)
+  const muE = PROG_BODIES.Earth.mu;
+  [[6563, 8.7], [6749, 56.7]].forEach(([rp, c3]) => {
+    const g = physEscapeGeometry(rp, c3, muE, 1);
+    ok(`P3 escape: hyperbolic (e>1) for rp=${rp}, C3=${c3}`, g && g.e > 1);
+    approx(`P3 escape: e closed form (rp=${rp}, C3=${c3})`, g.e, 1 + rp * c3 / muE, 1e-12);
+    approx(`P3 escape: beta = acos(1/e) closed form (rp=${rp}, C3=${c3})`, g.beta, Math.acos(1 / g.e), 0);
+    approx(`P3 escape: vInf = sqrt(C3) (rp=${rp}, C3=${c3})`, g.vInf, Math.sqrt(c3), 1e-12);
+  });
+
+  // sample radii monotonically increase from rp out to rSoi
+  {
+    const rp = 6563, c3 = 8.7;
+    const g = physEscapeGeometry(rp, c3, muE, 1);
+    const rSoi = physSoiRadius('Earth');
+    ok('P3 escape: Earth SOI radius sane (~9.25e5 km)', rSoi > 9e5 && rSoi < 9.5e5);
+    const pts = g.samplePoints(rSoi, 40);
+    ok('P3 escape: n+1 sample points', pts.length === 41);
+    let mono = true, prevR = 0;
+    pts.forEach(p => { const r = Math.hypot(p[0], p[1]); if (r < prevR - 1e-6) mono = false; prevR = r; });
+    ok('P3 escape: sample radii monotonically increasing', mono);
+    approx('P3 escape: first point at periapsis rp', Math.hypot(pts[0][0], pts[0][1]), rp, 1e-6);
+    approx('P3 escape: last point at rSoi', Math.hypot(pts[40][0], pts[40][1]), rSoi, rSoi * 1e-9);
+    ok('P3 escape: periapsis on +x (caller rotates)', Math.abs(pts[0][1]) < 1e-9 && pts[0][0] > 0);
+    // mirror branch: outboundSign -1 flips y
+    const gm = physEscapeGeometry(rp, c3, muE, -1);
+    const pm = gm.samplePoints(rSoi, 40);
+    approx('P3 escape: mirror branch flips y', pm[20][1], -pts[20][1], 1e-9);
+  }
+
+  // degenerate guards: bound/parabolic energies have no asymptote to draw
+  ok('P3 escape: c3<=0 returns null', physEscapeGeometry(6563, 0, muE, 1) === null && physEscapeGeometry(6563, -1.9, muE, 1) === null);
+  ok('P3 escape: bad rp/mu return null', physEscapeGeometry(0, 8.7, muE, 1) === null && physEscapeGeometry(6563, 8.7, 0, 1) === null);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

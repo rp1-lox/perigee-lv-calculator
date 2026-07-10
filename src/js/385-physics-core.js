@@ -194,3 +194,44 @@ function physBodyStateAt(body, t_s, overrides) {
   }
   return { r: localR, v: localV };
 }
+
+// ── escape hyperbola geometry (P3) ───────────────────────────────────────────
+/** Pure planar geometry of an escape/capture hyperbola with periapsis radius
+ *  rpKm and characteristic energy c3 (km²/s²) about a body of GM mu (km³/s²).
+ *  Periapsis is placed on the local +x axis — the CALLER rotates the sampled
+ *  points into its own frame. outboundSign (+1 default / -1) picks which side
+ *  of the apse line the branch sweeps (mirror for capture spurs).
+ *  Returns null unless c3 > 0 (a bound/parabolic "escape" has no hyperbolic
+ *  asymptote to draw). {
+ *    e, vInf,
+ *    beta:   acos(1/e) — asymptote half-angle from the apse line,
+ *    nuBurn: 0 (burn modeled at periapsis),
+ *    p:      semi-latus rectum rp·(1+e),
+ *    samplePoints(rSoiKm, n): [[x,y],...] km — n+1 conic points from periapsis
+ *      (ν=0) out to the true anomaly where r = rSoiKm (radii monotonically
+ *      increasing; ν sign = outboundSign),
+ *  } */
+function physEscapeGeometry(rpKm, c3, mu, outboundSign) {
+  if (!(rpKm > 0) || !(mu > 0) || !(c3 > 0)) return null;
+  const sign = outboundSign < 0 ? -1 : 1;
+  const vInf = Math.sqrt(c3);
+  const e = 1 + rpKm * c3 / mu;           // rp·vInf²/mu, vInf² = c3
+  const beta = Math.acos(1 / e);          // asymptote half-angle
+  const p = rpKm * (1 + e);
+  return {
+    e, vInf, beta, nuBurn: 0, p,
+    samplePoints(rSoiKm, n) {
+      const N = Math.max(2, n || 32);
+      const rMax = Math.max(rSoiKm || rpKm, rpKm);
+      // ν where r = rMax: cosν = (p/r − 1)/e (clamped — rMax below rp can't happen)
+      const nuMax = Math.acos(Math.max(-1, Math.min(1, (p / rMax - 1) / e)));
+      const pts = [];
+      for (let k = 0; k <= N; k++) {
+        const nu = sign * nuMax * k / N;
+        const r = p / (1 + e * Math.cos(nu));
+        pts.push([r * Math.cos(nu), r * Math.sin(nu)]);
+      }
+      return pts;
+    },
+  };
+}

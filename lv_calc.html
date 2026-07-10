@@ -11876,6 +11876,47 @@ function physBodyStateAt(body, t_s, overrides) {
   return { r: localR, v: localV };
 }
 
+// ── escape hyperbola geometry (P3) ───────────────────────────────────────────
+/** Pure planar geometry of an escape/capture hyperbola with periapsis radius
+ *  rpKm and characteristic energy c3 (km²/s²) about a body of GM mu (km³/s²).
+ *  Periapsis is placed on the local +x axis — the CALLER rotates the sampled
+ *  points into its own frame. outboundSign (+1 default / -1) picks which side
+ *  of the apse line the branch sweeps (mirror for capture spurs).
+ *  Returns null unless c3 > 0 (a bound/parabolic "escape" has no hyperbolic
+ *  asymptote to draw). {
+ *    e, vInf,
+ *    beta:   acos(1/e) — asymptote half-angle from the apse line,
+ *    nuBurn: 0 (burn modeled at periapsis),
+ *    p:      semi-latus rectum rp·(1+e),
+ *    samplePoints(rSoiKm, n): [[x,y],...] km — n+1 conic points from periapsis
+ *      (ν=0) out to the true anomaly where r = rSoiKm (radii monotonically
+ *      increasing; ν sign = outboundSign),
+ *  } */
+function physEscapeGeometry(rpKm, c3, mu, outboundSign) {
+  if (!(rpKm > 0) || !(mu > 0) || !(c3 > 0)) return null;
+  const sign = outboundSign < 0 ? -1 : 1;
+  const vInf = Math.sqrt(c3);
+  const e = 1 + rpKm * c3 / mu;           // rp·vInf²/mu, vInf² = c3
+  const beta = Math.acos(1 / e);          // asymptote half-angle
+  const p = rpKm * (1 + e);
+  return {
+    e, vInf, beta, nuBurn: 0, p,
+    samplePoints(rSoiKm, n) {
+      const N = Math.max(2, n || 32);
+      const rMax = Math.max(rSoiKm || rpKm, rpKm);
+      // ν where r = rMax: cosν = (p/r − 1)/e (clamped — rMax below rp can't happen)
+      const nuMax = Math.acos(Math.max(-1, Math.min(1, (p / rMax - 1) / e)));
+      const pts = [];
+      for (let k = 0; k <= N; k++) {
+        const nu = sign * nuMax * k / N;
+        const r = p / (1 + e * Math.cos(nu));
+        pts.push([r * Math.cos(nu), r * Math.sin(nu)]);
+      }
+      return pts;
+    },
+  };
+}
+
 // ─── PHYSICS INTEGRATOR (P1) — restricted n-body propagation ─────────────────
 //
 // Pure math, no DOM. See PHYSICS_PLAN.md (P1) and MATH.md §7d.
@@ -20474,6 +20515,186 @@ function _trajArcPointAt(r1, r2, scale, rotDeg, ox, oy, t) {
   return { x: rx + ox, y: ry + oy };
 }
 
+// ── P3: physics-leg polylines + SOI spurs (render integration) ─────────────
+// A propagated physics leg (565's _physTrajByMission, via physMissionLeg)
+// carries samples [{t, r:[x,y,z], frame}] where r is RELATIVE to that
+// sample's frame body AT TIME sample.t. Drawing convention (patched-conic,
+// KSP-style): each frame's sub-segment is anchored to that body's CURRENT
+// DRAWN position (the ox,oy the renderer computed for the body at viewTime)
+// — NEVER at absolute heliocentric sample positions (the bodies move between
+// sample.t and viewTime; absolute positions would smear the trajectory).
+
+/** Frame-local portion of a physics leg as one polyline. Coordinates:
+ *  ox + r[0]*zoom, oy + r[1]*zoom (render units = km × zoom). Samples are
+ *  filtered to frame === frameBody and t <= opts.clipT; non-contiguous runs
+ *  (e.g. Earth-frame samples before AND after a lunar flyby) become separate
+ *  M... subpaths of the same path element. Returns null when the leg has no
+ *  drawable (>= 2 finite) samples in this frame — the caller falls back to
+ *  the schematic arc. Returns {hidden:true} when the polyline exists but is
+ *  outside its LOD/cull window (physics stays authoritative — no schematic
+ *  fallback for a merely-invisible polyline). */
+function _trajPolylineSVG(physLeg, frameBody, ox, oy, zoom, opts) {
+  opts = opts || {};
+  const clipT = opts.clipT != null ? opts.clipT : Infinity;
+  const samples = (physLeg && physLeg.samples) || [];
+  const runs = [];
+  let cur = null;
+  for (const s of samples) {
+    if (s.frame !== frameBody || s.t > clipT) { cur = null; continue; }
+    const x = ox + s.r[0] * zoom, y = oy + s.r[1] * zoom;
+    if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
+    if (!cur) { cur = []; runs.push(cur); }
+    cur.push({ x, y, t: s.t });
+  }
+  const pts = [];
+  runs.forEach(run => { if (run.length >= 2) pts.push(...run); });
+  if (pts.length < 2) return null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  pts.forEach(p => {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  });
+  const extentPx = Math.max(maxX - minX, maxY - minY) / 2;
+  const viewportDiagPx = opts.viewportDiagPx || Infinity;
+  if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return { hidden: true };
+  let d = '';
+  runs.forEach(run => {
+    if (run.length < 2) return;
+    d += (d ? ' ' : '') + 'M ' + run.map((p, i) => (i ? 'L ' : '') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+  });
+  return { d, first: pts[0], last: pts[pts.length - 1], extentPx, tFirst: pts[0].t, tLast: pts[pts.length - 1].t };
+}
+
+/** Vehicle-dot position on a physics leg at time tQuery: linear interpolation
+ *  between the bracketing samples IN THE GIVEN FRAME (replaces the schematic
+ *  _trajLegPathFraction linear-fraction for physics legs). Returns null when
+ *  tQuery falls outside this frame's sample span (the vehicle is in another
+ *  frame at that moment — its dot belongs there). */
+function _trajPolylinePointAt(physLeg, frameBody, ox, oy, zoom, tQuery) {
+  const samples = (physLeg && physLeg.samples) || [];
+  let prev = null;
+  for (const s of samples) {
+    if (s.frame !== frameBody) { prev = null; continue; }
+    if (prev && s.t >= tQuery && prev.t <= tQuery) {
+      const f = (s.t - prev.t) > 0 ? (tQuery - prev.t) / (s.t - prev.t) : 0;
+      const rx = prev.r[0] + (s.r[0] - prev.r[0]) * f, ry = prev.r[1] + (s.r[1] - prev.r[1]) * f;
+      const x = ox + rx * zoom, y = oy + ry * zoom;
+      return (isFinite(x) && isFinite(y)) ? { x, y } : null;
+    }
+    prev = s;
+  }
+  return null;
+}
+
+/** Mission-truth clip time for a propagated injection leg: the propagation
+ *  runs to 1.5× the schematic TOF (565), but the mission's own trajectory
+ *  ends at the arrival burn — clip the drawn polyline at the EXITING
+ *  (transit -> destination orbit) leg's metArrive so post-capture integrator
+ *  samples don't render as a phantom continuation. Infinity when no arrival
+ *  leg exists (the propagation tail is then the honest picture). */
+function _trajPhysClipT(m, physLeg) {
+  if (!m || !physLeg || !physLeg.dest) return Infinity;
+  const frames = _trajGetExtraction(m);
+  const sc = frames[physLeg.dest];
+  if (!sc || !sc.legs) return Infinity;
+  let clip = Infinity;
+  sc.legs.forEach(l => {
+    if (!l.fromO || l.fromO.type !== 'transit') return;
+    if (l.authIdx == null || physLeg.authIdx == null || l.authIdx <= physLeg.authIdx) return;
+    if (l.metArrive != null && l.metArrive < clip) clip = l.metArrive;
+  });
+  return clip;
+}
+
+/** The propagated INJECTION physics leg whose destination is `body`, for an
+ *  arrival (transit -> orbit) schematic leg at arrAuthIdx — the injection leg
+ *  already flew the coast, so its samples carry the body-frame approach. */
+function _trajPhysInjectionLegFor(m, arrAuthIdx, body) {
+  if (!m || arrAuthIdx == null || typeof _physTrajByMission === 'undefined') return null;
+  const t = _physTrajByMission[m.missionId];
+  if (!t || !t.legs) return null;
+  let best = null;
+  t.legs.forEach(L => {
+    if ((L.kind !== 'moon' && L.kind !== 'interplanetary') || L.dest !== body) return;
+    if (L.authIdx == null || L.authIdx >= arrAuthIdx) return;
+    if (!best || L.authIdx > best.authIdx) best = L;
+  });
+  return best;
+}
+
+/** Shared physics-leg renderer for one frame: polyline + hit path + burn
+ *  markers + vehicle dot, with the C2 leg-state treatment derived from the
+ *  PROPAGATED time span (tDep = physLeg.met, tArr = clip time or last sample)
+ *  rather than the schematic leg's met/metArrive (an impulsive injection
+ *  leg's schematic record has met === metArrive; the polyline spans the real
+ *  coast). Returns the SVG string, '' when LOD-hidden, or null when the
+ *  physics leg has nothing drawable in this frame (schematic fallback). */
+function _trajPhysLegRender(ctx) {
+  const { m, leg, physLeg, body, ox, oy, zoom, viewportDiagPx, vt, emphasized } = ctx;
+  const id = m.missionId;
+  const clipT = _trajPhysClipT(m, physLeg);
+  const poly = _trajPolylineSVG(physLeg, body, ox, oy, zoom, { clipT, viewportDiagPx });
+  if (!poly) return null;
+  if (poly.hidden) return '';
+  const tDep = physLeg.met != null ? physLeg.met : poly.tFirst;
+  const tArr = isFinite(clipT) ? clipT : poly.tLast;
+  const legState = vt >= tArr ? 'history' : (vt >= tDep ? 'current' : 'planned');
+  const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
+  const alpha = emphasized ? 1 : _trajLodOpacity(poly.extentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
+  if (alpha <= 0) return '';
+  const clickIdx = leg.authIdx;
+  const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})"` : '';
+  const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
+  const strokeW = emphasized ? 1.2 : 0.7;
+  const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
+  const opacity = (alpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
+  const hoverTitle = ctx.title || '';
+  const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
+  let out = `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+  const markerOpts = { emphasized, authIdx: clickIdx, missionId: id, title: hoverTitle, zoom, screenSize: poly.extentPx };
+  if (ctx.depMarker) _trajBurnMarker(poly.first.x, poly.first.y, 'up', _trajDvText(ctx.depDv != null ? ctx.depDv : leg.dv), _metFmt(tDep), Object.assign({}, markerOpts, { opacity: stateAlpha }));
+  if (ctx.arrMarker) _trajBurnMarker(poly.last.x, poly.last.y, 'down', ctx.arrDv != null ? _trajDvText(ctx.arrDv) : '', isFinite(tArr) ? _metFmt(tArr) : '', Object.assign({}, markerOpts, { opacity: stateAlpha }));
+  if (legState === 'current') {
+    const dotP = _trajPolylinePointAt(physLeg, body, ox, oy, zoom, vt);
+    if (dotP) out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (physics leg — interpolated from propagated samples)</title></circle>`;
+  }
+  return out;
+}
+
+/** SOI escape/capture spur (P3): hyperbola from the parking-ring periapsis
+ *  out to the body's SOI edge (physEscapeGeometry, 385), rotated so the far
+ *  (asymptote-ward) end points along farAngleRad. `mirror` flips the sweep
+ *  side (capture spurs — schematic mirror, see MATH.md §7f). Embedded
+ *  body-frame content: the caller's zoiAlpha <g opacity> wrapper is the one
+ *  fade authority; the spur only applies its own transferArc LOD window. */
+function _trajEscapeSpurSVG(body, rpKm, c3, farAngleRad, mirror, zoom, ox, oy, viewportDiagPx, opts) {
+  opts = opts || {};
+  const mu = PROG_BODIES[body] && PROG_BODIES[body].mu;
+  const geo = (typeof physEscapeGeometry === 'function' && mu) ? physEscapeGeometry(rpKm, c3, mu, mirror ? -1 : 1) : null;
+  if (!geo) return null;
+  const rSoi = (typeof physSoiRadius === 'function') ? physSoiRadius(body) : 0;
+  if (!(rSoi > rpKm) || !isFinite(rSoi)) return null;
+  const raw = geo.samplePoints(rSoi, 48);
+  const far = raw[raw.length - 1];
+  const rot = farAngleRad - Math.atan2(far[1], far[0]);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  const pts = raw.map(p => ({ x: ox + (p[0] * cr - p[1] * sr) * zoom, y: oy + (p[0] * sr + p[1] * cr) * zoom }));
+  if (pts.some(p => !isFinite(p.x) || !isFinite(p.y))) return null;
+  const extentPx = rSoi * zoom;
+  if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return { svg: '', hidden: true };
+  const alpha = opts.emphasized ? 1 : _trajLodOpacity(extentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
+  if (alpha <= 0) return { svg: '', hidden: true };
+  const d = 'M ' + pts.map((p, i) => (i ? 'L ' : '') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+  const stateAlpha = opts.stateAlpha != null ? opts.stateAlpha : 1;
+  const opacity = (alpha * (opts.emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
+  const color = opts.emphasized ? 'var(--accent)' : (opts.color || 'var(--accent2)');
+  const strokeW = opts.emphasized ? 1.2 : 0.7;
+  const hit = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
+  const svg = `<path d="${d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${opts.dashAttr || ''} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${opts.title || ''}</title></path>${hit}`;
+  return { svg, burn: pts[0], soiEnd: pts[pts.length - 1], extentPx, alpha };
+}
+
 // ── LOD opacity ramp (C2) ──────────────────────────────────────────────────
 // Replaces C1b's hard culls with a linear fade at each end of a px-size
 // visibility window [lo,hi]. Ramp width is ~20% of the window (in log space
@@ -20783,6 +21004,17 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
         return;
       }
 
+      // ── P3: physics polyline (Sun-frame portion) — the propagated leg's
+      // heliocentric samples render INSTEAD of the schematic half-ellipse
+      // when present; schematic stays for physics-off/unconverged/no-samples.
+      if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
+        const physLegS = physMissionLeg(id, leg.authIdx);
+        if (physLegS && physLegS.samples && physLegS.samples.length) {
+          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true });
+          if (phys != null) { out += phys; return; }
+        }
+      }
+
       let rotAng = _trajPlanetAngle(leg.fromO.body);
       let ghostP = null, arrivalTargetP = null;
       if (destBody && PROG_HELIO_R[destBody] != null && typeof progBodyWorldPosCalibrated === 'function') {
@@ -20846,6 +21078,58 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       return;
     }
 
+    // ── P3: physics polyline, LOCAL-frame portion. Two cases:
+    // (a) the leg's OWN physics record has samples in this frame (e.g. the
+    //     TLC injection leg drawn at Earth — the spiral/ellipse out); and
+    // (b) an ARRIVAL leg (fromO transit) drawn in the destination's own
+    //     frame — the propagation lives on the earlier INJECTION leg, whose
+    //     destination-frame samples carry the hyperbolic approach (this
+    //     replaces the schematic SOI-fallback arc when the physics actually
+    //     reached the body). Clicking the polyline selects THIS frame's
+    //     authored event (injection at Earth, arrival burn at the Moon).
+    if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
+      const physLegL = physMissionLeg(id, leg.authIdx);
+      if (physLegL && physLegL.samples && physLegL.samples.length) {
+        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false });
+        if (phys != null) { out += phys; return; }
+      }
+      if (leg.fromO && leg.fromO.type === 'transit') {
+        const inj = _trajPhysInjectionLegFor(m, leg.authIdx, body);
+        if (inj && inj.samples && inj.samples.some(s => s.frame === body)) {
+          const phys = _trajPhysLegRender({ m, leg, physLeg: inj, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: false, arrMarker: true, arrDv: leg.dv });
+          if (phys != null) { out += phys; return; }
+        }
+        // ── P3: capture spur — an INTERPLANETARY arrival with no physics
+        // samples at this body (unconverged pre-P4 aim is expected) draws the
+        // analytic capture hyperbola from the SOI edge down to the arrival
+        // orbit instead of the arbitrary R*20 schematic fallback. Incoming
+        // asymptote anti-parallel to the schematic arrival v∞ direction
+        // (≈ −v_planet for arrivals from an inner origin, +v_planet from an
+        // outer one) — a schematic mirror of the departure geometry, per
+        // MATH.md §7f.
+        if (leg.fromO.body === 'Sun' && (leg.fromO.c3 > 0) && PROG_HELIO_R[body] != null && typeof physBodyStateAt === 'function') {
+          const rpArr = _trajLocalRadius(leg.toO, body);
+          if (rpArr != null) {
+            const tArrSpur = leg.metArrive != null ? leg.metArrive : vt;
+            const vArr = physBodyStateAt(body, tArrSpur).v;
+            const originB = leg.fromO.departure_body || 'Earth';
+            const fromInner = PROG_HELIO_R[originB] != null && PROG_HELIO_R[originB] < PROG_HELIO_R[body];
+            // SOI entry point sits UP-stream of the incoming v∞ direction:
+            // vInf ≈ −v_planet (from inner) → far end along +v_planet; mirrored otherwise.
+            const farAng = Math.atan2(fromInner ? vArr[1] : -vArr[1], fromInner ? vArr[0] : -vArr[0]);
+            const spurDash = legState === 'planned' ? ' stroke-dasharray="2.5,2"' : '';
+            const spur = _trajEscapeSpurSVG(body, rpArr, leg.fromO.c3, farAng, true, zoom, ox, oy, viewportDiagPx,
+              { emphasized, color: leg.color, dashAttr: spurDash, stateAlpha, missionId: id, authIdx: leg.authIdx, title: hoverTitle });
+            if (spur != null) {
+              out += spur.svg;
+              if (!spur.hidden) _trajBurnMarker(spur.burn.x, spur.burn.y, 'down', _trajDvText(leg.dv), _metFmt(leg.metArrive), Object.assign(markerOpts(spur.extentPx), { opacity: stateAlpha }));
+              return;
+            }
+          }
+        }
+      }
+    }
+
     const fromR = _trajLocalRadius(leg.fromO, body);
     const toR = _trajLocalRadius(leg.toO, body);
     if (fromR == null || toR == null) return;
@@ -20891,6 +21175,48 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     }
     if (ghostLocal) out += _trajGhostMarker(ghostLocal.p.x, ghostLocal.p.y, ghostLocal.body, zoom, arcAlpha * stateAlpha);
   });
+
+  // ── P3: SOI departure spurs — an interplanetary injection leg lives in the
+  // SUN frame's leg list (frameId 'Sun'), so the departure body's own local
+  // frame previously showed nothing for it. Draw the escape hyperbola from
+  // the parking ring out to the SOI edge, outgoing asymptote along the
+  // departure body's heliocentric velocity (prograde for outbound/superior
+  // destinations, retrograde for inbound). Embedded body-frame content: this
+  // runs INSIDE _trajBodyFrameContent so it inherits the body's zoiAlpha from
+  // the caller's <g opacity> wrapper (one fade authority); its own extent
+  // LOD-gates through the transferArc window inside _trajEscapeSpurSVG.
+  if (!isSun && PROG_HELIO_R[body] != null && frames['Sun'] && typeof physBodyStateAt === 'function') {
+    (frames['Sun'].legs || []).forEach(sleg => {
+      const toO = sleg.toO;
+      if (!toO || toO.type !== 'transit' || toO.body !== 'Sun') return;
+      if ((toO.departure_body || 'Earth') !== body) return;
+      const dest = toO.destination;
+      if (!dest || PROG_HELIO_R[dest] == null || !(toO.c3 > 0)) return;
+      const rp = _trajLocalRadius(sleg.fromO, body);
+      if (rp == null) return;
+      const emphasized = selAuthIdx != null && sleg.authIdx === selAuthIdx;
+      const tDep = sleg.met != null ? sleg.met : 0;
+      const vDep = physBodyStateAt(body, tDep).v;
+      const outbound = PROG_HELIO_R[dest] > PROG_HELIO_R[body];
+      const farAng = Math.atan2(outbound ? vDep[1] : -vDep[1], outbound ? vDep[0] : -vDep[0]);
+      // leg state: the spur is flown right after the (impulsive) injection
+      // burn; it dims to history once the transit has fully arrived (clip
+      // time from the propagated leg when available).
+      const physLegD = (typeof physMissionLeg === 'function' && sleg.authIdx != null) ? physMissionLeg(id, sleg.authIdx) : null;
+      const clipT = physLegD ? _trajPhysClipT(m, physLegD) : Infinity;
+      const legState = vt < tDep ? 'planned' : (isFinite(clipT) && vt >= clipT ? 'history' : 'current');
+      const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
+      const dashAttr = legState === 'planned' ? ' stroke-dasharray="2.5,2"' : '';
+      const title = `${sleg.vehName ? sleg.vehName + ' — ' : ''}${sleg.fromLabel} → ${sleg.toLabel} — escape hyperbola to ${body} SOI`;
+      const spur = _trajEscapeSpurSVG(body, rp, toO.c3, farAng, false, zoom, ox, oy, viewportDiagPx,
+        { emphasized, color: sleg.color, dashAttr, stateAlpha, missionId: id, authIdx: sleg.authIdx, title });
+      if (spur && !spur.hidden) {
+        out += spur.svg;
+        _trajBurnMarker(spur.burn.x, spur.burn.y, 'up', _trajDvText(sleg.dv), _metFmt(tDep),
+          { emphasized, authIdx: sleg.authIdx, missionId: id, title, zoom, screenSize: spur.extentPx, opacity: stateAlpha });
+      }
+    });
+  }
 
   // surface events (fixed-px marker + LOD-gated label, like burn markers)
   sc.surface.forEach(s => {
