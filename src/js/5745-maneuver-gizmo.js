@@ -1088,8 +1088,19 @@ function _trajGizmoRunScratch(mode) {
   // _trajGizmoRepaintScenePreview). Only extend on the FULL-fidelity pass —
   // cheap mode stays single-frame/short per the fidelity ladder contract.
   if (!cheap && isEscape) horizon = 90 * 86400;
-  const maxSamplesFull = (!cheap && isEscape) ? 160 : maxSamples;
-  const res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+  let maxSamplesFull = (!cheap && isEscape) ? 160 : maxSamples;
+  let res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+  // R3.5.3: extend a full-fidelity escape preview to a full-orbit horizon
+  // (shared helper physEscapeHorizonS in 565) so the heliocentric arc reads
+  // as a real orbit rather than the flat 90-day quarter-arc.
+  if (!cheap && isEscape && typeof physEscapeHorizonS === 'function') {
+    const fullHorizon = physEscapeHorizonS(res.samples, horizon);
+    if (fullHorizon > horizon) {
+      horizon = fullHorizon;
+      maxSamplesFull = 256;
+      res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+    }
+  }
   g.preview = { samples: res.samples, body: node.body, fidelity: mode };
   // R3.4 item 4: closest-approach pair, recomputed alongside the preview at
   // whichever fidelity just ran — cheap-mode CA is approximate (flagged, so

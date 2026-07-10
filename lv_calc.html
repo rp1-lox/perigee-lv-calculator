@@ -15511,6 +15511,47 @@ function physLegTofFor(m, e, metNow) {
  * SOI-entry/periapsis timing when the trajectory actually reaches the
  * destination SOI, else the schematic Hohmann time.
  */
+// R3.5.3: dynamic full-orbit horizon for post-escape heliocentric arcs. The
+// flat 90-day horizon (R3.5.2) only ever showed a quarter-orbit at 1 AU —
+// this scans a propagated leg's samples for the SOI handoff into the Sun
+// frame, estimates the heliocentric orbit there (numerically, since
+// physPropagateSegment's decimated samples carry {t,r,frame} but not v — see
+// 386's return-shape comment; v is estimated by finite difference between
+// the first two consecutive Sun-frame samples, which is plenty accurate for
+// sizing a re-propagation horizon), and returns a horizon (measured from the
+// LEG START, i.e. samples[0].t) long enough to show one full solar orbit
+// plus 5% margin. Shared by 565 (committed legs) and 5745 (gizmo preview).
+//   - no Sun-frame samples (or only one — can't finite-difference a
+//     velocity) -> fallbackS unchanged.
+//   - elliptical about the Sun -> (tSunEntry - tLegStart) + 1.05 * period.
+//   - hyperbolic/parabolic/degenerate -> max(fallbackS, 2 solar years) (a
+//     generous interstellar-departure window; there's no "one orbit" to wait
+//     for).
+//   - capped at 5 solar years either way so a Jupiter-crossing ellipse can't
+//     demand a decades-long integration.
+function physEscapeHorizonS(samples, fallbackS) {
+  const CAP_S = 5 * 365.25 * 86400;
+  if (!samples || !samples.length) return fallbackS;
+  const idx = samples.findIndex(s => s.frame === 'Sun');
+  if (idx < 0) return fallbackS;
+  let jdx = -1;
+  for (let k = idx + 1; k < samples.length; k++) { if (samples[k].frame === 'Sun') { jdx = k; break; } }
+  if (jdx < 0) return fallbackS; // only one Sun-frame sample recorded — can't estimate v
+  const s0 = samples[idx], s1 = samples[jdx];
+  const dt = s1.t - s0.t;
+  if (!(dt > 0)) return fallbackS;
+  const v = [(s1.r[0] - s0.r[0]) / dt, (s1.r[1] - s0.r[1]) / dt, (s1.r[2] - s0.r[2]) / dt];
+  const muSun = (typeof PROG_MU_SUN !== 'undefined') ? PROG_MU_SUN : 1.32712440018e11;
+  const el = (typeof physStateToElements === 'function') ? physStateToElements(s0.r, v, muSun) : null;
+  let result;
+  if (el && el.a > 0 && isFinite(el.period)) {
+    result = (s0.t - samples[0].t) + 1.05 * el.period;
+  } else {
+    result = Math.max(fallbackS, 2 * 365.25 * 86400);
+  }
+  return Math.min(result, CAP_S);
+}
+
 function physRebuildMissionTrajectories(m) {
   if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
   // R1: planet-phase calibration retired — real ephemeris rails need no
@@ -15586,8 +15627,16 @@ function physRebuildMissionTrajectories(m) {
       // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
       // what the gizmo's full-fidelity preview showed before commit.
       else if (el && (el.a < 0 || el.ra >= physSoiRadius(o.body) * 0.8)) horizon = 90 * 86400;
-      const res = physPropagateSegment(state, burnMet, burnMet + horizon,
+      let res = physPropagateSegment(state, burnMet, burnMet + horizon,
         { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 256 });
+      // R3.5.3: if the 90-day pass reached heliocentric space, re-propagate
+      // once to a full-orbit horizon (physEscapeHorizonS) so the committed
+      // arc shows at least one full solar orbit instead of a quarter-orbit.
+      const fullHorizon = physEscapeHorizonS(res.samples, horizon);
+      if (fullHorizon > horizon) {
+        res = physPropagateSegment(state, burnMet, burnMet + fullHorizon,
+          { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 512 });
+      }
       legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,
         tof_s: 0, tofPhysics: null, dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
         converged: true, kind: 'mnode', homeFrame: o.body,
@@ -24193,8 +24242,19 @@ function _trajGizmoRunScratch(mode) {
   // _trajGizmoRepaintScenePreview). Only extend on the FULL-fidelity pass —
   // cheap mode stays single-frame/short per the fidelity ladder contract.
   if (!cheap && isEscape) horizon = 90 * 86400;
-  const maxSamplesFull = (!cheap && isEscape) ? 160 : maxSamples;
-  const res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+  let maxSamplesFull = (!cheap && isEscape) ? 160 : maxSamples;
+  let res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+  // R3.5.3: extend a full-fidelity escape preview to a full-orbit horizon
+  // (shared helper physEscapeHorizonS in 565) so the heliocentric arc reads
+  // as a real orbit rather than the flat 90-day quarter-arc.
+  if (!cheap && isEscape && typeof physEscapeHorizonS === 'function') {
+    const fullHorizon = physEscapeHorizonS(res.samples, horizon);
+    if (fullHorizon > horizon) {
+      horizon = fullHorizon;
+      maxSamplesFull = 256;
+      res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
+    }
+  }
   g.preview = { samples: res.samples, body: node.body, fidelity: mode };
   // R3.4 item 4: closest-approach pair, recomputed alongside the preview at
   // whichever fidelity just ran — cheap-mode CA is approximate (flagged, so

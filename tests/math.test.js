@@ -81,7 +81,7 @@ const {
   physKeplerPropagate, physBodyStateAt, progStumpffC, progStumpffS,
   physSoiRadius, physFrameOf, physPatchState, physAccel, physStepFor,
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
-  physMissionLeg, _trajGizmoClosestApproach,
+  physMissionLeg, _trajGizmoClosestApproach, physEscapeHorizonS,
   _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
@@ -1849,6 +1849,69 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // Unconverged leg -> estimated, even though a leg record exists.
   const annUnconverged = _nmEdgePhysicsAnnotation('mission-x', 3, () => ({ converged: false }));
   ok('R5 edges: unconverged leg -> flown:false / estimated label', annUnconverged.flown === false);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R3.5.3 — physEscapeHorizonS (565-physics-mission.js): dynamic full-orbit
+// heliocentric horizon, replacing the flat 90-day escape horizon that only
+// ever showed a quarter-orbit. Dated 2026-07-10.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const FALLBACK_S = 90 * 86400;
+  const YEAR_S = 365.25 * 86400;
+  const CAP_S = 5 * YEAR_S;
+  const MU_SUN = 1.32712440018e11;
+
+  // No Sun-frame samples at all -> fallback verbatim.
+  const noSun = [{ t: 0, r: [1e5, 0, 0], frame: 'Earth' }, { t: 1000, r: [1.1e5, 0, 0], frame: 'Earth' }];
+  ok('physEscapeHorizonS: no Sun-frame samples -> fallback', physEscapeHorizonS(noSun, FALLBACK_S) === FALLBACK_S);
+
+  // Only ONE Sun-frame sample recorded -> can't finite-difference a velocity -> fallback.
+  const oneSun = [{ t: 0, r: [1e5, 0, 0], frame: 'Earth' }, { t: 1000, r: [1.496e8, 0, 0], frame: 'Sun' }];
+  ok('physEscapeHorizonS: single Sun-frame sample -> fallback', physEscapeHorizonS(oneSun, FALLBACK_S) === FALLBACK_S);
+
+  // Elliptical heliocentric orbit (near-circular at 1 AU, Earth-like) -> tExit + 1.05*period.
+  {
+    const R = 1.496e8; // km, 1 AU
+    const vCirc = Math.sqrt(MU_SUN / R); // ~29.78 km/s
+    const dt = 1000; // s, small step for an accurate finite-difference v estimate
+    const dtheta = (vCirc / R) * dt;
+    const s0 = { t: 5000, r: [R, 0, 0], frame: 'Sun' };
+    const s1 = { t: 5000 + dt, r: [R * Math.cos(dtheta), R * Math.sin(dtheta), 0], frame: 'Sun' };
+    const samples = [{ t: 0, r: [1e5, 0, 0], frame: 'Earth' }, s0, s1];
+    const period = 2 * Math.PI * Math.sqrt((R * R * R) / MU_SUN); // ~1 sidereal year
+    const expected = (s0.t - samples[0].t) + 1.05 * period;
+    const got = physEscapeHorizonS(samples, FALLBACK_S);
+    ok('physEscapeHorizonS: elliptical -> ~tExit + 1.05*period (within 1%)', Math.abs(got - expected) / expected < 0.01);
+    ok('physEscapeHorizonS: elliptical -> roughly one solar year plus margin', got > YEAR_S && got < 1.2 * YEAR_S);
+  }
+
+  // Hyperbolic w.r.t. the Sun -> max(fallback, 2 solar years).
+  {
+    const R = 1.496e8;
+    const vEsc = Math.sqrt(2 * MU_SUN / R); // ~42.12 km/s
+    const vHyp = vEsc * 1.2; // comfortably hyperbolic
+    const dt = 100;
+    const s0 = { t: 5000, r: [R, 0, 0], frame: 'Sun' };
+    const s1 = { t: 5000 + dt, r: [R, vHyp * dt, 0], frame: 'Sun' }; // near-radial straight-line step
+    const samples = [{ t: 0, r: [1e5, 0, 0], frame: 'Earth' }, s0, s1];
+    const got = physEscapeHorizonS(samples, FALLBACK_S);
+    ok('physEscapeHorizonS: hyperbolic -> at least 2 solar years', got === 2 * YEAR_S);
+  }
+
+  // Extreme near-parabolic ellipse (huge period) -> capped at 5 solar years.
+  {
+    const R = 1.496e8;
+    const vEsc = Math.sqrt(2 * MU_SUN / R);
+    const vNearEsc = vEsc * 0.997; // bound but with an enormous semi-major axis
+    const dt = 100;
+    const dtheta = (vNearEsc / R) * dt;
+    const s0 = { t: 5000, r: [R, 0, 0], frame: 'Sun' };
+    const s1 = { t: 5000 + dt, r: [R * Math.cos(dtheta), R * Math.sin(dtheta), 0], frame: 'Sun' };
+    const samples = [{ t: 0, r: [1e5, 0, 0], frame: 'Earth' }, s0, s1];
+    const got = physEscapeHorizonS(samples, FALLBACK_S);
+    ok('physEscapeHorizonS: near-parabolic huge-period ellipse -> capped at 5 years', got === CAP_S);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
