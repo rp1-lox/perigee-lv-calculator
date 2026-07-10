@@ -926,7 +926,8 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
   const clipT = opts.clipT != null ? opts.clipT : Infinity;
   const samples = (physLeg && physLeg.samples) || [];
   const runs = [];
-  let cur = null;
+  const seams = []; // SOI handoffs: {x, y, from, to, t} — drawn as small dashed circles, NOT connected by a chord
+  let cur = null, curFrame = null, lastPt = null;
   for (const s of samples) {
     if (s.t > clipT) { cur = null; continue; }
     const a = anchorOf(s.frame);
@@ -934,8 +935,17 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0); // R2: samples are 3D (Moon-frame patches carry real z)
     const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
-    if (!cur) { cur = []; runs.push(cur); }
+    // Frame handoff: BREAK the polyline (the two gluings disagree by the
+    // body's drift between sample.t and viewTime — a straight chord across
+    // that gap reads as a phantom burn; user-reported) and record a seam
+    // marker at the departure side of the handoff instead.
+    if (cur && curFrame !== s.frame) {
+      if (lastPt) seams.push({ x: lastPt.x, y: lastPt.y, from: curFrame, to: s.frame, t: s.t });
+      cur = null;
+    }
+    if (!cur) { cur = []; runs.push(cur); curFrame = s.frame; }
     cur.push({ x, y, t: s.t });
+    lastPt = { x, y };
   }
   const pts = [];
   runs.forEach(run => { if (run.length >= 2) pts.push(...run); });
@@ -953,7 +963,7 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     if (run.length < 2) return;
     d += (d ? ' ' : '') + 'M ' + run.map((p, i) => (i ? 'L ' : '') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
   });
-  return { d, first: pts[0], last: pts[pts.length - 1], extentPx, tFirst: pts[0].t, tLast: pts[pts.length - 1].t };
+  return { d, seams, first: pts[0], last: pts[pts.length - 1], extentPx, tFirst: pts[0].t, tLast: pts[pts.length - 1].t };
 }
 
 /** Vehicle-dot position on a physics leg at time tQuery: linear interpolation
@@ -1062,6 +1072,12 @@ function _trajPhysLegRender(ctx) {
   const hoverTitle = ctx.title || '';
   const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
   let out = `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+  // SOI handoff seams: small dashed circles where the trajectory leaves one
+  // sphere of influence for another (the polyline BREAKS here by design —
+  // the two frames' gluings disagree by the body's drift; see _trajPolylineSVG).
+  (poly.seams || []).forEach(sm => {
+    out += `<circle cx="${sm.x.toFixed(2)}" cy="${sm.y.toFixed(2)}" r="3.2" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="1.6,1.6" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>SOI handoff: ${sm.from} → ${sm.to} · ${_metFmt(sm.t)}</title></circle>`;
+  });
   const markerOpts = { emphasized, authIdx: clickIdx, missionId: id, title: hoverTitle, zoom, screenSize: poly.extentPx };
   if (ctx.depMarker) _trajBurnMarker(poly.first.x, poly.first.y, 'up', _trajDvText(ctx.depDv != null ? ctx.depDv : leg.dv), _metFmt(tDep), Object.assign({}, markerOpts, { opacity: stateAlpha }));
   if (ctx.arrMarker) _trajBurnMarker(poly.last.x, poly.last.y, 'down', ctx.arrDv != null ? _trajDvText(ctx.arrDv) : '', isFinite(tArr) ? _metFmt(tArr) : '', Object.assign({}, markerOpts, { opacity: stateAlpha }));
@@ -1763,7 +1779,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const p = toRender(0, 0, 0);
     if (!_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) {
       const sunScale = _trajLocalScaleFor('Sun', m) * zoom; // km -> render units
-      let s = _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun');
+      let s = _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun', false, m && m.missionId);
       s += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
       emit(p.depth, s);
     }
@@ -1789,7 +1805,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const forceLabel = (trueR * zoom) < _TRAJ_MIN_BODY_PX;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      s += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel);
+      s += _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId);
     }
     // Zone-of-influence content: single fade authority for everything embedded
     // at this body (moons in the next pass share the same gate via zoiAlpha).
@@ -1822,7 +1838,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const trueR = 3;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      const glyphSvg = _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name, false);
+      const glyphSvg = _trajGlyph(p.x, p.y, _trajBodyPxR(trueR, zoom), _trajBodyColor(name), name, zoom, cam.anchorBody === name, false, m && m.missionId);
       s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m) * zoom; // km -> render units
@@ -1889,11 +1905,25 @@ function _trajLocalScaleFor(body, m) {
 // UNAFFECTED (still true-scale/min-clamped as before) — this only changes
 // whether the NAME survives the size gate; collision resolution still runs
 // normally (so crowded labels at extreme zoom still de-duplicate).
-function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel) {
+// Click a body glyph to anchor the camera on it (fly-to) — guarded against
+// the click that ends a real drag, same pattern as _trajSelectEventFromView.
+function trajGlyphClick(id, body) {
+  if (_trajJustDragged) { _trajJustDragged = false; return; }
+  trajSetFocus(id, body);
+}
+
+function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel, clickId) {
   // Body name inherits the body's own chrome color (theme var) so labels read
   // as belonging to their glyph rather than a flat gray sheet of names.
   _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
     { screenSize: r, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
+  const clickAttr = clickId ? ` style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${label}')"` : '';
+  if (clickId) {
+    return `<g${clickAttr}>
+    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"><title>Fly to ${label}</title></circle>
+    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(r, 7)}" fill="transparent"/>
+  </g>`;
+  }
   return `<g>
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>
   </g>`;
