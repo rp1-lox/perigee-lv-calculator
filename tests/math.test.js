@@ -1993,6 +1993,31 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R6.2' Phase A — maneuver unification: solved-Δv decomposition (2026-07-10)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajGizmoDecomposeDv } = vm.runInContext('({ _trajGizmoDecomposeDv })', sandbox);
+
+  const axes = { vHat: [1, 0, 0], rHat: [0, 1, 0], hHat: [0, 0, 1] };
+  const d1 = _trajGizmoDecomposeDv([1.5, -0.25, 0.75], axes); // km/s -> m/s
+  approx('gizmo decomposeDv: pro component (axis-aligned)', d1.pro, 1500, 1e-9);
+  approx('gizmo decomposeDv: rad component (axis-aligned)', d1.rad, -250, 1e-9);
+  approx('gizmo decomposeDv: nrm component (axis-aligned)', d1.nrm, 750, 1e-9);
+  approx('gizmo decomposeDv: magnitude preserved through decomposition',
+    Math.hypot(d1.pro, d1.rad, d1.nrm), Math.hypot(1.5, -0.25, 0.75) * 1000, 1e-6);
+
+  // non-axis-aligned orthonormal basis (a real burn-frame triad) still recovers the magnitude
+  const axes2 = { vHat: [0, 1, 0], rHat: [1, 0, 0], hHat: [0, 0, -1] };
+  const d2 = _trajGizmoDecomposeDv([2, 3, -1], axes2);
+  approx('gizmo decomposeDv: reorders/sign-flips per basis (pro <- rHat-slot input)', d2.pro, 3000, 1e-9);
+  approx('gizmo decomposeDv: reorders/sign-flips per basis (rad <- vHat-slot input)', d2.rad, 2000, 1e-9);
+  approx('gizmo decomposeDv: reorders/sign-flips per basis (nrm <- -hHat-slot input)', d2.nrm, 1000, 1e-9);
+
+  ok('gizmo decomposeDv: null vector -> zeros', JSON.stringify(_trajGizmoDecomposeDv(null, axes)) === JSON.stringify({ pro: 0, rad: 0, nrm: 0 }));
+  ok('gizmo decomposeDv: null axes -> zeros', JSON.stringify(_trajGizmoDecomposeDv([1, 2, 3], null)) === JSON.stringify({ pro: 0, rad: 0, nrm: 0 }));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

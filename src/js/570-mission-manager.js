@@ -924,6 +924,8 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">MANEUVER NODE (vector)</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">Δv ${(entry.dvRequired||0).toLocaleString()} m/s <span style="color:var(--text-dim);">(pro ${Math.round(entry.dvPro_ms||0)} / rad ${Math.round(entry.dvRad_ms||0)} / nrm ${Math.round(entry.dvNrm_ms||0)})</span></div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">prop &minus;${(entry.prop_consumed||0).toLocaleString()} kg &middot; ${entry.result||''}</div>
+    ${entry.detachedFrom ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">detached — was solved ${_tsEsc(entry.detachedFrom.fromLabel || entry.detachedFrom.fromNode || '?')} → ${_tsEsc(entry.detachedFrom.toLabel || entry.detachedFrom.toNode || '?')} · ΔV budget now uses this vector's authored magnitude, not the solved edge</div>
+    <button class="act-btn" style="margin-top:6px;font-size:10px;" onclick="event.stopPropagation();missionMnodeResolveToTarget('${id}',${idx})">↺ Re-solve to target</button>` : ''}
   </div>`;
   if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">COAST</span>
@@ -3860,6 +3862,24 @@ function missionMnodeNudge(id, idx, field, sign, ev) {
     const step = fine ? 1 : 10;
     const key = field === 'pro' ? 'dvPro_ms' : field === 'rad' ? 'dvRad_ms' : 'dvNrm_ms';
     e[key] = (e[key] || 0) + sign * step;
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
+// R6.2' Phase A item 4: swap a detached MNODE back to its original solved
+// MANEUVER — the exact object stashed on `detachedFrom` at detach time
+// (5745's _trajGizmoDetachManeuverIfNeeded), restored verbatim (byte-
+// identical fromNode/toNode/dvOverride/etc.) so ΔV accounting flips back to
+// progNmComputeEdgeDv and totals match the pre-detach values exactly — the
+// parity check the R6.2' spec requires. If the gizmo is open on this same
+// log index, close it (its cached kind/authIdx would otherwise be stale
+// against the just-swapped-back MANEUVER; re-dblclick to reopen).
+function missionMnodeResolveToTarget(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE' || !m.log[idx].detachedFrom) return;
+  m.log[idx] = m.log[idx].detachedFrom;
+  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
+    if (typeof _trajGizmoClose === 'function') _trajGizmoClose();
   }
   missionRecompute(m);
   missionRenderDetail();

@@ -147,6 +147,21 @@ function missionRunChecks(m) {
       }
     }
 
+    // R6.2' Phase A item 5: soft info note for a detached MNODE (a MANEUVER
+    // pulled into a manual vector burn via the gizmo's handle-drag detach,
+    // 5745). Not a failure — just a heads-up that ΔV accounting for this leg
+    // switched from the solved edge (progNmComputeEdgeDv) to the authored
+    // vector's own magnitude, which won't auto-track a later change to the
+    // original from/to nodes the way a still-solved MANEUVER would.
+    if (e.type === 'MNODE' && e.detachedFrom) {
+      const df = e.detachedFrom;
+      const fromLbl = _mcEscape(df.fromLabel || df.fromNode || '?');
+      const toLbl = _mcEscape(df.toLabel || df.toNode || '?');
+      push('mnode-detached', 'info', 'Vector-authored burn replaces a solved maneuver',
+        `This maneuver node was detached from a solved ${fromLbl} → ${toLbl} transfer — &Delta;V budget now uses the authored vector's own magnitude, not the solved edge. Use "Re-solve to target" to restore the solved maneuver.`,
+        authIdx);
+    }
+
     // #3 RED maneuver-from-mismatch: MANEUVER whose from-node != the acting
     // vehicle's orbit state at that event (pre-event snapshot).
     if (e.type === 'MANEUVER' && e.fromNode) {

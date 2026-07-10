@@ -16797,6 +16797,8 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">MANEUVER NODE (vector)</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">Δv ${(entry.dvRequired||0).toLocaleString()} m/s <span style="color:var(--text-dim);">(pro ${Math.round(entry.dvPro_ms||0)} / rad ${Math.round(entry.dvRad_ms||0)} / nrm ${Math.round(entry.dvNrm_ms||0)})</span></div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">prop &minus;${(entry.prop_consumed||0).toLocaleString()} kg &middot; ${entry.result||''}</div>
+    ${entry.detachedFrom ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">detached — was solved ${_tsEsc(entry.detachedFrom.fromLabel || entry.detachedFrom.fromNode || '?')} → ${_tsEsc(entry.detachedFrom.toLabel || entry.detachedFrom.toNode || '?')} · ΔV budget now uses this vector's authored magnitude, not the solved edge</div>
+    <button class="act-btn" style="margin-top:6px;font-size:10px;" onclick="event.stopPropagation();missionMnodeResolveToTarget('${id}',${idx})">↺ Re-solve to target</button>` : ''}
   </div>`;
   if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">COAST</span>
@@ -19738,6 +19740,24 @@ function missionMnodeNudge(id, idx, field, sign, ev) {
   missionRenderDetail();
 }
 
+// R6.2' Phase A item 4: swap a detached MNODE back to its original solved
+// MANEUVER — the exact object stashed on `detachedFrom` at detach time
+// (5745's _trajGizmoDetachManeuverIfNeeded), restored verbatim (byte-
+// identical fromNode/toNode/dvOverride/etc.) so ΔV accounting flips back to
+// progNmComputeEdgeDv and totals match the pre-detach values exactly — the
+// parity check the R6.2' spec requires. If the gizmo is open on this same
+// log index, close it (its cached kind/authIdx would otherwise be stale
+// against the just-swapped-back MANEUVER; re-dblclick to reopen).
+function missionMnodeResolveToTarget(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE' || !m.log[idx].detachedFrom) return;
+  m.log[idx] = m.log[idx].detachedFrom;
+  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
+    if (typeof _trajGizmoClose === 'function') _trajGizmoClose();
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 // Round 2 item 3(b): persist the explicit CA-target dropdown selection onto
 // the log entry (authored state on the event, same mutation discipline).
 function missionApplyMnodeCaTarget(id, idx) {
@@ -20721,6 +20741,21 @@ function missionRunChecks(m) {
             authIdx);
         }
       }
+    }
+
+    // R6.2' Phase A item 5: soft info note for a detached MNODE (a MANEUVER
+    // pulled into a manual vector burn via the gizmo's handle-drag detach,
+    // 5745). Not a failure — just a heads-up that ΔV accounting for this leg
+    // switched from the solved edge (progNmComputeEdgeDv) to the authored
+    // vector's own magnitude, which won't auto-track a later change to the
+    // original from/to nodes the way a still-solved MANEUVER would.
+    if (e.type === 'MNODE' && e.detachedFrom) {
+      const df = e.detachedFrom;
+      const fromLbl = _mcEscape(df.fromLabel || df.fromNode || '?');
+      const toLbl = _mcEscape(df.toLabel || df.toNode || '?');
+      push('mnode-detached', 'info', 'Vector-authored burn replaces a solved maneuver',
+        `This maneuver node was detached from a solved ${fromLbl} → ${toLbl} transfer — &Delta;V budget now uses the authored vector's own magnitude, not the solved edge. Use "Re-solve to target" to restore the solved maneuver.`,
+        authIdx);
     }
 
     // #3 RED maneuver-from-mismatch: MANEUVER whose from-node != the acting
@@ -22258,7 +22293,11 @@ function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   const strokeColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
   const strokeW = emphasized ? 1.3 : 0.8;
   const textColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
+  // R6.2' Phase A item 1: dblclick the marker to open the maneuver gizmo at
+  // its solved state (_trajGizmoOpenExisting, a no-op for non-MANEUVER
+  // authIdx entries — MNODE dblclick is wired separately via the event-node
+  // pass, R6.1).
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})" ondblclick="event.stopPropagation();if(typeof _trajGizmoOpenExisting==='function')_trajGizmoOpenExisting('${opts.missionId}',${opts.authIdx});"` : '';
   const titleTxt = opts.title || '';
   // Marker dot + hit area (px-sized, always rendered — geometry-adjacent, not
   // an "annotation" subject to LOD).
@@ -23704,6 +23743,23 @@ function _trajGizmoAxes(r, v) {
   return { rHat, vHat, hHat };
 }
 
+/** R6.2' Phase A: decompose a Δv vector (km/s, inertial/center frame) into
+ *  the local (v̂, r̂, ĥ) basis, in m/s — the same basis _trajGizmoAxes builds
+ *  and physAimBurnState used to construct the vector in the first place.
+ *  Pure dot-product projection (the basis is orthonormal so this is exact
+ *  regardless of which theta the basis was reconstructed at); used to show a
+ *  solved MANEUVER's Δv on the gizmo's pro/rad/nrm handles. Returns
+ *  {pro,rad,nrm} (m/s) or {pro:0,rad:0,nrm:0} for a degenerate/null input. */
+function _trajGizmoDecomposeDv(dvVecKms, axes) {
+  if (!dvVecKms || !axes) return { pro: 0, rad: 0, nrm: 0 };
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  return {
+    pro: dot(dvVecKms, axes.vHat) * 1000,
+    rad: dot(dvVecKms, axes.rHat) * 1000,
+    nrm: dot(dvVecKms, axes.hHat) * 1000,
+  };
+}
+
 /** px-drag -> signed m/s. gain = 2 m/s/px normally, 0.2 m/s/px with Shift
  *  held (fine control) — hand-tuned constants, zoom-independent by design
  *  (screen px in, m/s out; see MATH.md §7k). Pure. */
@@ -23980,6 +24036,45 @@ function _trajGizmoNodeState(m, met, authIdx) {
   return _trajGizmoOrbitNodeAt(o, met);
 }
 
+/** R6.2' Phase A: departure-state reconstruction for an EXISTING MANEUVER log
+ *  entry (as opposed to MNODE's own recorded orbitAtBurn). No side-table
+ *  entry records the exact departure r/v basis physSolveNodeBurn/the P4
+ *  shooter actually flew (only the solved dvVec, in 565's leg record) — so
+ *  per PHYSICS_PLAN's documented fallback, this reconstructs from the
+ *  fromNode's authored orbit at the maneuver's own MET via the SAME
+ *  mean-anomaly rail _trajGizmoOrbitNodeAt/_trajGizmoNodeState already use
+ *  for MNODE. The reconstructed basis is internally consistent (orthonormal)
+ *  so decomposing the leg's real dvVec against it is exact in magnitude even
+ *  though the absolute burn POINT (theta) may differ slightly from what the
+ *  shooter actually flew — a presentation-layer simplification, not a
+ *  physics change (ΔV accounting is untouched: it still comes from
+ *  progNmComputeEdgeDv via the leg, never recomputed here). Returns the same
+ *  shape as _trajGizmoNodeState, or null. */
+function _trajGizmoManeuverNodeState(m, e) {
+  if (!e || e.type !== 'MANEUVER' || !e.fromNode) return null;
+  const fromN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
+  const o = fromN && fromN.orbit;
+  if (!o) return null;
+  const met = e.metStart != null ? e.metStart : 0;
+  return _trajGizmoOrbitNodeAt(o, met);
+}
+
+/** R6.2' Phase A: look up the solved Δv (leg.dvVec, km/s) for a MANEUVER's
+ *  physics leg in the mission's side-table (_physTrajByMission, 565 — the
+ *  ONLY sanctioned source for this vector), decomposed into (pro,rad,nrm)
+ *  m/s against `node`'s local basis. Returns null if the leg hasn't been
+ *  computed yet (physics off, or not yet recomputed). Pure lookup + the pure
+ *  decompose helper above — no math performed here beyond that call. */
+function _trajGizmoManeuverSolvedDv(missionId, authIdx, node) {
+  if (!node) return null;
+  const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[missionId] : null;
+  const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
+  if (!leg || !leg.dvVec) return null;
+  const axes = _trajGizmoAxes(node.r, node.v);
+  if (!axes) return null;
+  return _trajGizmoDecomposeDv(leg.dvVec, axes);
+}
+
 /** R3.4 target selection for the closest-approach pair: scan the mission log
  *  for the next MANEUVER after `met` whose destination node names a body
  *  different from the node's own body; else fall back to the Moon for
@@ -24031,7 +24126,7 @@ function _trajGizmoOpenPending(id, met) {
   if (!m) return;
   const node = _trajGizmoNodeState(m, met, null);
   if (!node) return;
-  _trajGizmo = { missionId: id, met, authIdx: null, dv: { pro: 0, rad: 0, nrm: 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
+  _trajGizmo = { missionId: id, met, authIdx: null, kind: 'mnode', dv: { pro: 0, rad: 0, nrm: 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
   document.addEventListener('keydown', _trajGizmoKeydown);
   _trajGizmoAddDismissListeners();
   missionRenderDetail();
@@ -24039,15 +24134,41 @@ function _trajGizmoOpenPending(id, met) {
 
 function _trajGizmoOpenExisting(id, authIdx) {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
-  if (!m || !m.log[authIdx] || m.log[authIdx].type !== 'MNODE') return;
+  if (!m || !m.log[authIdx]) return;
   const e = m.log[authIdx];
-  const met = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
-  const node = _trajGizmoNodeState(m, met, authIdx);
-  if (!node) return;
-  _trajGizmo = { missionId: id, met, authIdx, dv: { pro: e.dvPro_ms || 0, rad: e.dvRad_ms || 0, nrm: e.dvNrm_ms || 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
-  document.addEventListener('keydown', _trajGizmoKeydown);
-  _trajGizmoAddDismissListeners();
-  _trajGizmoRepaintOverlay();
+  if (e.type === 'MNODE') {
+    const met = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
+    const node = _trajGizmoNodeState(m, met, authIdx);
+    if (!node) return;
+    _trajGizmo = { missionId: id, met, authIdx, kind: 'mnode', dv: { pro: e.dvPro_ms || 0, rad: e.dvRad_ms || 0, nrm: e.dvNrm_ms || 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
+    document.addEventListener('keydown', _trajGizmoKeydown);
+    _trajGizmoAddDismissListeners();
+    _trajGizmoRepaintOverlay();
+    return;
+  }
+  if (e.type === 'MANEUVER') {
+    // R6.2' Phase A: dblclicking a solved MANEUVER opens the SAME gizmo,
+    // showing the leg's solved Δv on the handles (kind:'maneuver'). The
+    // gizmo starts attached (authIdx set) but the log entry is untouched
+    // until the first handle drag detaches it into an MNODE (see
+    // _trajGizmoHandleDown) — so opening/closing without dragging is a
+    // no-op, same as inspecting an MNODE without touching a handle.
+    const node = _trajGizmoManeuverNodeState(m, e);
+    if (!node) return;
+    const met = e.metStart != null ? e.metStart : 0;
+    const solved = _trajGizmoManeuverSolvedDv(id, authIdx, node) || { pro: 0, rad: 0, nrm: 0 };
+    const toN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.toNode) : null;
+    const toLabel = e.toLabel || (toN && toN.label) || e.toNode || '?';
+    _trajGizmo = {
+      missionId: id, met, authIdx, kind: 'maneuver',
+      dv: { pro: solved.pro, rad: solved.rad, nrm: solved.nrm }, node,
+      drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null,
+      solved: { pro: solved.pro, rad: solved.rad, nrm: solved.nrm, toLabel },
+    };
+    document.addEventListener('keydown', _trajGizmoKeydown);
+    _trajGizmoAddDismissListeners();
+    _trajGizmoRepaintOverlay();
+  }
 }
 
 // R3.5.2 (user flight-test): dismiss affordances beyond Escape — left-click
@@ -24115,6 +24236,12 @@ function _trajGizmoLegDblClick(id, authIdx, evt) {
   if (_trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
   if (!m) return;
+  // R6.2' Phase A item 1: a MANEUVER leg/marker dblclick opens the SAME
+  // gizmo at the maneuver's solved state (_trajGizmoOpenExisting), instead
+  // of the "spawn a pending MNODE at the nearest sample" behavior below
+  // (which remains the fallback for other physics-leg dblclicks, e.g. an
+  // arrival/exiting-corridor leg with no MANEUVER of its own at this index).
+  if (m.log[authIdx] && m.log[authIdx].type === 'MANEUVER') { _trajGizmoOpenExisting(id, authIdx); return; }
   const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[id] : null;
   const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
   const vt = _trajViewTime(m);
@@ -24468,7 +24595,12 @@ function _trajGizmoOverlaySVG(id, rect) {
   });
   const readout = _trajGizmoFormatReadout(g.dv.pro, g.dv.rad, g.dv.nrm, g.met);
   const caTxt = _trajGizmoCaPlateText(g);
-  const plateLines = caTxt ? [readout, caTxt] : [readout];
+  const solvedTxt = (g.kind === 'maneuver' && g.solved) ? `solved → ${g.solved.toLabel}` : '';
+  const detachedTxt = (g.kind === 'mnode' && g.solved) ? `detached — was: solved burn` : '';
+  const plateLines = [readout];
+  if (solvedTxt) plateLines.push(solvedTxt);
+  if (detachedTxt) plateLines.push(detachedTxt);
+  if (caTxt) plateLines.push(caTxt);
   const plateW = Math.max(...plateLines.map(l => l.length)) * 5.6 + 16;
   const plateH = 18 * plateLines.length;
   svg += `<g transform="translate(${(geo.nodeScreen.x + 12).toFixed(1)},${(geo.nodeScreen.y - 12 - plateH).toFixed(1)})" style="pointer-events:none">
@@ -24559,9 +24691,22 @@ function _trajGizmoRepaintOverlay() {
   // gizmo attached to a committed MNODE" rule.
   if (g.authIdx != null && !g.drag && !g.centerDrag) {
     const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
-    if (m && m.log[g.authIdx] && m.log[g.authIdx].type === 'MNODE') {
+    const le = m && m.log[g.authIdx];
+    if (le && le.type === 'MNODE') {
       const node = _trajGizmoNodeState(m, g.met, g.authIdx);
       if (node) g.node = node;
+      g.kind = 'mnode';
+    } else if (le && le.type === 'MANEUVER' && g.kind === 'maneuver') {
+      // still-solved MANEUVER (not yet detached) — re-derive the solved Δv
+      // in case an upstream edit (e.g. a preceding COAST commit) recomputed
+      // the leg with a new magnitude/state.
+      const node = _trajGizmoManeuverNodeState(m, le);
+      if (node) {
+        g.node = node;
+        g.met = le.metStart != null ? le.metStart : g.met;
+        const solved = _trajGizmoManeuverSolvedDv(g.missionId, g.authIdx, node);
+        if (solved) { g.dv = { pro: solved.pro, rad: solved.rad, nrm: solved.nrm }; g.solved = Object.assign({}, g.solved, solved); }
+      }
     } else {
       _trajGizmo = null; // the event was deleted/undone out from under us
       return;
@@ -24588,9 +24733,17 @@ function _trajGizmoRenderMenu(va, rect) {
   const geo = _trajGizmoScreenGeo(g.missionId, rect);
   if (!geo) { if (existing) existing.remove(); return; }
   const canDelete = g.authIdx != null;
+  // R6.2' Phase A item 4: a detached MNODE (has detachedFrom on the log
+  // entry) gets a re-solve action right in the gizmo flyout, mirroring the
+  // MNODE card's button (570).
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const le = m && g.authIdx != null ? m.log[g.authIdx] : null;
+  const resolveBtn = (le && le.type === 'MNODE' && le.detachedFrom)
+    ? `<button onclick="missionMnodeResolveToTarget('${g.missionId}',${g.authIdx})">↺ Re-solve to target</button>` : '';
   const html = `
     <button onclick="_trajGizmoOrbitStep(1)">+1 orbit</button>
     <button onclick="_trajGizmoOrbitStep(-1)">-1 orbit</button>
+    ${resolveBtn}
     <button class="danger" onclick="_trajGizmoDeleteNode()">${canDelete ? 'Delete node' : 'Discard node'}</button>
     <button onclick="_trajGizmoCloseMenu()">Close</button>`;
   let menu = existing;
@@ -24659,10 +24812,37 @@ function _trajGizmoApplyMet(newMet) {
 }
 
 // ── Drag mechanics — handles (Δv) ───────────────────────────────────────────
+/** R6.2' Phase A item 3: the first Δv-handle drag on a solved MANEUVER
+ *  gizmo DETACHES it — the log entry is replaced in place with an MNODE
+ *  seeded at the solved components (already sitting in g.dv, since the
+ *  gizmo opened showing them), stashing the whole original MANEUVER object
+ *  on `detachedFrom` so "Re-solve to target" (missionMnodeResolveToTarget,
+ *  570) can swap it back verbatim. No recompute here — the existing
+ *  MNODE drag/commit path (unchanged below) recomputes on release, exactly
+ *  like authoring a fresh MNODE. Idempotent: a no-op once g.kind is already
+ *  'mnode' (e.g. dragging a second handle on an already-detached node). */
+function _trajGizmoDetachManeuverIfNeeded() {
+  const g = _trajGizmo;
+  if (!g || g.kind !== 'maneuver' || g.authIdx == null) return;
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  if (!m || !m.log[g.authIdx] || m.log[g.authIdx].type !== 'MANEUVER') return;
+  const orig = m.log[g.authIdx];
+  const mnode = {
+    type: 'MNODE',
+    at: { kind: 'met', value_s: g.met },
+    dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm,
+    activeKey: orig.activeKey, activeName: orig.activeName,
+    detachedFrom: orig,
+  };
+  m.log[g.authIdx] = mnode;
+  g.kind = 'mnode';
+}
+
 function _trajGizmoHandleDown(evt, key) {
   const g = _trajGizmo;
   if (!g) return;
   evt.preventDefault();
+  _trajGizmoDetachManeuverIfNeeded();
   const h = _TRAJ_GIZMO_HANDLES.find(x => x.key === key);
   if (!h) return;
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${g.missionId}"]`);
@@ -24797,11 +24977,61 @@ function _trajGizmoCancelDrag() {
   if (layer) layer.innerHTML = '';
 }
 
+// ── R6.2' Phase A item 2: MANEUVER center-drag slides departure time via the
+// PRECEDING COAST (transit-corridor convention — a MANEUVER's own duration
+// IS the coast that precedes it, per 570's replay comment). Simpler than the
+// MNODE ring-snap drag (no closed parking ring to sample against a shifting
+// departure point isn't meaningful here): plain px-along-prograde -> dMET via
+// the same degenerate-fallback formula the MNODE center-drag already uses,
+// scaled by the node's own orbital speed. Commit on release: log surgery
+// (extend an existing preceding COAST, or insert a new 'phasing' COAST) ->
+// missionRecompute -> render, ONE undo step (matches the drag-commit
+// discipline elsewhere in this module).
+function _trajGizmoManeuverCenterDown(evt) {
+  const g = _trajGizmo;
+  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${g.missionId}"]`);
+  const svgEl = va && va.querySelector('svg.traj-svg');
+  const rect = svgEl && svgEl.getBoundingClientRect();
+  const geo = rect && _trajGizmoScreenGeo(g.missionId, rect);
+  if (!geo || !rect || !(rect.width > 0)) return;
+  const vMagKms = physMag(g.node.v);
+  g.centerDrag = { maneuver: true, x0: evt.clientX, y0: evt.clientY, met0: g.met, moved: false, dir: geo.dirs.pro, kmPerPx: geo.cam.wKm / rect.width, vMagKms };
+  g.menuOpen = false;
+  document.addEventListener('mousemove', _trajGizmoCenterMove);
+  document.addEventListener('mouseup', _trajGizmoCenterUp);
+}
+
+/** Log surgery for the MANEUVER center-drag commit: `dMetSec` is the signed
+ *  MET delta accumulated by the drag (g.met - centerDrag.met0). Clamped >= 0
+ *  duration on the preceding COAST (never negative — dragging backward past
+ *  the original departure just floors the coast at 0, it can't go negative
+ *  and "steal" time from the event before it). If the immediately preceding
+ *  log entry isn't a COAST, one is inserted (label 'phasing') with the
+ *  dragged duration. */
+function _trajGizmoManeuverCommitTimeDrag(dMetSec) {
+  const g = _trajGizmo;
+  if (!g || g.authIdx == null) return;
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  if (!m || !m.log[g.authIdx] || m.log[g.authIdx].type !== 'MANEUVER') return;
+  const idx = g.authIdx;
+  const prev = idx >= 1 ? m.log[idx - 1] : null;
+  if (prev && prev.type === 'COAST') {
+    prev.days = Math.max(0, (prev.days || 0) + dMetSec / 86400);
+  } else {
+    const days = Math.max(0, dMetSec / 86400);
+    m.log.splice(idx, 0, { type: 'COAST', days, label: 'phasing' });
+    g.authIdx = idx + 1; // the MANEUVER shifted down one slot
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 // ── Drag mechanics — center knob (node TIME) ────────────────────────────────
 function _trajGizmoCenterDown(evt) {
   const g = _trajGizmo;
   if (!g || g.drag) return; // handle-drag owns the pointer; center never starts mid-handle-drag
   evt.preventDefault();
+  if (g.kind === 'maneuver') { _trajGizmoManeuverCenterDown(evt); return; }
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${g.missionId}"]`);
   const svgEl = va && va.querySelector('svg.traj-svg');
   const rect = svgEl && svgEl.getBoundingClientRect();
@@ -24848,6 +25078,16 @@ function _trajGizmoCenterMove(evt) {
   const dx = evt.clientX - cd.x0, dy = evt.clientY - cd.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) cd.moved = true;
   if (!cd.moved) return; // below the click-vs-drag threshold: don't touch MET yet
+  if (cd.maneuver) {
+    // R6.2' Phase A item 2: simple px-along-prograde -> dMET, no ring rebuild
+    // (see _trajGizmoManeuverCenterDown doc comment) — display-only until
+    // release, log surgery happens in _trajGizmoManeuverCommitTimeDrag.
+    const pxAlong = dx * cd.dir.ux + dy * cd.dir.uy;
+    const dMet = _trajGizmoCenterDragDMet(pxAlong, cd.kmPerPx, cd.vMagKms);
+    g.met = Math.max(0, cd.met0 + dMet);
+    _trajGizmoRepaintOverlay();
+    return;
+  }
   let newMet;
   if (cd.ringPts && cd.ringPts.length) {
     // R3.5 item 1: snap to the ring sample nearest the CURSOR (not a
@@ -24887,6 +25127,7 @@ function _trajGizmoCenterUp() {
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   g.centerDrag = null;
   if (!cd.moved) { g.menuOpen = !g.menuOpen; _trajGizmoRepaintOverlay(); return; } // click (no drag) -> toggle the node menu
+  if (cd.maneuver) { _trajGizmoManeuverCommitTimeDrag(g.met - cd.met0); return; }
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   if (m && g.authIdx != null && m.log[g.authIdx] && m.log[g.authIdx].type === 'MNODE') {
     m.log[g.authIdx].at = { kind: 'met', value_s: g.met };
@@ -24906,7 +25147,11 @@ function _trajGizmoCancelCenterDrag() {
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   g.centerDrag = null;
-  if (m) { const node = _trajGizmoNodeState(m, cd.met0, g.authIdx); if (node) { g.met = cd.met0; g.node = node; } }
+  if (cd.maneuver) {
+    g.met = cd.met0; // node/geometry never changed for the maneuver path — just revert the displayed MET
+  } else if (m) {
+    const node = _trajGizmoNodeState(m, cd.met0, g.authIdx); if (node) { g.met = cd.met0; g.node = node; }
+  }
   g.preview = null;
   _trajGizmoRepaintOverlay();
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${g.missionId}"]`);

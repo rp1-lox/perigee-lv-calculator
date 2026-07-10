@@ -1263,7 +1263,11 @@ function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   const strokeColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
   const strokeW = emphasized ? 1.3 : 0.8;
   const textColor = emphasized ? 'var(--accent)' : 'var(--accent2)';
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
+  // R6.2' Phase A item 1: dblclick the marker to open the maneuver gizmo at
+  // its solved state (_trajGizmoOpenExisting, a no-op for non-MANEUVER
+  // authIdx entries — MNODE dblclick is wired separately via the event-node
+  // pass, R6.1).
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})" ondblclick="event.stopPropagation();if(typeof _trajGizmoOpenExisting==='function')_trajGizmoOpenExisting('${opts.missionId}',${opts.authIdx});"` : '';
   const titleTxt = opts.title || '';
   // Marker dot + hit area (px-sized, always rendered — geometry-adjacent, not
   // an "annotation" subject to LOD).
