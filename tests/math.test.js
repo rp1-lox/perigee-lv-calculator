@@ -82,7 +82,7 @@ const {
   physSoiRadius, physFrameOf, physPatchState, physAccel, physStepFor,
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
   physMissionLeg, _trajGizmoClosestApproach, physEscapeHorizonS,
-  _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation,
+  _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation, _trajEventNodeInfo,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -1912,6 +1912,42 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const got = physEscapeHorizonS(samples, FALLBACK_S);
     ok('physEscapeHorizonS: near-parabolic huge-period ellipse -> capped at 5 years', got === CAP_S);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R6.1 — passive flight-plan event nodes (574-trajectory-view.js): pure
+// resolver _trajEventNodeInfo(m, idx) -> {met, label, glyphKind} | null.
+// Dated 2026-07-10.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const mNode = {
+    log: [
+      { type: 'LAUNCH', label: 'Falcon 9', metStart: 0 },
+      { type: 'BURN', burnLabel: 'Circularize', metStart: 620 },
+      { type: 'DOCK', metStart: 45000 },
+      { type: 'COAST', days: 2, metStart: 12000 }, // not in the R6.1 type list -> null
+      { type: 'MNODE', metStart: 9000 },
+      { type: 'SEPARATE' }, // no metStart stamped -> null
+    ],
+  };
+  const launch = _trajEventNodeInfo(mNode, 0);
+  ok('R6.1 _trajEventNodeInfo: LAUNCH resolves met/glyph', launch && launch.met === 0 && launch.glyphKind === 'L');
+  ok('R6.1 _trajEventNodeInfo: LAUNCH label mentions the launch', launch && /Launch/.test(launch.label));
+
+  const burn = _trajEventNodeInfo(mNode, 1);
+  ok('R6.1 _trajEventNodeInfo: BURN resolves met/glyph', burn && burn.met === 620 && burn.glyphKind === 'B');
+
+  const dock = _trajEventNodeInfo(mNode, 2);
+  ok('R6.1 _trajEventNodeInfo: DOCK resolves met/glyph', dock && dock.met === 45000 && dock.glyphKind === 'DK');
+
+  ok('R6.1 _trajEventNodeInfo: unsupported type (COAST) -> null', _trajEventNodeInfo(mNode, 3) === null);
+
+  const mnode = _trajEventNodeInfo(mNode, 4);
+  ok('R6.1 _trajEventNodeInfo: MNODE resolves met/glyph', mnode && mnode.met === 9000 && mnode.glyphKind === 'MN');
+
+  ok('R6.1 _trajEventNodeInfo: entry with no stamped metStart -> null', _trajEventNodeInfo(mNode, 5) === null);
+  ok('R6.1 _trajEventNodeInfo: out-of-range index -> null', _trajEventNodeInfo(mNode, 99) === null);
+  ok('R6.1 _trajEventNodeInfo: null mission -> null', _trajEventNodeInfo(null, 0) === null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

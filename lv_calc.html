@@ -22191,6 +22191,200 @@ function _trajBurnMarker(x, y, dir, dvText, metText, opts) {
   _trajRegisterLabel(x, y, lines, 'burn', { screenSize: opts.screenSize != null ? opts.screenSize : Infinity, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit, opacity: opts.opacity != null ? opts.opacity : 1 });
 }
 
+// ── R6.1: passive flight-plan event nodes ───────────────────────────────────
+// Every replayed m.log entry that resolves to a MET and a drawable position
+// gets a small overlay marker (2 above). MANEUVER is intentionally excluded
+// from the render pass (not the resolver) — see the note above
+// _trajEventNodesSVG: the existing _trajBurnMarker calls (dep/arr triangles,
+// wired since before R6) already give MANEUVER click-to-select
+// (_trajSelectEventFromView, with event.stopPropagation()) and a hover
+// tooltip, so a second independent node would just double-mark the same
+// event. All other 11 types are new.
+
+// type -> {glyph, colorVar-category}. Category drives the marker's stroke
+// color per the theming brief: maneuver-ish = accent, structural = accent3,
+// passive/other = text-dim. No chromatic literals — plain seed vars only
+// (same "stroke uses the seed directly, no tint" convention _trajBurnMarker
+// already uses for its own accent2 stroke).
+const _TRAJ_EVENTNODE_TYPES = {
+  LAUNCH:     { glyph: 'L',  cat: 'passive' },
+  DEPLOY:     { glyph: 'D',  cat: 'passive' },
+  BURN:       { glyph: 'B',  cat: 'maneuver' },
+  MANEUVER:   { glyph: 'M',  cat: 'maneuver' },   // resolver supports it; render pass skips it (see above)
+  MNODE:      { glyph: 'MN', cat: 'maneuver' },
+  SEPARATE:   { glyph: 'S',  cat: 'structural' },
+  DOCK:       { glyph: 'DK', cat: 'structural' },
+  EXPEND:     { glyph: 'E',  cat: 'structural' },
+  RENDEZVOUS: { glyph: 'RV', cat: 'structural' },
+  TRANSFER:   { glyph: 'T',  cat: 'maneuver' },
+  REENTER:    { glyph: 'R',  cat: 'passive' },
+  RECOVER:    { glyph: 'RC', cat: 'passive' },
+};
+
+function _trajEventNodeColorVar(type) {
+  const cat = (_TRAJ_EVENTNODE_TYPES[type] || {}).cat;
+  if (cat === 'maneuver') return 'var(--accent)';
+  if (cat === 'structural') return 'var(--accent3)';
+  return 'var(--text-dim)';
+}
+
+// Short human label — kept to a couple words, vehicle/target name appended
+// when a resolvable one is authored on the entry (best-effort; the entry may
+// not carry one at all, e.g. a bare SEPARATE).
+function _trajEventNodeLabel(e) {
+  switch (e.type) {
+    case 'LAUNCH': return 'Launch' + (e.label ? ' — ' + e.label : '');
+    case 'DEPLOY': return 'Deploy' + (e.label ? ' — ' + e.label : '');
+    case 'BURN': return e.burnLabel || 'Burn';
+    case 'MANEUVER': return 'Maneuver' + (e.toLabel ? ' → ' + e.toLabel : '');
+    case 'MNODE': return 'Node';
+    case 'SEPARATE': return 'Separate';
+    case 'DOCK': return 'Dock';
+    case 'EXPEND': return 'Expend' + (e.stageName ? ' — ' + e.stageName : '');
+    case 'RENDEZVOUS': return 'Rendezvous';
+    case 'TRANSFER': return 'Transfer';
+    case 'REENTER': return 'Reenter';
+    case 'RECOVER': return 'Recover';
+    default: return e.type;
+  }
+}
+
+// Pure resolver: m.log[idx] -> {met, label, glyphKind} or null. `met` is read
+// from `.metStart`, the field `missionRecompute` (570) stamps on every
+// replayed entry — mirrored back onto the AUTHORED m.log entry itself
+// (`authEntry.metStart = metClock`, 570 ~L2189) for the common (non-repeated
+// -group) case, which is the only case this resolver supports (repeated-
+// group clones live only in m._expanded and are out of scope here, same
+// limitation the existing leg/burn-marker extraction already has via
+// `e._authIdx`). Returns null for any type not in the R6.1 list, or when the
+// entry/mission is malformed, or when no MET has been stamped yet (mission
+// never recomputed, or a corrupt entry).
+function _trajEventNodeInfo(m, idx) {
+  if (!m || !m.log || idx == null || idx < 0 || idx >= m.log.length) return null;
+  const e = m.log[idx];
+  if (!e || typeof e !== 'object' || !e.type) return null;
+  if (!_TRAJ_EVENTNODE_TYPES[e.type]) return null;
+  if (e.metStart == null || !isFinite(e.metStart)) return null;
+  return { met: e.metStart, label: _trajEventNodeLabel(e), glyphKind: _TRAJ_EVENTNODE_TYPES[e.type].glyph };
+}
+
+// Tier (b)/(c) support: the orbit a given log entry's snapshot places some
+// vehicle into, in body-frame `body` (skips surface/degenerate orbits). Reads
+// `e.snapshot` directly off m.log[idx] — populated by missionRecompute for
+// the primary (non-cloned) replay of that entry, same object-identity fact
+// _trajEventNodeInfo's metStart read relies on.
+function _trajEventNodeOrbitFor(m, idx, body) {
+  const e = m && m.log && m.log[idx];
+  if (!e || !e.snapshot) return null;
+  for (const v of e.snapshot) {
+    if (v.orbit && !v.orbit.surface && (v.orbit.body || 'Earth') === body) return v.orbit;
+  }
+  return null;
+}
+
+// Which body-frame a log entry's node belongs in — LAUNCH/REENTER/RECOVER use
+// their authored/replayed surface-transition orbit fields directly; every
+// other type uses the body of its own snapshot's (first non-surface) orbit.
+function _trajEventNodeBody(m, idx) {
+  const e = m && m.log && m.log[idx];
+  if (!e) return null;
+  if (e.type === 'LAUNCH') return (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+  if (e.type === 'REENTER' || e.type === 'RECOVER') return (e.orbitAfter && e.orbitAfter.body) || 'Earth';
+  if (e.snapshot) {
+    for (const v of e.snapshot) {
+      if (v.orbit && !v.orbit.surface) return v.orbit.body || 'Earth';
+    }
+  }
+  return null;
+}
+
+// Position resolver, precedence per PHYSICS_PLAN.md R6: (a) covering physics
+// leg sample interpolation, reusing _trajPolylinePointAt exactly like the
+// physics-leg renderer does; (b) orbit-ring position at MET via the SAME
+// mean-motion/theta convention the maneuver gizmo's rail math uses
+// (_trajGizmoNodeState, 5745 — nMean = sqrt(mu/rMean^3), theta = nMean*met
+// mod 2pi, fed through physAimBurnState); (c) body glyph position (ox,oy —
+// the body-frame's own origin, correct for surface events); else null.
+function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
+  // (a) physics leg covering this MET in this frame
+  if (typeof _physTrajByMission !== 'undefined' && _physTrajByMission[m.missionId]) {
+    const legs = _physTrajByMission[m.missionId].legs || [];
+    for (const L of legs) {
+      const inFrame = (L.samples || []).filter(s => s.frame === body);
+      if (!inFrame.length) continue;
+      const tMin = Math.min(inFrame[0].t, inFrame[inFrame.length - 1].t);
+      const tMax = Math.max(inFrame[0].t, inFrame[inFrame.length - 1].t);
+      if (met < tMin || met > tMax) continue;
+      const anchorOf = f => (f === body ? { x: ox, y: oy } : null);
+      const p = _trajPolylinePointAt(L, anchorOf, zoom, met);
+      if (p) return p;
+    }
+  }
+  // (b) orbit-ring position at MET
+  const o = _trajEventNodeOrbitFor(m, idx, body);
+  if (o && PROG_BODIES[body] && typeof physAimBurnState === 'function') {
+    const R = PROG_BODIES[body].R || 0;
+    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const rMean = R + (peri + apo) / 2;
+    const mu = PROG_BODIES[body].mu;
+    if (rMean > 0 && mu > 0) {
+      const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
+      const theta = (nMean * met) % (2 * Math.PI);
+      const incRad = ((o.inclination || 0) * Math.PI) / 180;
+      const raan = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : (o.lan != null ? (o.lan * Math.PI) / 180 : 0);
+      const bs = physAimBurnState(body, rMean, theta, 0, 0, incRad, 0, raan);
+      if (bs && bs.r) {
+        const q = _trajProj3(bs.r[0] * scale, bs.r[1] * scale, (bs.r[2] || 0) * scale);
+        if (isFinite(q.x) && isFinite(q.y)) return { x: ox + q.x, y: oy + q.y };
+      }
+    }
+  }
+  // (c) body glyph position — correct fallback for surface events; also the
+  // honest fallback for anything else with no resolvable orbit/leg.
+  if (isFinite(ox) && isFinite(oy)) return { x: ox, y: oy };
+  return null;
+}
+
+// Emits (registers) the passive event-node markers for one body frame. Runs
+// AFTER rings/legs/MNODE legs so covering-leg lookups (tier a) see the same
+// data those passes already resolved. `screenSize` reuses whatever LOD extent
+// is available for the node's underlying geometry (the ring's own screenSize
+// for tier b/c nodes, matching the ring's own LOD window so a node doesn't
+// outlive its ring visually; Infinity — always eligible — for tier a nodes,
+// since a visible leg polyline is itself the LOD gate); piggybacks
+// _trajRegisterLabel's existing collision/minSize machinery, per the brief,
+// rather than inventing a second LOD system.
+function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
+  if (!m || !m.log) return;
+  const frames = _trajGetExtraction(m);
+  const sc = frames[body];
+  m.log.forEach((e, idx) => {
+    if (!e || e.type === 'MANEUVER') return; // already selectable via _trajBurnMarker — see note above
+    const info = _trajEventNodeInfo(m, idx);
+    if (!info) return;
+    const evBody = _trajEventNodeBody(m, idx);
+    if (evBody !== body) return;
+    const pos = _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, info.met);
+    if (!pos) return;
+    const emphasized = selAuthIdx != null && selAuthIdx === idx;
+    const o = _trajEventNodeOrbitFor(m, idx, body);
+    const rec = (o && sc) ? [...sc.orbits.values()].find(r => Math.abs(r.peri - (o.perigee ?? o.apogee ?? 0)) < 1 && Math.abs(r.apo - (o.apogee ?? o.perigee ?? 0)) < 1) : null;
+    const screenSize = rec ? ((PROG_BODIES[body] ? PROG_BODIES[body].R : 0) + rec.apo) * scale : Infinity;
+    const color = _trajEventNodeColorVar(e.type);
+    const vehName = (m._ownerLabels && e.vehicleId && m._ownerLabels[e.vehicleId]) || e.activeName || e.label || '';
+    const title = `${e.type} · ${_metFmt(info.met)}${vehName ? ' · ' + _tsEsc(vehName) : ''}`;
+    const clickAttr = ` style="cursor:pointer" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${idx})"` +
+      (e.type === 'MNODE' ? ` ondblclick="event.stopPropagation();_trajGizmoOpenExisting('${id}',${idx})"` : '');
+    const r = emphasized ? 4.6 : 4;
+    const ring = emphasized ? `<circle cx="0" cy="0" r="${(r + 2).toFixed(1)}" fill="none" stroke="var(--accent)" stroke-width="1.1"/>` : '';
+    const marker = `${ring}<circle cx="0" cy="0" r="${r}" fill="var(--nm-bg)" stroke="${color}" stroke-width="1"/>` +
+      `<text x="0" y="0" text-anchor="middle" dominant-baseline="central" font-family="var(--mono)" font-size="${info.glyphKind.length > 1 ? 4 : 5}" fill="${color}" pointer-events="none">${info.glyphKind}</text>`;
+    const hit = `<circle cx="0" cy="0" r="9" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
+    _trajRegisterLabel(pos.x, pos.y, [{ text: info.label, dy: -9, fontPx: 9, color }],
+      'burn', { screenSize, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit, opacity: 1 });
+  });
+}
+
 // History alpha (C2): legs/orbits belonging to a vehicle/state that no
 // longer exists "now" (arrived-and-past, or expended before viewTime) dim to
 // this constant rather than disappearing — keeps mission HISTORY legible
@@ -22612,6 +22806,12 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     _trajRegisterLabel(x, y, [{ text: s.label, dy, fontPx: 10, color: 'var(--accent3)' }], 'burn',
       { screenSize: Infinity, minSize: 0, selected: false, marker });
   });
+
+  // R6.1: passive flight-plan event nodes — every other log event that
+  // resolves to geometry (see _trajEventNodesSVG for the exact type/tier
+  // rules). Runs last so tier-(a) leg lookups see the fully-populated
+  // physics side-table and tier-(b) ring matches see this frame's `sc`.
+  _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx);
 
   return out;
 }
