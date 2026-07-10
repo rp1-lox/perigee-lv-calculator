@@ -220,3 +220,68 @@ function physEscapeGeometry(rpKm, c3, mu, outboundSign) {
     },
   };
 }
+
+// ── J2 secular rates (R4) ─────────────────────────────────────────────────────
+/** Dimensionless J2 (oblateness) coefficient per body. Bodies absent from this
+ *  map have no J2 model — callers must treat that as "no data", not zero.
+ *  Provenance: standard published low-precision values (Earth/Moon/Mars/Venus
+ *  IAU/JPL fact-sheet order-of-magnitude figures), NOT re-derived here — see
+ *  MATH.md §7l critique on provenance/precision. */
+const PROG_BODY_J2 = {
+  Earth: 1.08263e-3,
+  Mars:  1.9555e-3,
+  Moon:  2.033e-4,
+  Venus: 4.458e-6,
+};
+
+/** Mean motion n (rad/s) for semi-major axis aKm (km) about body with GM mu
+ *  (km^3/s^2). Internal helper shared by the two secular-rate functions. */
+function _physJ2MeanMotion(aKm, mu) {
+  return Math.sqrt(mu / (aKm * aKm * aKm));
+}
+
+/** J2 nodal regression rate dΩ/dt (rad/s) for an orbit {aKm, e, iRad} about
+ *  `body`. Standard secular first-order result:
+ *    dΩ/dt = -(3/2) J2 n (R/p)^2 cos(i),   p = a(1-e^2), n = sqrt(mu/a^3).
+ *  Returns null if `body` has no J2 entry or inputs are degenerate (a<=0,
+ *  e outside [0,1), or p<=0). */
+function physJ2NodalRate(aKm, e, iRad, body) {
+  const j2 = PROG_BODY_J2[body];
+  const info = PROG_BODIES[body];
+  if (j2 == null || !info) return null;
+  if (!(aKm > 0) || !(e >= 0) || e >= 1) return null;
+  const p = aKm * (1 - e * e);
+  if (!(p > 0)) return null;
+  const n = _physJ2MeanMotion(aKm, info.mu);
+  const ratio = info.R / p;
+  return -1.5 * j2 * n * ratio * ratio * Math.cos(iRad);
+}
+
+/** J2 apsidal precession rate dω/dt (rad/s) for an orbit {aKm, e, iRad} about
+ *  `body`. Standard secular first-order result:
+ *    dω/dt = (3/4) J2 n (R/p)^2 (5 cos^2(i) - 1).
+ *  Returns null under the same degeneracy conditions as physJ2NodalRate. */
+function physJ2ApsidalRate(aKm, e, iRad, body) {
+  const j2 = PROG_BODY_J2[body];
+  const info = PROG_BODIES[body];
+  if (j2 == null || !info) return null;
+  if (!(aKm > 0) || !(e >= 0) || e >= 1) return null;
+  const p = aKm * (1 - e * e);
+  if (!(p > 0)) return null;
+  const n = _physJ2MeanMotion(aKm, info.mu);
+  const ratio = info.R / p;
+  const ci = Math.cos(iRad);
+  return 0.75 * j2 * n * ratio * ratio * (5 * ci * ci - 1);
+}
+
+/** Sun-synchronous check: nodal rate converted to deg/day compared against
+ *  Earth's mean heliocentric drift rate (360/365.2422 = 0.98565 deg/day).
+ *  Only meaningful for Earth (other bodies always return sunSync:false).
+ *  Returns {rateDegPerDay, sunSync} or null if no J2 data. */
+function physJ2SunSyncCheck(aKm, e, iRad, body) {
+  const rate = physJ2NodalRate(aKm, e, iRad, body);
+  if (rate == null) return null;
+  const rateDegPerDay = rate * (180 / Math.PI) * 86400;
+  const sunSync = (body === 'Earth') && Math.abs(rateDegPerDay - 0.98565) < 0.02;
+  return { rateDegPerDay, sunSync };
+}

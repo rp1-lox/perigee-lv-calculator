@@ -1649,6 +1649,99 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R4 — J2 / orbital-economy layer (385/386): secular rates + optional J2
+// integrator term (default off, MATH.md §7l)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physJ2NodalRate, physJ2ApsidalRate, physJ2SunSyncCheck, physAccel,
+          physPropagateSegment, physElementsToState, physStateToElements,
+          PROG_BODIES, PROG_BODY_J2 } =
+    vm.runInContext('({ physJ2NodalRate, physJ2ApsidalRate, physJ2SunSyncCheck, physAccel, physPropagateSegment, physElementsToState, physStateToElements, PROG_BODIES, PROG_BODY_J2 })', sandbox);
+
+  const muE = PROG_BODIES.Earth.mu;
+  const R2D_DAY = r => r * (180 / Math.PI) * 86400;
+
+  // 800 km circular @ 98.6° (near-sun-sync). Sign convention: retrograde
+  // (i > 90, cos i < 0) -> nodal rate is POSITIVE (eastward regression of
+  // the ascending node), matching the ~+0.9856 deg/day Earth needs to stay
+  // sun-synchronous.
+  {
+    const a = PROG_BODIES.Earth.R + 800;
+    const iRad = 98.6 * Math.PI / 180;
+    const rate = R2D_DAY(physJ2NodalRate(a, 0, iRad, 'Earth'));
+    ok(`R4 J2 nodal: 800km@98.6deg ~ +0.9856 deg/day (got ${rate.toFixed(4)})`,
+      Math.abs(rate - 0.9856) < 0.03);
+    const ss = physJ2SunSyncCheck(a, 0, iRad, 'Earth');
+    ok('R4 J2 sunSync: 800km@98.6deg is sun-synchronous', !!ss && ss.sunSync === true);
+  }
+
+  // Molniya: apsidal rate near zero at the critical inclination 63.4°.
+  {
+    const rate = R2D_DAY(physJ2ApsidalRate(26562, 0.74, 63.4 * Math.PI / 180, 'Earth'));
+    ok(`R4 J2 apsidal: Molniya 63.4deg apsis ~ 0 deg/day (got ${rate.toFixed(5)})`,
+      Math.abs(rate) < 0.01);
+  }
+
+  // ISS-like 51.6°: nodal rate ~ -5.0 deg/day (prograde -> negative/westward).
+  {
+    const a = PROG_BODIES.Earth.R + 400;
+    const rate = R2D_DAY(physJ2NodalRate(a, 0, 51.6 * Math.PI / 180, 'Earth'));
+    ok(`R4 J2 nodal: 400km@51.6deg ~ -5.0 deg/day (got ${rate.toFixed(3)})`,
+      Math.abs(rate - (-5.0)) < 0.3);
+    const ss = physJ2SunSyncCheck(a, 0, 51.6 * Math.PI / 180, 'Earth');
+    ok('R4 J2 sunSync: 400km@51.6deg is NOT sun-synchronous', !!ss && ss.sunSync === false);
+  }
+
+  // No J2 data for a body -> null, not a fabricated zero.
+  ok('R4 J2: body with no J2 entry returns null (nodal)',
+    physJ2NodalRate(10000, 0, 0.5, 'Jupiter') === null);
+  ok('R4 J2: body with no J2 entry returns null (sunSync)',
+    physJ2SunSyncCheck(10000, 0, 0.5, 'Jupiter') === null);
+
+  // physAccel with ctx.j2 unset === without: bit-identical (default-off contract).
+  {
+    const r = [7171, 500, 1200];
+    const ctxBase = { center: 'Earth', bodies: ['Earth'] };
+    const aOff1 = physAccel(r, 0, ctxBase);
+    const aOff2 = physAccel(r, 0, { ...ctxBase, j2: false });
+    const aUnset = physAccel(r, 0, { ...ctxBase, j2: undefined });
+    ok('R4 J2: physAccel with ctx.j2 unset is bit-identical to no j2 key',
+      aOff1.every((v, k) => v === aUnset[k]));
+    ok('R4 J2: physAccel with ctx.j2 explicitly false is bit-identical to no j2 key',
+      aOff1.every((v, k) => v === aOff2[k]));
+    const aOn = physAccel(r, 0, { ...ctxBase, j2: true });
+    ok('R4 J2: physAccel with ctx.j2 true DIFFERS from the default (term actually applied)',
+      !aOff1.every((v, k) => v === aOn[k]));
+  }
+
+  // Numerically-propagated 800km/98.6deg orbit with J2 on: RAAN regresses in
+  // the predicted direction/order-of-magnitude over a few orbits (generous
+  // tolerance — this is a secular-trend sanity check, not a precision pin).
+  {
+    const a = PROG_BODIES.Earth.R + 800;
+    const iRad = 98.6 * Math.PI / 180;
+    const el = { a, e: 0, i: iRad, raan: 0, argp: 0, nu: 0 };
+    const st0 = physElementsToState(el, muE);
+    const period = 2 * Math.PI * Math.sqrt(a * a * a / muE);
+    const nOrbits = 5;
+    const tMax = nOrbits * period;
+    const ctx = { center: 'Earth', bodies: ['Earth'], j2: true };
+    const seg = physPropagateSegment(st0, 0, tMax, ctx, { maxSamples: 8 });
+    ok('R4 J2 propagation: segment produced samples', !!seg && Array.isArray(seg.samples) && seg.samples.length > 1);
+    if (seg && seg.stateF) {
+      const elEnd = physStateToElements(seg.stateF.r, seg.stateF.v, muE);
+      // predicted secular drift over tMax, wrapped to (-180, 180]
+      const predictedDeg = R2D_DAY(physJ2NodalRate(a, 0, iRad, 'Earth')) * (tMax / 86400);
+      let dRaan = (elEnd.raan - el.raan) * 180 / Math.PI;
+      dRaan = ((dRaan + 540) % 360) - 180; // wrap to (-180,180]
+      let predWrapped = ((predictedDeg + 540) % 360) - 180;
+      ok(`R4 J2 propagation: RAAN drift sign/order matches secular prediction (predicted ${predWrapped.toFixed(2)} deg, observed ${dRaan.toFixed(2)} deg over ${nOrbits} orbits)`,
+        Math.sign(predWrapped) === Math.sign(dRaan) && Math.abs(dRaan - predWrapped) < 2.0);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

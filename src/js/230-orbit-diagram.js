@@ -240,8 +240,33 @@ function drawOrbitDiagram(){
     overlay+=plateRect(p.x-ww/2-3, p.y-11, ww+6, 14)+`<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
   }
 
+  // J2 readout chip (R4) — compact secular-rate line for the defined orbit,
+  // Earth-only diagram so PROG_BODY_J2.Earth is the only entry that matters
+  // here. Shown whenever inclination is authored (non-blank/non-zero input)
+  // and the target apsides resolve to a real orbit.
+  let j2Html='';
+  if(!isEsc && typeof physJ2NodalRate==='function'){
+    const incEl=document.getElementById('inclination');
+    const incRaw=incEl?incEl.value:'';
+    const incAuthored=incRaw!=='' && !isNaN(parseFloat(incRaw));
+    if(incAuthored){
+      const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
+      const aKm=(rApo+rPeri)/2, eEcc=(rApo-rPeri)/(rApo+rPeri);
+      const iRad=inc*Math.PI/180;
+      const nodalRate=physJ2NodalRate(aKm,eEcc,iRad,'Earth');
+      const apsidalRate=physJ2ApsidalRate(aKm,eEcc,iRad,'Earth');
+      if(nodalRate!=null && apsidalRate!=null){
+        const nodalDegDay=nodalRate*(180/Math.PI)*86400;
+        const apsidalDegDay=apsidalRate*(180/Math.PI)*86400;
+        const ss=physJ2SunSyncCheck(aKm,eEcc,iRad,'Earth');
+        let line=`J2: node ${nodalDegDay>=0?'+':''}${nodalDegDay.toFixed(2)}°/day · apsis ${apsidalDegDay>=0?'+':''}${apsidalDegDay.toFixed(2)}°/day`;
+        j2Html=`<div class="od-footer-note">${line}${(ss&&ss.sunSync)?' · <span style="color:var(--accent)">sun-synchronous ✓</span>':''}</div>`;
+      }
+    }
+  }
+
   const footerNote=earthCapped?'Earth size schematic':'';
-  const footerHtml=footerNote?`<div class="od-footer-note">${footerNote}</div>`:'';
+  const footerHtml=(footerNote?`<div class="od-footer-note">${footerNote}</div>`:'')+j2Html;
   host.innerHTML=`<svg class="od-svg" viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`
     + `<svg class="od-overlay" viewBox="0 0 ${odRealW.toFixed(2)} ${odRealH.toFixed(2)}" width="100%" height="100%" preserveAspectRatio="none">${overlay}</svg>`
     + footerHtml;

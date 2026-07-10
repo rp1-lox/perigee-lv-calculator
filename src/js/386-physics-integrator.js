@@ -111,6 +111,30 @@ function physAccel(r, t, ctx) {
       physScale(rel, muP / (relMag * relMag * relMag)),
       physScale(d,   muP / (dMag  * dMag  * dMag))));
   }
+  // ── optional J2 oblateness term (R4) — DEFAULT OFF: only applied when the
+  // caller explicitly opts in with ctx.j2 === true AND the center body has a
+  // J2 entry (PROG_BODY_J2, 385). No existing caller sets ctx.j2, so this is
+  // zero behavior change unless requested (gate-pinned).
+  // Approximation: the standard Earth-centered J2 form treats the z axis as
+  // the body's equatorial-plane normal. We use the ECLIPTIC normal as a
+  // stand-in (z of the integration frame) since body obliquities aren't
+  // modeled anywhere in this program — see MATH.md §7l critique.
+  if (ctx.j2 === true) {
+    const j2 = (typeof PROG_BODY_J2 !== 'undefined') ? PROG_BODY_J2[ctx.center] : null;
+    if (j2 != null) {
+      const info = PROG_BODIES[ctx.center];
+      const Rb = info.R;
+      const x = r[0], y = r[1], z = r[2];
+      const r2 = rMag * rMag;
+      const z2r2 = (z * z) / r2;
+      const k = -1.5 * j2 * muC * Rb * Rb / (rMag * rMag * rMag * rMag * rMag);
+      a = physAdd(a, [
+        k * x * (1 - 5 * z2r2),
+        k * y * (1 - 5 * z2r2),
+        k * z * (3 - 5 * z2r2),
+      ]);
+    }
+  }
   return a;
 }
 
@@ -194,7 +218,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const maxSamples = opts.maxSamples || 256;
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
-  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax };
+  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax, j2: ctx.j2 };
   let state = { r: state0.r.slice(), v: state0.v.slice() };
   let t = t0;
   const raw = [{ t, r: state.r.slice(), frame: ctxNow.center }];

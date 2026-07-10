@@ -9134,8 +9134,33 @@ function drawOrbitDiagram(){
     overlay+=plateRect(p.x-ww/2-3, p.y-11, ww+6, 14)+`<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" text-anchor="middle" font-family="var(--mono)" font-size="10" fill="${warnColor}">${warn}</text>`;
   }
 
+  // J2 readout chip (R4) — compact secular-rate line for the defined orbit,
+  // Earth-only diagram so PROG_BODY_J2.Earth is the only entry that matters
+  // here. Shown whenever inclination is authored (non-blank/non-zero input)
+  // and the target apsides resolve to a real orbit.
+  let j2Html='';
+  if(!isEsc && typeof physJ2NodalRate==='function'){
+    const incEl=document.getElementById('inclination');
+    const incRaw=incEl?incEl.value:'';
+    const incAuthored=incRaw!=='' && !isNaN(parseFloat(incRaw));
+    if(incAuthored){
+      const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
+      const aKm=(rApo+rPeri)/2, eEcc=(rApo-rPeri)/(rApo+rPeri);
+      const iRad=inc*Math.PI/180;
+      const nodalRate=physJ2NodalRate(aKm,eEcc,iRad,'Earth');
+      const apsidalRate=physJ2ApsidalRate(aKm,eEcc,iRad,'Earth');
+      if(nodalRate!=null && apsidalRate!=null){
+        const nodalDegDay=nodalRate*(180/Math.PI)*86400;
+        const apsidalDegDay=apsidalRate*(180/Math.PI)*86400;
+        const ss=physJ2SunSyncCheck(aKm,eEcc,iRad,'Earth');
+        let line=`J2: node ${nodalDegDay>=0?'+':''}${nodalDegDay.toFixed(2)}°/day · apsis ${apsidalDegDay>=0?'+':''}${apsidalDegDay.toFixed(2)}°/day`;
+        j2Html=`<div class="od-footer-note">${line}${(ss&&ss.sunSync)?' · <span style="color:var(--accent)">sun-synchronous ✓</span>':''}</div>`;
+      }
+    }
+  }
+
   const footerNote=earthCapped?'Earth size schematic':'';
-  const footerHtml=footerNote?`<div class="od-footer-note">${footerNote}</div>`:'';
+  const footerHtml=(footerNote?`<div class="od-footer-note">${footerNote}</div>`:'')+j2Html;
   host.innerHTML=`<svg class="od-svg" viewBox="-${_OD_VBW/2} -${_OD_VBH/2} ${_OD_VBW} ${_OD_VBH}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${out}</svg>`
     + `<svg class="od-overlay" viewBox="0 0 ${odRealW.toFixed(2)} ${odRealH.toFixed(2)}" width="100%" height="100%" preserveAspectRatio="none">${overlay}</svg>`
     + footerHtml;
@@ -12045,6 +12070,71 @@ function physEscapeGeometry(rpKm, c3, mu, outboundSign) {
   };
 }
 
+// ── J2 secular rates (R4) ─────────────────────────────────────────────────────
+/** Dimensionless J2 (oblateness) coefficient per body. Bodies absent from this
+ *  map have no J2 model — callers must treat that as "no data", not zero.
+ *  Provenance: standard published low-precision values (Earth/Moon/Mars/Venus
+ *  IAU/JPL fact-sheet order-of-magnitude figures), NOT re-derived here — see
+ *  MATH.md §7l critique on provenance/precision. */
+const PROG_BODY_J2 = {
+  Earth: 1.08263e-3,
+  Mars:  1.9555e-3,
+  Moon:  2.033e-4,
+  Venus: 4.458e-6,
+};
+
+/** Mean motion n (rad/s) for semi-major axis aKm (km) about body with GM mu
+ *  (km^3/s^2). Internal helper shared by the two secular-rate functions. */
+function _physJ2MeanMotion(aKm, mu) {
+  return Math.sqrt(mu / (aKm * aKm * aKm));
+}
+
+/** J2 nodal regression rate dΩ/dt (rad/s) for an orbit {aKm, e, iRad} about
+ *  `body`. Standard secular first-order result:
+ *    dΩ/dt = -(3/2) J2 n (R/p)^2 cos(i),   p = a(1-e^2), n = sqrt(mu/a^3).
+ *  Returns null if `body` has no J2 entry or inputs are degenerate (a<=0,
+ *  e outside [0,1), or p<=0). */
+function physJ2NodalRate(aKm, e, iRad, body) {
+  const j2 = PROG_BODY_J2[body];
+  const info = PROG_BODIES[body];
+  if (j2 == null || !info) return null;
+  if (!(aKm > 0) || !(e >= 0) || e >= 1) return null;
+  const p = aKm * (1 - e * e);
+  if (!(p > 0)) return null;
+  const n = _physJ2MeanMotion(aKm, info.mu);
+  const ratio = info.R / p;
+  return -1.5 * j2 * n * ratio * ratio * Math.cos(iRad);
+}
+
+/** J2 apsidal precession rate dω/dt (rad/s) for an orbit {aKm, e, iRad} about
+ *  `body`. Standard secular first-order result:
+ *    dω/dt = (3/4) J2 n (R/p)^2 (5 cos^2(i) - 1).
+ *  Returns null under the same degeneracy conditions as physJ2NodalRate. */
+function physJ2ApsidalRate(aKm, e, iRad, body) {
+  const j2 = PROG_BODY_J2[body];
+  const info = PROG_BODIES[body];
+  if (j2 == null || !info) return null;
+  if (!(aKm > 0) || !(e >= 0) || e >= 1) return null;
+  const p = aKm * (1 - e * e);
+  if (!(p > 0)) return null;
+  const n = _physJ2MeanMotion(aKm, info.mu);
+  const ratio = info.R / p;
+  const ci = Math.cos(iRad);
+  return 0.75 * j2 * n * ratio * ratio * (5 * ci * ci - 1);
+}
+
+/** Sun-synchronous check: nodal rate converted to deg/day compared against
+ *  Earth's mean heliocentric drift rate (360/365.2422 = 0.98565 deg/day).
+ *  Only meaningful for Earth (other bodies always return sunSync:false).
+ *  Returns {rateDegPerDay, sunSync} or null if no J2 data. */
+function physJ2SunSyncCheck(aKm, e, iRad, body) {
+  const rate = physJ2NodalRate(aKm, e, iRad, body);
+  if (rate == null) return null;
+  const rateDegPerDay = rate * (180 / Math.PI) * 86400;
+  const sunSync = (body === 'Earth') && Math.abs(rateDegPerDay - 0.98565) < 0.02;
+  return { rateDegPerDay, sunSync };
+}
+
 // ─── PHYSICS INTEGRATOR (P1) — restricted n-body propagation ─────────────────
 //
 // Pure math, no DOM. See PHYSICS_PLAN.md (P1) and MATH.md §7d.
@@ -12157,6 +12247,30 @@ function physAccel(r, t, ctx) {
       physScale(rel, muP / (relMag * relMag * relMag)),
       physScale(d,   muP / (dMag  * dMag  * dMag))));
   }
+  // ── optional J2 oblateness term (R4) — DEFAULT OFF: only applied when the
+  // caller explicitly opts in with ctx.j2 === true AND the center body has a
+  // J2 entry (PROG_BODY_J2, 385). No existing caller sets ctx.j2, so this is
+  // zero behavior change unless requested (gate-pinned).
+  // Approximation: the standard Earth-centered J2 form treats the z axis as
+  // the body's equatorial-plane normal. We use the ECLIPTIC normal as a
+  // stand-in (z of the integration frame) since body obliquities aren't
+  // modeled anywhere in this program — see MATH.md §7l critique.
+  if (ctx.j2 === true) {
+    const j2 = (typeof PROG_BODY_J2 !== 'undefined') ? PROG_BODY_J2[ctx.center] : null;
+    if (j2 != null) {
+      const info = PROG_BODIES[ctx.center];
+      const Rb = info.R;
+      const x = r[0], y = r[1], z = r[2];
+      const r2 = rMag * rMag;
+      const z2r2 = (z * z) / r2;
+      const k = -1.5 * j2 * muC * Rb * Rb / (rMag * rMag * rMag * rMag * rMag);
+      a = physAdd(a, [
+        k * x * (1 - 5 * z2r2),
+        k * y * (1 - 5 * z2r2),
+        k * z * (3 - 5 * z2r2),
+      ]);
+    }
+  }
   return a;
 }
 
@@ -12240,7 +12354,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const maxSamples = opts.maxSamples || 256;
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
-  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax };
+  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax, j2: ctx.j2 };
   let state = { r: state0.r.slice(), v: state0.v.slice() };
   let t = t0;
   const raw = [{ t, r: state.r.slice(), frame: ctxNow.center }];
