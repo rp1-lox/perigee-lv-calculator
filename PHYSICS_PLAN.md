@@ -128,3 +128,48 @@ User directive after P4 shipped: *"each orbit should be accurate EXACTLY to how 
 - **Gate growth:** 141 → ~220 assertions by P6.
 - **Perf budget:** full mission recompute incl. propagation <50 ms; P5 frame render <16 ms.
 - **Effort shape:** P0/P1 small-and-pure · P2 big (architecture) · P3 moderate · P4 big (numerics+UX) · P5 moderate-plus-fiddly · P6 small.
+
+---
+
+## COHERENCE SERIES (user-approved 2026-07-09, after R3 first flight) — orientation, gizmo, node map
+
+User reports driving this: (1) arrival orbits render misaligned with the trajectories that create them ("always just a little misaligned"); (2) an LLO rendered as an arbitrary polar orbit ("inserting directly into a polar orbit for seemingly no reason"); (3) the Vector Burn form is unclear — wants a KSP-style maneuver gizmo; (4) the node map should be reworked to derive from the physics reality, with custom nodes gaining orientation detail so "polar-approach TLI" means something.
+
+Root cause of (1)+(2): rings draw from the authored spec with the Ω=ω=0 convention (critique 46) while trajectories are real states — two authorities for one geometry.
+
+### R3.1 — State-derived orbit rings + solved-RAAN defaults (574 + 565)
+
+Orientation precedence for EVERY drawn orbit ring (one rule, three tiers):
+1. **Authored orientation** (R3.2's fields) — if the orbit spec carries Ω/ω, that IS the orbit.
+2. **State-derived** — no authored orientation but a converged physics leg arrives there: draw the OSCULATING elements of the post-arrival-burn state (`physStateToElements` of the propagated arrival state + insertion Δv applied along the arrival v̂). New side-table field on the arrival leg: `arrivalElements` (computed in 565's rebuild, consumed by 574's `_trajRingSVG` via a rec-level `elements` override). Burn marker sits ON the ring by construction. First converged arrival wins for a shared ring (same dedupe key); later arrivals don't re-orient it (stability under replay).
+3. **Solved-RAAN default** — no orientation, no physics: keep authored {a, e, i} but SOLVE Ω so the ring passes through the point that created it (launch insertion point from the LAUNCH event's site/latitude context, or the schematic arrival point for planned legs). 1-DOF deterministic solve (ring plane must contain the point: Ω from atan2 on the point's projection); falls back to Ω=0 only when there is no creating point at all (define-an-orbit previews).
+- Accounting untouched: authored {peri, apo, inc} remain the ΔV-engine inputs; orientation is geometry only in this phase.
+- Gate: osculating-elements ring passes through the arrival state point (<1 km); solved-RAAN ring contains its creating point; determinism (same mission → same orientations).
+- Verify (browser): Apollo LLO ring plane ≈ arrival trajectory plane (no more arbitrary polar LLO — measure the angle between ring normal and arrival-state h-vector, assert < 5°); arrival burn marker ON the ring (<2 px at fit zoom).
+
+### R3.2 — Orbit orientation authoring (nodes + custom orbits) (430/570 node specs + 565 + 574)
+
+- Orbit specs gain OPTIONAL `lan_deg` (Ω) and `argp_deg` (ω) alongside `inclination`. Persisted wherever orbit specs already serialize (custom orbits library, node overrides, .program) — absent fields mean "unauthored" (R3.1 tiers 2/3 apply).
+- Node map + Define-an-Orbit UI: inc/LAN/ω inputs on the custom-orbit editor and node detail card, with the source badged: `authored` / `derived (from flight)` / `default (solved)`. Derived values are DISPLAYED back (e.g. "arrived in i=5.3°, Ω=141°") so users discover orientation matters and graduate to authoring it.
+- Physics honors authored orientation end-to-end: `physSolveNodeBurn` builds departure states from the full authored element set; the shooter's target for an arrival into an ORIENTED orbit adds a plane-alignment component to the miss vector (angle between arrival h-vector and target plane normal, weighted; escalate DOFs as in P4) — insertion into "LLO i=90 Ω=X" is a genuinely different target than "any 100 km LLO". Clean converged:false when the fixed |Δv| can't reach the authored plane.
+- **Edge-cost wiring (guarded)**: optionally price the authored plane into the node engine's ΔV (it already has plane-change math; today it assumes latitude-derived planes). OPT-IN per node ("price this orientation") + own goldens — silently repricing existing missions is forbidden (ΔV-parity discipline). Default off in this phase.
+- MATH.md honesty note: authored LAN is an orbit property we model; REACHING a given LAN is a launch-window/wait problem we don't (COAST events are the future home of that cost).
+
+### R3.3 — Maneuver gizmo (KSP-style) for MNODE authoring (574 + 570)
+
+Replaces "type numbers into the Vector Burn form" as the primary authoring flow (the form stays as the precise-entry fallback and shows the live numbers).
+- **Placement**: click a point on any orbit ring or trajectory polyline in the trajectory view → "add maneuver here" affordance (reuses the existing hit-path plumbing; the clicked sample's MET is the node's time; snap along-path by dragging).
+- **Gizmo**: at the node point, draw three axis handles in the LOCAL frame — prograde (along v̂, accent color), radial (r̂), normal (ĥ) — as overlay-layer symbols anchored to the projected point (px-native, per the two-layer rule). Dragging a handle scales that Δv component (px-to-m/s gain ~ zoom-independent, shift = fine); the PREDICTED trajectory re-propagates live through the standard side-table path (throttled ~10 Hz like rotate-drag) and renders as the planned dashed polyline. This is exactly KSP's loop: drag, watch the trajectory bend.
+- Mutation discipline unchanged: gizmo edits stage into the MNODE event's fields → `missionRecompute` → render (the live preview uses a scratch propagation, NOT a log mutation per drag tick; commit on release).
+- 3D interplay: handles project through the pass camera; normal drags are how users FEEL the new R3 out-of-plane capability.
+- Verify: drag prograde on a LEO node → apogee grows on screen and in the readout; normal drag tilts the predicted plane; release commits one undo step; escape/right-click cancels.
+
+### R5 — Node-map coherence pass (570 `_missionNmLayout` + selection model)
+
+The node map and trajectory view become two projections of ONE dataset — topology (plan/budgets) vs geometry (execution/time).
+- Layout derives from reality: body groups sized/positioned from real SOI structure (`physSoiRadius`) instead of hand-set `soiR` constants; per-body orbit fans list the same orbit records (with R3.1/R3.2 orientation shown on cards).
+- Edges annotated from the physics side-table: converged legs show real TOF + closest approach + "flown ✓" badge; unconverged/planned edges show the schematic estimate and say so.
+- Cross-view selection: node ↔ ring, edge ↔ maneuver event/polyline — one selection model, both views highlight (the event-selection plumbing already exists on both sides; this wires node/ring ids through it).
+- Cosmetic (optional, last): per-body insets use the true-geometry sampled-ellipse renderer at fixed scale so the schematic view stops drawing false circles.
+
+Sequencing: R3 verify/push → R3.1 → R3.2 → R3.3 (gizmo) → R4 (J2, unchanged scope) → R5 (node map). R3.1 is small; R3.2 medium (touches persistence + shooter targeting); R3.3 medium-UI; R5 medium.
