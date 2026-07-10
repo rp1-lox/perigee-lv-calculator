@@ -37,7 +37,7 @@ function _missionNaturalDurationUnit(sec) {
 }
 function _missionSecondsToUnitValue(sec, unit) { return sec == null ? 0 : +(sec / (_MISSION_DURATION_UNITS[unit] || 1)).toFixed(4); }
 
-// Apply a duration override typed in the event modal (BURN/MANEUVER only).
+// Apply a duration override typed in the event card's inline edit section (BURN/MANEUVER only).
 function missionApplyDurationOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e) return;
@@ -46,18 +46,16 @@ function missionApplyDurationOverride(id, idx) {
   if (val === '' || val == null) delete e.durationOverride;
   else e.durationOverride = _missionDurationToSeconds(val, unit);
   missionRecompute(m);
-  missionOpenEventModal(id, idx);   // refresh the modal in place so the (auto)/(custom) hint updates
-  missionRenderDetail();
+  missionRenderDetail();   // e._expanded persists, so the card re-renders with the (auto)/(custom) hint updated
 }
 function missionResetDurationOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e) return;
   delete e.durationOverride;
   missionRecompute(m);
-  missionOpenEventModal(id, idx);
   missionRenderDetail();
 }
-// Apply a ΔV override typed in the event modal (MANEUVER only).
+// Apply a ΔV override typed in the event card's inline edit section (MANEUVER only).
 function missionApplyDvOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'MANEUVER') return;
@@ -65,7 +63,6 @@ function missionApplyDvOverride(id, idx) {
   if (val === '' || val == null) delete e.dvOverride;
   else e.dvOverride = parseFloat(val) || 0;
   missionRecompute(m);
-  missionOpenEventModal(id, idx);
   missionRenderDetail();
 }
 function missionResetDvOverride(id, idx) {
@@ -73,10 +70,9 @@ function missionResetDvOverride(id, idx) {
   const e = m.log[idx]; if (!e) return;
   delete e.dvOverride;
   missionRecompute(m);
-  missionOpenEventModal(id, idx);
   missionRenderDetail();
 }
-// Shared duration-override sub-form for the BURN/MANEUVER edit modal.
+// Shared duration-override sub-form for the BURN/MANEUVER inline edit section.
 function _missionDurationOverrideHTML(id, idx, e) {
   const auto = e.durationAuto;
   const hasOverride = e.durationOverride != null;
@@ -384,8 +380,7 @@ function missionRenderDetail() {
     const upDis = (i <= 0) ? ' disabled' : '';
     const dnDis = (i >= m.log.length - 1) ? ' disabled' : '';
     const sub = e.burnLabel || e.toLabel || e.vehicleName || e.label || e.targetName || '';
-    const editBtn = `<button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionOpenEventModal('${id}',${i})" title="Edit">✎</button>`;
-    const ctl = `<div class="mevt-ctlbar">${editBtn}<button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},-1)" title="Move up"${upDis}>▲</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},1)" title="Move down"${dnDis}>▼</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEventToEnd('${id}',${i})" title="Send to end"${dnDis}>⤓</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionDeleteEvent('${id}',${i})" title="Delete event">✕</button></div>`;
+    const ctl = `<div class="mevt-ctlbar"><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},-1)" title="Move up"${upDis}>▲</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},1)" title="Move down"${dnDis}>▼</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEventToEnd('${id}',${i})" title="Send to end"${dnDis}>⤓</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionDeleteEvent('${id}',${i})" title="Delete event">✕</button></div>`;
     const grpMark = grpSel ? (_missionGroupStart === i ? '◉ ' : '○ ') : '';
     const onclick = grpSel ? `missionGroupPick('${id}',${i})` : `missionSelectEvent('${id}',${i})`;
     const dragAttrs = grpSel ? '' : ` draggable="true" ondragstart="missionEvtDragStart(event,${i})" ondragover="missionEvtDragOver(event)" ondragleave="missionEvtDragLeave(event)" ondrop="missionEvtDrop(event,'${id}',${i})"`;
@@ -397,7 +392,7 @@ function missionRenderDetail() {
         <span class="mevt-sub">${sub}</span>
         ${grpSel ? '' : ctl}
       </div>
-      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}</div>` : ''}
+      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}</div>` : ''}
     </div>`;
   };
   let logHTML = '';
@@ -1037,70 +1032,15 @@ function missionSelectEvent(id, idx) {
   missionRenderDetail();
 }
 
-// Open the edit pop-up for an event (BURN / MANEUVER).
-function missionOpenEventModal(id, idx) {
-  const m = _missionGet(id);
-  if (!m || !m.log[idx]) return;
-  const e = m.log[idx];
-  const titleEl = document.getElementById('mevt-title');
-  const bodyEl  = document.getElementById('mevt-body');
-  if (!titleEl || !bodyEl) return;
-  titleEl.textContent = 'Edit ' + e.type + ' Event';
-  bodyEl.innerHTML = _missionEventDetailHTML(m, idx);
-  openModal('modal-mission-evt');
-}
-
-function _missionEventDetailHTML(m, idx) {
+// Inline editable-fields section for an expanded event card (replaces the old
+// edit-pop-up modal). Appended below the read-only card detail
+// (_missionLogCardHTML) when e._expanded is true. Types with nothing editable
+// return '' here and the card just shows its existing detail.
+function _missionEventEditFieldsHTML(m, idx) {
   if (idx == null) return '';
   const e = m.log[idx];
   if (!e) return '';
   const id = m.missionId;
-  let fields = '';
-  if (e.type === 'LAUNCH') {
-    const o = e.orbit || {};
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${o.body}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Alt</span><span class="mission-state-val">${(o.alt_km||0).toLocaleString()} km</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Inc</span><span class="mission-state-val">${(o.inc_deg||0)}&deg;</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Payload</span><span class="mission-state-val">${(e.payloadMass||0).toLocaleString()} kg</span></div>`;
-  } else if (e.type === 'BURN') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Burn</span><span class="mission-state-val">${e.burnLabel||e.burnType||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Target ΔV</span><span class="mission-state-val">${Math.round(e.dvTarget||0).toLocaleString()} m/s</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Actual ΔV</span><span class="mission-state-val">${Math.round(e.dv_actual||0).toLocaleString()} m/s</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Prop Consumed</span><span class="mission-state-val">${Math.round(e.prop_consumed||0).toLocaleString()} kg</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Result</span><span class="mission-state-val">${e.result||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}${e.durationOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>`;
-  } else if (e.type === 'DEPLOY') {
-    const o = e.orbit || {};
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Spacecraft</span><span class="mission-state-val">${e.label||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${o.body||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${(o.alt_km||0).toLocaleString()} km${o.apo_km&&o.apo_km!==o.alt_km?' × '+o.apo_km.toLocaleString():''}</span></div>`;
-  } else if (e.type === 'MANEUVER') {
-    const porkChip = (typeof progPorkChipHTML === 'function') ? progPorkChipHTML(id, idx, e.toNode) : '';
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Route</span><span class="mission-state-val">${e.fromLabel||''} → ${e.toLabel||''}${porkChip?' '+porkChip:''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${e.dv!=null?e.dv.toLocaleString()+' m/s':'n/a'}${e.dvOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>
-      ${e.prop_consumed?`<div class="mission-state-kv"><span class="mission-state-key">Prop used</span><span class="mission-state-val">${Math.round(e.prop_consumed).toLocaleString()} kg</span></div>`:''}
-      ${(e.firingStageId||e.firedStageId)?`<div class="mission-state-kv"><span class="mission-state-key">Firing stage</span><span class="mission-state-val">${_missionStageLabelById(e.firingStageId||e.firedStageId)}</span></div>`:''}
-      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}${e.durationOverride!=null?' <span style="color:var(--accent3);font-size:9px;">(custom)</span>':''}</span></div>`;
-  } else if (e.type === 'SEPARATE') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">From</span><span class="mission-state-val">${e.parentName||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Lower</span><span class="mission-state-val">${e.lowerName||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Upper</span><span class="mission-state-val">${e.upperName||''}</span></div>`;
-  } else if (e.type === 'DOCK') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Vehicle A</span><span class="mission-state-val">${e.aDisp||e.aName||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Vehicle B</span><span class="mission-state-val">${e.tDisp||e.tName||''}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Merged</span><span class="mission-state-val">${e.mergedName||''}</span></div>`;
-  } else if (e.type === 'EXPEND') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Name</span><span class="mission-state-val">${e.vehicleName || e.stageName || ''}</span></div>`;
-  } else if (e.type === 'MNODE') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Burn MET</span><span class="mission-state-val">${_metFmt(e.at && e.at.value_s || 0)}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${(e.dvRequired||0).toLocaleString()} m/s</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Prop Consumed</span><span class="mission-state-val">${Math.round(e.prop_consumed||0).toLocaleString()} kg</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Result</span><span class="mission-state-val">${e.result||''}</span></div>`;
-  } else if (e.type === 'COAST') {
-    fields = `<div class="mission-state-kv"><span class="mission-state-key">Days</span><span class="mission-state-val">${(e.days||0).toLocaleString()}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}</span></div>
-      ${e.boiloffKg > 0 ? `<div class="mission-state-kv"><span class="mission-state-key">Boiloff</span><span class="mission-state-val" style="color:var(--accent2);">&minus;${Math.round(e.boiloffKg).toLocaleString()} kg</span></div>` : ''}`;
-  }
 
   const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
   const _vehBefore = _missionVehiclesBeforeEvent(m, idx);
@@ -1330,15 +1270,11 @@ function _missionEventDetailHTML(m, idx) {
         ⤵ Occurs during the previous transfer's coast (show it mid-maneuver)
       </label>`
     : '';
+  if (!editForm && !simToggle && !coastToggle) return '';
   return `<div style="padding:4px 2px;">
-      <div class="mission-state-grid">${fields}</div>
       ${editForm}
       ${simToggle}
       ${coastToggle}
-      <div style="display:flex;gap:6px;margin-top:12px;">
-        <button class="act-btn" onclick="missionDeleteEvent('${id}',${idx});closeModal('modal-mission-evt')">Delete Event</button>
-        <button class="act-btn" onclick="closeModal('modal-mission-evt')">Close</button>
-      </div>
     </div>`;
 }
 
@@ -2316,7 +2252,6 @@ function missionApplyBurnEdit(id, idx) {
   const bt = document.getElementById('edit-burn-type-'+id)?.value || e.burnType;
   const pval = parseFloat(document.getElementById('edit-burn-param-'+id)?.value) || 0;
   e.burnType = bt; e.burnParam = pval;
-  closeModal('modal-mission-evt');
   missionRecompute(m);
   missionRenderDetail();
 }
@@ -2328,7 +2263,6 @@ function missionApplyManeuverEdit(id, idx) {
   const to   = document.getElementById('edit-mv-to-'+id)?.value || e.toNode;
   const lbl = nid => { const n = _missionNmNodeById(nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
   e.fromNode = from; e.toNode = to; e.fromLabel = lbl(from); e.toLabel = lbl(to);
-  closeModal('modal-mission-evt');
   missionRecompute(m);   // recompute refreshes ΔV/prop from the new node pair (steps unchanged)
   missionRenderDetail();
 }
@@ -2341,7 +2275,6 @@ function missionApplyDeployEdit(id, idx) {
   if (sc) { e.spacecraftId = scId; e.label = sc.name; }
   const emptyEl = document.getElementById('edit-deploy-empty-'+id);
   if (emptyEl) e.emptyTanks = emptyEl.checked;
-  closeModal('modal-mission-evt');
   missionRecompute(m);
   missionRenderDetail();
 }
@@ -2393,21 +2326,21 @@ function missionApplyLaunchEdit(id, idx) {
   o.apo_km = +document.getElementById('edit-launch-apo-' + id)?.value || o.alt_km;
   o.inc_deg = +document.getElementById('edit-launch-inc-' + id)?.value || 0;
   e.launchOrbit = { ...o };
-  closeModal('modal-mission-evt'); missionRecompute(m); missionRenderDetail();
+  missionRecompute(m); missionRenderDetail();
 }
-// Provisionally set which vehicle separates, then refresh the modal so the stage
-// list matches the chosen vehicle (no recompute until Apply).
+// Provisionally set which vehicle separates, then re-render so the stage list in
+// the inline edit section matches the chosen vehicle (no recompute until Apply).
 function missionSepEditSetVehicle(id, idx, key) {
   const m = _missionGet(id); if (!m || !m.log[idx]) return;
   m.log[idx].activeKey = key || null;
-  const b = document.getElementById('mevt-body'); if (b) b.innerHTML = _missionEventDetailHTML(m, idx);
+  missionRenderDetail();
 }
 function missionApplySeparateEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'SEPARATE') return;
   const vk = document.getElementById('edit-sep-veh-' + id)?.value; if (vk) e.activeKey = vk;
   const si = document.getElementById('edit-sep-idx-' + id)?.value; if (si != null && si !== '') e.sepIndex = +si;
-  closeModal('modal-mission-evt'); missionRecompute(m); missionRenderDetail();
+  missionRecompute(m); missionRenderDetail();
 }
 function missionApplyDockEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
@@ -2416,14 +2349,14 @@ function missionApplyDockEdit(id, idx) {
   const b = document.getElementById('edit-dock-b-' + id)?.value;
   if (a) { e.activeKey = a; delete e.aName; }
   if (b) { e.targetKey = b; delete e.tName; }
-  closeModal('modal-mission-evt'); missionRecompute(m); missionRenderDetail();
+  missionRecompute(m); missionRenderDetail();
 }
 function missionApplyExpendEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'EXPEND') return;
   const vk = document.getElementById('edit-expend-veh-' + id)?.value;
   if (vk) { e.targetKey = vk; e.vehicleLevel = true; delete e.stageName; }
-  closeModal('modal-mission-evt'); missionRecompute(m); missionRenderDetail();
+  missionRecompute(m); missionRenderDetail();
 }
 
 function missionApplyPropTransferEdit(id, idx) {
@@ -2438,7 +2371,6 @@ function missionApplyPropTransferEdit(id, idx) {
   const fv = e.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId] : null;
   const ss = fv ? fv.stages[e.sourceIndex] : null;
   if (ss && ss.tanks && ss.tanks[0]) e.propellantType = ss.tanks[0].propellantType;
-  closeModal('modal-mission-evt');
   missionRecompute(m);
   missionRenderDetail();
 }
@@ -2807,7 +2739,6 @@ function missionApplyCoastEdit(id, idx) {
   if (days > 0) e.days = days;
   e.label = (document.getElementById('edit-coast-label-' + id)?.value || '').trim() || null;
   missionRecompute(m);
-  missionOpenEventModal(id, idx);
   missionRenderDetail();
 }
 
@@ -3899,7 +3830,7 @@ function missionSolveFreeReturn(id) {
   say(`// free return solved: ${Math.round(sol.dv_ms).toLocaleString()} m/s prograde at MET ${Math.round(sol.met_s).toLocaleString()} s — return perigee ${Math.round(sol.periAlt_km)} km (hit Add to author it)`);
 }
 
-// Apply edits from the MNODE event modal — standard mutation path
+// Apply edits from the MNODE event's inline edit section — standard mutation path
 // (update log entry → missionRecompute → render).
 function missionApplyMnodeEdit(id, idx) {
   const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
@@ -3909,7 +3840,6 @@ function missionApplyMnodeEdit(id, idx) {
   e.dvPro_ms = gv('pro'); e.dvRad_ms = gv('rad'); e.dvNrm_ms = gv('nrm');
   missionRecompute(m);
   missionRenderDetail();
-  closeModal('modal-mission-evt');
 }
 
 // Round 2 item 2: precision +/- nudge buttons on the MNODE event card — write
