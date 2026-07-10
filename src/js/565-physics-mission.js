@@ -159,6 +159,245 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   };
 }
 
+// ── P4: targeting — generic differential corrector + leg aim ─────────────────
+//
+// ΔV ACCOUNTING PARITY (sacred): the shooter adjusts WHERE the burn happens
+// (anomaly theta on the parking orbit) and its in-plane DIRECTION (pitch off
+// prograde) — NEVER the magnitude. |Δv| is always the engine-supplied value.
+// If the fixed magnitude cannot reach the target, we return converged:false
+// and the renderer keeps the schematic arc (MATH.md §7g).
+
+/** Burn state on a circular parking ring: position at anomaly `theta`
+ *  (radius r1, km), velocity = circular + dv_kms along a unit vector pitched
+ *  `pitch` rad off prograde toward radial-out (in-plane; normal is a P5/3D
+ *  concern). Pure. Returns {r, v, dvVec}. */
+function physAimBurnState(fromBody, r1, theta, pitch, dv_kms) {
+  const mu = PROG_BODIES[fromBody].mu;
+  const pro = [-Math.sin(theta), Math.cos(theta), 0];
+  const radOut = [Math.cos(theta), Math.sin(theta), 0];
+  const p = pitch || 0;
+  const dvDir = physAdd(physScale(pro, Math.cos(p)), physScale(radOut, Math.sin(p)));
+  const dvVec = physScale(dvDir, dv_kms);
+  return { r: physScale(radOut, r1), v: physAdd(physScale(pro, Math.sqrt(mu / r1)), dvVec), dvVec };
+}
+
+/** Closest approach of a propagation result to body `dest`: exact periapsis
+ *  events in the dest frame win; otherwise the (decimated) sample minimum.
+ *  Returns {dKm, t}. Body positions via physBodyStateAt with the caller's
+ *  calibration overrides (one position source). */
+function physClosestApproachKm(res, dest, overrides) {
+  let best = Infinity, tBest = null;
+  (res.events || []).forEach(ev => {
+    if (ev.type === 'periapsis' && ev.frame === dest && ev.rMag < best) { best = ev.rMag; tBest = ev.t; }
+  });
+  (res.samples || []).forEach(s => {
+    let d;
+    if (s.frame === dest) d = physMag(s.r);
+    else {
+      const fHelio = s.frame === 'Sun' ? [0, 0, 0] : physBodyStateAt(s.frame, s.t, overrides).r;
+      d = physMag(physSub(physAdd(s.r, fHelio), physBodyStateAt(dest, s.t, overrides).r));
+    }
+    if (d < best) { best = d; tBest = s.t; }
+  });
+  return { dKm: best, t: tBest };
+}
+
+/**
+ * Generic n-DOF (n = 1 or 2) differential corrector.
+ *   burnSolveFn(x) -> initial state {r,v} (or null)
+ *   targetFn(propagatedResult, x) -> miss vector (length n, km-scaled) or null
+ *   x0: initial guess array; opts = { propagate (REQUIRED: state -> result via
+ *   physPropagateSegment), maxIter=12, tolKm=500, eps (scalar or per-component
+ *   array, default 1e-3), maxProps=40 }.
+ * Finite-difference Jacobian, Newton steps with step-halving damping (a step
+ * whose miss grows or goes non-finite is halved, up to 4 times). Terminates
+ * cleanly on singular Jacobian / non-finite miss / propagation budget:
+ * {converged:false}. Deterministic (no randomness, fixed eval order).
+ * Returns { converged, x, missKm, iters, propagations }.
+ */
+function physShootToTarget(burnSolveFn, targetFn, x0, opts) {
+  opts = opts || {};
+  const maxIter = opts.maxIter != null ? opts.maxIter : 12;
+  const tolKm = opts.tolKm != null ? opts.tolKm : 500;
+  const maxProps = opts.maxProps != null ? opts.maxProps : 40;
+  const propagate = opts.propagate;
+  const n = x0.length;
+  const eps = Array.isArray(opts.eps) ? opts.eps : x0.map(() => (opts.eps || 1e-3));
+  let props = 0;
+  const evalMiss = x => {
+    if (props >= maxProps) return null;
+    props++;
+    const st = burnSolveFn(x);
+    if (!st) return null;
+    const res = propagate(st, x);
+    if (!res) return null;
+    const miss = targetFn(res, x);
+    if (!miss || miss.length !== n || miss.some(v => !isFinite(v))) return null;
+    return miss;
+  };
+  const norm = mv => Math.hypot.apply(null, mv);
+  let x = x0.slice();
+  let miss = evalMiss(x);
+  if (!miss) return { converged: false, x, missKm: Infinity, iters: 0, propagations: props };
+  let it = 0;
+  for (; it < maxIter; it++) {
+    if (norm(miss) <= tolKm) return { converged: true, x, missKm: norm(miss), iters: it, propagations: props };
+    // finite-difference Jacobian columns (J[j][k] = dmiss_k/dx_j)
+    const J = [];
+    let jacBad = false;
+    for (let j = 0; j < n; j++) {
+      const xp = x.slice(); xp[j] += eps[j];
+      const mp = evalMiss(xp);
+      if (!mp) { jacBad = true; break; }
+      J.push(mp.map((v, k) => (v - miss[k]) / eps[j]));
+    }
+    if (jacBad) return { converged: false, x, missKm: norm(miss), iters: it, propagations: props };
+    // Newton step: solve M dx = -miss with M[k][j] = J[j][k]
+    let dx;
+    if (n === 1) {
+      if (!isFinite(J[0][0]) || Math.abs(J[0][0]) < 1e-12) return { converged: false, x, missKm: norm(miss), iters: it, propagations: props };
+      dx = [-miss[0] / J[0][0]];
+    } else {
+      const det = J[0][0] * J[1][1] - J[1][0] * J[0][1];
+      if (!isFinite(det) || Math.abs(det) < 1e-15) return { converged: false, x, missKm: norm(miss), iters: it, propagations: props };
+      dx = [
+        (-miss[0] * J[1][1] + miss[1] * J[1][0]) / det,
+        (miss[0] * J[0][1] - miss[1] * J[0][0]) / det,
+      ];
+    }
+    // damped acceptance: halve the step while the miss grows / breaks
+    let accepted = null, mNew = null, scale = 1;
+    for (let h = 0; h < 4; h++) {
+      const xt = x.map((v, j) => v + dx[j] * scale);
+      const mt = evalMiss(xt);
+      if (mt && norm(mt) < norm(miss)) { accepted = xt; mNew = mt; break; }
+      scale /= 2;
+    }
+    if (!accepted) return { converged: norm(miss) <= tolKm, x, missKm: norm(miss), iters: it + 1, propagations: props };
+    x = accepted; miss = mNew;
+  }
+  return { converged: norm(miss) <= tolKm, x, missKm: norm(miss), iters: it, propagations: props };
+}
+
+/**
+ * Aim an existing node MANEUVER's injection burn with the corrector: 1-DOF on
+ * the burn anomaly theta first (cheap, usually enough for moon legs), then
+ * escalating to 2-DOF (theta + pitch) if 1-DOF stalls. Target: closest
+ * approach to the destination body equals the destination-orbit radius
+ * (targetRadiusKm); the 2-DOF variant adds an arrival-timing component
+ * (closest-approach time vs. the schematic TOF, scaled to km — see MATH.md
+ * §7g) so the Jacobian is full-rank. |Δv| = dv_kms, FIXED throughout.
+ * Returns { converged, theta, pitch, missKm, iters, propagations, dof } or
+ * null (no n-body leg model for this pair).
+ */
+function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts) {
+  overrides = overrides || {}; opts = opts || {};
+  const burn0 = physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides);
+  if (!burn0 || (burn0.kind !== 'moon' && burn0.kind !== 'interplanetary')) return null;
+  const dest = burn0.dest, fromBody = burn0.center;
+  const r1 = physMag(burn0.state.r);
+  let theta0 = Math.atan2(burn0.state.r[1], burn0.state.r[0]);
+  if (theta0 < 0) theta0 += 2 * Math.PI;
+  const soi = physSoiRadius(dest);
+  const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
+  const tolKm = Math.min(soi / 3, Math.max(1000, targetR * 0.25));
+  const cutoff = tDepart_s + 1.5 * Math.max(burn0.coastTof_s, 3600);
+  // heliocentric cruise: cap the step ladder so the encounter can't be
+  // stepped over (see physStepFor ctx.dtMax) — fixed constant, deterministic
+  const ctx = { center: fromBody, bodies: burn0.bodies, overrides,
+    dtMax: burn0.kind === 'interplanetary' ? 16384 : undefined };
+  const propagate = st => physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, cutoff, ctx, { maxSamples: 128 });
+  const tArrSched = tDepart_s + burn0.coastTof_s;
+  // 1-DOF: burn anomaly only
+  const sol1 = physShootToTarget(
+    x => physAimBurnState(fromBody, r1, x[0], 0, dv_kms),
+    res => [physClosestApproachKm(res, dest, overrides).dKm - targetR],
+    [theta0], { propagate, tolKm, eps: [1e-3], maxIter: opts.maxIter || 12, maxProps: 26 });
+  if (sol1.converged) {
+    return { converged: true, theta: sol1.x[0], pitch: 0, missKm: sol1.missKm, iters: sol1.iters, propagations: sol1.propagations, dof: 1 };
+  }
+  // 2-DOF escalation: theta + pitch; second miss component pins the
+  // closest-approach TIME to the schematic arrival (seconds -> km at a
+  // transfer-speed scale, 0.5 km/s) so the 2x2 Jacobian is full-rank.
+  const sol2 = physShootToTarget(
+    x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms),
+    res => {
+      const ca = physClosestApproachKm(res, dest, overrides);
+      return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9]; // seconds × 0.5 km/s → km scale
+    },
+    [sol1.x[0], 0], { propagate, tolKm: Math.max(tolKm, soi / 3), eps: [1e-3, 1e-3], maxIter: opts.maxIter || 12, maxProps: 40 });
+  return { converged: sol2.converged, theta: sol2.x[0], pitch: sol2.x[1] || 0,
+    missKm: sol2.missKm, iters: sol1.iters + sol2.iters, propagations: sol1.propagations + sol2.propagations, dof: 2 };
+}
+
+// shooter solution cache: re-shoot only when the leg's signature changes —
+// cached solves make a warm recompute cost ~one propagation per leg.
+const _physShootCache = {};
+
+/**
+ * Free-return template solve (authoring aid, NOT re-aiming an accounted burn —
+ * here the magnitude IS free because the user is authoring a NEW burn).
+ * 2-DOF shoot on x = [burn MET (s), |Δv| (km/s)] from a circular Earth orbit
+ * at leoAltKm; the burn anomaly follows the MNODE convention theta = n·MET
+ * (mean motion phase), so the solved MET round-trips exactly through the
+ * MNODE leg builder. Targets: lunar SOI transit at the seed trajectory's
+ * flyby distance AND Earth return perigee inside [30, 500] km (aimed at the
+ * seed's own value when already in band). Seeded from the P1 golden (apogee
+ * 455,000 km energy; burn angle 4.5379 rad rotated with the Moon's rail).
+ * Returns { converged, met_s, dv_ms, periAlt_km, missKm, iters } or a
+ * converged:false record.
+ */
+function physFreeReturnSolve(leoAltKm, tDepart_s, overrides) {
+  overrides = overrides || {};
+  const muE = PROG_BODIES.Earth.mu, RE_ = PROG_BODIES.Earth.R;
+  const rp = RE_ + (leoAltKm || 185);
+  const nMean = Math.sqrt(muE / (rp * rp * rp));
+  const t0 = tDepart_s || 0;
+  // seed energy from the P1 golden (apo 455,000 km) and its burn angle
+  // rotated with the Moon's rail angle at departure
+  const aSeed = (rp + 455000) / 2;
+  const dvSeed = Math.sqrt(muE * (2 / rp - 1 / aSeed)) - Math.sqrt(muE / rp);
+  const twoPi = 2 * Math.PI;
+  let thetaSeed = (4.5379 + (progBodyAngleAt('Moon', t0) - progBodyAngleAt('Moon', 0))) % twoPi;
+  if (thetaSeed < 0) thetaSeed += twoPi;
+  const phase = (((thetaSeed - nMean * t0) % twoPi) + twoPi) % twoPi;
+  const metSeed = t0 + phase / nMean;
+  const ctx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'], overrides };
+  const mkState = x => {
+    const bs = physAimBurnState('Earth', rp, (x[0] * nMean) % twoPi, 0, x[1]);
+    return { r: bs.r, v: bs.v, met: x[0] };
+  };
+  const propagate = st => physPropagateSegment({ r: st.r, v: st.v }, st.met, st.met + 12 * 86400, ctx, { maxSamples: 128 });
+  const measure = res => {
+    const soiOut = res.events.find(ev => ev.type === 'soi' && ev.from === 'Moon');
+    const moonPeri = res.events.filter(ev => ev.type === 'periapsis' && ev.frame === 'Moon');
+    const dMoonKm = moonPeri.length ? Math.min.apply(null, moonPeri.map(ev => ev.rMag))
+      : physClosestApproachKm(res, 'Moon', overrides).dKm;
+    let periAlt = null;
+    if (soiOut) {
+      const per = res.events.filter(ev => ev.type === 'periapsis' && ev.frame === 'Earth' && ev.t > soiOut.t);
+      if (per.length) periAlt = per[0].rMag - RE_;
+      else {
+        let best = Infinity;
+        res.samples.forEach(s => { if (s.frame === 'Earth' && s.t > soiOut.t) best = Math.min(best, physMag(s.r)); });
+        if (isFinite(best)) periAlt = best - RE_;
+      }
+    }
+    return { dMoonKm, periAlt };
+  };
+  const seedM = measure(propagate(mkState([metSeed, dvSeed])));
+  const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < physSoiRadius('Moon')) ? seedM.dMoonKm : physSoiRadius('Moon') * 0.15;
+  const pTgt = (seedM.periAlt != null && seedM.periAlt >= 30 && seedM.periAlt <= 500) ? seedM.periAlt : 265;
+  const sol = physShootToTarget(mkState,
+    res => { const mm = measure(res); return [mm.dMoonKm - dTgt, mm.periAlt == null ? 1e9 : mm.periAlt - pTgt]; },
+    [metSeed, dvSeed],
+    { propagate, tolKm: 100, eps: [1e-3 / nMean, 1e-4], maxIter: 12, maxProps: 40 });
+  const finalM = measure(propagate(mkState(sol.x)));
+  const inBand = finalM.periAlt != null && finalM.periAlt >= 30 && finalM.periAlt <= 500;
+  return { converged: !!(sol.converged && inBand) || inBand, met_s: sol.x[0], dv_ms: sol.x[1] * 1000,
+    periAlt_km: finalM.periAlt, missKm: sol.missKm, iters: sol.iters };
+}
+
 // ── duration precedence hook (called from 570's MANEUVER replay) ─────────────
 /** Physics TOF for an authored MANEUVER, from the PREVIOUS rebuild's legs
  *  (stale-by-one; the convergence pass re-replays once when it matters).
@@ -196,8 +435,61 @@ function physRebuildMissionTrajectories(m) {
   const calOverrides = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
   const legs = [];
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
+  // destination-orbit mean altitude for a leg's dest body, from the first
+  // later arrival MANEUVER into an orbit of that body (shooter target radius).
+  const destAltFor = (dest, fromIdx) => {
+    for (let j = fromIdx + 1; j < (m.log || []).length; j++) {
+      const ev = m.log[j];
+      if (ev.type !== 'MANEUVER' || !ev.toNode) continue;
+      const tn = _missionNmNodeById(ev.toNode);
+      const o = tn && tn.orbit;
+      if (o && o.body === dest && (o.type === 'circular' || o.type === 'elliptic'))
+        return ((o.perigee ?? o.apogee ?? 100) + (o.apogee ?? o.perigee ?? 100)) / 2;
+    }
+    return 100;
+  };
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
+    // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
+    // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point
+    // sits at anomaly theta = n·MET on the mean-altitude circular ring (mean
+    // motion phase — same convention physFreeReturnSolve solves in); Δv is
+    // applied in the orbit's local frame: prograde + radial-out (normal is a
+    // no-op until the P5 3D world — documented in MATH.md §7g).
+    if (e.type === 'MNODE') {
+      const o = e.orbitAtBurn;
+      const burnMet = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
+      if (!o || o.transit || o.surface || !PROG_BODIES[o.body]) {
+        legs.push({ authIdx: i, met: burnMet, samples: [], events: [], tof_s: 0, tofPhysics: null,
+          dvVec: null, frames: [], converged: false, kind: 'mnode',
+          note: 'no propagable orbit at burn (transit corridor / surface / unknown body)' });
+        continue;
+      }
+      const mu = PROG_BODIES[o.body].mu;
+      const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+      const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
+      const theta = (nMean * burnMet) % (2 * Math.PI);
+      const bs = physAimBurnState(o.body, rMean, theta, 0, 0);
+      const pro = [-Math.sin(theta), Math.cos(theta), 0], radOut = [Math.cos(theta), Math.sin(theta), 0];
+      const dvVec = physAdd(physScale(pro, (e.dvPro_ms || 0) / 1000), physScale(radOut, (e.dvRad_ms || 0) / 1000));
+      const state = { r: bs.r, v: physAdd(bs.v, dvVec) };
+      const parent = physParentOf(o.body);
+      const bodies = [...new Set([o.body, parent || 'Sun', 'Sun', o.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
+      // horizon: 30 days, or 3 post-burn periods when the new orbit stays
+      // comfortably inside this body's SOI (shows the settled orbit without
+      // integrating 500 LEO revs)
+      let horizon = 30 * 86400;
+      const el = physStateToElements(state.r, state.v, mu);
+      if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(o.body) * 0.8)
+        horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
+      const res = physPropagateSegment(state, burnMet, burnMet + horizon,
+        { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 256 });
+      legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,
+        tof_s: 0, tofPhysics: null, dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
+        converged: true, kind: 'mnode', homeFrame: o.body,
+        dv_ms: Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2)) });
+      continue;
+    }
     if (e.type !== 'MANEUVER' || !e.fromNode || !e.toNode) continue;
     const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
     const fromO = fromN && fromN.orbit, toO = toN && toN.orbit;
@@ -248,15 +540,37 @@ function physRebuildMissionTrajectories(m) {
       continue;
     }
 
-    // n-body leg (moon / interplanetary): propagate until 1.5× the schematic TOF
+    // n-body leg (moon / interplanetary): P4 — refine the analytic aim with
+    // the differential corrector (burn anomaly ± pitch; |Δv| FIXED), cached
+    // by leg signature so a warm recompute costs ~one propagation per leg.
+    let st0 = burn.state, dvVec = burn.dvVec;
+    {
+      const relevantOv = (burn.kind === 'interplanetary') ? (calOverrides[burn.dest] || 0) : 0;
+      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|${relevantOv.toFixed(6)}`;
+      let aim = _physShootCache[sig];
+      if (!aim) {
+        let sol = null;
+        try { sol = physShootLegAim(fromO, toO, met, dv_ms / 1000, calOverrides, { destAltKm: destAltFor(burn.dest, i) }); }
+        catch (err) { sol = null; }
+        aim = sol ? { theta: sol.theta, pitch: sol.pitch, shot: sol.converged, missKm: sol.missKm, iters: sol.iters }
+                  : { shot: false };
+        _physShootCache[sig] = aim;
+      }
+      if (aim.theta != null) {
+        // even an unconverged shoot's best x beats the raw analytic seed
+        const bs = physAimBurnState(burn.center, physMag(burn.state.r), aim.theta, aim.pitch || 0, dv_ms / 1000);
+        st0 = { r: bs.r, v: bs.v }; dvVec = bs.dvVec;
+      }
+    }
     const cutoff = met + 1.5 * Math.max(burn.coastTof_s, 3600);
-    const res = physPropagateSegment(burn.state, met, cutoff,
-      { center: burn.center, bodies: burn.bodies, overrides: calOverrides }, { maxSamples: 256 });
+    const res = physPropagateSegment(st0, met, cutoff,
+      { center: burn.center, bodies: burn.bodies, overrides: calOverrides,
+        dtMax: burn.kind === 'interplanetary' ? 16384 : undefined }, { maxSamples: 256 });
     const converged = res.events.some(ev => ev.type === 'soi' && ev.to === burn.dest);
     const leg = { authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
       samples: res.samples, events: res.events, tof_s: burn.coastTof_s,
       tofPhysics: null,   // injection is impulsive under the corridor rule — no coast of its own
-      dvVec: burn.dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
+      dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
       converged, kind: burn.kind, dest: burn.dest };
     legs.push(leg);
     lastTransit = leg;

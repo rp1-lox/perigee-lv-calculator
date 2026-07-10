@@ -118,7 +118,14 @@ function physStepFor(r, ctx) {
   const muC = ctx.center === 'Sun' ? PROG_MU_SUN : PROG_BODIES[ctx.center].mu;
   const d = physMag(r);
   const tOrbit = 2 * Math.PI * Math.sqrt(d * d * d / muC); // circular timescale at this radius
-  const want = tOrbit / PHYS_STEPS_PER_ORBIT;
+  let want = tOrbit / PHYS_STEPS_PER_ORBIT;
+  // ctx.dtMax (P4): optional deterministic cap — heliocentric cruise steps
+  // otherwise reach the 65,536 s rung (~1.5M km of relative motion per step),
+  // enough to step clean OVER a planet's SOI, which both misses the SOI event
+  // and makes the shooter's closest-approach metric noisy. Callers targeting
+  // a specific body cap the ladder (a FIXED constant per leg — still
+  // deterministic; the cap just selects a smaller rung).
+  if (ctx.dtMax && want > ctx.dtMax) want = ctx.dtMax;
   let dt = PHYS_DT_LADDER[0];
   for (const step of PHYS_DT_LADDER) { if (step <= want) dt = step; else break; }
   return dt;
@@ -169,7 +176,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const maxSamples = opts.maxSamples || 256;
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
-  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn };
+  let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax };
   let state = { r: state0.r.slice(), v: state0.v.slice() };
   let t = t0;
   const raw = [{ t, r: state.r.slice(), frame: ctxNow.center }];

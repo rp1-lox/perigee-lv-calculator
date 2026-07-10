@@ -1578,6 +1578,27 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     });
   }
 
+  // ── P4: MNODE legs — vector burns live ONLY in the physics side-table
+  // (they're not node-map maneuvers, so the schematic extraction never sees
+  // them). Rendered UNCONDITIONALLY (no converged gate): a maneuver node's
+  // ballistic path IS the content — user-authored intent, drawn wherever it
+  // goes. Same _trajPhysLegRender path (continuous multi-frame anchorOf
+  // gluing, transferArc LOD window, click selects the MNODE event).
+  if (typeof _physTrajByMission !== 'undefined' && _physTrajByMission[id]) {
+    (_physTrajByMission[id].legs || []).forEach(L => {
+      if (L.kind !== 'mnode' || !L.samples || !L.samples.length) return;
+      const home = L.homeFrame || (L.samples[0] && L.samples[0].frame);
+      if (home !== body) return;
+      const ev = (m.log || [])[L.authIdx];
+      const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
+      const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
+      const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
+      const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
+        emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: true, arrMarker: false, calib });
+      if (phys) out += phys;
+    });
+  }
+
   // surface events (fixed-px marker + LOD-gated label, like burn markers)
   sc.surface.forEach(s => {
     const ang = s.kind === 'launch' ? -90 : 90; // launch at top, landing at bottom of disc — schematic

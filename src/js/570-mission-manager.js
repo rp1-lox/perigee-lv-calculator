@@ -1091,6 +1091,11 @@ function _missionEventDetailHTML(m, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Merged</span><span class="mission-state-val">${e.mergedName||''}</span></div>`;
   } else if (e.type === 'EXPEND') {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Name</span><span class="mission-state-val">${e.vehicleName || e.stageName || ''}</span></div>`;
+  } else if (e.type === 'MNODE') {
+    fields = `<div class="mission-state-kv"><span class="mission-state-key">Burn MET</span><span class="mission-state-val">${_metFmt(e.at && e.at.value_s || 0)}</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">ΔV</span><span class="mission-state-val">${(e.dvRequired||0).toLocaleString()} m/s</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Prop Consumed</span><span class="mission-state-val">${Math.round(e.prop_consumed||0).toLocaleString()} kg</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Result</span><span class="mission-state-val">${e.result||''}</span></div>`;
   } else if (e.type === 'COAST') {
     fields = `<div class="mission-state-kv"><span class="mission-state-key">Days</span><span class="mission-state-val">${(e.days||0).toLocaleString()}</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Duration</span><span class="mission-state-val">${_metFmt(e.durationUsed)}</span></div>
@@ -1261,6 +1266,21 @@ function _missionEventDetailHTML(m, idx) {
         <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Vehicle to expend</label>
           <select id="edit-expend-veh-${id}" style="${_es}">${_vehOpt(e.targetKey)}</select></div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyExpendEdit('${id}',${idx})">Apply</button>
+      </div>`;
+  } else if (e.type === 'MNODE') {
+    editForm = `
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
+          <div class="cfg-item"><label class="cfg-label">MET (s)</label>
+            <input type="number" id="edit-mnode-met-${id}" class="field" value="${e.at && e.at.value_s || 0}" min="0" step="any" style="width:110px;"></div>
+          <div class="cfg-item"><label class="cfg-label">Prograde (m/s)</label>
+            <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;"></div>
+          <div class="cfg-item"><label class="cfg-label">Radial (m/s)</label>
+            <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;"></div>
+          <div class="cfg-item"><label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(coplanar — no effect until 3D)</span></label>
+            <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" disabled style="width:100px;opacity:.55;"></div>
+        </div>
+        <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
       </div>`;
   }
 
@@ -2133,6 +2153,11 @@ function missionRecompute(m) {
       active = resolveActive(e);
       if (active) {
         e.vehicleId = active.vehicleId;
+        // P4: cache the vehicle's node-map orbit at the burn so the physics
+        // rebuild (565) can reconstruct + propagate the post-burn trajectory
+        // (same replay-derived-cache pattern as e.orbitAfter / e.stagingResult).
+        e.orbitAtBurn = active.orbitState ? { ...active.orbitState } : null;
+        if (authEntry) authEntry.orbitAtBurn = e.orbitAtBurn;
         const fullDv = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
         e.dvRequired = Math.round(fullDv);
         let delivered = 0, propTotal = 0;
@@ -3634,7 +3659,7 @@ function _missionAddEventHTML(m) {
   if (_missionAddEvt == null) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
-  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
+  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -3712,6 +3737,26 @@ function _missionAddEventHTML(m) {
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
+  } else if (_missionAddEvt === 'mnode') {
+    // P4: vector maneuver node — a raw Δv applied at a MET, propagated by the
+    // physics side (565) and drawn unconditionally (user-authored intent).
+    const os = fv && fv.orbitState;
+    const canFreeReturn = !!(os && os.body === 'Earth' && !os.surface && !os.transit);
+    const metDefault = Math.round(m._metTotal || 0);
+    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// a raw Δv vector applied at a mission time — burns propellant like a maneuver, trajectory propagated by the physics engine</div>
+      <label class="cfg-label">MET (s)</label>
+      <input type="number" id="addev-mnode-met-${id}" class="field" value="${metDefault}" min="0" step="any" style="width:100%;margin-bottom:6px;">
+      <label class="cfg-label">Prograde (m/s)</label>
+      <input type="number" id="addev-mnode-pro-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
+      <label class="cfg-label">Radial (m/s)</label>
+      <input type="number" id="addev-mnode-rad-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
+      <label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(coplanar — no effect until 3D)</span></label>
+      <input type="number" id="addev-mnode-nrm-${id}" class="field" value="0" step="any" disabled style="width:100%;margin-bottom:8px;opacity:.55;">
+      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;margin-bottom:8px;" onclick="missionExecMnodeFromDock('${id}')">⊕ Add Vector Burn</button>
+      <div style="border-top:1px solid var(--border);padding-top:8px;">
+        <button class="act-btn" style="width:100%;"${canFreeReturn ? '' : ' disabled title="Active vehicle must be in an Earth orbit"'} onclick="missionSolveFreeReturn('${id}')">☾ Solve free return…</button>
+        <div id="addev-mnode-msg-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;"></div>
+      </div>`;
   } else if (_missionAddEvt === 'coast') {
     form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// advance the mission clock without a burn (e.g. "loiter 30 days in NRHO") — boiloff applies to every live vehicle's cryo tanks over this span</div>
       <label class="cfg-label">Days</label>
@@ -3766,6 +3811,53 @@ function _missionAddEventHTML(m) {
   // forms that already have their own vehicle dropdown don't need the global Active Vehicle selector
   const ownsVehiclePicker = ['expend', 'recover', 'coast'].includes(_missionAddEvt);
   return `${header}${(_missionAddEvt!=='__menu__'&&_missionAddEvt!=='burn'&&!ownsVehiclePicker)?vehSel:''}${form}`;
+}
+
+// ── P4: Vector Burn (MNODE) dock handlers ───────────────────────────────────
+function missionExecMnodeFromDock(id) {
+  const gv = f => { const el = document.getElementById(`addev-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
+  missionExecManeuverNode(id, { value_s: Math.max(0, gv('met')), dvPro_ms: gv('pro'), dvRad_ms: gv('rad'), dvNrm_ms: gv('nrm') });
+}
+
+// Solve a free-return trajectory from the active vehicle's Earth orbit and
+// PREFILL the Vector Burn fields (never auto-pushes — the user hits Add).
+function missionSolveFreeReturn(id) {
+  const m = _missionGet(id); if (!m) return;
+  const msgEl = document.getElementById('addev-mnode-msg-' + id);
+  const say = (t, warn) => { if (msgEl) { msgEl.textContent = t; msgEl.style.color = warn ? 'var(--warn)' : 'var(--text-dim)'; } };
+  const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+  const os = fv && fv.orbitState;
+  if (!os || os.body !== 'Earth' || os.surface || os.transit) { say('// active vehicle must be in an Earth orbit', true); return; }
+  if (typeof physFreeReturnSolve !== 'function') { say('// physics module unavailable', true); return; }
+  const alt = ((os.perigee ?? 185) + (os.apogee ?? os.perigee ?? 185)) / 2;
+  const metEl = document.getElementById('addev-mnode-met-' + id);
+  const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
+  const calib = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
+  let sol = null;
+  try { sol = physFreeReturnSolve(alt, tDep, calib); } catch (err) { sol = null; }
+  if (!sol || !sol.converged) {
+    say(`// no free return found from ${Math.round(alt)} km at this departure — try a different MET`, true);
+    return;
+  }
+  if (metEl) metEl.value = Math.round(sol.met_s);
+  const proEl = document.getElementById('addev-mnode-pro-' + id);
+  if (proEl) proEl.value = Math.round(sol.dv_ms);
+  const radEl = document.getElementById('addev-mnode-rad-' + id);
+  if (radEl) radEl.value = 0;
+  say(`// free return solved: ${Math.round(sol.dv_ms).toLocaleString()} m/s prograde at MET ${Math.round(sol.met_s).toLocaleString()} s — return perigee ${Math.round(sol.periAlt_km)} km (hit Add to author it)`);
+}
+
+// Apply edits from the MNODE event modal — standard mutation path
+// (update log entry → missionRecompute → render).
+function missionApplyMnodeEdit(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const e = m.log[idx];
+  const gv = f => { const el = document.getElementById(`edit-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
+  e.at = { kind: 'met', value_s: Math.max(0, gv('met')) };
+  e.dvPro_ms = gv('pro'); e.dvRad_ms = gv('rad'); e.dvNrm_ms = gv('nrm');
+  missionRecompute(m);
+  missionRenderDetail();
+  closeModal('modal-mission-evt');
 }
 
 // Resolve var(--x) tokens in a serialized SVG to concrete computed values, so

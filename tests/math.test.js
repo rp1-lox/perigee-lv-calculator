@@ -1043,6 +1043,78 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// P4 — targeting & authoring (565): differential corrector + free return
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physShootToTarget, physShootLegAim, physFreeReturnSolve, physAimBurnState,
+          physClosestApproachKm, physSoiRadius, physPropagateSegment, PROG_BODIES, PROG_MOON_ORBIT_R } =
+    vm.runInContext('({ physShootToTarget, physShootLegAim, physFreeReturnSolve, physAimBurnState, physClosestApproachKm, physSoiRadius, physPropagateSegment, PROG_BODIES, PROG_MOON_ORBIT_R })', sandbox);
+
+  const leo = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185 };
+  const tlc = { type: 'transit', body: 'Earth', c3: -1.9, destination: 'Moon' };
+  const muE = PROG_BODIES.Earth.mu;
+  const r1 = PROG_BODIES.Earth.R + 185, r2 = PROG_MOON_ORBIT_R;
+  const aT = (r1 + r2) / 2;
+  const dvHoh = Math.sqrt(muE * (2 / r1 - 1 / aT)) - Math.sqrt(muE / r1); // km/s
+  const soiMoon = physSoiRadius('Moon');
+
+  // shooter converges on a seeded Earth->Moon case with FIXED |dv|
+  {
+    const sol = physShootLegAim(leo, tlc, 86400 * 5, dvHoh, {}, {});
+    ok('P4 shooter: returns a solution record for LEO→TLC', !!sol);
+    ok(`P4 shooter: Earth→Moon converged (miss ${sol && sol.missKm.toFixed(0)} km < SOI/3 ${(soiMoon / 3).toFixed(0)} km) in ${sol && sol.iters} iters`,
+      !!sol && sol.converged && sol.missKm < soiMoon / 3 && sol.iters <= 12);
+    // the solved aim actually enters the Moon's SOI when propagated normally
+    if (sol && sol.converged) {
+      const bs = physAimBurnState('Earth', r1, sol.theta, sol.pitch, dvHoh);
+      const res = physPropagateSegment({ r: bs.r, v: bs.v }, 86400 * 5, 86400 * 5 + 1.5 * 430000,
+        { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] }, { maxSamples: 128 });
+      ok('P4 shooter: solved aim enters the Moon SOI', res.events.some(ev => ev.type === 'soi' && ev.to === 'Moon'));
+      const ca = physClosestApproachKm(res, 'Moon', {});
+      ok(`P4 shooter: closest approach ${ca.dKm.toFixed(0)} km < SOI/3`, ca.dKm < soiMoon / 3);
+    }
+    // |dv| is never modified: solution state's dv magnitude is exactly dvHoh
+    if (sol) {
+      const bs = physAimBurnState('Earth', r1, sol.theta, sol.pitch, dvHoh);
+      approx('P4 shooter: |dvVec| magnitude parity (never retuned)',
+        Math.hypot(bs.dvVec[0], bs.dvVec[1], bs.dvVec[2]), dvHoh, 1e-12);
+    }
+    // determinism: identical inputs -> identical solve
+    const sol2 = physShootLegAim(leo, tlc, 86400 * 5, dvHoh, {}, {});
+    ok('P4 shooter: deterministic (identical repeat solve)',
+      !!sol && !!sol2 && sol.theta === sol2.theta && sol.pitch === sol2.pitch &&
+      sol.missKm === sol2.missKm && sol.iters === sol2.iters);
+  }
+
+  // unreachable target: dv 10x too small -> clean converged:false, bounded work
+  {
+    let threw = false, sol = null;
+    try { sol = physShootLegAim(leo, tlc, 86400 * 5, dvHoh / 10, {}, {}); } catch (e) { threw = true; }
+    ok('P4 shooter: unreachable (dv/10) does not throw', !threw);
+    ok('P4 shooter: unreachable returns converged:false', !!sol && !sol.converged);
+    ok(`P4 shooter: unreachable bounded (${sol && sol.propagations} propagations ≤ 66)`, !!sol && sol.propagations <= 66);
+    // generic corrector: unreachable 1-DOF case terminates within maxIter
+    const flat = physShootToTarget(
+      x => ({ r: [7000 * Math.cos(x[0]), 7000 * Math.sin(x[0]), 0], v: [0, 0, 0] }),
+      () => [1e6],   // constant huge miss, zero gradient -> singular Jacobian
+      [0], { propagate: st => ({ samples: [], events: [] }), tolKm: 1, maxIter: 12 });
+    ok('P4 corrector: singular Jacobian terminates converged:false', flat.converged === false && flat.iters <= 12);
+  }
+
+  // free-return solve reproduces the P1 golden band
+  {
+    const fr = physFreeReturnSolve(185, 0, {});
+    ok('P4 free return: solve converged from 185 km LEO', !!fr && fr.converged);
+    ok(`P4 free return: return perigee ${fr && fr.periAlt_km != null ? fr.periAlt_km.toFixed(0) : '?'} km within [0, 2000] band (P1 golden band)`,
+      !!fr && fr.periAlt_km != null && fr.periAlt_km >= 0 && fr.periAlt_km <= 2000);
+    ok('P4 free return: solved |dv| plausible (3.0–3.3 km/s)', !!fr && fr.dv_ms > 3000 && fr.dv_ms < 3300);
+    const fr2 = physFreeReturnSolve(185, 0, {});
+    ok('P4 free return: deterministic (identical repeat solve)',
+      !!fr && !!fr2 && fr.met_s === fr2.met_s && fr.dv_ms === fr2.dv_ms && fr.periAlt_km === fr2.periAlt_km);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 
