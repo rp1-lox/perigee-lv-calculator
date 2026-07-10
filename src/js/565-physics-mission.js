@@ -110,7 +110,8 @@ function physSchematicCoastTof(fromO, toO) {
  *           coastTof_s, dvVec, dest, kind:'moon'|'interplanetary'|'samebody' }
  * or null when no model applies (e.g. surface-to-surface).
  */
-function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms) {
+function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
+  overrides = overrides || {};
   if (!fromOrbit || !toOrbit || !(dv_kms > 0)) return null;
   const fromBody = fromOrbit.body || 'Earth';
   if (!PROG_BODIES[fromBody]) return null;
@@ -134,11 +135,14 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms) {
     // moon's railed angle (parent-centered) at arrival; burn diametrically opposite
     theta = physPhaseBurnAngle(progBodyAngleAt(destMoon, tDepart_s + coastTof));
   } else if (destPlanet) {
-    // heliocentric equivalent: destination planet's railed angle at arrival;
-    // the LEO burn point is placed at the same schematic angle in the Earth
-    // frame (departure asymptote roughly opposite the arrival point). This is
-    // deliberately coarse — P4's shooter refines it.
-    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof));
+    // heliocentric equivalent: destination planet's railed angle at arrival —
+    // including the mission's CALIBRATION offset (the renderer draws the
+    // planet at the calibrated angle; phasing against the uncalibrated table
+    // angle made physics and render disagree about where the planet IS —
+    // critique 35, fixed 2026-07-09). The LEO burn point is placed at the
+    // same schematic angle in the Earth frame (departure asymptote roughly
+    // opposite the arrival point). Deliberately coarse — P4's shooter refines.
+    theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof) + (overrides[destPlanet] || 0));
   }
 
   const r = [r1 * Math.cos(theta), r1 * Math.sin(theta), 0];
@@ -185,6 +189,11 @@ function physLegTofFor(m, e, metNow) {
  */
 function physRebuildMissionTrajectories(m) {
   if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
+  // The mission's planet-phase calibration (574, render-layer derived state) —
+  // physics MUST use the same planet angles the renderer draws, or trajectories
+  // visibly detach from the planets they target (one position source, MATH.md
+  // §7a/§7f). Pure function of the schematic extraction; no physics circularity.
+  const calOverrides = (typeof _trajGetPlanetCalibration === 'function') ? _trajGetPlanetCalibration(m).overrides : {};
   const legs = [];
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
   for (let i = 0; i < (m.log || []).length; i++) {
@@ -218,7 +227,7 @@ function physRebuildMissionTrajectories(m) {
       continue;
     }
 
-    const burn = physSolveNodeBurn(fromO, toO, met, dv_ms / 1000);
+    const burn = physSolveNodeBurn(fromO, toO, met, dv_ms / 1000, calOverrides);
     if (!burn) continue;
 
     if (burn.kind === 'samebody') {
@@ -242,7 +251,7 @@ function physRebuildMissionTrajectories(m) {
     // n-body leg (moon / interplanetary): propagate until 1.5× the schematic TOF
     const cutoff = met + 1.5 * Math.max(burn.coastTof_s, 3600);
     const res = physPropagateSegment(burn.state, met, cutoff,
-      { center: burn.center, bodies: burn.bodies }, { maxSamples: 256 });
+      { center: burn.center, bodies: burn.bodies, overrides: calOverrides }, { maxSamples: 256 });
     const converged = res.events.some(ev => ev.type === 'soi' && ev.to === burn.dest);
     const leg = { authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
       samples: res.samples, events: res.events, tof_s: burn.coastTof_s,

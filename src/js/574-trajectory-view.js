@@ -842,24 +842,29 @@ function _trajArcPointAt(r1, r2, scale, rotDeg, ox, oy, t) {
 // — NEVER at absolute heliocentric sample positions (the bodies move between
 // sample.t and viewTime; absolute positions would smear the trajectory).
 
-/** Frame-local portion of a physics leg as one polyline. Coordinates:
- *  ox + r[0]*zoom, oy + r[1]*zoom (render units = km × zoom). Samples are
- *  filtered to frame === frameBody and t <= opts.clipT; non-contiguous runs
- *  (e.g. Earth-frame samples before AND after a lunar flyby) become separate
- *  M... subpaths of the same path element. Returns null when the leg has no
- *  drawable (>= 2 finite) samples in this frame — the caller falls back to
- *  the schematic arc. Returns {hidden:true} when the polyline exists but is
- *  outside its LOD/cull window (physics stays authoritative — no schematic
- *  fallback for a merely-invisible polyline). */
-function _trajPolylineSVG(physLeg, frameBody, ox, oy, zoom, opts) {
+/** The WHOLE physics leg as ONE CONTINUOUS polyline across frame handoffs.
+ *  `anchorOf(frame)` -> {x,y} render-space position of that frame's body as
+ *  DRAWN at viewTime (patched-conic gluing: each sample maps to
+ *  anchorOf(sample.frame) + r·zoom). A cross-frame trajectory therefore never
+ *  gaps mid-flight — the old per-frame rendering vanished the Moon-frame
+ *  passage whenever the Moon's ZOI fade was closed, leaving a hole exactly at
+ *  the encounter (user-reported, 2026-07-09). The frame seams get a small
+ *  kink where the two gluings disagree (the body drifted between sample.t and
+ *  viewTime) — an honest patched-conic seam, preferable to a void.
+ *  Samples with t > opts.clipT or an unresolvable frame are skipped (runs
+ *  split into subpaths only if a skip makes them non-contiguous).
+ *  Returns null (<2 drawable samples) or {hidden:true} (outside LOD culls). */
+function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
   opts = opts || {};
   const clipT = opts.clipT != null ? opts.clipT : Infinity;
   const samples = (physLeg && physLeg.samples) || [];
   const runs = [];
   let cur = null;
   for (const s of samples) {
-    if (s.frame !== frameBody || s.t > clipT) { cur = null; continue; }
-    const x = ox + s.r[0] * zoom, y = oy + s.r[1] * zoom;
+    if (s.t > clipT) { cur = null; continue; }
+    const a = anchorOf(s.frame);
+    if (!a) { cur = null; continue; }
+    const x = a.x + s.r[0] * zoom, y = a.y + s.r[1] * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
     if (!cur) { cur = []; runs.push(cur); }
     cur.push({ x, y, t: s.t });
@@ -884,20 +889,25 @@ function _trajPolylineSVG(physLeg, frameBody, ox, oy, zoom, opts) {
 }
 
 /** Vehicle-dot position on a physics leg at time tQuery: linear interpolation
- *  between the bracketing samples IN THE GIVEN FRAME (replaces the schematic
- *  _trajLegPathFraction linear-fraction for physics legs). Returns null when
- *  tQuery falls outside this frame's sample span (the vehicle is in another
- *  frame at that moment — its dot belongs there). */
-function _trajPolylinePointAt(physLeg, frameBody, ox, oy, zoom, tQuery) {
+ *  between the bracketing samples, glued via the SAME anchorOf resolver as
+ *  the polyline (replaces the schematic _trajLegPathFraction for physics
+ *  legs). Cross-frame bracket pairs interpolate in screen space — coarse but
+ *  only ever spans one sample interval at the seam. */
+function _trajPolylinePointAt(physLeg, anchorOf, zoom, tQuery) {
   const samples = (physLeg && physLeg.samples) || [];
+  const project = s => {
+    const a = anchorOf(s.frame);
+    if (!a) return null;
+    const x = a.x + s.r[0] * zoom, y = a.y + s.r[1] * zoom;
+    return (isFinite(x) && isFinite(y)) ? { x, y } : null;
+  };
   let prev = null;
   for (const s of samples) {
-    if (s.frame !== frameBody) { prev = null; continue; }
     if (prev && s.t >= tQuery && prev.t <= tQuery) {
+      const p0 = project(prev), p1 = project(s);
+      if (!p0 || !p1) return p0 || p1;
       const f = (s.t - prev.t) > 0 ? (tQuery - prev.t) / (s.t - prev.t) : 0;
-      const rx = prev.r[0] + (s.r[0] - prev.r[0]) * f, ry = prev.r[1] + (s.r[1] - prev.r[1]) * f;
-      const x = ox + rx * zoom, y = oy + ry * zoom;
-      return (isFinite(x) && isFinite(y)) ? { x, y } : null;
+      return { x: p0.x + (p1.x - p0.x) * f, y: p0.y + (p1.y - p0.y) * f };
     }
     prev = s;
   }
@@ -951,7 +961,20 @@ function _trajPhysLegRender(ctx) {
   const { m, leg, physLeg, body, ox, oy, zoom, viewportDiagPx, vt, emphasized } = ctx;
   const id = m.missionId;
   const clipT = _trajPhysClipT(m, physLeg);
-  const poly = _trajPolylineSVG(physLeg, body, ox, oy, zoom, { clipT, viewportDiagPx });
+  // Frame-anchor resolver: this pass knows only ITS body's drawn position
+  // (ox,oy); sibling frames' drawn positions follow from the calibrated world
+  // delta at viewTime × zoom (same position source as the glyphs — coherence).
+  const overrides = (ctx.calib && ctx.calib.overrides) || _trajGetPlanetCalibration(m).overrides;
+  const bodyWorld = progBodyWorldPosCalibrated(body, vt, overrides);
+  const anchorCache = {};
+  const anchorOf = frame => {
+    if (frame === body) return { x: ox, y: oy };
+    if (anchorCache[frame]) return anchorCache[frame];
+    const w = progBodyWorldPosCalibrated(frame, vt, overrides);
+    if (!w) return null;
+    return (anchorCache[frame] = { x: ox + (w.x - bodyWorld.x) * zoom, y: oy + (w.y - bodyWorld.y) * zoom });
+  };
+  const poly = _trajPolylineSVG(physLeg, anchorOf, zoom, { clipT, viewportDiagPx });
   if (!poly) return null;
   if (poly.hidden) return '';
   const tDep = physLeg.met != null ? physLeg.met : poly.tFirst;
@@ -973,7 +996,7 @@ function _trajPhysLegRender(ctx) {
   if (ctx.depMarker) _trajBurnMarker(poly.first.x, poly.first.y, 'up', _trajDvText(ctx.depDv != null ? ctx.depDv : leg.dv), _metFmt(tDep), Object.assign({}, markerOpts, { opacity: stateAlpha }));
   if (ctx.arrMarker) _trajBurnMarker(poly.last.x, poly.last.y, 'down', ctx.arrDv != null ? _trajDvText(ctx.arrDv) : '', isFinite(tArr) ? _metFmt(tArr) : '', Object.assign({}, markerOpts, { opacity: stateAlpha }));
   if (legState === 'current') {
-    const dotP = _trajPolylinePointAt(physLeg, body, ox, oy, zoom, vt);
+    const dotP = _trajPolylinePointAt(physLeg, anchorOf, zoom, vt);
     if (dotP) out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (physics leg — interpolated from propagated samples)</title></circle>`;
   }
   return out;
@@ -1322,13 +1345,17 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
         return;
       }
 
-      // ── P3: physics polyline (Sun-frame portion) — the propagated leg's
-      // heliocentric samples render INSTEAD of the schematic half-ellipse
-      // when present; schematic stays for physics-off/unconverged/no-samples.
+      // ── P3: physics polyline (heliocentric leg) — drawn ONLY when the
+      // propagation actually reached its destination SOI (converged). An
+      // unconverged ballistic polyline is a green line to nowhere (user-
+      // reported on the Venus transfer, 2026-07-09) while the schematic
+      // calibrated arc DOES visually connect — pre-P4 (no targeting), the
+      // schematic is the more honest picture of intent. P4's shooter flips
+      // these legs to converged and they graduate to physics rendering.
       if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
         const physLegS = physMissionLeg(id, leg.authIdx);
-        if (physLegS && physLegS.samples && physLegS.samples.length) {
-          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true });
+        if (physLegS && physLegS.converged && physLegS.samples && physLegS.samples.length) {
+          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true, calib });
           if (phys != null) { out += phys; return; }
         }
       }
@@ -1407,15 +1434,30 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     //     authored event (injection at Earth, arrival burn at the Moon).
     if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
       const physLegL = physMissionLeg(id, leg.authIdx);
-      if (physLegL && physLegL.samples && physLegL.samples.length) {
-        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false });
+      // (a) the leg's OWN physics record: the HOME pass draws the WHOLE
+      // continuous path (all frames, glued via anchorOf) — converged only,
+      // same rule as the Sun branch (unconverged = schematic fallback).
+      if (physLegL && physLegL.converged && physLegL.samples && physLegL.samples.length) {
+        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false, calib });
         if (phys != null) { out += phys; return; }
       }
       if (leg.fromO && leg.fromO.type === 'transit') {
         const inj = _trajPhysInjectionLegFor(m, leg.authIdx, body);
-        if (inj && inj.samples && inj.samples.some(s => s.frame === body)) {
-          const phys = _trajPhysLegRender({ m, leg, physLeg: inj, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: false, arrMarker: true, arrDv: leg.dv });
-          if (phys != null) { out += phys; return; }
+        // (b) ARRIVAL leg at the destination frame: the approach curve was
+        // already drawn (continuously) by the injection leg's home pass — do
+        // NOT redraw it here. Emit ONLY the arrival burn marker at the clip
+        // point (the mission's arrival-burn moment on the propagated path).
+        if (inj && inj.converged && inj.samples && inj.samples.some(s => s.frame === body)) {
+          const clipT = _trajPhysClipT(m, inj);
+          const anchorLocal = f => f === body ? { x: ox, y: oy } : null;
+          const lastLocalT = inj.samples.reduce((acc, s) => (s.frame === body && s.t > acc ? s.t : acc), -Infinity);
+          const tMark = Math.min(isFinite(clipT) ? clipT : Infinity, lastLocalT);
+          const pos = isFinite(tMark) ? _trajPolylinePointAt(inj, anchorLocal, zoom, tMark) : null;
+          if (pos) {
+            _trajBurnMarker(pos.x, pos.y, 'down', _trajDvText(leg.dv), leg.metArrive != null ? _metFmt(leg.metArrive) : '',
+              Object.assign(markerOpts(physSoiRadius(body) * zoom), { opacity: stateAlpha }));
+            return;
+          }
         }
         // ── P3: capture spur — an INTERPLANETARY arrival with no physics
         // samples at this body (unconverged pre-P4 aim is expected) draws the
