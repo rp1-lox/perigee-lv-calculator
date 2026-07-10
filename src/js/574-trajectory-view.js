@@ -43,9 +43,12 @@
 //
 // ── ANCHORED CAMERA (the teleport killer) ─────────────────────────────────
 // Camera state per mission: { anchorBody, relOffsetKm:{x,y}, wKm }. Effective
-// center = worldPos(anchorBody, viewTime) + relOffsetKm. Wheel zoom-to-cursor
-// mutates wKm + relOffsetKm; drag pan mutates relOffsetKm; changing the
-// selected event (which moves viewTime) leaves anchor+offset untouched, so
+// center = worldPos(anchorBody, viewTime) + relOffsetKm. R3.4: drag-pan and
+// cursor-anchored zoom are RETIRED (KSP camera semantics — see PHYSICS_PLAN
+// R3.4 item 1); relOffsetKm is only ever written as {0,0} now (wheel zoom is
+// a pure wKm change, drag always rotates az/el). The field stays on the
+// camera struct because the fit/zoom-to-content math still reads it. Changing
+// the selected event (which moves viewTime) leaves anchor+offset untouched, so
 // the anchored body stays fixed on screen while the rest of the system moves
 // around it. Fly-to (trajSetFocus, kept name/signature for the focus-bar
 // wiring) sets anchor, zeroes offset, and fits wKm to the body's
@@ -254,40 +257,15 @@ function _trajApplyCam(id, cam) {
 
 function trajWheelZoom(ev, id) {
   ev.preventDefault();
-  const svgEl = (ev.currentTarget.querySelector && ev.currentTarget.querySelector('svg.traj-svg')) || null;
   const cam = _trajCam(id);
   const dir = ev.deltaY < 0 ? 1 : -1;
   const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
   if (nextW === cam.wKm) return;
-  // Zoom about the cursor: convert cursor screen position to a render-space
-  // (floating-origin) point under the CURRENT camera, then re-anchor the
-  // OFFSET so that same point stays under the cursor after the width change
-  // (standard viewBox zoom-to-point, but operating on relOffsetKm rather
-  // than an absolute center — the anchor body's world position is added
-  // back in at render time, so this math never touches heliocentric km).
-  let offX = cam.relOffsetKm ? cam.relOffsetKm.x : 0, offY = cam.relOffsetKm ? cam.relOffsetKm.y : 0;
-  if (svgEl) {
-    const rect = svgEl.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      const aspect = rect.height / rect.width;
-      const h = cam.wKm * aspect;
-      const fx = (ev.clientX - rect.left) / rect.width;  // 0..1 across the svg
-      const fy = (ev.clientY - rect.top) / rect.height;
-      // Screen-plane point under the cursor, offset-relative. R2: the pan
-      // offset lives in the ECLIPTIC plane — un-project the screen delta
-      // (divide v by sin(el) to undo foreshortening, then inverse-az rotate)
-      // so cursor-anchored zoom keeps tracking under tilt.
-      const el0 = cam.el != null ? cam.el : Math.PI / 2;
-      const sinEl = Math.max(Math.sin(el0), 0.15);
-      const ca = Math.cos(cam.az || 0), sa = Math.sin(cam.az || 0);
-      const nextH = nextW * aspect;
-      const su = ((-cam.wKm / 2) + fx * cam.wKm) - (fx - 0.5) * nextW;
-      const sv = (((-h / 2) + fy * h) - (fy - 0.5) * nextH) / sinEl;
-      offX += su * ca + sv * sa;
-      offY += -su * sa + sv * ca;
-    }
-  }
-  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: offX, y: offY }, wKm: nextW }));
+  // R3.4: cursor-anchored zoom RETIRES with drag-pan (item 1) — without a way
+  // to undo an accumulated offset by panning, a cursor-anchored zoom could
+  // walk the view away from the anchor body with no way back. Zoom is now a
+  // pure wKm change about the anchor; relOffsetKm stays forced to {0,0}.
+  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: 0, y: 0 }, wKm: nextW }));
 }
 
 let _trajDrag = null;
@@ -297,8 +275,13 @@ let _trajDrag = null;
 // disambiguation, per the node map / library-browser _didDrag pattern).
 let _trajJustDragged = false;
 function trajPanStart(ev, id) {
-  // R2: Shift-drag or right-button drag rotates the 3D camera; plain drag pans.
-  const mode = (ev.shiftKey || ev.button === 2) ? 'rotate' : 'pan';
+  // R3.4 (KSP semantics): plain left-drag ROTATES by default now (the enabler
+  // for a grabbable gizmo — see PHYSICS_PLAN R3.4 item 1). Shift-drag / right-
+  // button drag remain aliases for rotate (kept for muscle-memory / R2 users).
+  // Drag-PAN is retired entirely — relOffsetKm is only ever written as {0,0}
+  // (see _trajCam / trajResetView / trajSetFocus) but the field stays on the
+  // camera struct because the fit/zoom math still reads it.
+  const mode = 'rotate';
   _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
   const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
   if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
@@ -311,48 +294,13 @@ function trajPanMove(ev) {
   if (!_trajDrag) return;
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
-  if (_trajDrag.mode === 'rotate') {
-    const cam0 = _trajDrag.cam0;
-    const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
-    const el = Math.max(0.087, Math.min(Math.PI / 2, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
-    const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
-    const now = performance.now();
-    if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
-    else _trajCamByMission[_trajDrag.id] = cam;
-    return;
-  }
-  const rectW = _trajDrag.rectW || 400, rectH = _trajDrag.rectH || 400;
-  // Screen-px delta -> world-unit (km) delta at the CURRENT camera width (drag
-  // pan shifts relOffsetKm directly, opposite the pointer delta since dragging
-  // right should reveal content to the left). Under tilt, a screen-vertical px
-  // spans MORE ecliptic km (foreshortening) — divide by sin(el), and rotate
-  // the screen delta back through az so panning still tracks the cursor.
   const cam0 = _trajDrag.cam0;
-  const el0 = cam0.el != null ? cam0.el : Math.PI / 2;
-  const sinEl = Math.max(Math.sin(el0), 0.15);
-  const aspect = rectH / rectW;
-  const su = -dx * (cam0.wKm / rectW);
-  const sv = -dy * (cam0.wKm * aspect / rectH) / sinEl;
-  const ca = Math.cos(cam0.az || 0), sa = Math.sin(cam0.az || 0);
-  const worldDx = su * ca + sv * sa, worldDy = -su * sa + sv * ca; // inverse az rotation
-  const cam = Object.assign({}, cam0, { relOffsetKm: { x: cam0.relOffsetKm.x + worldDx, y: cam0.relOffsetKm.y + worldDy } });
-  _trajCamByMission[_trajDrag.id] = cam;
-  const svgEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${_trajDrag.id}"] svg.traj-svg`);
-  if (svgEl) {
-    // Geometry was emitted in render units at cam0's center; slide the
-    // constant-unit viewBox by the PROJECTED offset delta (projection is
-    // linear and the pan offset is planar, so this stays exact under tilt).
-    const zoom0 = _trajZoomFromCam(cam0);
-    const q = _trajProjectVec(worldDx, worldDy, 0, cam0.az || 0, el0);
-    const vbH = _TRAJ_VB * aspect;
-    svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2 + q.x * zoom0).toFixed(3)} ${(-vbH / 2 + q.y * zoom0).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
-  }
-  // Overlay anchors are NOT re-projected during the drag (that would re-run
-  // LOD/collision every mousemove tick) — but pan is a pure translation, so
-  // sliding the whole overlay by the raw pointer delta keeps labels glued to
-  // their geometry 1:1. The transform is cleared by pan-end's full re-render.
-  const overlayEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${_trajDrag.id}"] svg.traj-overlay`);
-  if (overlayEl) overlayEl.style.transform = `translate(${dx}px, ${dy}px)`;
+  const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
+  const el = Math.max(0.087, Math.min(Math.PI / 2, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
+  const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
+  const now = performance.now();
+  if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
+  else _trajCamByMission[_trajDrag.id] = cam;
 }
 function trajPanEnd() {
   if (_trajDrag) {
@@ -2135,7 +2083,7 @@ function _trajFooterHTML(cam) {
   const elDeg = Math.round(((cam.el != null ? cam.el : Math.PI / 2) * 180 / Math.PI));
   const azDeg = Math.round((((cam.az || 0) * 180 / Math.PI) % 360 + 360) % 360);
   const orientTxt = elDeg < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
-  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; shift/right-drag rotates &middot; body sizes clamped for visibility`;
+  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; drag rotates &middot; scroll zooms &middot; click a body to center &middot; body sizes clamped for visibility`;
 }
 
 // Focus-flyout open state: 'missionId|sceneId' of the currently-open dropdown,

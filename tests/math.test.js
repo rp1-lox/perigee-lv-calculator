@@ -1558,6 +1558,97 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R3.4 — gizmo usability + KSP parity pure helpers (5745-maneuver-gizmo.js)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajGizmoHandleSideMag, _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet,
+          _trajGizmoClosestApproach, _trajGizmoSoiEntryT, _trajGizmoPreviewFidelity, physMag } =
+    vm.runInContext('({ _trajGizmoHandleSideMag, _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet, _trajGizmoClosestApproach, _trajGizmoSoiEntryT, _trajGizmoPreviewFidelity, physMag })', sandbox);
+
+  // six-handle component mapping: pull-away semantics, never crosses zero
+  {
+    approx('gizmo handle sideMag: pull away 100px -> +200', _trajGizmoHandleSideMag(0, 100, false), 200, 1e-9);
+    approx('gizmo handle sideMag: push back toward node clamps at 0 (never negative)', _trajGizmoHandleSideMag(50, -1000, false), 0, 1e-9);
+    ok('gizmo handle sideMag: never negative regardless of input', _trajGizmoHandleSideMag(10, -9999, true) === 0);
+    approx('gizmo handle sideMag: fine (shift) drag', _trajGizmoHandleSideMag(0, 100, true), 20, 1e-9);
+  }
+
+  // px -> dMET node-time drag: gain formula + clamp behavior (clamp itself lives in the caller; helper is the pure ratio)
+  {
+    approx('gizmo center-drag: dMET = pxAlong*kmPerPx/|v|', _trajGizmoCenterDragDMet(50, 2, 7.5), 50 * 2 / 7.5, 1e-9);
+    ok('gizmo center-drag: zero/neg vMag -> 0 (no time axis to drag along)', _trajGizmoCenterDragDMet(50, 2, 0) === 0 && _trajGizmoCenterDragDMet(50, 2, -1) === 0);
+    approx('gizmo center-drag: negative px -> negative dMET', _trajGizmoCenterDragDMet(-40, 2, 8), -40 * 2 / 8, 1e-9);
+  }
+
+  // orbital period round-trip: circular LEO-ish state, +1/-1 orbit should move MET by exactly the period
+  {
+    const mu = 398600.4418; // Earth
+    const r = [6778, 0, 0], v = [0, 7.6686, 0]; // ~400km circular
+    const period = _trajGizmoOrbitPeriodMet(mu, r, v);
+    ok('gizmo orbit period: positive finite for a circular state', period > 0 && isFinite(period));
+    const expected = 2 * Math.PI * Math.sqrt(Math.pow(physMag(r), 3) / mu); // circular: a = r
+    approx('gizmo orbit period: matches 2*pi*sqrt(a^3/mu) for a circular state', period, expected, 1);
+    const met0 = 12345;
+    approx('gizmo orbit period: +1 orbit then -1 orbit round-trips MET', (met0 + period) - period, met0, 1e-6);
+    ok('gizmo orbit period: hyperbolic state -> null (no period)', _trajGizmoOrbitPeriodMet(mu, [7000, 0, 0], [0, 20, 0]) === null);
+  }
+
+  // closest-approach helper: synthetic samples with a KNOWN minimum, frame-aware + encounter detection
+  {
+    // Synthetic rail: target body sits stationary at (10000,0,0) in the 'Earth' frame for all t.
+    const railFn = (body, t) => body === 'Target' ? { r: [10000, 0, 0] } : { r: [0, 0, 0] };
+    const samples = [];
+    for (let i = 0; i <= 10; i++) {
+      const x = i * 2000; // craft flies straight along +x from 0 to 20000 km, passing nearest Target at x=10000
+      samples.push({ t: i * 100, r: [x, 0, 0], frame: 'Earth' });
+    }
+    const hit = _trajGizmoClosestApproach(samples, 'Target', railFn);
+    ok('gizmo CA: finds the known minimum (craft at x=10000 exactly matches target)', hit && hit.dKm < 1e-6);
+    ok('gizmo CA: minimum occurs at the expected sample time', hit.t === 500);
+    ok('gizmo CA: empty samples -> null', _trajGizmoClosestApproach([], 'Target', railFn) === null);
+    ok('gizmo CA: no targetBody -> null', _trajGizmoClosestApproach(samples, null, railFn) === null);
+
+    // frame-aware case: same craft samples but expressed in the 'Sun' frame, with Earth offset from the Sun —
+    // target (relative to Earth) must be resolved through the frame-body's own position.
+    const railFn2 = (body, t) => {
+      if (body === 'Target') return { r: [10000, 0, 0] }; // Target sits at helio (10000,0,0), same as before
+      if (body === 'Earth') return { r: [0, 0, 0] };       // Earth at helio origin -> same geometry as the direct case
+      return { r: [0, 0, 0] };
+    };
+    const samplesSun = samples.map(s => ({ ...s, frame: 'Earth' }));
+    const hit2 = _trajGizmoClosestApproach(samplesSun, 'Target', railFn2);
+    ok('gizmo CA: frame-aware resolution matches the direct case', hit2 && hit2.dKm < 1e-6 && hit2.t === 500);
+
+    // encounter case: a sample whose frame IS the target body -> distance is |r| directly, and SOI-entry detected
+    const encSamples = samples.slice(0, 6).concat(samples.slice(6).map(s => ({ ...s, frame: 'Target', r: [s.r[0] - 10000, 0, 0] })));
+    const hitEnc = _trajGizmoClosestApproach(encSamples, 'Target', railFn);
+    ok('gizmo CA: still finds the pre-SOI-entry minimum correctly alongside re-framed samples', hitEnc && hitEnc.dKm < 1e-6 && hitEnc.t === 500);
+    const soiT = _trajGizmoSoiEntryT(encSamples, 'Target');
+    ok('gizmo CA: SOI-entry detected at the first re-framed sample', soiT === 600);
+    ok('gizmo CA: no SOI entry when no sample re-frames to the target', _trajGizmoSoiEntryT(samples, 'Target') === null);
+  }
+
+  // determinism: same inputs -> byte-identical outputs (replay/undo safety, per the module's own contract)
+  {
+    const a = _trajGizmoHandleSideMag(37, -12.5, false), b = _trajGizmoHandleSideMag(37, -12.5, false);
+    ok('gizmo determinism: handle sideMag is a pure function of its inputs', a === b);
+    const s1 = [{ t: 0, r: [0, 0, 0], frame: 'Earth' }, { t: 100, r: [5000, 0, 0], frame: 'Earth' }];
+    const rf = () => ({ r: [3000, 0, 0] });
+    const c1 = _trajGizmoClosestApproach(s1, 'Target', rf), c2 = _trajGizmoClosestApproach(s1, 'Target', rf);
+    ok('gizmo determinism: CA extraction is deterministic for identical inputs', c1.dKm === c2.dKm && c1.t === c2.t);
+  }
+
+  // fidelity-ladder decision (pure state helper, per the R3.4 spec addendum — timers themselves are NOT gate-tested)
+  {
+    ok('gizmo fidelity: fresh movement (dt=0) -> cheap', _trajGizmoPreviewFidelity(1000, 1000) === 'cheap');
+    ok('gizmo fidelity: just under the debounce -> cheap', _trajGizmoPreviewFidelity(1000, 1000 + 1999) === 'cheap');
+    ok('gizmo fidelity: at the debounce boundary -> full', _trajGizmoPreviewFidelity(1000, 1000 + 2000) === 'full');
+    ok('gizmo fidelity: well past the debounce -> full', _trajGizmoPreviewFidelity(1000, 60000) === 'full');
+    ok('gizmo fidelity: custom debounceMs is honored', _trajGizmoPreviewFidelity(0, 500, 500) === 'full' && _trajGizmoPreviewFidelity(0, 499, 500) === 'cheap');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

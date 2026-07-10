@@ -333,6 +333,16 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-hint-chip{position:absolute;top:8px;right:8px;z-index:2;font-family:var(--mono);font-size:9px;color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);padding:4px 9px;border-radius:3px;cursor:pointer;user-select:none;}
 .traj-hint-chip:hover{background:var(--accent-tint-strongest);}
 
+/* R3.4 gizmo node menu (+1/-1 orbit, delete, close) — plain HTML div positioned
+   canvas-relative (canvas is position:relative; _trajWorldToScreen returns
+   canvas-relative px already), NOT inside the SVG overlay so buttons can use
+   normal DOM click handlers. Same visual language as .traj-flyout. */
+.traj-gizmo-menu{position:absolute;z-index:60;background:var(--panel);border:1px solid var(--border-bright);display:flex;flex-direction:column;box-shadow:0 6px 18px rgba(0,0,0,.4);min-width:118px;}
+.traj-gizmo-menu button{background:transparent;border:none;color:var(--text-dim);font-family:var(--mono);font-size:11px;padding:6px 12px;text-align:left;cursor:pointer;white-space:nowrap;}
+.traj-gizmo-menu button:hover{background:var(--border-bright);color:var(--text-bright);}
+.traj-gizmo-menu button.danger{color:var(--danger);}
+.traj-gizmo-menu button.danger:hover{background:var(--danger-tint);}
+
 /* focus-bar planet+moons flyout — same overflow discipline as mcc-export-menu
    (absolute inside a relative wrap, positioned outside the scrolling view
    area) so it never clips against .mcc-view-area's overflow:auto */
