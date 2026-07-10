@@ -4,9 +4,9 @@
 // Pure math, no DOM, no globals mutated. See PHYSICS_PLAN.md (P0) and
 // MATH.md §"Numerical propagation foundations".
 //
-// Everything here is 3D-NATIVE: vectors are plain [x, y, z] arrays even while
-// the rest of the program passes z = 0 (the world stays coplanar until the
-// P5 camera). Units: km, km/s, seconds, radians. mu in km³/s².
+// Everything here is 3D-NATIVE: vectors are plain [x, y, z] arrays. Since R3
+// the MISSION layer is 3D too (inclined parking orbits, out-of-plane burns).
+// Units: km, km/s, seconds, radians. mu in km³/s².
 //
 // The Stumpff functions live here (moved verbatim from 410, which loads later
 // and keeps using them by name) because both the Lambert solver (410) and the

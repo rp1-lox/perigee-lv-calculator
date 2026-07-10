@@ -49,17 +49,23 @@ function physParentOf(body) {
 
 // ── frame finding + patching ─────────────────────────────────────────────────
 /** Deepest body whose SOI contains the heliocentric point (Sun -> planet ->
- *  moon walk). railFn/overrides must match the caller's integration context. */
-function physFrameOf(rHelio, t, overrides, railFn) {
+ *  moon walk). railFn/overrides must match the caller's integration context.
+ *  `onlyBodies` (optional, R3 perf): restrict the scan to these bodies — a
+ *  leg's SOI transitions can only involve the bodies whose gravity it models,
+ *  and the full scan was ~9 ephemeris Kepler solves per integrator step. */
+function physFrameOf(rHelio, t, overrides, railFn, onlyBodies) {
   const rails = railFn || physBodyStateAt;
+  const allowed = onlyBodies ? new Set(onlyBodies) : null;
   let frame = 'Sun';
   for (const planet of Object.keys(PROG_HELIO_R)) {
+    if (allowed && !allowed.has(planet)) continue;
     const p = rails(planet, t, overrides);
     if (physMag(physSub(rHelio, p.r)) < physSoiRadius(planet)) { frame = planet; break; }
   }
   if (frame !== 'Sun') {
     for (const [moon, mo] of Object.entries(PROG_MOON_ORBITS || {})) {
       if (mo.parent !== frame) continue;
+      if (allowed && !allowed.has(moon)) continue;
       const p = rails(moon, t, overrides);
       if (physMag(physSub(rHelio, p.r)) < physSoiRadius(moon)) { frame = moon; break; }
     }
@@ -112,13 +118,20 @@ function physAccel(r, t, ctx) {
 // dt = local orbital timescale / PHYS_STEPS_PER_ORBIT, quantized DOWN onto a
 // fixed power-of-4 ladder — quantization is what makes runs deterministic
 // regardless of float noise in the timescale estimate.
-const PHYS_DT_LADDER = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536];
+// R3 perf (2026-07-10): ladder densified from powers of 4 to powers of 2 —
+// the coarse buckets quantized "want 14.7 s" down to 4 s, running ~3.7× more
+// steps than the accuracy policy asked for (measured 612k steps per shoot
+// campaign, dominating cold recompute). Still a FIXED ladder: deterministic.
+// ctx.stepsPerOrbit (optional) coarsens the policy for scan-quality
+// propagations (the shooter's seed grid needs closest-approach magnitude,
+// not integration-grade accuracy).
+const PHYS_DT_LADDER = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
 const PHYS_STEPS_PER_ORBIT = 360;
 function physStepFor(r, ctx) {
   const muC = ctx.center === 'Sun' ? PROG_MU_SUN : PROG_BODIES[ctx.center].mu;
   const d = physMag(r);
   const tOrbit = 2 * Math.PI * Math.sqrt(d * d * d / muC); // circular timescale at this radius
-  let want = tOrbit / PHYS_STEPS_PER_ORBIT;
+  let want = tOrbit / (ctx.stepsPerOrbit || PHYS_STEPS_PER_ORBIT);
   // ctx.dtMax (P4): optional deterministic cap — heliocentric cruise steps
   // otherwise reach the 65,536 s rung (~1.5M km of relative motion per step),
   // enough to step clean OVER a planet's SOI, which both misses the SOI event
@@ -132,13 +145,18 @@ function physStepFor(r, ctx) {
 }
 
 // ── leapfrog (kick-drift-kick, symplectic, 2nd order) ────────────────────────
-function physLeapfrogStep(state, t, dt, ctx) {
-  const a0 = physAccel(state.r, t, ctx);
+// `a0` (optional): precomputed acceleration at (state.r, t). Between
+// consecutive steps a0 of step n+1 EQUALS a1 of step n (same r, same t) —
+// physPropagateSegment threads it through, halving rail/accel evaluations
+// (they became Kepler solves under the R1 real ephemeris — measured hot).
+// Returned {a1} lets the caller do that. Identical math either way.
+function physLeapfrogStep(state, t, dt, ctx, a0) {
+  if (!a0) a0 = physAccel(state.r, t, ctx);
   const vHalf = physAdd(state.v, physScale(a0, dt / 2));
   const r1 = physAdd(state.r, physScale(vHalf, dt));
   const a1 = physAccel(r1, t + dt, ctx);
   const v1 = physAdd(vHalf, physScale(a1, dt / 2));
-  return { r: r1, v: v1 };
+  return { r: r1, v: v1, a1 };
 }
 
 // ── event bisection ──────────────────────────────────────────────────────────
@@ -186,9 +204,17 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
 
   const helioOf = (st, tt, center) => center === 'Sun' ? st.r : physAdd(st.r, rails(center, tt, ctxNow.overrides).r);
 
+  // R3 perf: SOI transitions can only involve bodies whose gravity the leg
+  // models (ctx.bodies) + their moons — scanning every planet's ephemeris per
+  // step was ~9 Kepler solves/step for nothing (frame checks got expensive
+  // under the R1 real rails). physFrameOf takes the restricted list.
+  const frameBodies = ctxNow.bodies;
+  let aCarry = null; // a1 of step n === a0 of step n+1 (same r, same t)
+
   while (t < tMax && steps < maxSteps) {
     const dt = Math.min(physStepFor(state.r, ctxNow), tMax - t) || (tMax - t);
-    const next = physLeapfrogStep(state, t, dt, ctxNow);
+    const next = physLeapfrogStep(state, t, dt, ctxNow, aCarry);
+    aCarry = next.a1;
     const tNext = t + dt;
     steps++;
 
@@ -200,12 +226,13 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
 
     // SOI transition: frame of the new heliocentric position differs
     const helio = helioOf(next, tNext, ctxNow.center);
-    const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn);
+    const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {
       events.push({ type: 'soi', t: tNext, from: ctxNow.center, to: frameNext });
       state = physPatchState(next, ctxNow.center, frameNext, tNext, ctxNow.overrides, ctxNow.railFn);
       ctxNow = Object.assign({}, ctxNow, { center: frameNext });
       prevRdotV = physDot(state.r, state.v);
+      aCarry = null; // frame changed — carried acceleration is in the old frame
       t = tNext;
       raw.push({ t, r: state.r.slice(), frame: ctxNow.center });
       if (opts.stopAtSoi || opts.handoff === false) break;

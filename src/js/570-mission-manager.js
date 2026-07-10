@@ -1277,8 +1277,8 @@ function _missionEventDetailHTML(m, idx) {
             <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;"></div>
           <div class="cfg-item"><label class="cfg-label">Radial (m/s)</label>
             <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;"></div>
-          <div class="cfg-item"><label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(coplanar — no effect until 3D)</span></label>
-            <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" disabled style="width:100px;opacity:.55;"></div>
+          <div class="cfg-item"><label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(+ along the orbit normal ĥ)</span></label>
+            <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" style="width:100px;"></div>
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
       </div>`;
@@ -3750,8 +3750,8 @@ function _missionAddEventHTML(m) {
       <input type="number" id="addev-mnode-pro-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
       <label class="cfg-label">Radial (m/s)</label>
       <input type="number" id="addev-mnode-rad-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
-      <label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(coplanar — no effect until 3D)</span></label>
-      <input type="number" id="addev-mnode-nrm-${id}" class="field" value="0" step="any" disabled style="width:100%;margin-bottom:8px;opacity:.55;">
+      <label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(+ along the orbit normal ĥ)</span></label>
+      <input type="number" id="addev-mnode-nrm-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:8px;">
       <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;margin-bottom:8px;" onclick="missionExecMnodeFromDock('${id}')">⊕ Add Vector Burn</button>
       <div style="border-top:1px solid var(--border);padding-top:8px;">
         <button class="act-btn" style="width:100%;"${canFreeReturn ? '' : ' disabled title="Active vehicle must be in an Earth orbit"'} onclick="missionSolveFreeReturn('${id}')">☾ Solve free return…</button>
@@ -3833,7 +3833,8 @@ function missionSolveFreeReturn(id) {
   const metEl = document.getElementById('addev-mnode-met-' + id);
   const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
   let sol = null; // R1: calibration overrides retired — real ephemeris rails
-  try { sol = physFreeReturnSolve(alt, tDep, {}); } catch (err) { sol = null; }
+  // R3: solve in the active vehicle's authored orbit plane
+  try { sol = physFreeReturnSolve(alt, tDep, {}, os.inclination ?? 28.5); } catch (err) { sol = null; }
   if (!sol || !sol.converged) {
     say(`// no free return found from ${Math.round(alt)} km at this departure — try a different MET`, true);
     return;

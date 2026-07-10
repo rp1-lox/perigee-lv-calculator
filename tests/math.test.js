@@ -859,8 +859,13 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   {
     const ctx = { center: 'Earth', bodies: ['Earth'] };
     const dtLeo = physStepFor([6771, 0, 0], ctx), dtGeo = physStepFor([42164, 0, 0], ctx);
-    ok(`physStepFor: LEO=${dtLeo}s on ladder`, [1,4,16,64,256,1024,4096,16384,65536].includes(dtLeo));
+    // 2026-07-10 (R3 perf): ladder densified to powers of 2 — the pow-4
+    // buckets quantized dt ~3.7x below the accuracy policy (measured 612k
+    // steps per shoot campaign, dominating cold recompute). LEO lands on 8 s
+    // (was 4 s under the pow-4 ladder).
+    ok(`physStepFor: LEO=${dtLeo}s on ladder`, [1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768,65536].includes(dtLeo));
     ok('physStepFor: coarser at GEO than LEO', dtGeo > dtLeo);
+    ok('physStepFor: ctx.stepsPerOrbit coarsens deterministically', physStepFor([6771, 0, 0], Object.assign({}, ctx, { stepsPerOrbit: 90 })) > dtLeo);
   }
 
   // two-body limit: leapfrog vs analytic Kepler, 20 LEO orbits
@@ -871,7 +876,10 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const res = physPropagateSegment(st0, 0, 20 * T, ctx, { maxSamples: 8 });
     const ref = physKeplerPropagate(st0.r, st0.v, res.tF, muE);
     const posErr = physMag(physSub(res.stateF.r, ref.r));
-    ok(`integrator two-body limit: 20-orbit position error ${posErr.toFixed(2)} km < 10 km`, posErr < 10);
+    // 2026-07-10 (R3 perf): 10 km -> 30 km with the pow-2 ladder (dt doubled
+    // at LEO -> 2nd-order phase error x4; measured 23.35 km). A deliberate
+    // accuracy-for-speed trade — schematic-grade per MATH.md critique 28.
+    ok(`integrator two-body limit: 20-orbit position error ${posErr.toFixed(2)} km < 30 km`, posErr < 30);
     const e0 = physStateToElements(st0.r, st0.v, muE), eF = physStateToElements(res.stateF.r, res.stateF.v, muE);
     ok(`integrator two-body limit: energy drift rel ${(Math.abs(eF.energy - e0.energy) / Math.abs(e0.energy)).toExponential(1)} < 1e-12 (symplectic)`,
       Math.abs(eF.energy - e0.energy) < 1e-12 * Math.abs(e0.energy));
@@ -1115,16 +1123,120 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('P4 corrector: singular Jacobian terminates converged:false', flat.converged === false && flat.iters <= 12);
   }
 
-  // free-return solve reproduces the P1 golden band
+  // free-return solve reproduces the P1 golden band.
+  // R3 re-golden (2026-07-10): physFreeReturnSolve now solves from an
+  // INCLINED parking orbit (incDeg param, default 28.5°) with a deterministic
+  // seed scan replacing the rotated-golden shortcut. Old default (ecliptic
+  // ring): met 4187 s / dv 3149 m/s / perigee ≈ 164 km at 0 iters. New
+  // default (28.5° ring): met ≈ 5101 s / dv ≈ 3148 m/s / perigee ≈ 279 km.
+  // The explicit incDeg=0 solve stays in the old bands (perigee ≈ 195 km
+  // with the scanned seed).
   {
     const fr = physFreeReturnSolve(185, 0, {});
-    ok('P4 free return: solve converged from 185 km LEO', !!fr && fr.converged);
-    ok(`P4 free return: return perigee ${fr && fr.periAlt_km != null ? fr.periAlt_km.toFixed(0) : '?'} km within [0, 2000] band (P1 golden band)`,
+    ok('P4/R3 free return: solve converged from 185 km LEO @ default 28.5°', !!fr && fr.converged);
+    ok(`P4/R3 free return: return perigee ${fr && fr.periAlt_km != null ? fr.periAlt_km.toFixed(0) : '?'} km within [0, 2000] band (P1 golden band)`,
       !!fr && fr.periAlt_km != null && fr.periAlt_km >= 0 && fr.periAlt_km <= 2000);
-    ok('P4 free return: solved |dv| plausible (3.0–3.3 km/s)', !!fr && fr.dv_ms > 3000 && fr.dv_ms < 3300);
+    ok('P4/R3 free return: solved |dv| plausible (3.0–3.3 km/s)', !!fr && fr.dv_ms > 3000 && fr.dv_ms < 3300);
     const fr2 = physFreeReturnSolve(185, 0, {});
-    ok('P4 free return: deterministic (identical repeat solve)',
+    ok('P4/R3 free return: deterministic (identical repeat solve)',
       !!fr && !!fr2 && fr.met_s === fr2.met_s && fr.dv_ms === fr2.dv_ms && fr.periAlt_km === fr2.periAlt_km);
+    const fr0 = physFreeReturnSolve(185, 0, {}, 0);
+    ok(`R3 free return: explicit incDeg=0 converges in the ecliptic (perigee ${fr0 && fr0.periAlt_km != null ? fr0.periAlt_km.toFixed(0) : '?'} km)`,
+      !!fr0 && fr0.converged && fr0.periAlt_km >= 0 && fr0.periAlt_km <= 2000);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R3 — 3D physics coherence (565): inclined departure states, MNODE normal,
+// shooter yaw DOF (2026-07-10)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physAimBurnState, physSolveNodeBurn, physStateToElements, physKeplerPropagate,
+          physShootLegAim, physSoiRadius, physMag, physAdd, physScale, PROG_BODIES, PROG_MOON_ORBIT_R } =
+    vm.runInContext('({ physAimBurnState, physSolveNodeBurn, physStateToElements, physKeplerPropagate, physShootLegAim, physSoiRadius, physMag, physAdd, physScale, PROG_BODIES, PROG_MOON_ORBIT_R })', sandbox);
+
+  const muE = PROG_BODIES.Earth.mu;
+  const r1 = PROG_BODIES.Earth.R + 185;
+  const inc = 28.5 * Math.PI / 180;
+
+  // inclined ring state: radius preserved, plane tilted by i (h-vector check)
+  {
+    const bs = physAimBurnState('Earth', r1, 1.2, 0, 0, inc, 0);
+    approx('R3 ring: |r| = r1 on the inclined ring', physMag(bs.r), r1, 1e-6);
+    const el = physStateToElements(bs.r, bs.v, muE);
+    approx('R3 ring: state inclination = authored i', el.i, inc, 1e-9);
+    // z-amplitude over the ring is r1·sin(i): at nu = π/2 (max z for Ω=ω=0)
+    const top = physAimBurnState('Earth', r1, Math.PI / 2, 0, 0, inc, 0);
+    approx('R3 ring: z-amplitude = r1·sin(i) at ν=π/2', Math.abs(top.r[2]), r1 * Math.sin(inc), 1e-6);
+  }
+  // i=0 reproduces the pre-R3 planar construction exactly
+  {
+    const th = 2.3, dv = 3.1;
+    const bs = physAimBurnState('Earth', r1, th, 0, dv, 0, 0);
+    const vc = Math.sqrt(muE / r1);
+    approx('R3 back-compat: i=0 r.x', bs.r[0], r1 * Math.cos(th), 1e-6);
+    approx('R3 back-compat: i=0 r.y', bs.r[1], r1 * Math.sin(th), 1e-6);
+    ok('R3 back-compat: i=0 stays planar (r.z = v.z = 0)', Math.abs(bs.r[2]) < 1e-9 && Math.abs(bs.v[2]) < 1e-9);
+    approx('R3 back-compat: i=0 prograde speed', physMag(bs.v), vc + dv, 1e-9);
+  }
+  // yaw preserves |dvVec| exactly (ΔV accounting parity through the 3rd DOF)
+  {
+    const bs = physAimBurnState('Earth', r1, 0.7, 0.2, 3.15, inc, 0.3);
+    approx('R3 yaw: |dvVec| magnitude parity at pitch 0.2 / yaw 0.3', physMag(bs.dvVec), 3.15, 1e-12);
+    const bsY = physAimBurnState('Earth', r1, 0.7, 0, 1.0, inc, Math.PI / 2);
+    const el0 = physStateToElements(physAimBurnState('Earth', r1, 0.7, 0, 0, inc, 0).r,
+      physAimBurnState('Earth', r1, 0.7, 0, 0, inc, 0).v, muE);
+    ok('R3 yaw: yaw=π/2 puts the whole dv along ĥ (dv ⊥ v and ⊥ r)',
+      Math.abs(bsY.dvVec[0] * bsY.r[0] + bsY.dvVec[1] * bsY.r[1] + bsY.dvVec[2] * bsY.r[2]) < 1e-9 * r1 && !!el0);
+  }
+  // physSolveNodeBurn honors the FROM orbit's authored inclination
+  {
+    const leoInc = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    const tlc = { type: 'transit', body: 'Earth', c3: -1.9, destination: 'Moon' };
+    const b = physSolveNodeBurn(leoInc, tlc, 86400 * 3, 3.15);
+    ok('R3 solved burn: returns a state for inclined LEO→TLC', !!b && !!b.state);
+    const el = physStateToElements(b.state.r, b.state.v, muE);
+    approx('R3 solved burn: departure plane tilted by authored i (h-vector)', el.i, inc, 0.02);
+    approx('R3 solved burn: |dvVec| parity from the inclined ring', physMag(b.dvVec), 3.15, 1e-12);
+    // absent inclination -> ecliptic exactly (pre-R3 behavior)
+    const leoFlat = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185 };
+    const bf = physSolveNodeBurn(leoFlat, tlc, 86400 * 3, 3.15);
+    ok('R3 solved burn: no inclination field -> planar state (z = 0)',
+      Math.abs(bf.state.r[2]) < 1e-9 && Math.abs(bf.state.v[2]) < 1e-9);
+  }
+  // MNODE normal component changes the orbit plane (pure two-body check)
+  {
+    const bs = physAimBurnState('Earth', r1, 0.9, 0, 0, inc, 0);
+    const elBefore = physStateToElements(bs.r, bs.v, muE);
+    const dvN = physScale(bs.hHat, 0.5); // 500 m/s normal
+    const vAfter = physAdd(bs.v, dvN);
+    const elAfter = physStateToElements(bs.r, vAfter, muE);
+    const expTilt = Math.atan2(0.5, physMag(bs.v)); // h rotates about r̂ by atan(dvN/v)
+    const hB = elBefore.hVec, hA = elAfter.hVec;
+    const cosAng = (hB[0] * hA[0] + hB[1] * hA[1] + hB[2] * hA[2]) / (physMag(hB) * physMag(hA));
+    const ang = Math.acos(Math.max(-1, Math.min(1, cosAng)));
+    approx('R3 MNODE: nrm-only burn rotates the orbit plane by atan(dvN/v)', ang, expTilt, 0.002);
+    ok(`R3 MNODE: inclination actually moves (Δi ${(Math.abs(elAfter.i - elBefore.i) * 180 / Math.PI).toFixed(2)}° > 1°)`,
+      Math.abs(elAfter.i - elBefore.i) > Math.PI / 180);
+    const st = physKeplerPropagate(bs.r, vAfter, 3000, muE);
+    ok('R3 MNODE: post-burn propagation keeps the new plane', !!st &&
+      Math.abs(physStateToElements(st.r, st.v, muE).i - elAfter.i) < 1e-6);
+  }
+  // shooter: plane-mismatched Earth→Moon (28.5° ring vs 5.145° Moon)
+  // converges under the R3-tightened moon acceptance min(SOI/3, 25,000 km)
+  {
+    const leoInc = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    const tlc = { type: 'transit', body: 'Earth', c3: -1.9, destination: 'Moon' };
+    const aT = (r1 + PROG_MOON_ORBIT_R) / 2;
+    const dvHoh = Math.sqrt(muE * (2 / r1 - 1 / aT)) - Math.sqrt(muE / r1);
+    const accept = Math.min(physSoiRadius('Moon') / 3, 25000);
+    const sol = physShootLegAim(leoInc, tlc, 86400 * 5, dvHoh, {}, {});
+    ok(`R3 shooter: 28.5° plane-mismatch converged (miss ${sol && sol.missKm.toFixed(0)} km < ${accept.toFixed(0)} km, dof ${sol && sol.dof})`,
+      !!sol && sol.converged && sol.missKm < accept);
+    ok(`R3 shooter: propagation budget ≤ 58 (used ${sol && sol.propagations})`, !!sol && sol.propagations <= 58);
+    const sol2 = physShootLegAim(leoInc, tlc, 86400 * 5, dvHoh, {}, {});
+    ok('R3 shooter: deterministic (identical repeat solve incl. yaw)',
+      !!sol && !!sol2 && sol.theta === sol2.theta && sol.pitch === sol2.pitch && sol.yaw === sol2.yaw && sol.missKm === sol2.missKm);
   }
 }
 

@@ -2056,7 +2056,7 @@ function _trajFooterHTML(cam) {
   const elDeg = Math.round(((cam.el != null ? cam.el : Math.PI / 2) * 180 / Math.PI));
   const azDeg = Math.round((((cam.az || 0) * 180 / Math.PI) % 360 + 360) % 360);
   const orientTxt = elDeg < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
-  return `${orientTxt}true-geometry orbits (JPL mean elements; mission orbits &Omega;,&omega; assumed 0) &middot; shift/right-drag rotates &middot; vessel trajectories coplanar until R3 &middot; body sizes clamped for visibility`;
+  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbits &Omega;,&omega; assumed 0) &middot; shift/right-drag rotates &middot; body sizes clamped for visibility`;
 }
 
 // Focus-flyout open state: 'missionId|sceneId' of the currently-open dropdown,
