@@ -801,7 +801,11 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)"` : '';
+  // R6.1.2: hover ghost ball + click-to-menu placement, additive to the
+  // existing dblclick spawn. Thread the ring's own orbit basis (body/peri/
+  // apo/inc) so the hover/menu handlers can build the same mean-motion rail
+  // the gizmo's center-knob drag uses (_trajGizmoOrbitNodeAt/_trajRingHoverRail).
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',${rec.peri},${rec.apo},${rec.inc || 0})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)" onmousemove="_trajRingHoverMove(event,'${opts.missionId}','${body}',${rec.peri},${rec.apo},${rec.inc || 0},'${strokeColor}')" onmouseleave="_trajRingHoverLeave('${opts.missionId}')"` : '';
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position

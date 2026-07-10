@@ -3790,7 +3790,11 @@ function _missionAddEventHTML(m) {
     // physics side (565) and drawn unconditionally (user-authored intent).
     const os = fv && fv.orbitState;
     const canFreeReturn = !!(os && os.body === 'Earth' && !os.surface && !os.transit);
-    const metDefault = Math.round(m._metTotal || 0);
+    // R6.1.2: a MET snapped from the trajectory-view ring hover menu ("Use
+    // time in Add Event") takes precedence over the current mission-time
+    // default when the dock's own input wasn't mounted yet to prefill directly.
+    const pendingMet = (typeof _missionPendingEventMet !== 'undefined') ? _missionPendingEventMet[id] : null;
+    const metDefault = Math.round((pendingMet != null ? pendingMet : m._metTotal) || 0);
     form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// a raw Δv vector applied at a mission time — burns propellant like a maneuver, trajectory propagated by the physics engine</div>
       <label class="cfg-label">MET (s)</label>
       <input type="number" id="addev-mnode-met-${id}" class="field" value="${metDefault}" min="0" step="any" style="width:100%;margin-bottom:6px;">
