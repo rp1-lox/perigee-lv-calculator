@@ -1268,17 +1268,48 @@ function _missionEventDetailHTML(m, idx) {
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyExpendEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'MNODE') {
+    // Round 2 item 2: precision +/- nudge buttons per axis + time, standard
+    // step 10 m/s / 60 s, shift-click for the fine step (1 m/s / 10 s).
+    const _nudgeBtn = (field, sign, glyph) => `<button type="button" class="act-btn" style="padding:2px 7px;font-size:11px;line-height:1;" title="Shift-click for fine step" onclick="event.stopPropagation();missionMnodeNudge('${id}',${idx},'${field}',${sign},event)">${glyph}</button>`;
+    const _nudgeRow = (field) => `<div style="display:flex;gap:4px;">${_nudgeBtn(field, -1, '−')}${_nudgeBtn(field, 1, '+')}</div>`;
+    // Round 2 item 3(b): explicit CA-target dropdown, persisted on the log
+    // entry as caTarget (authored state, same as any other MNODE field).
+    const _ownBody = (e.orbitAtBurn && e.orbitAtBurn.body) || 'Earth';
+    const _bodyOpts = Object.keys(PROG_BODIES || {}).filter(b => b !== _ownBody)
+      .map(b => `<option value="${_tsEsc(b)}"${e.caTarget === b ? ' selected' : ''}>${_tsEsc(b)}</option>`).join('');
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
           <div class="cfg-item"><label class="cfg-label">MET (s)</label>
-            <input type="number" id="edit-mnode-met-${id}" class="field" value="${e.at && e.at.value_s || 0}" min="0" step="any" style="width:110px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-met-${id}" class="field" value="${e.at && e.at.value_s || 0}" min="0" step="any" style="width:110px;">
+              ${_nudgeRow('met')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Prograde (m/s)</label>
-            <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('pro')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Radial (m/s)</label>
-            <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('rad')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(+ along the orbit normal ĥ)</span></label>
-            <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('nrm')}
+            </div>
+          </div>
+          <div class="cfg-item"><label class="cfg-label">CA Target</label>
+            <select id="edit-mnode-catarget-${id}" style="${_es}" onchange="missionApplyMnodeCaTarget('${id}',${idx})">
+              <option value="auto"${!e.caTarget || e.caTarget === 'auto' ? ' selected' : ''}>Auto</option>
+              ${_bodyOpts}
+            </select>
+          </div>
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
       </div>`;
@@ -3875,6 +3906,40 @@ function missionApplyMnodeEdit(id, idx) {
   missionRecompute(m);
   missionRenderDetail();
   closeModal('modal-mission-evt');
+}
+
+// Round 2 item 2: precision +/- nudge buttons on the MNODE event card — write
+// directly through the standard log-entry -> missionRecompute -> render
+// mutation path (same discipline as missionApplyMnodeEdit), no modal needed.
+// Step: 10 m/s (dv axes) / 60 s (time), shift-click for the fine step
+// (1 m/s / 10 s).
+function missionMnodeNudge(id, idx, field, sign, ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const e = m.log[idx];
+  const fine = !!(ev && ev.shiftKey);
+  if (field === 'met') {
+    const step = fine ? 10 : 60;
+    const cur = (e.at && e.at.value_s) || 0;
+    e.at = { kind: 'met', value_s: Math.max(0, cur + sign * step) };
+  } else {
+    const step = fine ? 1 : 10;
+    const key = field === 'pro' ? 'dvPro_ms' : field === 'rad' ? 'dvRad_ms' : 'dvNrm_ms';
+    e[key] = (e[key] || 0) + sign * step;
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
+// Round 2 item 3(b): persist the explicit CA-target dropdown selection onto
+// the log entry (authored state on the event, same mutation discipline).
+function missionApplyMnodeCaTarget(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const e = m.log[idx];
+  const el = document.getElementById(`edit-mnode-catarget-${id}`);
+  e.caTarget = el ? el.value : 'auto';
+  missionRecompute(m);
+  missionRenderDetail();
 }
 
 // Resolve var(--x) tokens in a serialized SVG to concrete computed values, so

@@ -376,7 +376,19 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
-#rp-root{background:var(--bg);color:var(--text-bright);font-family:var(--sans);font-size:15px;min-height:100%;padding:0;box-sizing:border-box;display:flex;flex-direction:column;}
+/* R6.1 round-2 item 4: was min-height:100% only, which leaves #rp-root's own
+   height indefinite (content-driven) whenever nothing downstream forces it
+   taller than the viewport. That breaks the percentage-height chain relied
+   on by .mcc-body/.mcc-view-area/.traj-wrap/.traj-canvas (all height:100%)
+   — an SVG child with no definite ancestor height falls back to its
+   viewBox's intrinsic 1:1 aspect ratio, rendering the trajectory view
+   square and inflating the whole page to match (page-level scrollbar). A
+   definite height:100% keeps every downstream height:100%/flex:1 definite
+   as originally intended (.mcc-body already assumes this: overflow:hidden
+   with internal scroll regions doing the rest), fixing the square canvas
+   without touching any other page's layout (they never relied on the
+   indefinite fallback for anything visible). */
+#rp-root{background:var(--bg);color:var(--text-bright);font-family:var(--sans);font-size:15px;height:100%;min-height:100%;padding:0;box-sizing:border-box;display:flex;flex-direction:column;}
 header{flex-shrink:0;}
 
 /* ── HEADER ── */

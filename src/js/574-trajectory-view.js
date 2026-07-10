@@ -1113,8 +1113,12 @@ function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, sel
     const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
     const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
     const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
+    // R6.1 fix (round 2 item 1): the merged event-node marker in
+    // _trajEventNodesSVG now draws at this leg's first-sample position and
+    // carries the dv/time stack, so the leg's own dep marker is suppressed
+    // here to avoid drawing two markers for the same MNODE.
     const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
-      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: true, arrMarker: false, calib, noHighFade: true });
+      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: false, arrMarker: false, calib, noHighFade: true });
     if (phys) out += phys;
   });
   return out;
@@ -1441,7 +1445,25 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     if (!info) return;
     const evBody = _trajEventNodeBody(m, idx);
     if (evBody !== body) return;
-    const pos = _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, info.met);
+    // R6.1 fix (round 2 item 1): MNODE with a resolved physics leg draws ONE
+    // merged marker at the LEG's first-sample position (the same anchor the
+    // dep burn marker would have used) instead of the independent ring
+    // mean-motion position — the leg's own dep marker is suppressed for
+    // MNODE legs in _trajMnodeLegsSVG so there is exactly one marker.
+    let pos = null, mergedDvText = null, mergedLeg = null;
+    if (e.type === 'MNODE' && typeof physMissionLeg === 'function') {
+      mergedLeg = physMissionLeg(id, idx);
+      if (mergedLeg && mergedLeg.samples && mergedLeg.samples.length) {
+        const anchorOf = f => (f === body ? { x: ox, y: oy } : null);
+        const poly = _trajPolylineSVG(mergedLeg, anchorOf, zoom, {});
+        if (poly && poly.first && isFinite(poly.first.x) && isFinite(poly.first.y)) {
+          pos = { x: poly.first.x, y: poly.first.y };
+          const dv = e.dvRequired || (mergedLeg.dv_ms != null ? Math.round(mergedLeg.dv_ms) : null);
+          if (dv) mergedDvText = _trajDvText(dv);
+        }
+      }
+    }
+    if (!pos) pos = _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, info.met);
     if (!pos) return;
     const emphasized = selAuthIdx != null && selAuthIdx === idx;
     const o = _trajEventNodeOrbitFor(m, idx, body);
@@ -1456,8 +1478,14 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     const ring = emphasized ? `<circle cx="0" cy="0" r="${(r + 2).toFixed(1)}" fill="none" stroke="var(--accent)" stroke-width="1.1"/>` : '';
     const marker = `${ring}<circle cx="0" cy="0" r="${r}" fill="var(--nm-bg)" stroke="${color}" stroke-width="1"/>` +
       `<text x="0" y="0" text-anchor="middle" dominant-baseline="central" font-family="var(--mono)" font-size="${info.glyphKind.length > 1 ? 4 : 5}" fill="${color}" pointer-events="none">${info.glyphKind}</text>`;
-    const hit = `<circle cx="0" cy="0" r="9" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
-    _trajRegisterLabel(pos.x, pos.y, [{ text: info.label, dy: -9, fontPx: 9, color }],
+    const hitR = mergedLeg ? 12 : 9; // merged MNODE marker gets a more generous hit radius
+    const hit = `<circle cx="0" cy="0" r="${hitR}" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
+    // Merged MNODE marker: Δv text above, time plate directly below — one
+    // coherent stack (round 2 item 1). Non-merged nodes keep the plain label.
+    const lines = mergedDvText
+      ? [{ text: mergedDvText, dy: -9, fontPx: 9, color }, { text: _metFmt(info.met), dy: r + 7, fontPx: 9, color: 'var(--text-dim)' }]
+      : [{ text: info.label, dy: -9, fontPx: 9, color }];
+    _trajRegisterLabel(pos.x, pos.y, lines,
       'burn', { screenSize, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit, opacity: 1 });
   });
 }
@@ -2200,6 +2228,14 @@ function _trajLocalScaleFor(body, m) {
 // the click that ends a real drag, same pattern as _trajSelectEventFromView.
 function trajGlyphClick(id, body) {
   if (_trajJustDragged) { _trajJustDragged = false; return; }
+  // Round 2 item 3(a): with a gizmo open on this mission, a body-glyph click
+  // sets that body as the gizmo's closest-approach TARGET instead of
+  // recentering the camera (the dismiss handler already ignores clicks on
+  // .traj-body-glyph so the gizmo stays open for this).
+  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id) {
+    if (typeof _trajGizmoSetManualTarget === 'function') _trajGizmoSetManualTarget(body);
+    return;
+  }
   trajSetFocus(id, body);
 }
 
@@ -2208,7 +2244,7 @@ function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel, clickId)
   // as belonging to their glyph rather than a flat gray sheet of names.
   _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
     { screenSize: r, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
-  const clickAttr = clickId ? ` style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${label}')"` : '';
+  const clickAttr = clickId ? ` class="traj-body-glyph" style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${label}')"` : '';
   if (clickId) {
     return `<g${clickAttr}>
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"><title>Fly to ${label}</title></circle>

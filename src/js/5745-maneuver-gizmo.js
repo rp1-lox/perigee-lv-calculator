@@ -321,6 +321,20 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  else null (no CA pair shown). */
 function _trajGizmoPickTarget(m, node, met) {
   if (!m || !node) return null;
+  // Round 2 item 3: explicit target wins over the heuristics — first a
+  // runtime pick from clicking a body glyph while the gizmo is open (session
+  // state, not persisted), then an authored `caTarget` field on the MNODE
+  // log entry set via its event-card dropdown (persisted, since it's
+  // authored state on the event, same as any other MNODE field).
+  const g = (typeof _trajGizmo !== 'undefined') ? _trajGizmo : null;
+  if (g && g.manualTarget) {
+    if (g.manualTarget === node.body) return null; // can't target your own body
+    return g.manualTarget;
+  }
+  if (g && g.authIdx != null && m.log[g.authIdx]) {
+    const ct = m.log[g.authIdx].caTarget;
+    if (ct && ct !== 'auto' && ct !== node.body) return ct;
+  }
   if (typeof _missionNmNodeById === 'function') {
     for (const e of m.log || []) {
       if (e.type !== 'MANEUVER' || !e.toNode) continue;
@@ -331,6 +345,19 @@ function _trajGizmoPickTarget(m, node, met) {
   }
   if (node.body === 'Earth' && PROG_BODIES.Moon) return 'Moon';
   return null;
+}
+
+/** Round 2 item 3(a): set the gizmo's runtime CA target from a body-glyph
+ *  click (session state only — not written to the log; the persisted
+ *  equivalent is the MNODE card's caTarget dropdown). Re-runs the cheap
+ *  scratch pass so the CA readout/ghost marker reflect the new target
+ *  immediately without forcing a full n-body pass. */
+function _trajGizmoSetManualTarget(body) {
+  const g = _trajGizmo;
+  if (!g || !body) return;
+  g.manualTarget = body;
+  if (typeof _trajGizmoRunScratch === 'function') _trajGizmoRunScratch('cheap');
+  else _trajGizmoRepaintOverlay();
 }
 
 function _trajGizmoOpenPending(id, met) {
@@ -377,7 +404,7 @@ function _trajGizmoDocClick(evt) {
   // (Read without consuming: trajGlyphClick owns resetting the flag.)
   if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) return;
   const t = evt.target;
-  if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu')) return;
+  if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu, .traj-body-glyph')) return;
   _trajGizmoClose();
 }
 function _trajGizmoDocCtxMenu(evt) {

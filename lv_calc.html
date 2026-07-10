@@ -383,7 +383,19 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;margin:0;background:var(--bg);overscroll-behavior:none;}
-#rp-root{background:var(--bg);color:var(--text-bright);font-family:var(--sans);font-size:15px;min-height:100%;padding:0;box-sizing:border-box;display:flex;flex-direction:column;}
+/* R6.1 round-2 item 4: was min-height:100% only, which leaves #rp-root's own
+   height indefinite (content-driven) whenever nothing downstream forces it
+   taller than the viewport. That breaks the percentage-height chain relied
+   on by .mcc-body/.mcc-view-area/.traj-wrap/.traj-canvas (all height:100%)
+   — an SVG child with no definite ancestor height falls back to its
+   viewBox's intrinsic 1:1 aspect ratio, rendering the trajectory view
+   square and inflating the whole page to match (page-level scrollbar). A
+   definite height:100% keeps every downstream height:100%/flex:1 definite
+   as originally intended (.mcc-body already assumes this: overflow:hidden
+   with internal scroll regions doing the rest), fixing the square canvas
+   without touching any other page's layout (they never relied on the
+   indefinite fallback for anything visible). */
+#rp-root{background:var(--bg);color:var(--text-bright);font-family:var(--sans);font-size:15px;height:100%;min-height:100%;padding:0;box-sizing:border-box;display:flex;flex-direction:column;}
 header{flex-shrink:0;}
 
 /* ── HEADER ── */
@@ -9146,7 +9158,7 @@ function drawOrbitDiagram(){
     if(incAuthored){
       const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
       const aKm=(rApo+rPeri)/2, eEcc=(rApo-rPeri)/(rApo+rPeri);
-      const iRad=inc*Math.PI/180;
+      const iRad=parseFloat(incRaw)*Math.PI/180; // NOT `inc` — that const lives in an inner branch scope (R4 bug: ReferenceError killed the whole orbits-page render)
       const nodalRate=physJ2NodalRate(aKm,eEcc,iRad,'Earth');
       const apsidalRate=physJ2ApsidalRate(aKm,eEcc,iRad,'Earth');
       if(nodalRate!=null && apsidalRate!=null){
@@ -17068,17 +17080,48 @@ function _missionEventDetailHTML(m, idx) {
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyExpendEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'MNODE') {
+    // Round 2 item 2: precision +/- nudge buttons per axis + time, standard
+    // step 10 m/s / 60 s, shift-click for the fine step (1 m/s / 10 s).
+    const _nudgeBtn = (field, sign, glyph) => `<button type="button" class="act-btn" style="padding:2px 7px;font-size:11px;line-height:1;" title="Shift-click for fine step" onclick="event.stopPropagation();missionMnodeNudge('${id}',${idx},'${field}',${sign},event)">${glyph}</button>`;
+    const _nudgeRow = (field) => `<div style="display:flex;gap:4px;">${_nudgeBtn(field, -1, '−')}${_nudgeBtn(field, 1, '+')}</div>`;
+    // Round 2 item 3(b): explicit CA-target dropdown, persisted on the log
+    // entry as caTarget (authored state, same as any other MNODE field).
+    const _ownBody = (e.orbitAtBurn && e.orbitAtBurn.body) || 'Earth';
+    const _bodyOpts = Object.keys(PROG_BODIES || {}).filter(b => b !== _ownBody)
+      .map(b => `<option value="${_tsEsc(b)}"${e.caTarget === b ? ' selected' : ''}>${_tsEsc(b)}</option>`).join('');
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-end;margin-bottom:8px;">
           <div class="cfg-item"><label class="cfg-label">MET (s)</label>
-            <input type="number" id="edit-mnode-met-${id}" class="field" value="${e.at && e.at.value_s || 0}" min="0" step="any" style="width:110px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-met-${id}" class="field" value="${e.at && e.at.value_s || 0}" min="0" step="any" style="width:110px;">
+              ${_nudgeRow('met')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Prograde (m/s)</label>
-            <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-pro-${id}" class="field" value="${e.dvPro_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('pro')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Radial (m/s)</label>
-            <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-rad-${id}" class="field" value="${e.dvRad_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('rad')}
+            </div>
+          </div>
           <div class="cfg-item"><label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(+ along the orbit normal ĥ)</span></label>
-            <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" style="width:100px;"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="number" id="edit-mnode-nrm-${id}" class="field" value="${e.dvNrm_ms||0}" step="any" style="width:100px;">
+              ${_nudgeRow('nrm')}
+            </div>
+          </div>
+          <div class="cfg-item"><label class="cfg-label">CA Target</label>
+            <select id="edit-mnode-catarget-${id}" style="${_es}" onchange="missionApplyMnodeCaTarget('${id}',${idx})">
+              <option value="auto"${!e.caTarget || e.caTarget === 'auto' ? ' selected' : ''}>Auto</option>
+              ${_bodyOpts}
+            </select>
+          </div>
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
       </div>`;
@@ -19677,6 +19720,40 @@ function missionApplyMnodeEdit(id, idx) {
   closeModal('modal-mission-evt');
 }
 
+// Round 2 item 2: precision +/- nudge buttons on the MNODE event card — write
+// directly through the standard log-entry -> missionRecompute -> render
+// mutation path (same discipline as missionApplyMnodeEdit), no modal needed.
+// Step: 10 m/s (dv axes) / 60 s (time), shift-click for the fine step
+// (1 m/s / 10 s).
+function missionMnodeNudge(id, idx, field, sign, ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const e = m.log[idx];
+  const fine = !!(ev && ev.shiftKey);
+  if (field === 'met') {
+    const step = fine ? 10 : 60;
+    const cur = (e.at && e.at.value_s) || 0;
+    e.at = { kind: 'met', value_s: Math.max(0, cur + sign * step) };
+  } else {
+    const step = fine ? 1 : 10;
+    const key = field === 'pro' ? 'dvPro_ms' : field === 'rad' ? 'dvRad_ms' : 'dvNrm_ms';
+    e[key] = (e[key] || 0) + sign * step;
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
+// Round 2 item 3(b): persist the explicit CA-target dropdown selection onto
+// the log entry (authored state on the event, same mutation discipline).
+function missionApplyMnodeCaTarget(id, idx) {
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const e = m.log[idx];
+  const el = document.getElementById(`edit-mnode-catarget-${id}`);
+  e.caTarget = el ? el.value : 'auto';
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 // Resolve var(--x) tokens in a serialized SVG to concrete computed values, so
 // the rasterized image keeps the theme's colours AND fonts (CSS variables and
 // the stylesheet don't apply to a detached <img> SVG).
@@ -22036,8 +22113,12 @@ function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, sel
     const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
     const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
     const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
+    // R6.1 fix (round 2 item 1): the merged event-node marker in
+    // _trajEventNodesSVG now draws at this leg's first-sample position and
+    // carries the dv/time stack, so the leg's own dep marker is suppressed
+    // here to avoid drawing two markers for the same MNODE.
     const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
-      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: true, arrMarker: false, calib, noHighFade: true });
+      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: false, arrMarker: false, calib, noHighFade: true });
     if (phys) out += phys;
   });
   return out;
@@ -22364,7 +22445,25 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     if (!info) return;
     const evBody = _trajEventNodeBody(m, idx);
     if (evBody !== body) return;
-    const pos = _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, info.met);
+    // R6.1 fix (round 2 item 1): MNODE with a resolved physics leg draws ONE
+    // merged marker at the LEG's first-sample position (the same anchor the
+    // dep burn marker would have used) instead of the independent ring
+    // mean-motion position — the leg's own dep marker is suppressed for
+    // MNODE legs in _trajMnodeLegsSVG so there is exactly one marker.
+    let pos = null, mergedDvText = null, mergedLeg = null;
+    if (e.type === 'MNODE' && typeof physMissionLeg === 'function') {
+      mergedLeg = physMissionLeg(id, idx);
+      if (mergedLeg && mergedLeg.samples && mergedLeg.samples.length) {
+        const anchorOf = f => (f === body ? { x: ox, y: oy } : null);
+        const poly = _trajPolylineSVG(mergedLeg, anchorOf, zoom, {});
+        if (poly && poly.first && isFinite(poly.first.x) && isFinite(poly.first.y)) {
+          pos = { x: poly.first.x, y: poly.first.y };
+          const dv = e.dvRequired || (mergedLeg.dv_ms != null ? Math.round(mergedLeg.dv_ms) : null);
+          if (dv) mergedDvText = _trajDvText(dv);
+        }
+      }
+    }
+    if (!pos) pos = _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, info.met);
     if (!pos) return;
     const emphasized = selAuthIdx != null && selAuthIdx === idx;
     const o = _trajEventNodeOrbitFor(m, idx, body);
@@ -22379,8 +22478,14 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     const ring = emphasized ? `<circle cx="0" cy="0" r="${(r + 2).toFixed(1)}" fill="none" stroke="var(--accent)" stroke-width="1.1"/>` : '';
     const marker = `${ring}<circle cx="0" cy="0" r="${r}" fill="var(--nm-bg)" stroke="${color}" stroke-width="1"/>` +
       `<text x="0" y="0" text-anchor="middle" dominant-baseline="central" font-family="var(--mono)" font-size="${info.glyphKind.length > 1 ? 4 : 5}" fill="${color}" pointer-events="none">${info.glyphKind}</text>`;
-    const hit = `<circle cx="0" cy="0" r="9" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
-    _trajRegisterLabel(pos.x, pos.y, [{ text: info.label, dy: -9, fontPx: 9, color }],
+    const hitR = mergedLeg ? 12 : 9; // merged MNODE marker gets a more generous hit radius
+    const hit = `<circle cx="0" cy="0" r="${hitR}" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
+    // Merged MNODE marker: Δv text above, time plate directly below — one
+    // coherent stack (round 2 item 1). Non-merged nodes keep the plain label.
+    const lines = mergedDvText
+      ? [{ text: mergedDvText, dy: -9, fontPx: 9, color }, { text: _metFmt(info.met), dy: r + 7, fontPx: 9, color: 'var(--text-dim)' }]
+      : [{ text: info.label, dy: -9, fontPx: 9, color }];
+    _trajRegisterLabel(pos.x, pos.y, lines,
       'burn', { screenSize, minSize: _TRAJ_LOD_BURN_MIN, selected: emphasized, marker, hit, opacity: 1 });
   });
 }
@@ -23123,6 +23228,14 @@ function _trajLocalScaleFor(body, m) {
 // the click that ends a real drag, same pattern as _trajSelectEventFromView.
 function trajGlyphClick(id, body) {
   if (_trajJustDragged) { _trajJustDragged = false; return; }
+  // Round 2 item 3(a): with a gizmo open on this mission, a body-glyph click
+  // sets that body as the gizmo's closest-approach TARGET instead of
+  // recentering the camera (the dismiss handler already ignores clicks on
+  // .traj-body-glyph so the gizmo stays open for this).
+  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id) {
+    if (typeof _trajGizmoSetManualTarget === 'function') _trajGizmoSetManualTarget(body);
+    return;
+  }
   trajSetFocus(id, body);
 }
 
@@ -23131,7 +23244,7 @@ function _trajGlyph(cx, cy, r, color, label, zoom, isFocus, forceLabel, clickId)
   // as belonging to their glyph rather than a flat gray sheet of names.
   _trajRegisterLabel(cx, cy - r, [{ text: label, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
     { screenSize: r, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
-  const clickAttr = clickId ? ` style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${label}')"` : '';
+  const clickAttr = clickId ? ` class="traj-body-glyph" style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${label}')"` : '';
   if (clickId) {
     return `<g${clickAttr}>
     <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"><title>Fly to ${label}</title></circle>
@@ -23675,6 +23788,20 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  else null (no CA pair shown). */
 function _trajGizmoPickTarget(m, node, met) {
   if (!m || !node) return null;
+  // Round 2 item 3: explicit target wins over the heuristics — first a
+  // runtime pick from clicking a body glyph while the gizmo is open (session
+  // state, not persisted), then an authored `caTarget` field on the MNODE
+  // log entry set via its event-card dropdown (persisted, since it's
+  // authored state on the event, same as any other MNODE field).
+  const g = (typeof _trajGizmo !== 'undefined') ? _trajGizmo : null;
+  if (g && g.manualTarget) {
+    if (g.manualTarget === node.body) return null; // can't target your own body
+    return g.manualTarget;
+  }
+  if (g && g.authIdx != null && m.log[g.authIdx]) {
+    const ct = m.log[g.authIdx].caTarget;
+    if (ct && ct !== 'auto' && ct !== node.body) return ct;
+  }
   if (typeof _missionNmNodeById === 'function') {
     for (const e of m.log || []) {
       if (e.type !== 'MANEUVER' || !e.toNode) continue;
@@ -23685,6 +23812,19 @@ function _trajGizmoPickTarget(m, node, met) {
   }
   if (node.body === 'Earth' && PROG_BODIES.Moon) return 'Moon';
   return null;
+}
+
+/** Round 2 item 3(a): set the gizmo's runtime CA target from a body-glyph
+ *  click (session state only — not written to the log; the persisted
+ *  equivalent is the MNODE card's caTarget dropdown). Re-runs the cheap
+ *  scratch pass so the CA readout/ghost marker reflect the new target
+ *  immediately without forcing a full n-body pass. */
+function _trajGizmoSetManualTarget(body) {
+  const g = _trajGizmo;
+  if (!g || !body) return;
+  g.manualTarget = body;
+  if (typeof _trajGizmoRunScratch === 'function') _trajGizmoRunScratch('cheap');
+  else _trajGizmoRepaintOverlay();
 }
 
 function _trajGizmoOpenPending(id, met) {
@@ -23731,7 +23871,7 @@ function _trajGizmoDocClick(evt) {
   // (Read without consuming: trajGlyphClick owns resetting the flag.)
   if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) return;
   const t = evt.target;
-  if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu')) return;
+  if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu, .traj-body-glyph')) return;
   _trajGizmoClose();
 }
 function _trajGizmoDocCtxMenu(evt) {

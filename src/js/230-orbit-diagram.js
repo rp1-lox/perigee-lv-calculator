@@ -252,7 +252,7 @@ function drawOrbitDiagram(){
     if(incAuthored){
       const rApo=R_e+apoAlt, rPeri=R_e+periAlt;
       const aKm=(rApo+rPeri)/2, eEcc=(rApo-rPeri)/(rApo+rPeri);
-      const iRad=inc*Math.PI/180;
+      const iRad=parseFloat(incRaw)*Math.PI/180; // NOT `inc` — that const lives in an inner branch scope (R4 bug: ReferenceError killed the whole orbits-page render)
       const nodalRate=physJ2NodalRate(aKm,eEcc,iRad,'Earth');
       const apsidalRate=physJ2ApsidalRate(aKm,eEcc,iRad,'Earth');
       if(nodalRate!=null && apsidalRate!=null){
