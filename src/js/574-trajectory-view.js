@@ -535,6 +535,44 @@ function _trajExtractMission(m) {
     if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
   });
 
+  // ── R3.1: state-derived ring orientation (MATH.md §7i) ───────────────────
+  // A converged physics leg's departure/arrival plane OVERRIDES the ring's
+  // Ω=ω=0 convention when the ring's (body, peri, apo) matches the leg's
+  // parking/arrival orbit. First converged leg to touch a shared ring wins
+  // (stability under replay) — later legs never re-orient an already-derived
+  // ring. Size (peri/apo) is unchanged — orientation only (tier 2 of the
+  // three-tier rule; unmatched rings keep the Ω=0 default, tier 3).
+  if (m.missionId != null && typeof _physTrajByMission !== 'undefined') {
+    const physLegs = (_physTrajByMission[m.missionId] && _physTrajByMission[m.missionId].legs) || [];
+    physLegs.forEach(L => {
+      if (!L.converged || (!L.departElements && !L.arrivalElements)) return;
+      const auth = m.log[L.authIdx];
+      if (!auth || auth.type !== 'MANEUVER') return;
+      const fromN = _missionNmNodeById(auth.fromNode);
+      const fromO = fromN && fromN.orbit;
+      if (L.departElements && fromO && fromO.body) {
+        const sc = frames[fromO.body];
+        const key = _trajOrbitKey(fromO.body, fromO.perigee ?? fromO.apogee ?? 0, fromO.apogee ?? fromO.perigee ?? 0);
+        const rec = sc && sc.orbits.get(key);
+        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.departElements);
+      }
+      // Arrival: L.toNode is the transit/corridor node (no peri/apo of its
+      // own), so match by L.dest (the real destination BODY, stored on the
+      // leg) + peri/apo RECOVERED from arrivalElements' own {a, e} — those
+      // were already set to the AUTHORED destination orbit's size in 565, so
+      // this reproduces exactly the (body, peri, apo) key the real LLO/
+      // arrival ring was registered under.
+      if (L.arrivalElements && L.dest && PROG_BODIES[L.dest]) {
+        const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
+        const peri = el.a * (1 - el.e) - Rd, apo = el.a * (1 + el.e) - Rd;
+        const sc = frames[L.dest];
+        const key = _trajOrbitKey(L.dest, peri, apo);
+        const rec = sc && sc.orbits.get(key);
+        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.arrivalElements);
+      }
+    });
+  }
+
   // Resolve each ring's expend-at-met (C2 "expended vehicle" dimming): the
   // LATEST of its owners' expend times (a ring is only "history" once ALL
   // its owners are gone — a multi-owner co-located ring with one surviving
@@ -791,8 +829,13 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
   if (lodAlpha <= 0) return '';
   const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
-  const incRad = (rec.inc || 0) * Math.PI / 180;
-  const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: 0, argp: 0 }, 96);
+  // R3.1: state-derived orientation override (MATH.md §7i) — a ring whose
+  // plane was matched to a converged physics leg's departure/arrival state
+  // samples with THAT (i, raan, argp) instead of the Ω=ω=0 convention; size
+  // (a, e) always stays authored (rec.peri/rec.apo above — accounting truth).
+  let incRad = (rec.inc || 0) * Math.PI / 180, raanRad = 0, argpRad = 0;
+  if (rec.elements) { incRad = rec.elements.i || 0; raanRad = rec.elements.raan || 0; argpRad = rec.elements.argp || 0; }
+  const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
   let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
   for (let k = 0; k < pts.length; k++) {
     const q = _trajProj3(pts[k][0] * scale, pts[k][1] * scale, pts[k][2] * scale);
@@ -802,7 +845,9 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     if (y < topY) { topY = y; topX = x; }
     if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
   }
-  const incTxt = rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '';
+  const incTxt = rec.elements
+    ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (plane from flight)`
+    : (rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '');
   const hitArea = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
   _trajRegisterLabel(topX, topY, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
@@ -2056,7 +2101,7 @@ function _trajFooterHTML(cam) {
   const elDeg = Math.round(((cam.el != null ? cam.el : Math.PI / 2) * 180 / Math.PI));
   const azDeg = Math.round((((cam.az || 0) * 180 / Math.PI) % 360 + 360) % 360);
   const orientTxt = elDeg < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
-  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbits &Omega;,&omega; assumed 0) &middot; shift/right-drag rotates &middot; body sizes clamped for visibility`;
+  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; shift/right-drag rotates &middot; body sizes clamped for visibility`;
 }
 
 // Focus-flyout open state: 'missionId|sceneId' of the currently-open dropdown,

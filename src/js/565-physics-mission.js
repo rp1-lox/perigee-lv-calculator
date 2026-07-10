@@ -220,6 +220,41 @@ function physClosestApproachKm(res, dest, overrides) {
   return { dKm: best, t: tBest, dz };
 }
 
+/** R3.1: osculating plane of a converged leg's actual arrival, for the
+ *  STATE-DERIVED orbit ring (MATH.md §7f-R2/§7h/§7i). The propagator only
+ *  records POSITION samples (no velocity) plus periapsis events (rMag + t,
+ *  no vector) — so the arrival velocity is reconstructed by a central finite
+ *  difference of the two dest-frame samples bracketing the arrival periapsis
+ *  event's time, and the arrival radius vector is that same bracket's linear
+ *  position interpolation rescaled onto the event's exact rMag. This is an
+ *  approximation (decimated samples, not a re-integration) — good enough for
+ *  RING ORIENTATION (i, raan, argp), which is all this phase consumes; it is
+ *  NOT precise enough for a targeting residual. Deterministic given fixed
+ *  samples/events (same propagation -> same bracket -> same result).
+ *  Returns osculating {a,e,i,raan,argp,nu,hVec} (physStateToElements' full
+ *  return) or null if no periapsis event was recorded in `dest`'s frame. */
+function physArrivalOsculatingElements(res, dest, mu) {
+  const peris = (res.events || []).filter(ev => ev.type === 'periapsis' && ev.frame === dest);
+  if (!peris.length) return null;
+  const ev = peris[peris.length - 1];   // last = the post-encounter periapsis nearest actual arrival
+  const destSamples = (res.samples || []).filter(s => s.frame === dest).sort((a, b) => a.t - b.t);
+  if (destSamples.length < 2) return null;
+  let idx = destSamples.findIndex(s => s.t >= ev.t);
+  if (idx <= 0) idx = 1;
+  if (idx >= destSamples.length) idx = destSamples.length - 1;
+  const s0 = destSamples[idx - 1], s1 = destSamples[idx];
+  const dt = s1.t - s0.t;
+  if (!(dt > 0)) return null;
+  const v = physScale(physSub(s1.r, s0.r), 1 / dt);
+  const frac = (ev.t - s0.t) / dt;
+  const rInterp = physAdd(s0.r, physScale(physSub(s1.r, s0.r), frac));
+  const rMagInterp = physMag(rInterp);
+  if (!(rMagInterp > 0)) return null;
+  const rDir = physScale(rInterp, 1 / rMagInterp);
+  const r = physScale(rDir, ev.rMag != null ? ev.rMag : rMagInterp);
+  return physStateToElements(r, v, mu);
+}
+
 /**
  * Generic n-DOF (n = 1, 2 or 3) differential corrector.
  *   burnSolveFn(x) -> initial state {r,v} (or null)
@@ -632,16 +667,25 @@ function physRebuildMissionTrajectories(m) {
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
   // destination-orbit mean altitude for a leg's dest body, from the first
   // later arrival MANEUVER into an orbit of that body (shooter target radius).
-  const destAltFor = (dest, fromIdx) => {
+  // R3.1: same search, but returning the actual {peri, apo} pair (not just the
+  // mean) for arrivalElements' AUTHORED SIZE (§7i) — the leg's own `toO` is
+  // the TRANSIT/corridor node (no perigee/apogee of its own), so the real
+  // destination orbit's shape has to come from this downstream lookahead,
+  // same target the shooter already searches for its radius.
+  const destOrbitFor = (dest, fromIdx) => {
     for (let j = fromIdx + 1; j < (m.log || []).length; j++) {
       const ev = m.log[j];
       if (ev.type !== 'MANEUVER' || !ev.toNode) continue;
       const tn = _missionNmNodeById(ev.toNode);
       const o = tn && tn.orbit;
       if (o && o.body === dest && (o.type === 'circular' || o.type === 'elliptic'))
-        return ((o.perigee ?? o.apogee ?? 100) + (o.apogee ?? o.perigee ?? 100)) / 2;
+        return { peri: o.perigee ?? o.apogee ?? 100, apo: o.apogee ?? o.perigee ?? 100 };
     }
-    return 100;
+    return { peri: 100, apo: 100 };
+  };
+  const destAltFor = (dest, fromIdx) => {
+    const o = destOrbitFor(dest, fromIdx);
+    return (o.peri + o.apo) / 2;
   };
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
@@ -743,10 +787,12 @@ function physRebuildMissionTrajectories(m) {
     // the differential corrector (burn anomaly ± pitch; |Δv| FIXED), cached
     // by leg signature so a warm recompute costs ~one propagation per leg.
     let st0 = burn.state, dvVec = burn.dvVec;
+    const r1 = physMag(burn.state.r);
+    const incLeg = (fromO.inclination || 0);
+    let raanUsed = 0;
     {
       // R3: signature includes the departure inclination — editing a node's
       // inclination must re-shoot the leg
-      const incLeg = (fromO.inclination || 0);
       const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|i${incLeg}`;
       let aim = _physShootCache[sig];
       if (!aim) {
@@ -759,8 +805,9 @@ function physRebuildMissionTrajectories(m) {
       }
       if (aim.theta != null) {
         // even an unconverged shoot's best x beats the raw analytic seed
-        const bs = physAimBurnState(burn.center, physMag(burn.state.r), aim.theta, aim.pitch || 0, dv_ms / 1000,
-          incLeg * Math.PI / 180, aim.yaw || 0, aim.raan || 0);
+        raanUsed = aim.raan || 0;
+        const bs = physAimBurnState(burn.center, r1, aim.theta, aim.pitch || 0, dv_ms / 1000,
+          incLeg * Math.PI / 180, aim.yaw || 0, raanUsed);
         st0 = { r: bs.r, v: bs.v }; dvVec = bs.dvVec;
       }
     }
@@ -769,11 +816,37 @@ function physRebuildMissionTrajectories(m) {
       { center: burn.center, bodies: burn.bodies, overrides: calOverrides,
         dtMax: burn.kind === 'interplanetary' ? 16384 : undefined }, { maxSamples: 256 });
     const converged = res.events.some(ev => ev.type === 'soi' && ev.to === burn.dest);
+    // R3.1 (MATH.md §7i): departure/arrival ORIENTATION for the state-derived
+    // ring (574 consumes these; the ΔV-engine's authored {peri,apo,inc} stay
+    // untouched — orientation is geometry only in this phase). Departure is
+    // the exact circular-ring plane the corrector actually flew (tier 2a);
+    // arrival is the osculating plane of the real arrival state, with SIZE
+    // pinned to the authored target orbit (tier 2b — accounting truth vs
+    // flight truth, see the module doc comment above).
+    let departElements = null, arrivalElements = null;
+    if (converged) {
+      departElements = { a: r1, e: 0, i: incLeg * Math.PI / 180, raan: raanUsed, argp: 0 };
+      const muDest = PROG_BODIES[burn.dest] && PROG_BODIES[burn.dest].mu;
+      const oscul = muDest ? physArrivalOsculatingElements(res, burn.dest, muDest) : null;
+      if (oscul && PROG_BODIES[burn.dest]) {
+        const Rd = PROG_BODIES[burn.dest].R;
+        // AUTHORED target size (§7i split: size is accounting truth) — the
+        // leg's own `toO` is the transit/corridor node and has no perigee of
+        // its own, so look ahead to the real destination-orbit MANEUVER
+        // (same lookahead the shooter's destAltFor already performs).
+        const destO = destOrbitFor(burn.dest, i);
+        const rp = Rd + Math.min(destO.peri, destO.apo);
+        const ra = Rd + Math.max(destO.peri, destO.apo);
+        if (ra > 0) {
+          arrivalElements = { a: (rp + ra) / 2, e: (ra - rp) / (ra + rp), i: oscul.i, raan: oscul.raan, argp: oscul.argp };
+        }
+      }
+    }
     const leg = { authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
       samples: res.samples, events: res.events, tof_s: burn.coastTof_s,
       tofPhysics: null,   // injection is impulsive under the corridor rule — no coast of its own
       dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
-      converged, kind: burn.kind, dest: burn.dest };
+      converged, kind: burn.kind, dest: burn.dest, departElements, arrivalElements };
     legs.push(leg);
     lastTransit = leg;
   }

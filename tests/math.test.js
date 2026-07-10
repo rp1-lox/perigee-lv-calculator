@@ -1241,6 +1241,85 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R3.1 — state-derived orbit rings + solved-RAAN defaults (565 + 574,
+// MATH.md §7i)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physArrivalOsculatingElements, physStateToElements, physElementsToState,
+          physMag, physCross, physSub, physScale, PROG_BODIES, _trajRingSVG, progOrbitSamplePoints } =
+    vm.runInContext('({ physArrivalOsculatingElements, physStateToElements, physElementsToState, physMag, physCross, physSub, physScale, PROG_BODIES, _trajRingSVG, progOrbitSamplePoints })', sandbox);
+
+  const muM = PROG_BODIES.Moon.mu;
+
+  // synthetic converged "arrival": build a two-sample propagation result
+  // bracketing a periapsis event around a known inclined circular state, and
+  // verify physArrivalOsculatingElements' reconstructed h-vector matches the
+  // true state's h-vector.
+  const rp = PROG_BODIES.Moon.R + 100;
+  const trueEl = { a: rp, e: 0, i: 0.9, raan: 1.3, argp: 0, nu: 0 };
+  const trueState = physElementsToState(trueEl, muM);
+  const hTrue = physCross(trueState.r, trueState.v);
+  const dt = 5; // s, small step either side of the event for a clean finite difference
+  const before = physElementsToState(Object.assign({}, trueEl, { nu: -0.01 }), muM);
+  const after = physElementsToState(Object.assign({}, trueEl, { nu: 0.01 }), muM);
+  const tEvent = 1000;
+  const res = {
+    events: [{ type: 'periapsis', t: tEvent, rMag: rp, frame: 'Moon' }],
+    samples: [
+      { t: tEvent - dt, r: before.r, frame: 'Moon' },
+      { t: tEvent + dt, r: after.r, frame: 'Moon' },
+    ],
+  };
+  const oscul = physArrivalOsculatingElements(res, 'Moon', muM);
+  {
+    const hOscul = oscul && oscul.hVec;
+    const cosAng = hOscul ? (hOscul[0] * hTrue[0] + hOscul[1] * hTrue[1] + hOscul[2] * hTrue[2]) / (physMag(hOscul) * physMag(hTrue)) : 0;
+    const ang = hOscul ? Math.acos(Math.max(-1, Math.min(1, cosAng))) : Infinity;
+    ok(`R3.1 arrival osculating elements: h-vector angle to true state < 1e-6 rad (got ${ang.toExponential(2)})`,
+      ang < 1e-6);
+  }
+  // determinism: identical inputs -> identical elements
+  {
+    const oscul2 = physArrivalOsculatingElements(res, 'Moon', muM);
+    ok('R3.1 arrival elements: deterministic (identical repeat call)',
+      !!oscul && !!oscul2 && oscul.i === oscul2.i && oscul.raan === oscul2.raan && oscul.argp === oscul2.argp);
+  }
+  // a ring sampled with the derived elements' plane has the same normal as
+  // the arrival state's h-vector (the ring literally passes through that plane)
+  {
+    const pts = progOrbitSamplePoints({ a: rp, e: 0, i: oscul.i, raan: oscul.raan, argp: oscul.argp || 0 }, 96);
+    const p0 = pts[0], p1 = pts[32];
+    const hRing = physCross(p0, p1);
+    const cosAng = (hRing[0] * hTrue[0] + hRing[1] * hTrue[1] + hRing[2] * hTrue[2]) / (physMag(hRing) * physMag(hTrue));
+    const ang = Math.acos(Math.max(-1, Math.min(1, Math.abs(cosAng))));
+    ok(`R3.1 ring plane: sampled ring's plane normal matches arrival h-vector (angle ${ang.toExponential(2)} rad)`,
+      ang < 1e-9);
+  }
+  // _trajRingSVG: rec.elements overrides the Ω=ω=0 convention and the
+  // tooltip switches from "assumed 0" to "plane from flight"
+  {
+    const rec = { key: 'k', body: 'Moon', peri: 100, apo: 100, inc: 45, label: '100', colors: new Set(), names: new Set(),
+      elements: { i: oscul.i, raan: oscul.raan, argp: oscul.argp || 0, source: 'flight' } };
+    const svg = _trajRingSVG(rec, 'Moon', 0.1, null, { zoom: 1, viewportDiagPx: 2000, originX: 0, originY: 0 });
+    ok('R3.1 _trajRingSVG: derived-plane ring renders (non-empty path) and is annotated "plane from flight"',
+      svg.length > 0 && svg.indexOf('plane from flight') >= 0 && svg.indexOf('assumed 0') === -1);
+  }
+  // i=0 unflown rings unchanged: no rec.elements -> same Ω=ω=0 convention text
+  {
+    const rec = { key: 'k2', body: 'Earth', peri: 185, apo: 185, inc: 0, label: '185', colors: new Set(), names: new Set() };
+    const svg = _trajRingSVG(rec, 'Earth', 0.1, null, { zoom: 1, viewportDiagPx: 2000, originX: 0, originY: 0 });
+    ok('R3.1 backwards-compat: i=0 unflown ring unchanged (no "plane from flight" annotation, no NaN)',
+      svg.length > 0 && svg.indexOf('plane from flight') === -1 && svg.indexOf('NaN') === -1);
+  }
+  // no periapsis event in the destination frame -> no derived elements (clean null)
+  {
+    const resNoPeri = { events: [], samples: [{ t: 0, r: [1, 0, 0], frame: 'Moon' }] };
+    ok('R3.1 arrival elements: no periapsis event -> null (no throw)',
+      physArrivalOsculatingElements(resNoPeri, 'Moon', muM) === null);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // R2 — 3D projection + true-geometry orbit sampling (574 + 360)
 // ═══════════════════════════════════════════════════════════════════════════
 
