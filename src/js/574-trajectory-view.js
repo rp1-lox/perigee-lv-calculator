@@ -245,6 +245,7 @@ function _trajApplyCam(id, cam) {
       overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
       const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
       overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
+      if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
     }
   }
   const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
@@ -838,7 +839,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})"` : '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${opts.missionId}',${opts.authIdx})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)"` : '';
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
@@ -1136,7 +1137,7 @@ function _trajPhysLegRender(ctx) {
   const alpha = emphasized ? 1 : _trajLodOpacity(poly.extentPx, _TRAJ_LOD_WIN.transferArc[0], _trajWindowHi(_TRAJ_LOD_WIN.transferArc[1], viewportDiagPx));
   if (alpha <= 0) return '';
   const clickIdx = leg.authIdx;
-  const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})"` : '';
+  const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)"` : '';
   const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
   const strokeW = emphasized ? 1.2 : 0.7;
   const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
@@ -1274,6 +1275,12 @@ function _trajGhostMarker(x, y, bodyName, zoom, parentAlpha) {
 function _trajSelectEventFromView(id, authIdx) {
   if (_trajJustDragged) { _trajJustDragged = false; return; }
   if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
+  // R3.3: selecting an MNODE event attaches the gizmo at its recorded state;
+  // selecting anything else detaches a currently-committed gizmo.
+  if (typeof _trajGizmoOnEventSelected === 'function') {
+    const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+    _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
+  }
 }
 
 // Compute the min zoom-worthy extent (max body-centered radius, km) of a
@@ -2190,6 +2197,7 @@ function _missionTrajAfterRender(m) {
         overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
         const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
         overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
+        if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
       }
     }
   };

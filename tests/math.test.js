@@ -32,6 +32,7 @@ const FILES = [
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/430-program-module-phase-8-node-map.js',
   'src/js/574-trajectory-view.js',
+  'src/js/5745-maneuver-gizmo.js',
 ];
 
 const src = FILES.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
@@ -1499,6 +1500,60 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok(`R2 sampler: inclination lifts z (max|z| ${zMax.toFixed(0)} km > 0.3a·sin(i))`, zMax > 0.3 * el.a * Math.sin(el.i));
     const flat = progOrbitSamplePoints({ a: 10000, e: 0, i: 0, raan: 0, argp: 0 }, 32);
     ok('R2 sampler: i=0 stays in the ecliptic', flat.every(p => Math.abs(p[2]) < 1e-9));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R3.3 — maneuver gizmo pure helpers (5745-maneuver-gizmo.js)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajGizmoAxes, _trajGizmoPxToDv, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout,
+          _trajGizmoScreenDir, physMag, physDot } =
+    vm.runInContext('({ _trajGizmoAxes, _trajGizmoPxToDv, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout, _trajGizmoScreenDir, physMag, physDot })', sandbox);
+
+  // axes: circular-orbit state -> orthonormal-ish {rHat,vHat,hHat}
+  {
+    const r = [7000, 0, 0], v = [0, 7.5, 0];
+    const ax = _trajGizmoAxes(r, v);
+    approx('gizmo axes: |rHat|=1', physMag(ax.rHat), 1, 1e-9);
+    approx('gizmo axes: |vHat|=1', physMag(ax.vHat), 1, 1e-9);
+    approx('gizmo axes: |hHat|=1', physMag(ax.hHat), 1, 1e-9);
+    approx('gizmo axes: hHat = r cross v direction (z for this planar case)', ax.hHat[2], 1, 1e-9);
+    ok('gizmo axes: rHat perp hHat', Math.abs(physDot(ax.rHat, ax.hHat)) < 1e-9);
+    ok('gizmo axes: degenerate state (zero v) -> null', _trajGizmoAxes([7000, 0, 0], [0, 0, 0]) === null);
+  }
+
+  // px-drag -> dv mapping: 2 m/s/px normal, 0.2 m/s/px fine (shift), sign preserved (flip past zero)
+  {
+    approx('gizmo px->dv: 100px normal = 200 m/s', _trajGizmoPxToDv(100, false), 200, 1e-9);
+    approx('gizmo px->dv: 100px shift-fine = 20 m/s', _trajGizmoPxToDv(100, true), 20, 1e-9);
+    approx('gizmo px->dv: negative px flips sign', _trajGizmoPxToDv(-50, false), -100, 1e-9);
+    ok('gizmo px->dv: zero px = zero dv', _trajGizmoPxToDv(0, false) === 0);
+  }
+
+  // nearest-sample MET resolution
+  {
+    const samples = [{ t: 0 }, { t: 100 }, { t: 250 }, { t: 400 }];
+    ok('gizmo nearest-sample: exact hit', _trajGizmoNearestSampleMet(samples, 100) === 100);
+    ok('gizmo nearest-sample: rounds to closer neighbor', _trajGizmoNearestSampleMet(samples, 180) === 250 || _trajGizmoNearestSampleMet(samples, 180) === 100);
+    approx('gizmo nearest-sample: picks 100 for target 120', _trajGizmoNearestSampleMet(samples, 120), 100, 1e-9);
+    ok('gizmo nearest-sample: empty array -> null', _trajGizmoNearestSampleMet([], 50) === null);
+  }
+
+  // readout formatting
+  {
+    ok('gizmo readout: positive/negative sign + MET mm:ss', _trajGizmoFormatReadout(200, -15, 0, 125) === 'pro +200 · rad -15 · nrm +0 m/s · MET 2m05s');
+    ok('gizmo readout: zero met', _trajGizmoFormatReadout(0, 0, 0, 0) === 'pro +0 · rad +0 · nrm +0 m/s · MET 0m00s');
+  }
+
+  // screen-dir: normal (non-degenerate) direction normalizes; degenerate falls back
+  {
+    const d1 = _trajGizmoScreenDir(3, 4, [0, -1]);
+    approx('gizmo screenDir: normalizes (3,4)->(0.6,0.8)', d1.ux, 0.6, 1e-9);
+    approx('gizmo screenDir: normalizes (3,4)->(0.6,0.8) y', d1.uy, 0.8, 1e-9);
+    ok('gizmo screenDir: non-degenerate flag', d1.degenerate === false);
+    const d2 = _trajGizmoScreenDir(0.001, 0.001, [0, -1]);
+    ok('gizmo screenDir: near-zero length -> degenerate fallback', d2.degenerate === true && d2.ux === 0 && d2.uy === -1);
   }
 }
 
