@@ -688,8 +688,12 @@ function _trajRingMenuRender() {
   const existing = document.querySelector('.traj-ring-menu');
   if (!rm || !va) { if (existing) existing.remove(); return; }
   const fb = rm.feedback ? ` (${_metFmt(rm.met)})` : '';
+  // legMode (R6.2.1): no "+ Maneuver node here" on physics legs — a pending
+  // gizmo reconstructs its node from the vehicle's CURRENT settled orbitState
+  // (_trajGizmoNodeState with authIdx null), which mid-transfer would snap
+  // the node onto the parking orbit instead of the hovered leg point.
   const html = `
-    <button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>
+    ${rm.legMode ? '' : '<button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>'}
     <button onclick="_trajRingMenuUseAddEvent()">Use time in Add Event${fb}</button>
     <button onclick="_trajRingMenuClose()">✕ close</button>`;
   let menu = existing;
@@ -781,6 +785,93 @@ function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg) {
   }
   if (met == null) return;
   _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false };
+  _trajRingMenuAddDismiss();
+  _trajRingMenuRender();
+}
+
+// ── R6.2.1 (round-3 item 5): hover ball + placement menu on PHYSICS-LEG
+// polylines. R6.1.2 shipped the affordance on orbit RINGS only; in a real
+// mission most hoverable geometry is committed transfer/MNODE legs, which
+// never got it — the user-facing "hover is gone" report. Same ghost/plate/
+// menu flow as the ring version, but the rail comes from the leg's OWN
+// propagated samples (exact nearest-sample MET, like _trajGizmoNearestSampleMet
+// — no arc-fraction interpolation), projected with the SAME patched-conic
+// gluing convention _trajPhysLegRender/_trajPolylineSVG use: each sample
+// anchors to its frame body's position AT viewTime plus the sample's r.
+// (Projection is linear, so proj(bodyWorld(vt)+r−camCenter) ≡ the renderer's
+// anchorOf(frame) + proj(r)·zoom — the rail lands exactly on the drawn path.)
+function _trajLegHoverRail(missionId, authIdx, rect) {
+  const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[missionId] : null;
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
+  const L = (typeof physMissionLeg === 'function') ? physMissionLeg(missionId, authIdx) : null;
+  if (!cam || !m || !L || !L.samples || !L.samples.length || !rect || !(rect.width > 0)) return null;
+  const vt = _trajViewTime(m);
+  const zoom = _trajZoomFromCam(cam);
+  _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
+  const camCenterKm = _trajCamCenterKm(cam, vt);
+  const anchorCache = {};
+  const pts = [];
+  for (const s of L.samples) {
+    let bw = anchorCache[s.frame];
+    if (bw === undefined) bw = anchorCache[s.frame] = (progBodyWorldPosCalibrated(s.frame, vt, {}) || null);
+    if (!bw) continue;
+    const p = _trajProj3(bw.x + s.r[0] - camCenterKm.x, bw.y + s.r[1] - camCenterKm.y,
+      (bw.z || 0) + (s.r[2] || 0) - (camCenterKm.z || 0));
+    const sc = _trajWorldToScreen(p.x * zoom, p.y * zoom, { cx: 0, cy: 0, w: _TRAJ_VB }, rect);
+    if (isFinite(sc.x) && isFinite(sc.y)) pts.push({ x: sc.x, y: sc.y, met: s.t });
+  }
+  return pts.length ? { pts } : null;
+}
+
+/** Wired from the leg hit path's onmousemove (574 _trajPhysLegRender). Same
+ *  ~30ms throttle + gizmo-drag no-op as the ring version; shares
+ *  _trajRingHover/_trajRingHoverPaint/_trajRingHoverLeave wholesale. */
+function _trajLegHoverMove(evt, missionId, authIdx, color) {
+  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
+  const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+  if (now - _trajRingHoverLastMs < 30) return;
+  _trajRingHoverLastMs = now;
+  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${missionId}"]`);
+  const svgEl = va && va.querySelector('svg.traj-svg');
+  const rect = svgEl && svgEl.getBoundingClientRect();
+  if (!rect || !(rect.width > 0)) return;
+  const rail = _trajLegHoverRail(missionId, authIdx, rect);
+  if (!rail || !rail.pts.length) return;
+  const pt = _trajRailNearestPoint(rail.pts, evt.clientX - rect.left, evt.clientY - rect.top);
+  if (!pt) return;
+  _trajRingHover = { missionId, x: pt.x, y: pt.y, met: pt.met, color: color || 'var(--accent2)' };
+  _trajRingHoverPaint(missionId);
+}
+
+/** Wired from the leg hit path's onclick — preserves the pre-existing
+ *  select-event behavior (_trajSelectEventFromView, same drag guard), then
+ *  opens the placement menu at the nearest-sample MET. `legMode:true` limits
+ *  the menu to "Use time in Add Event": a pending gizmo's node state comes
+ *  from _trajGizmoNodeState(m, met, null), which for a PENDING node
+ *  reconstructs from the vehicle's CURRENT settled orbitState — placing
+ *  "+ Maneuver node here" mid-transfer would silently snap the node onto the
+ *  parking-orbit ring, not the hovered leg point, so it is not offered. */
+function _trajLegClick(id, authIdx, evt) {
+  const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
+  if (typeof _trajSelectEventFromView === 'function') _trajSelectEventFromView(id, authIdx);
+  if (dragged) return;
+  evt.stopPropagation();
+  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
+  const svgEl = va && va.querySelector('svg.traj-svg');
+  const rect = svgEl && svgEl.getBoundingClientRect();
+  if (!rect) return;
+  let met = null, sx, sy;
+  if (_trajRingHover && _trajRingHover.missionId === id) {
+    met = _trajRingHover.met; sx = _trajRingHover.x; sy = _trajRingHover.y;
+  } else {
+    const rail = _trajLegHoverRail(id, authIdx, rect);
+    if (rail && rail.pts.length) {
+      const pt = _trajRailNearestPoint(rail.pts, evt.clientX - rect.left, evt.clientY - rect.top);
+      if (pt) { met = pt.met; sx = pt.x; sy = pt.y; }
+    }
+  }
+  if (met == null) return;
+  _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false, legMode: true };
   _trajRingMenuAddDismiss();
   _trajRingMenuRender();
 }

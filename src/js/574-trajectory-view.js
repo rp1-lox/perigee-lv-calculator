@@ -1170,7 +1170,13 @@ function _trajPhysLegRender(ctx) {
   const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
   const opacity = (alpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
   const hoverTitle = ctx.title || '';
-  const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
+  // R6.2.1 (round-3 item 5): the wide hit path also carries the hover-ball /
+  // placement-menu affordance (5745 _trajLegHoverMove/_trajLegClick — the
+  // physics-leg equivalent of the ring hit path's R6.1.2 wiring; the handler
+  // re-finds the leg via physMissionLeg(missionId, authIdx)). The visible
+  // stroke keeps the plain select/dblclick attrs unchanged.
+  const legHoverAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajLegClick('${id}',${clickIdx},event)" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)" onmousemove="_trajLegHoverMove(event,'${id}',${clickIdx},'${color}')" onmouseleave="_trajRingHoverLeave('${id}')"` : '';
+  const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${legHoverAttr}/>` : '';
   let out = `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
   // SOI handoff seams: small dashed circles where the trajectory leaves one
   // sphere of influence for another (the polyline BREAKS here by design —
@@ -2306,6 +2312,12 @@ function _trajBodyPxR(trueR, zoom) {
 const _TRAJ_SURFACE_PX = 24;
 const _TRAJ_CHIP_PX = 2;
 const _TRAJ_CHIP_R = 7; // constant screen radius (px/render-unit) for the chip tier
+// R6.2.1: middle plain-disc tier removed (flight-test item 2) — the surfaced
+// disc now renders all the way down to the chip threshold. Below this radius
+// (px) the surfaced disc skips vector feature sampling (base fill + limb
+// gradient only — visually indistinguishable at that size, and keeps the
+// per-point path-string cost bounded at small sizes).
+const _TRAJ_FEATURE_PX = 14;
 
 // Astronomical glyphs — reuses the same symbols as the Orbits page destination
 // picker (060-orbit-categories.js ORBIT_CATEGORIES icons) for Earth/Moon/Mars/
@@ -2415,25 +2427,37 @@ function _trajLimbGradientDef(gradId, body, sunDirAngle) {
 // bounded; the base-color fill alone still reads correctly at that zoom.
 function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewportDiagPx) {
   const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
-  const skipGeometry = viewportDiagPx && rPx > viewportDiagPx * 4;
+  // R6.2.1 item 2: skip vector feature sampling both when the disc is
+  // absurdly huge (mostly off-screen — path strings would be unbounded) AND
+  // when it's small enough (< _TRAJ_FEATURE_PX) that features are invisible
+  // — the surfaced tier now runs all the way to the chip threshold, so this
+  // keeps small-disc rendering as cheap as the old plain-disc middle tier.
+  const skipGeometry = (viewportDiagPx && rPx > viewportDiagPx * 4) || rPx < _TRAJ_FEATURE_PX;
   const baseFill = style.base || (style.bands && style.bands[0]) || _trajBodyColor(body);
-  let inner = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="${baseFill}"/>`;
+  // Feature paths are collected separately so they can be clipped to the
+  // disc circle (item 1a) — the limb-culling below only breaks point RUNS at
+  // the hemisphere edge; the fill still closed straight chords across gaps
+  // and, when tilted, maria/coastline geometry could spill past the disc's
+  // own edge. Clipping to the exact disc circle kills the spill and hides
+  // most chord artifacts (chords occur where geometry exits the disc).
+  let features = '';
   if (!skipGeometry) {
     if (body === 'Earth' && typeof PROG_GEO_EARTH !== 'undefined') {
       PROG_GEO_EARTH.forEach(poly => {
         const d = _trajGeoPolyPath(poly, spinAngle, cx, cy, rPx);
-        if (d) inner += `<path d="${d}Z" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
+        if (d) features += `<path d="${d}Z" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
       });
     } else if (body === 'Moon' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Moon || []).forEach(f => {
         const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
-        if (d) inner += `<path d="${d}Z" fill="${style.mare || '#7d7566'}" stroke="none"/>`;
+        const fill = style[f.kind] || style.mare || '#7d7566';
+        if (d) features += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
       });
     } else if (body === 'Mars' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Mars || []).forEach(f => {
         const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
         const fill = style[f.kind] || style.base;
-        if (d) inner += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
+        if (d) features += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
       });
     } else if ((body === 'Jupiter' || body === 'Saturn') && style.bands) {
       const bands = style.bands, nBands = bands.length, nSeg = 16;
@@ -2454,7 +2478,7 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewpor
           d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
           started = true;
         }
-        if (d) inner += `<path d="${d}Z" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
+        if (d) features += `<path d="${d}Z" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
       }
     }
     // Venus/Mercury/Titan: base disc only (Venus's base fill is already a
@@ -2462,8 +2486,16 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewpor
   }
   _trajGeoIdSeq++;
   const gradId = `trajLimb${_trajGeoIdSeq}`;
-  return `<defs>${_trajLimbGradientDef(gradId, body, sunDirAngle)}</defs>` +
-    `<g>${inner}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
+  const clipId = `trajClip${_trajGeoIdSeq}`;
+  const baseCircle = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="${baseFill}"/>`;
+  // item 1a: surface features clipped to the disc circle — kills the spill
+  // past the limb when tilted (Moon maria) and hides most chord artifacts
+  // (Earth coastlines) since those occur exactly where geometry exits the
+  // disc. Unique clip id per body-instance-per-render-pass (shares the
+  // limb-gradient id counter, already unique).
+  const featuresSvg = features ? `<g clip-path="url(#${clipId})">${features}</g>` : '';
+  return `<defs>${_trajLimbGradientDef(gradId, body, sunDirAngle)}<clipPath id="${clipId}"><circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}"/></clipPath></defs>` +
+    `<g>${baseCircle}${featuresSvg}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
     `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/></g>`;
 }
 // Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
@@ -2477,12 +2509,14 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
     { screenSize: labelSize, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
   const clickAttr = clickId ? ` class="traj-body-glyph" style="cursor:pointer" onclick="trajGlyphClick('${clickId}','${body}')"` : '';
   let disc;
-  if (trueRpx >= _TRAJ_SURFACE_PX) {
+  if (trueRpx >= _TRAJ_CHIP_PX) {
+    // item 2: middle plain-disc tier removed — surfaced disc renders all the
+    // way down to the chip threshold (same constant-floor clamp as the old
+    // tier 2 kept the disc from vanishing below _TRAJ_MIN_BODY_PX; feature
+    // sampling itself is skipped internally below _TRAJ_FEATURE_PX).
+    const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX);
     const spin = _trajBodySpinAngle(body, viewT);
-    disc = _trajSurfacedDiscSVG(body, cx, cy, trueRpx, spin, sunDirAngle, viewportDiagPx);
-  } else if (trueRpx >= _TRAJ_CHIP_PX) {
-    const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX); // tier 2: same constant-floor clamp as _trajBodyPxR
-    disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="${color}" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
+    disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDirAngle, viewportDiagPx);
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';
     disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${_TRAJ_CHIP_R}" fill="var(--nm-bg)" fill-opacity="0.15" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>` +

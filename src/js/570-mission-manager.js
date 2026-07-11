@@ -1142,6 +1142,13 @@ function _missionEventEditFieldsHTML(m, idx) {
   const _vehBefore = _missionVehiclesBeforeEvent(m, idx);
   const _vehOpt = (selKey, exclKey) => _vehBefore.filter(v => v.key !== exclKey)
     .map(v => `<option value="${v.key}"${v.key === selKey ? ' selected' : ''}>${v.name}</option>`).join('');
+  // Round 2 item 2 (regression restore, R6.2.1): precision +/- nudge buttons,
+  // hoisted so both the solved-maneuver branch (time only — dv components are
+  // solver-owned display, see progNmComputeEdgeDv) and the manual MNODE
+  // branch (all axes + time) can use them. Standard step 10 m/s / 60 s,
+  // shift-click for the fine step (1 m/s / 10 s).
+  const _nudgeBtn = (field, sign, glyph) => `<button type="button" class="act-btn" style="padding:2px 7px;font-size:11px;line-height:1;" title="Shift-click for fine step" onclick="event.stopPropagation();missionMnodeNudge('${id}',${idx},'${field}',${sign},event)">${glyph}</button>`;
+  const _nudgeRow = (field) => `<div style="display:flex;gap:4px;">${_nudgeBtn(field, -1, '−')}${_nudgeBtn(field, 1, '+')}</div>`;
   let editForm = '';
   if (e.type === 'BURN') {
     editForm = `
@@ -1184,6 +1191,12 @@ function _missionEventEditFieldsHTML(m, idx) {
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// edit the burn/separate steps on the maneuver card itself</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyManeuverEdit('${id}',${idx})">Apply</button>
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-start;margin-top:10px;">
+          <div class="cfg-item"><label class="cfg-label" title="Solved maneuvers: only the departure MET is directly nudgeable — the ΔV components are solver-owned display, refreshed from the physics leg every recompute.">MET nudge</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">${_metFmt((e.at && e.at.value_s) || 0)}</span>
+              ${_nudgeRow('met')}
+            </div>
+          </div>
           ${_missionDurationOverrideHTML(id, idx, e)}
           <div class="cfg-item"><label class="cfg-label">&Delta;V (m/s) ${e.dvOverride!=null?'<span style="color:var(--accent3)">(custom)</span>':''}</label>
             <div style="display:flex;gap:6px;align-items:center;">
@@ -1306,10 +1319,6 @@ function _missionEventEditFieldsHTML(m, idx) {
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyExpendEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'MNODE') {
-    // Round 2 item 2: precision +/- nudge buttons per axis + time, standard
-    // step 10 m/s / 60 s, shift-click for the fine step (1 m/s / 10 s).
-    const _nudgeBtn = (field, sign, glyph) => `<button type="button" class="act-btn" style="padding:2px 7px;font-size:11px;line-height:1;" title="Shift-click for fine step" onclick="event.stopPropagation();missionMnodeNudge('${id}',${idx},'${field}',${sign},event)">${glyph}</button>`;
-    const _nudgeRow = (field) => `<div style="display:flex;gap:4px;">${_nudgeBtn(field, -1, '−')}${_nudgeBtn(field, 1, '+')}</div>`;
     // Round 2 item 3(b): explicit CA-target dropdown, persisted on the log
     // entry as caTarget (authored state, same as any other MNODE field).
     const _ownBody = (e.orbitAtBurn && e.orbitAtBurn.body) || 'Earth';
@@ -4099,8 +4108,13 @@ function missionApplyMnodeEdit(id, idx) {
 // (1 m/s / 10 s).
 function missionMnodeNudge(id, idx, field, sign, ev) {
   if (ev && ev.stopPropagation) ev.stopPropagation();
-  const m = _missionGet(id); if (!m || !m.log[idx] || !_evIsManualBurn(m.log[idx])) return;
+  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
   const e = m.log[idx];
+  // Solved MNODEs (regression restore, R6.2.1): only the departure MET is
+  // author-nudgeable — dv components are solver-owned display (refreshed
+  // from the physics leg every recompute via progNmComputeEdgeDv), nudging
+  // them here would be silently overwritten and misleading.
+  if (!_evIsManualBurn(e) && field !== 'met') return;
   const fine = !!(ev && ev.shiftKey);
   if (field === 'met') {
     const step = fine ? 10 : 60;
