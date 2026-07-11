@@ -2199,7 +2199,6 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   // rings, arcs, spurs, physics samples, grid) projects through it.
   _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
   const tilt = Math.PI / 2 - _trajProjCtx.el;
-  _trajGeoIdSeq = 0; // R6.2: fresh unique gradient ids each render pass
 
   // World-to-render: heliocentric km -> PROJECTED render units (floating
   // origin, 3D camera rotation, then ×zoom so the emitted coordinate space is
@@ -2285,8 +2284,13 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const forceLabel = trueRpx < _TRAJ_MIN_BODY_PX;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      const sunDirAngle = Math.atan2(sunP.y - p.y, sunP.x - p.x);
-      s += _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId, viewT, sunDirAngle, viewportDiagPx);
+      // R6.2 defect3: body->Sun direction as a WORLD-frame unit 3-vector (not
+      // a 2D screen angle) — the terminator math needs the real camera-depth
+      // component (zc_sun), which a screen-space atan2 of two already-
+      // projected points can't recover.
+      const sunLen = Math.hypot(wp.x, wp.y, wp.z) || 1;
+      const sunDir3 = [-wp.x / sunLen, -wp.y / sunLen, -wp.z / sunLen];
+      s += _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId, viewT, sunDir3, viewportDiagPx);
       // R6.3: site marker + mock ascent path — only meaningful once the disc is
       // surfaced (same LOD tier as coastlines) and only for Earth (the only
       // body missions currently launch from).
@@ -2332,9 +2336,10 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const trueRpx = trueR * zoom;
     let s = '';
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
-      const sunP0 = toRender(0, 0, 0);
-      const sunDirAngle = Math.atan2(sunP0.y - p.y, sunP0.x - p.x);
-      const glyphSvg = _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(name), name, zoom, cam.anchorBody === name, false, m && m.missionId, viewT, sunDirAngle, viewportDiagPx);
+      // R6.2 defect3: same world-frame sun-direction vector as the planet pass.
+      const sunLen = Math.hypot(wp.x, wp.y, wp.z) || 1;
+      const sunDir3 = [-wp.x / sunLen, -wp.y / sunLen, -wp.z / sunLen];
+      const glyphSvg = _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(name), name, zoom, cam.anchorBody === name, false, m && m.missionId, viewT, sunDir3, viewportDiagPx);
       s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m) * zoom; // km -> render units
@@ -2525,39 +2530,118 @@ function _trajSurfacePoint(unitDir, cx, cy, rPx) {
   const q = _trajProj3(unitDir[0], unitDir[1], unitDir[2]);
   return { x: cx + q.x * rPx, y: cy + q.y * rPx, depth: q.depth };
 }
-// Flat [lon0,lat0,lon1,lat1,...] TENTHS-of-degree polygon (PROG_GEO_EARTH) ->
-// an SVG path `d` string, front-hemisphere points only (camera depth >= 0);
-// runs break (new M) at the limb — filled paths with limb breaks are
-// acceptable/rudimentary by design (238-geo-data.js header).
-function _trajGeoPolyPath(lonLatTenths, spinAngle, cx, cy, rPx) {
-  let d = '', started = false;
-  for (let i = 0; i < lonLatTenths.length; i += 2) {
-    const lon = lonLatTenths[i] / 10, lat = lonLatTenths[i + 1] / 10;
-    const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle), cx, cy, rPx);
-    if (q.depth < 0) { started = false; continue; }
-    d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
-    started = true;
+// ── R6.2 defect1: exact hemisphere clip (2026-07-11) ────────────────────────
+// The old per-vertex "drop back-facing points, keep the front runs joined"
+// approach let the SVG fill close each gap with a straight chord THROUGH the
+// disc interior (visible as giant wedges, worst pole-on where whole polygons
+// straddle the limb). This clips a closed polygon of WORLD-frame unit
+// direction vectors (as produced by _trajSpinRotate/_trajLatLonUnit, i.e.
+// pre-projection) against the camera's front hemisphere (projected depth >=
+// 0), closing every crossed edge exactly ON the limb circle instead of
+// cutting inward.
+//
+// Exactness: depth is a LINEAR function of the input vector (_trajProjectVec
+// is a pure rotation), so interpolating the two endpoint UNIT VECTORS in 3D
+// by t = za/(za-zb) yields a point whose depth is exactly 0 by construction;
+// renormalizing that point to unit length then gives a projected radius of
+// exactly 1 (|x,y|^2 + 0^2 = 1) — i.e. it lands exactly on the limb, not an
+// approximation of it (accurate at any polygon scale, not just coastlines).
+//
+// Returns { closed, runs }:
+//   closed: true  -> `runs` is a single array holding the ENTIRE input
+//                     polygon (every vertex front-facing) — draw with a
+//                     plain `Z` close, no limb involved.
+//   closed: false -> `runs` is zero or more open chains, each starting and
+//                     ending exactly on the limb (or [] if fully back-facing).
+function _trajHemiClipRuns(dirs) {
+  const n = dirs.length;
+  if (!n) return { closed: false, runs: [] };
+  const zc = dirs.map(v => _trajProj3(v[0], v[1], v[2]).depth);
+  if (zc.every(z => z >= 0)) return { closed: true, runs: [dirs.slice()] };
+  if (zc.every(z => z < 0)) return { closed: false, runs: [] };
+  const lerpUnit = (i, j, t) => {
+    const wx = dirs[i][0] + (dirs[j][0] - dirs[i][0]) * t;
+    const wy = dirs[i][1] + (dirs[j][1] - dirs[i][1]) * t;
+    const wz = dirs[i][2] + (dirs[j][2] - dirs[i][2]) * t;
+    const len = Math.hypot(wx, wy, wz) || 1;
+    return [wx / len, wy / len, wz / len];
+  };
+  const runs = [];
+  let cur = null;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const za = zc[i], zb = zc[j];
+    if (za >= 0) {
+      if (!cur) cur = [];
+      cur.push(dirs[i]);
+      if (zb < 0) { cur.push(lerpUnit(i, j, za / (za - zb))); runs.push(cur); cur = null; }
+    } else if (zb >= 0) {
+      cur = [lerpUnit(i, j, za / (za - zb))];
+    }
   }
-  return d;
+  // Wraparound: if the LAST edge crossed back->front, `cur` is left open at
+  // loop end — it is the run continuing across the array boundary INTO
+  // runs[0] (which necessarily starts at dirs[0] itself, since that crossing
+  // is only left open when dirs[0] is front-facing). Splicing it onto the
+  // front of runs[0] reunites the two into the single continuous run they
+  // actually are, instead of emitting a spurious extra fragment.
+  if (cur) { if (runs.length) runs[0] = cur.concat(runs[0]); else runs.push(cur); }
+  return { closed: false, runs };
+}
+// Project a hemisphere-clip result to an SVG path `d`, stitching consecutive
+// open runs together with an elliptical arc ALONG THE LIMB (radius rPx)
+// instead of a chord — this is what actually kills the chord-wedge artifact.
+// Winding-direction disambiguation between the two candidate arcs (short vs
+// long way around) is resolved by taking the SHORT arc; at coastline/maria
+// polygon scale (item 1a already clips to the disc circle as a safety net
+// too) this reads correctly in every case exercised during verification —
+// noted here per the brief as the accepted fallback for ambiguous cases.
+function _trajClippedRunsToPath(clip, cx, cy, rPx) {
+  const { closed, runs } = clip;
+  if (!runs.length) return '';
+  const proj = v => { const q = _trajProj3(v[0], v[1], v[2]); return { x: cx + q.x * rPx, y: cy + q.y * rPx }; };
+  if (closed) {
+    const pts = runs[0].map(proj);
+    return pts.map((p, k) => (k ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ') + ' Z';
+  }
+  let d = '';
+  for (let r = 0; r < runs.length; r++) {
+    const pts = runs[r].map(proj);
+    d += pts.map((p, k) => ((r === 0 && k === 0) ? 'M ' : 'L ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ') + ' ';
+    const nextPts = runs[(r + 1) % runs.length].map(proj);
+    const exitPt = pts[pts.length - 1], entryPt = nextPts[0];
+    const a0 = Math.atan2(exitPt.y - cy, exitPt.x - cx), a1 = Math.atan2(entryPt.y - cy, entryPt.x - cx);
+    let delta = a1 - a0;
+    while (delta <= -Math.PI) delta += 2 * Math.PI;
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    const sweep = delta >= 0 ? 1 : 0;
+    d += `A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 0 ${sweep} ${entryPt.x.toFixed(2)} ${entryPt.y.toFixed(2)} `;
+  }
+  return d + 'Z';
+}
+// Flat [lon0,lat0,lon1,lat1,...] TENTHS-of-degree polygon (PROG_GEO_EARTH) ->
+// an SVG path `d` string, hemisphere-clipped and limb-closed (item defect1).
+function _trajGeoPolyPath(lonLatTenths, spinAngle, cx, cy, rPx) {
+  const dirs = [];
+  for (let i = 0; i < lonLatTenths.length; i += 2) {
+    dirs.push(_trajSpinRotate(_trajLatLonUnit(lonLatTenths[i + 1] / 10, lonLatTenths[i] / 10), spinAngle));
+  }
+  return _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
 }
 // PROG_GEO_FEATURES ellipse {lat,lon,rLat,rLon} -> sampled SVG path `d`
-// string, same front-hemisphere/limb-break treatment as the coastline path.
+// string, same hemisphere-clip/limb-close treatment as the coastline path.
 function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx) {
   const n = 20;
-  let d = '', started = false;
   const lonScale = Math.max(0.15, Math.cos(feat.lat * _PROG_D2R)); // lon degrees compress toward the poles
-  for (let k = 0; k <= n; k++) {
+  const dirs = [];
+  for (let k = 0; k < n; k++) { // n (not n+1): the polygon is implicitly closed by the clip/path Z, no duplicate seam point
     const a = 2 * Math.PI * k / n;
     const lat = feat.lat + feat.rLat * Math.sin(a);
     const lon = feat.lon + (feat.rLon * Math.cos(a)) / lonScale;
-    const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle), cx, cy, rPx);
-    if (q.depth < 0) { started = false; continue; }
-    d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
-    started = true;
+    dirs.push(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle));
   }
-  return d;
+  return _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
 }
-let _trajGeoIdSeq = 0; // unique <radialGradient> ids per render pass (reset in _trajWorldSVG)
 // Shared limb-darkening overlay: transparent center -> ~35% black rim,
 // center offset toward the Sun's SCREEN direction (cheap 2D dot from already-
 // projected positions) for a rudimentary day-side/terminator feel.
@@ -2570,13 +2654,68 @@ function _trajLimbGradientDef(gradId, body, sunDirAngle) {
     `<stop offset="30%" stop-color="${limbColor}" stop-opacity="0"/>` +
     `<stop offset="100%" stop-color="${limbColor}" stop-opacity="1"/></radialGradient>`;
 }
+// ── R6.2 defect3: real terminator (2026-07-11, MATH.md §7m) ────────────────
+// `sd` is the body->Sun WORLD-frame unit vector. Builds the great circle
+// perpendicular to `sd` (the terminator) in WORLD frame — NOT spin-rotated,
+// since illumination depends on sun geometry, not the body's own rotation —
+// samples it, and runs it through the SAME hemisphere clipper as coastlines
+// (item defect1's clipper doubles as the "ellipse feature" clipper the brief
+// asked for). The front-visible arc plus a limb arc closes the NIGHT region;
+// which limb arc (of the two candidates) is night is resolved by checking
+// which one avoids the sun's own screen angle. Returns null when no scrim is
+// needed (fully lit) or {path, alpha} otherwise.
+function _trajTerminatorNightPath(sd, cx, cy, rPx) {
+  const sq = _trajProj3(sd[0], sd[1], sd[2]);
+  const a = sq.x, b = sq.y, c = sq.depth; // a^2+b^2+c^2 == 1 (rotation preserves length)
+  if (c >= 0.995) return null; // sun ~directly toward viewer: fully lit face, no scrim
+  const FULL_CIRCLE = `M ${(cx - rPx).toFixed(2)} ${cy.toFixed(2)} A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 1 0 ${(cx + rPx).toFixed(2)} ${cy.toFixed(2)} A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 1 0 ${(cx - rPx).toFixed(2)} ${cy.toFixed(2)} Z`;
+  if (c <= -0.995) return { path: FULL_CIRCLE, alpha: 0.55 }; // sun ~directly away: fully dark face, soft floor so geometry stays faintly legible
+  // World-frame basis spanning the plane perpendicular to sd (the terminator
+  // plane); worldUp is the ecliptic normal (+z), matching _trajLatLonUnit's
+  // spin-axis convention.
+  let e1x = sd[1] * 1 - sd[2] * 0, e1y = sd[2] * 0 - sd[0] * 1, e1z = sd[0] * 0 - sd[1] * 0; // sd x (0,0,1)
+  let elen = Math.hypot(e1x, e1y, e1z);
+  if (elen < 1e-6) { e1x = 1; e1y = 0; e1z = 0; elen = 1; } // sd ~parallel to ecliptic pole (edge case, no real mission body hits this)
+  e1x /= elen; e1y /= elen; e1z /= elen;
+  const e2x = sd[1] * e1z - sd[2] * e1y, e2y = sd[2] * e1x - sd[0] * e1z, e2z = sd[0] * e1y - sd[1] * e1x; // sd x e1, already unit
+  const N = 40;
+  const termDirs = [];
+  for (let k = 0; k < N; k++) {
+    const phi = 2 * Math.PI * k / N, cp = Math.cos(phi), sp = Math.sin(phi);
+    termDirs.push([cp * e1x + sp * e2x, cp * e1y + sp * e2y, cp * e1z + sp * e2z]);
+  }
+  const clip = _trajHemiClipRuns(termDirs);
+  if (clip.closed || !clip.runs.length) return null; // degenerate (shouldn't occur once |c|<0.995) — no scrim rather than a wrong one
+  const run = clip.runs[0];
+  if (run.length < 2) return null;
+  const proj = v => { const q = _trajProj3(v[0], v[1], v[2]); return { x: cx + q.x * rPx, y: cy + q.y * rPx }; };
+  const p0 = proj(run[0]), pn = proj(run[run.length - 1]);
+  const angStart = Math.atan2(p0.y - cy, p0.x - cx), angEnd = Math.atan2(pn.y - cy, pn.x - cx);
+  const theta = Math.atan2(b, a); // sun's own screen angle from disc center
+  const norm2pi = x => { x %= 2 * Math.PI; return x < 0 ? x + 2 * Math.PI : x; };
+  const s = norm2pi(angStart), e = norm2pi(angEnd), sunA = norm2pi(theta);
+  const span = norm2pi(s - e);           // CCW (increasing-angle) span from pn's angle to p0's angle
+  const sunSpan = norm2pi(sunA - e);     // where the sun angle falls within that sweep
+  const ccwArcContainsSun = sunSpan <= span; // that arc is the DAY side -> night needs the complement
+  const sweep = ccwArcContainsSun ? 0 : 1;
+  const arcSpan = ccwArcContainsSun ? (2 * Math.PI - span) : span;
+  const largeArc = arcSpan > Math.PI ? 1 : 0;
+  let d = `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} `;
+  for (let i = 1; i < run.length; i++) { const p = proj(run[i]); d += `L ${p.x.toFixed(2)} ${p.y.toFixed(2)} `; }
+  d += `A ${rPx.toFixed(2)} ${rPx.toFixed(2)} 0 ${largeArc} ${sweep} ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} Z`;
+  return { path: d, alpha: 0.4 };
+}
 // Full surfaced-disc render (tier 1): base color + surface geometry (per body
-// kind) + limb-shading overlay. `rPx` is the disc's TRUE (unclamped) screen
-// radius. Perf clamp: an absurdly huge disc (camera zoomed deep into the
-// body, disc mostly off-screen) skips surface geometry sampling entirely —
-// same spirit as the polyline viewClampUnits pattern — so path strings stay
-// bounded; the base-color fill alone still reads correctly at that zoom.
-function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewportDiagPx) {
+// kind) + limb-shading overlay + terminator scrim. `rPx` is the disc's TRUE
+// (unclamped) screen radius. Perf clamp: an absurdly huge disc (camera
+// zoomed deep into the body, disc mostly off-screen) skips surface geometry
+// sampling entirely — same spirit as the polyline viewClampUnits pattern —
+// so path strings stay bounded; the base-color fill alone still reads
+// correctly at that zoom. `sunDir3` is the body->Sun WORLD-frame unit vector
+// (defect3); `instanceId` (mission id or a fixed fallback) + `body` form a
+// STABLE per-body-per-instance id for the gradient/clip defs (defect2 — see
+// _trajBodyDiscTiered).
+function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDiagPx, instanceId) {
   const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
   // R6.2.1 item 2: skip vector feature sampling both when the disc is
   // absurdly huge (mostly off-screen — path strings would be unbounded) AND
@@ -2586,67 +2725,65 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewpor
   const skipGeometry = (viewportDiagPx && rPx > viewportDiagPx * 4) || rPx < _TRAJ_FEATURE_PX;
   const baseFill = style.base || (style.bands && style.bands[0]) || _trajBodyColor(body);
   // Feature paths are collected separately so they can be clipped to the
-  // disc circle (item 1a) — the limb-culling below only breaks point RUNS at
-  // the hemisphere edge; the fill still closed straight chords across gaps
-  // and, when tilted, maria/coastline geometry could spill past the disc's
-  // own edge. Clipping to the exact disc circle kills the spill and hides
-  // most chord artifacts (chords occur where geometry exits the disc).
+  // disc circle (item 1a) as a safety net on top of the exact hemisphere clip
+  // above (defect1) — belt-and-suspenders against any float-precision spill.
   let features = '';
   if (!skipGeometry) {
     if (body === 'Earth' && typeof PROG_GEO_EARTH !== 'undefined') {
       PROG_GEO_EARTH.forEach(poly => {
         const d = _trajGeoPolyPath(poly, spinAngle, cx, cy, rPx);
-        if (d) features += `<path d="${d}Z" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
+        if (d) features += `<path d="${d}" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
       });
     } else if (body === 'Moon' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Moon || []).forEach(f => {
         const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
         const fill = style[f.kind] || style.mare || '#7d7566';
-        if (d) features += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
+        if (d) features += `<path d="${d}" fill="${fill}" stroke="none"/>`;
       });
     } else if (body === 'Mars' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Mars || []).forEach(f => {
         const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
         const fill = style[f.kind] || style.base;
-        if (d) features += `<path d="${d}Z" fill="${fill}" stroke="none"/>`;
+        if (d) features += `<path d="${d}" fill="${fill}" stroke="none"/>`;
       });
     } else if ((body === 'Jupiter' || body === 'Saturn') && style.bands) {
       const bands = style.bands, nBands = bands.length, nSeg = 16;
       for (let b = 0; b < nBands; b++) {
         const lat0 = -90 + (180 * b) / nBands, lat1 = -90 + (180 * (b + 1)) / nBands;
-        let d = '', started = false;
+        const dirs = [];
         for (let k = 0; k <= nSeg; k++) {
           const lon = -180 + (360 * k) / nSeg;
-          const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat1, lon), spinAngle), cx, cy, rPx);
-          if (q.depth < 0) { started = false; continue; }
-          d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
-          started = true;
+          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat1, lon), spinAngle));
         }
         for (let k = nSeg; k >= 0; k--) {
           const lon = -180 + (360 * k) / nSeg;
-          const q = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(lat0, lon), spinAngle), cx, cy, rPx);
-          if (q.depth < 0) { started = false; continue; }
-          d += (started ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ' ';
-          started = true;
+          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat0, lon), spinAngle));
         }
-        if (d) features += `<path d="${d}Z" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
+        const d = _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
+        if (d) features += `<path d="${d}" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
       }
     }
     // Venus/Mercury/Titan: base disc only (Venus's base fill is already a
     // brightened tint via PROG_GEO_STYLE.Venus).
   }
-  _trajGeoIdSeq++;
-  const gradId = `trajLimb${_trajGeoIdSeq}`;
-  const clipId = `trajClip${_trajGeoIdSeq}`;
+  // R6.2 defect2: STABLE deterministic ids (per body per render instance)
+  // instead of a per-render-unique counter. The world layer is rebuilt
+  // wholesale via innerHTML swap every ~33ms during rotation; unique ids
+  // meant every rebuild minted fresh gradient/clipPath ids and rewired every
+  // url(#) reference, which browsers can resolve asynchronously relative to
+  // the atomic DOM swap -> one-frame paint gaps (the flicker). Same-id defs
+  // recreated atomically by the innerHTML swap never dangle a reference.
+  const idBase = `traj-geo-${(instanceId || 'x')}-${body}`;
+  const gradId = `${idBase}-limb`;
+  const clipId = `${idBase}-clip`;
+  const sunQ = _trajProj3(sunDir3[0], sunDir3[1], sunDir3[2]);
+  const sunDirAngle = Math.atan2(sunQ.y, sunQ.x);
   const baseCircle = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="${baseFill}"/>`;
-  // item 1a: surface features clipped to the disc circle — kills the spill
-  // past the limb when tilted (Moon maria) and hides most chord artifacts
-  // (Earth coastlines) since those occur exactly where geometry exits the
-  // disc. Unique clip id per body-instance-per-render-pass (shares the
-  // limb-gradient id counter, already unique).
   const featuresSvg = features ? `<g clip-path="url(#${clipId})">${features}</g>` : '';
+  const term = _trajTerminatorNightPath(sunDir3, cx, cy, rPx);
+  const termSvg = term ? `<path d="${term.path}" fill="rgba(0,0,0,${term.alpha})" clip-path="url(#${clipId})"/>` : '';
   return `<defs>${_trajLimbGradientDef(gradId, body, sunDirAngle)}<clipPath id="${clipId}"><circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}"/></clipPath></defs>` +
-    `<g>${baseCircle}${featuresSvg}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
+    `<g>${baseCircle}${featuresSvg}${termSvg}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
     `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/></g>`;
 }
 // Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
@@ -2654,7 +2791,7 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDirAngle, viewpor
 // one of the three LOD tiers from the TRUE apparent radius (trueRpx,
 // unclamped) and returns the disc svg, wrapped in the same fly-to click
 // handler as _trajGlyph. Registers the body-name label exactly as before.
-function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceLabel, clickId, viewT, sunDirAngle, viewportDiagPx) {
+function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceLabel, clickId, viewT, sunDir3, viewportDiagPx) {
   const labelSize = Math.max(trueRpx, _TRAJ_CHIP_R);
   _trajRegisterLabel(cx, cy - labelSize, [{ text: body, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
     { screenSize: labelSize, minSize: _TRAJ_LOD_BODY_MIN, selected: !!isFocus || !!forceLabel });
@@ -2667,7 +2804,7 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
     // sampling itself is skipped internally below _TRAJ_FEATURE_PX).
     const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX);
     const spin = _trajBodySpinAngle(body, viewT);
-    disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDirAngle, viewportDiagPx);
+    disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';
     disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${_TRAJ_CHIP_R}" fill="var(--nm-bg)" fill-opacity="0.15" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>` +

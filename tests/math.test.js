@@ -90,6 +90,7 @@ const {
   _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation, _trajEventNodeInfo,
   _nmMatchOrbitToNode, _nmClassifySettledOrbit,
   _trajLatLonUnit, _trajSpinRotate, _trajBodySpinAngle, _trajTrueBodyRadiusKm,
+  _trajHemiClipRuns,
   _evIsSolvedManeuver, _evManeuverTarget, _evIsManualBurn, _missionMigrateManeuverEntry,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
@@ -2289,6 +2290,62 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // Infinity for tArr-tDep).
   ok('_trajTickIntervalS: non-positive tof falls back to the finest rung', _trajTickIntervalS(-5) === 60);
   ok('_trajTickIntervalS: Infinity tof falls back to the coarsest rung', _trajTickIntervalS(Infinity) === 8640000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _trajHemiClipRuns (2026-07-11, R6.2 defect1 — planet-surface chord-wedge fix)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Default projection context is top-down (az:0, el:PI/2) at module load, so
+  // for these tests camera depth == world z exactly (matches _trajProjectVec
+  // at el=PI/2). Use points on the unit circle in the x-z plane for exactness.
+  const deg = d => d * Math.PI / 180;
+  const onCircle = degAngle => [Math.cos(deg(degAngle)), 0, Math.sin(deg(degAngle))];
+
+  // Case 1: fully front-facing polygon (all z >= 0) -> single CLOSED run,
+  // vertices unchanged (no limb involved).
+  const frontPoly = [onCircle(20), onCircle(60), onCircle(100), onCircle(140)];
+  const c1 = _trajHemiClipRuns(frontPoly);
+  ok('_trajHemiClipRuns: fully front polygon is closed with all vertices kept', c1.closed === true && c1.runs.length === 1 && c1.runs[0].length === 4);
+
+  // Case 2: fully back-facing polygon (all z < 0) -> no runs at all.
+  const backPoly = [onCircle(200), onCircle(240), onCircle(280), onCircle(320)];
+  const c2 = _trajHemiClipRuns(backPoly);
+  ok('_trajHemiClipRuns: fully back polygon drops entirely', c2.closed === false && c2.runs.length === 0);
+
+  // Case 3: single hemisphere crossing (2 front vertices, 2 back vertices,
+  // contiguous) -> exactly one OPEN run, both its endpoints landing exactly
+  // ON the limb (x^2+z^2 == 1, since y=0 here) rather than the original
+  // vertices — this is the chord-wedge fix: the run is limb-bounded, not a
+  // straight cut through the interior.
+  const halfPoly = [onCircle(-45), onCircle(45), onCircle(135), onCircle(225)];
+  const c3 = _trajHemiClipRuns(halfPoly);
+  ok('_trajHemiClipRuns: single crossing yields exactly one open run', c3.closed === false && c3.runs.length === 1);
+  if (c3.runs.length === 1) {
+    const run = c3.runs[0];
+    ok('_trajHemiClipRuns: single-crossing run keeps the 2 original front vertices + 2 limb points', run.length === 4);
+    const first = run[0], last = run[run.length - 1];
+    approx('_trajHemiClipRuns: run start lands on the limb (unit radius)', first[0] * first[0] + first[1] * first[1] + first[2] * first[2], 1, 1e-9);
+    approx('_trajHemiClipRuns: run end lands on the limb (unit radius)', last[0] * last[0] + last[1] * last[1] + last[2] * last[2], 1, 1e-9);
+    approx('_trajHemiClipRuns: run start depth is exactly 0 (on the hemisphere boundary)', last[2], 0, 1e-9);
+  }
+
+  // Case 4: polygon alternating front/back TWICE (front, back, front, back)
+  // -> two separate open runs, and — the wraparound edge case that a naive
+  // single-pass loop gets wrong — the run that spans the array boundary
+  // (last vertex front, first vertex back... or vice versa) must NOT be
+  // split into a spurious extra fragment.
+  const zigzagPoly = [onCircle(30), onCircle(210), onCircle(150), onCircle(330)]; // front,back,front,back
+  const c4 = _trajHemiClipRuns(zigzagPoly);
+  ok('_trajHemiClipRuns: alternating front/back twice yields exactly two open runs', c4.closed === false && c4.runs.length === 2);
+
+  // Case 5: wraparound-continuity regression — the run that crosses the
+  // dirs[n-1]->dirs[0] boundary must be ONE run, not two. Front vertices at
+  // index 0 and index n-1 (i.e. the run wraps across the array seam) with a
+  // single back vertex elsewhere.
+  const wrapPoly = [onCircle(10), onCircle(60), onCircle(200), onCircle(170)]; // front,front,back,front
+  const c5 = _trajHemiClipRuns(wrapPoly);
+  ok('_trajHemiClipRuns: run spanning the array wraparound stays a single run (not split)', c5.closed === false && c5.runs.length === 1 && c5.runs[0].length === 5);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
