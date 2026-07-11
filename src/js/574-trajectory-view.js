@@ -2799,6 +2799,173 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDia
     `<g>${baseCircle}${featuresSvg}${termSvg}<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="url(#${gradId})"/>` +
     `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rPx.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/></g>`;
 }
+// ── R6.4: real textured globes (MATH.md §7m raster addendum) ───────────────
+// Lazy per-body sampling-canvas cache: decodes PROG_TEXTURES[body] into an
+// offscreen canvas once and keeps its ImageData for bilinear sampling. Image
+// decode is async — callers MUST check `.ready` and fall back to the vector
+// path until the onload fires (which invalidates the raster cache below and
+// triggers a repaint through _trajRequestRepaint).
+let _trajTexStore = {};
+function _trajTextureFor(body) {
+  if (!(typeof PROG_TEXTURES !== 'undefined' && PROG_TEXTURES[body])) return null;
+  let t = _trajTexStore[body];
+  if (t) return t;
+  t = { ready: false, imgData: null, w: 0, h: 0 };
+  _trajTexStore[body] = t;
+  const img = new Image();
+  img.onload = () => {
+    // Sampling canvas: cap width so bilinear lookups stay cheap; equirect
+    // aspect is always 2:1 for these sources.
+    const sw = Math.min(img.naturalWidth || 1024, 1024);
+    const sh = Math.round(sw / 2);
+    const sc = document.createElement('canvas');
+    sc.width = sw; sc.height = sh;
+    const sctx = sc.getContext('2d');
+    sctx.drawImage(img, 0, 0, sw, sh);
+    t.imgData = sctx.getImageData(0, 0, sw, sh);
+    t.w = sw; t.h = sh;
+    t.ready = true;
+    _trajRasterCache = {}; // stale dataURLs reference the pre-decode fallback
+    _trajRequestRepaint();
+  };
+  img.src = PROG_TEXTURES[body];
+  return t;
+}
+// Bilinear sample of an ImageData at fractional pixel (fx,fy), wrapping X
+// (longitude seam) and clamping Y (poles).
+function _trajBilinearSample(imgData, w, h, fx, fy) {
+  fx = ((fx % w) + w) % w;
+  fy = fy < 0 ? 0 : (fy > h - 1 ? h - 1 : fy);
+  const x0 = Math.floor(fx), y0 = Math.floor(fy);
+  const x1 = (x0 + 1) % w, y1 = y0 + 1 > h - 1 ? h - 1 : y0 + 1;
+  const tx = fx - x0, ty = fy - y0;
+  const d = imgData.data;
+  const i00 = (y0 * w + x0) * 4, i10 = (y0 * w + x1) * 4, i01 = (y1 * w + x0) * 4, i11 = (y1 * w + x1) * 4;
+  const out = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    const a = d[i00 + c] + (d[i10 + c] - d[i00 + c]) * tx;
+    const b = d[i01 + c] + (d[i11 + c] - d[i01 + c]) * tx;
+    out[c] = a + (b - a) * ty;
+  }
+  return out;
+}
+// Raster an equirect texture to a shaded disc canvas via PER-PIXEL INVERSE
+// orthographic mapping. Derivation (MATH.md §7m raster addendum): the
+// forward map _trajProjectVec rotates a WORLD unit vector (x,y,z) by az then
+// tilt t=pi/2-el and reflects screen-x:
+//   u = -(x*ca - y*sa)                         [ca=cos(az), sa=sin(az)]
+//   v = (x*sa + y*ca)*ct - z*st                 [ct=cos(t), st=sin(t)]
+//   w = (x*sa + y*ca)*st + z*ct   (== depth)
+// Since this is a pure rotation, (u,v,w) is unit-length whenever (x,y,z) is,
+// so w = +sqrt(1-u^2-v^2) recovers the dropped depth on the front hemisphere.
+// Un-rotating tilt then azimuth (both orthonormal, so inverse = transpose)
+// gives back the WORLD direction; un-spinning by the body's own spin angle
+// (inverse of _trajSpinRotate) gives the BODY-FRAME direction that
+// _trajLatLonUnit produces lat/lon from — this is what makes the raster
+// align with the vector site markers, which route through the same chain.
+function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3) {
+  const tex = _trajTextureFor(body);
+  if (!tex || !tex.ready) return null;
+  const size = Math.max(1, Math.min(Math.round(discPx), 512));
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const out = ctx.createImageData(size, size);
+  const od = out.data;
+  const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
+  const ca = Math.cos(az || 0), sa = Math.sin(az || 0), ct = Math.cos(t), st = Math.sin(t);
+  const spc = Math.cos(spinAngle || 0), sps = Math.sin(spinAngle || 0);
+  const iw = tex.w, ih = tex.h, id = tex.imgData;
+  const R = size / 2;
+  // sunDir3 is WORLD-frame body->Sun unit vector (same one the vector
+  // terminator uses) — no re-derivation, single source per the brief.
+  const sx = sunDir3 ? sunDir3[0] : 0, sy = sunDir3 ? sunDir3[1] : 0, sz = sunDir3 ? sunDir3[2] : 1;
+  for (let py = 0; py < size; py++) {
+    const v = (py + 0.5 - R) / R;
+    for (let px = 0; px < size; px++) {
+      const u = (px + 0.5 - R) / R;
+      const r2 = u * u + v * v;
+      const pi = (py * size + px) * 4;
+      if (r2 > 1) { od[pi + 3] = 0; continue; }
+      const w = Math.sqrt(Math.max(0, 1 - r2));
+      // un-tilt: (ya,z) = R(-t) * (v,w)
+      const ya = v * ct + w * st;
+      const z = -v * st + w * ct;
+      const xa = -u;
+      // un-azimuth: (x,y) = R(-az) * (xa,ya)
+      const x = xa * ca + ya * sa;
+      const y = u * sa + ya * ca; // == -xa*sa + ya*ca
+      // un-spin: body-frame = R(-spin) * (x,y)
+      const bx = x * spc + y * sps;
+      const by = -x * sps + y * spc;
+      const bz = z;
+      const lat = Math.asin(Math.max(-1, Math.min(1, bz)));
+      const lon = Math.atan2(by, bx);
+      const fx = ((lon + Math.PI) / (2 * Math.PI)) * iw;
+      const fy = ((Math.PI / 2 - lat) / Math.PI) * ih;
+      const rgb = _trajBilinearSample(id, iw, ih, fx, fy);
+      // Shading in the SAME (world-frame, pre-unspin) coordinates as the
+      // vector terminator: normal == (x,y,z), dot with sunDir3.
+      let ndotl = x * sx + y * sy + z * sz;
+      const edge = 0.15;
+      let lightF = ndotl < -edge ? 0 : ndotl > edge ? 1 : (ndotl + edge) / (2 * edge);
+      lightF = lightF * lightF * (3 - 2 * lightF); // smoothstep
+      const NIGHT_FLOOR = 0.45;
+      const shade = NIGHT_FLOOR + (1 - NIGHT_FLOOR) * lightF;
+      const limb = 0.75 + 0.25 * w;
+      const f = shade * limb;
+      od[pi] = rgb[0] * f; od[pi + 1] = rgb[1] * f; od[pi + 2] = rgb[2] * f; od[pi + 3] = 255;
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas;
+}
+// Raster dataURL cache: quantized key -> dataURL, so drag/rotate re-uses a
+// stale raster between throttled re-raster passes instead of re-running the
+// per-pixel loop every 33ms frame. Cleared whenever a texture finishes
+// decoding (fallback frames must not stick around after real data arrives).
+let _trajRasterCache = {};
+const _TRAJ_RASTER_MIN_INTERVAL_MS = 120;
+function _trajRasteredDiscDataURL(body, discPx, spinAngle, az, el, sunDir3) {
+  const tex = _trajTextureFor(body);
+  if (!tex || !tex.ready) return null;
+  const discBucket = Math.round(discPx / 8) * 8;
+  const spinQ = Math.round((spinAngle || 0) * 100) / 100;
+  const azQ = Math.round((az || 0) * 100) / 100;
+  const elQ = Math.round((el != null ? el : Math.PI / 2) * 100) / 100;
+  // Coarse sun-direction quantization — the brief accepts a slightly stale
+  // globe mid-drag; 0.1 rad buckets keep the terminator visually correct
+  // without re-rastering on every frame.
+  const sunQ = sunDir3 ? [Math.round(sunDir3[0] * 10) / 10, Math.round(sunDir3[1] * 10) / 10, Math.round(sunDir3[2] * 10) / 10].join(',') : '0';
+  const key = `${body}|${discBucket}|${spinQ}|${azQ}|${elQ}|${sunQ}`;
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const cached = _trajRasterCache[key];
+  if (cached) return cached.url;
+  // Throttle: if ANY raster for this body happened very recently, reuse the
+  // most recent one (even if the key differs slightly) rather than pay the
+  // per-pixel cost again mid-drag.
+  const last = _trajRasterCache['__last_' + body];
+  if (last && (now - last.t) < _TRAJ_RASTER_MIN_INTERVAL_MS) return last.url;
+  const canvas = _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3);
+  if (!canvas) return null;
+  const url = canvas.toDataURL('image/png');
+  const entry = { url, t: now };
+  _trajRasterCache[key] = entry;
+  _trajRasterCache['__last_' + body] = entry;
+  return url;
+}
+// Repaint hook: after an async texture decode completes, re-render every
+// mounted trajectory-view panel at its current camera (same rebuild path
+// _trajApplyCam/_missionTrajAfterRender use) so the fallback vector frame is
+// replaced with the real raster without waiting for the next user gesture.
+function _trajRequestRepaint() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.mcc-view-area .traj-wrap[data-mid]').forEach(va => {
+    const id = va.getAttribute('data-mid');
+    const cam = _trajCamByMission[id];
+    if (id && cam && typeof _trajApplyCam === 'function') _trajApplyCam(id, cam);
+  });
+}
 // Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
 // planets/moons (Sun keeps its own plain _trajGlyph path, untouched). Picks
 // one of the three LOD tiers from the TRUE apparent radius (trueRpx,
@@ -2817,7 +2984,15 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
     // sampling itself is skipped internally below _TRAJ_FEATURE_PX).
     const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX);
     const spin = _trajBodySpinAngle(body, viewT);
-    disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
+    let rasterUrl = null;
+    if (r >= _TRAJ_FEATURE_PX && typeof PROG_TEXTURES !== 'undefined' && PROG_TEXTURES[body]) {
+      const az = _trajProjCtx.az, el = _trajProjCtx.el;
+      rasterUrl = _trajRasteredDiscDataURL(body, r * 2, spin, az, el, sunDir3);
+    }
+    disc = rasterUrl
+      ? `<image href="${rasterUrl}" x="${(cx - r).toFixed(2)}" y="${(cy - r).toFixed(2)}" width="${(r * 2).toFixed(2)}" height="${(r * 2).toFixed(2)}" preserveAspectRatio="none"/>` +
+        `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`
+      : _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';
     disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${_TRAJ_CHIP_R}" fill="var(--nm-bg)" fill-opacity="0.15" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>` +
@@ -3093,7 +3268,8 @@ function _trajFooterHTML(cam) {
   // (0 at top-down, 90 at the horizon, up to ~180 near straight-up-from-below);
   // only suppress the readout right at the canonical top-down default.
   const orientTxt = Math.abs(elDeg) < 89 ? `az ${azDeg}&deg; &middot; tilt ${90 - elDeg}&deg; &middot; ` : '';
-  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; drag rotates &middot; scroll zooms &middot; click a body to center &middot; body sizes clamped for visibility`;
+  const attrib = (typeof PROG_TEXTURE_ATTRIBUTION !== 'undefined') ? ` &middot; ${PROG_TEXTURE_ATTRIBUTION}` : '';
+  return `${orientTxt}true-geometry orbits (JPL mean elements; vessel orbit planes: from flight where flown, &Omega;=0 otherwise) &middot; drag rotates &middot; scroll zooms &middot; click a body to center &middot; body sizes clamped for visibility${attrib}`;
 }
 
 // Focus-flyout open state: 'missionId|sceneId' of the currently-open dropdown,
