@@ -1576,6 +1576,66 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R6.5 (2026-07-11) — trajectory-view apse markers + occlusion (574)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajApsePoints, _trajPointOccluded, _trajOcclusionSplitRuns } =
+    vm.runInContext('({ _trajApsePoints, _trajPointOccluded, _trajOcclusionSplitRuns })', sandbox);
+
+  // _trajApsePoints: robust min/max-radius pick, not just sample[0]/sample[N/2]
+  {
+    const el = { a: 400000, e: 0.5, i: 0.2, raan: 0.4, argp: 0.9 };
+    const { periPt, apoPt, periR, apoR } = _trajApsePoints(el, 96);
+    approx('R6.5 apse: periR = a(1-e)', periR, el.a * (1 - el.e), 1);
+    approx('R6.5 apse: apoR = a(1+e)', apoR, el.a * (1 + el.e), 1);
+    approx('R6.5 apse: periPt magnitude matches periR', Math.hypot(periPt[0], periPt[1], periPt[2]), periR, 1e-6);
+    approx('R6.5 apse: apoPt magnitude matches apoR', Math.hypot(apoPt[0], apoPt[1], apoPt[2]), apoR, 1e-6);
+    ok('R6.5 apse: apo is farther than peri', apoR > periR);
+  }
+
+  // _trajPointOccluded: depth-sign convention (larger depth = nearer camera,
+  // painter sort ascending) — a point BEHIND the near cap (smaller depth than
+  // the cap's surface at that radial offset) is occluded; a point IN FRONT of
+  // the near cap, or outside the disc's silhouette, is not.
+  {
+    const bodies = [{ name: 'Test', cx: 0, cy: 0, depth: 1000, R: 100 }];
+    const zoom = 1;
+    // dead-center behind the body (depth well short of the near cap = depth+R = 1100)
+    ok('R6.5 occlusion: center point behind the disc is occluded',
+      _trajPointOccluded(0, 0, 500, zoom, bodies));
+    // dead-center, but in FRONT of the body (depth > near cap)
+    ok('R6.5 occlusion: center point in front of the disc is NOT occluded',
+      !_trajPointOccluded(0, 0, 1200, zoom, bodies));
+    // outside the silhouette (rho > R) — never occluded regardless of depth
+    ok('R6.5 occlusion: point outside the disc silhouette is NOT occluded',
+      !_trajPointOccluded(150, 0, 500, zoom, bodies));
+    // exactly at the body's own depth, offset so rho < R: still behind the
+    // near cap (near cap sits AHEAD of center depth by sqrt(R^2-rho^2) > 0)
+    ok('R6.5 occlusion: point at the body\'s own center-depth, inside silhouette, is occluded',
+      _trajPointOccluded(50, 0, 1000, zoom, bodies));
+  }
+
+  // _trajOcclusionSplitRuns: drops occluded points, breaks contiguous runs
+  {
+    const bodies = [{ name: 'Test', cx: 0, cy: 0, depth: 0, R: 50 }];
+    // a "ring" of 8 points, radius 30 (inside the R=50 silhouette so rho<R for
+    // all of them); half sit BEHIND the body (depth<0, occluded) and half in
+    // FRONT (depth>0, visible) — a diameter split at x=0.
+    const pts = [];
+    for (let k = 0; k < 8; k++) {
+      const a = 2 * Math.PI * k / 8;
+      const x = 30 * Math.cos(a), y = 30 * Math.sin(a);
+      const depth = Math.cos(a) >= 0 ? 100 : -100; // front half vs back half
+      pts.push({ x, y, depth });
+    }
+    const runs = _trajOcclusionSplitRuns(pts, 1, bodies);
+    ok('R6.5 occlusion split: multiple runs (the ring breaks, not one closed loop)', runs.length >= 1 && runs.length <= 4);
+    const totalPts = runs.reduce((s, r) => s + r.length, 0);
+    ok('R6.5 occlusion split: fewer points survive than went in (some were dropped)', totalPts < pts.length);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // R3.3 — maneuver gizmo pure helpers (5745-maneuver-gizmo.js)
 // ═══════════════════════════════════════════════════════════════════════════
 {

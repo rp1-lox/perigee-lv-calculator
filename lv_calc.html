@@ -22572,6 +22572,83 @@ function _trajRingOrientationFor(rec) {
   return { i: ((rec && rec.inc) || 0) * Math.PI / 180, raan: 0, argp: 0, source: 'default' };
 }
 
+/** R6.5 (2026-07-11): pure apsides finder — samples orbit `elements`
+ *  {a,e,i,raan,argp} (radians) via progOrbitSamplePoints and picks the
+ *  periapsis/apoapsis POINT by actual radius magnitude (robust against
+ *  sampling-convention drift — doesn't blindly trust sample[0]/sample[N/2]
+ *  even though that's what progOrbitSamplePoints's E=0/E=pi convention
+ *  produces). Points are in the SAME local frame progOrbitSamplePoints
+ *  returns (relative to the primary, pre-projection, real km — no `scale`
+ *  applied). Pure, no DOM. Gate assertions: tests/math.test.js (2026-07-11). */
+function _trajApsePoints(elements, n) {
+  const pts = progOrbitSamplePoints(elements, n || 96);
+  let periPt = pts[0], apoPt = pts[0], periR = Infinity, apoR = -Infinity;
+  for (let k = 0; k < pts.length; k++) {
+    const r = Math.hypot(pts[k][0], pts[k][1], pts[k][2]);
+    if (r < periR) { periR = r; periPt = pts[k]; }
+    if (r > apoR) { apoR = r; apoPt = pts[k]; }
+  }
+  return { periPt, apoPt, periR, apoR };
+}
+
+/** Distance label for an apse marker. `mode:'au'` -> AU (heliocentric rings);
+ *  else plain comma-grouped km (moon rings: raw body-centered distance;
+ *  mission rings: the caller passes an ALTITUDE-above-surface km value, not
+ *  a center distance — see the two call sites). Pure. */
+function _trajFmtApseDist(km, mode) {
+  if (mode === 'au') return (km / 149597870.7).toFixed(3) + ' AU';
+  return Math.round(km).toLocaleString() + ' km';
+}
+
+// ── R6.5: trajectory occlusion by opaque bodies (2026-07-11, MATH.md §7m) ──
+// Module-local, reset at the top of every _trajWorldSVG pass: the opaque
+// discs actually drawn this frame (disc tier only — chips don't occlude),
+// collected as {name, cx, cy, depth, R}. cx/cy are RENDER units (km·zoom,
+// the same space g.traj-scene draws in); depth/R are REAL km (unscaled) —
+// depth in the painter-sort convention (_trajWorldSVG's `toRender`: larger
+// depth = nearer the camera, since the painter sorts ascending-depth-first).
+let _trajOccludeBodies = [];
+
+/** Pure occlusion predicate: is render-space point (px,py) at camera-relative
+ *  depth `pdepthKm` (km, SAME sign convention as the painter-sort depth —
+ *  see _trajWorldSVG's `toRender`) hidden behind any opaque body disc in
+ *  `bodies`? Derivation (empirically verified against the painter sort, see
+ *  MATH.md §7m): a sphere of radius R centered at (cx,cy) with camera-axis
+ *  depth `depth` has its NEAR cap (the side facing the camera, i.e. the
+ *  LARGEST depth at a given perpendicular offset rho) at
+ *  depth + sqrt(R^2 - rho^2). A point is behind that cap — occluded — iff
+ *  its own depth is LESS than the near cap's depth at its rho AND it falls
+ *  within the disc's silhouette (rho < R). Pure, no DOM. */
+function _trajPointOccluded(px, py, pdepthKm, zoom, bodies) {
+  if (!bodies || !bodies.length || !(zoom > 0)) return false;
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    const rho = Math.hypot(px - b.cx, py - b.cy) / zoom; // render units -> real km
+    if (!(rho < b.R)) continue;
+    const nearCapDepth = b.depth + Math.sqrt(Math.max(0, b.R * b.R - rho * rho));
+    if (pdepthKm < nearCapDepth) return true;
+  }
+  return false;
+}
+
+/** Split a sampled polyline (array of {x,y,depth}, render-units x/y + real-km
+ *  depth) into contiguous VISIBLE runs against `bodies` (_trajOccludeBodies),
+ *  dropping occluded points and breaking the run at the crossing — same
+ *  pattern as _trajHemiClipRuns/viewClampUnits elsewhere in this file.
+ *  Exact limb interpolation is NOT done (not required at ring/leg sample
+ *  density per the brief) — dropping + breaking is sufficient. Pure. */
+function _trajOcclusionSplitRuns(pts, zoom, bodies) {
+  const runs = [];
+  let cur = null;
+  for (let k = 0; k < pts.length; k++) {
+    const p = pts[k];
+    if (_trajPointOccluded(p.x, p.y, p.depth, zoom, bodies)) { cur = null; continue; }
+    if (!cur) { cur = []; runs.push(cur); }
+    cur.push(p);
+  }
+  return runs.filter(r => r.length >= 2);
+}
+
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
@@ -22611,38 +22688,82 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const orient = _trajRingOrientationFor(rec);
   const incRad = orient.i, raanRad = orient.raan, argpRad = orient.argp;
   const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
-  let d = '', topX = ox, topY = Infinity, periX = ox, periY = oy;
+  let topX = ox, topY = Infinity;
+  // R6.5: the body's own camera-relative depth (real km, unscaled) — threaded
+  // by the caller (_trajBodyFrameContent -> oDepth) so ring points can be
+  // tested against _trajOccludeBodies; Infinity (never occluded) is the safe
+  // default for any call site that hasn't threaded it.
+  const centerDepth = opts.centerDepth != null ? opts.centerDepth : Infinity;
   const screenPts = [];
+  let periIdx = 0, apoIdx = 0, periRLocal = Infinity, apoRLocal = -Infinity;
   for (let k = 0; k < pts.length; k++) {
-    const q = _trajProj3(pts[k][0] * scale, pts[k][1] * scale, pts[k][2] * scale);
-    const x = ox + q.x, y = oy + q.y;
+    // Projecting the RAW (unscaled) local point then scaling x/y by `scale`
+    // is exactly equivalent to projecting the pre-scaled vector (rotation is
+    // linear) — and gives depth in REAL km directly (no /scale needed), the
+    // same units _trajOccludeBodies' depth/R use.
+    const qRaw = _trajProj3(pts[k][0], pts[k][1], pts[k][2]);
+    const x = ox + qRaw.x * scale, y = oy + qRaw.y * scale;
     if (!isFinite(x) || !isFinite(y)) return '';
-    d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
-    screenPts.push({ x, y });
+    const depth = centerDepth + qRaw.depth;
+    screenPts.push({ x, y, depth });
     if (y < topY) { topY = y; topX = x; }
-    if (k === 0) { periX = x; periY = y; } // E=0 sample = periapsis
+    const rLocal = Math.hypot(pts[k][0], pts[k][1], pts[k][2]);
+    if (rLocal < periRLocal) { periRLocal = rLocal; periIdx = k; }
+    if (rLocal > apoRLocal) { apoRLocal = rLocal; apoIdx = k; }
   }
+  const periX = screenPts[periIdx].x, periY = screenPts[periIdx].y;
   const incTxt = orient.source === 'authored'
     ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (&Omega;,&omega; authored)`
     : orient.source === 'flight'
     ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (plane from flight)`
     : (rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '');
-  const hitArea = opts.authIdx != null ? `<path d="${d}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+  // R6.5: occlusion — split into visible runs against opaque bodies drawn
+  // this frame (a LEO ring's far side hidden by Earth is correct/desired —
+  // see MATH.md §7m). Fully-occluded ring (e.g. camera looking straight
+  // through the body) renders nothing.
+  const visRuns = _trajOcclusionSplitRuns(screenPts, zoom, _trajOccludeBodies);
+  if (!visRuns.length) return '';
+  const fullD = visRuns.map(run => run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ')).join(' ');
+  const hitArea = opts.authIdx != null ? `<path d="${fullD}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
   _trajRegisterLabel(topX, topY, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
   if (coastTxt) _trajRegisterLabel(periX, periY - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
-  // R3.5 item 2: direction-of-motion cue — split the ring into faint->bright
-  // segments (sample order = increasing eccentric anomaly = prograde motion,
-  // per progOrbitSamplePoints) instead of one uniform-opacity path, so which
-  // way the orbit goes is visible at a glance (KSP fades the trailing side).
-  // The single hit-path/title/label handling above is unaffected — this only
-  // changes how the VISIBLE stroke is emitted.
-  const segs = _trajRingDirSegments(screenPts, 10);
-  const segPaths = segs.length ? segs.map(seg => {
-    const segD = seg.pts.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
-    const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity).toFixed(3);
-    return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
-  }).join('') : `<path d="${d}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  // R6.5: apoapsis/periapsis markers — altitude above `body`'s surface (the
+  // ring's OWN peri/apo fields already ARE altitudes, not center-distances —
+  // see the rp/ra construction above). Skipped individually when their own
+  // point is occluded (per-point test, not the whole-ring visRuns gate, since
+  // one apse can be visible while the other is hidden behind the body).
+  const periAlt = Math.min(rec.peri, rec.apo), apoAlt = Math.max(rec.peri, rec.apo);
+  const apseColor = strokeColor;
+  const periPt = screenPts[periIdx], apoPt = screenPts[apoIdx];
+  if (!_trajPointOccluded(periPt.x, periPt.y, periPt.depth, zoom, _trajOccludeBodies)) {
+    const mk = `<path d="M -2.6 2.2 L 0 -2.6 L 2.6 2.2 Z" fill="${apseColor}" stroke="none"/>`;
+    _trajRegisterLabel(periPt.x, periPt.y, [{ text: 'Pe', dy: -6, fontPx: 8.5, color: apseColor }, { text: _trajFmtApseDist(periAlt, 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+      'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
+  }
+  if (!_trajPointOccluded(apoPt.x, apoPt.y, apoPt.depth, zoom, _trajOccludeBodies)) {
+    const mk = `<path d="M -2.6 -2.2 L 0 2.6 L 2.6 -2.2 Z" fill="${apseColor}" stroke="none"/>`;
+    _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: apseColor }, { text: _trajFmtApseDist(apoAlt, 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+      'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
+  }
+  // R3.5 item 2: direction-of-motion cue — split each VISIBLE run into
+  // faint->bright segments (sample order = increasing eccentric anomaly =
+  // prograde motion, per progOrbitSamplePoints) instead of one uniform-
+  // opacity path, so which way the orbit goes is visible at a glance (KSP
+  // fades the trailing side). Segmenting per-run (not across an occlusion
+  // break) keeps each visible arc's own fade coherent.
+  const segPaths = visRuns.map(run => {
+    const segs = _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length)));
+    if (!segs.length) {
+      const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+      return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+    }
+    return segs.map(seg => {
+      const segD = seg.pts.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+      const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity).toFixed(3);
+      return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
+    }).join('');
+  }).join('');
   return `<g${clickAttr}>
     <title>${title}${incTxt}</title>
     ${segPaths}
@@ -22778,6 +22899,12 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     // hazard, see the render-unit invariant) and without the oversize cull
     // below hiding the whole leg. The run simply breaks where it exits.
     if (opts.viewClampUnits && (Math.abs(x) > opts.viewClampUnits || Math.abs(y) > opts.viewClampUnits)) { cur = null; lastPt = null; continue; }
+    // R6.5: occlusion — a sample hidden behind an opaque body disc drawn this
+    // frame is dropped and the run breaks (same pattern as the other skip
+    // conditions here). `a.depth` defaults to Infinity ("never occluded") on
+    // any anchorOf that hasn't threaded real depth (backward compatible).
+    const pdepth = (a.depth != null ? a.depth : Infinity) + q.depth;
+    if (_trajPointOccluded(x, y, pdepth, zoom, _trajOccludeBodies)) { cur = null; lastPt = null; continue; }
     // Frame handoff: BREAK the polyline (the two gluings disagree by the
     // body's drift between sample.t and viewTime — a straight chord across
     // that gap reads as a phantom burn; user-reported) and record a seam
@@ -22887,7 +23014,7 @@ function _trajPhysInjectionLegFor(m, arrAuthIdx, body) {
 // at opacity (1 − zoiAlpha) — so an escape trajectory stays visible at
 // heliocentric zoom where the home body's zone-of-influence content has
 // faded to nothing (the two calls cross-fade; no double-draw at either end).
-function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, onlyMultiFrame) {
+function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, onlyMultiFrame, oDepth) {
   const id = m && m.missionId;
   if (!id || typeof _physTrajByMission === 'undefined' || !_physTrajByMission[id]) return '';
   let out = '';
@@ -22904,7 +23031,7 @@ function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, sel
     // _trajEventNodesSVG now draws at this leg's first-sample position and
     // carries the dv/time stack, so the leg's own dep marker is suppressed
     // here to avoid drawing two markers for the same MNODE.
-    const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt,
+    const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt, oDepth,
       emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: false, arrMarker: false, calib, noHighFade: true });
     if (phys) out += phys;
   });
@@ -22918,16 +23045,23 @@ function _trajPhysLegRender(ctx) {
   // Frame-anchor resolver: this pass knows only ITS body's drawn position
   // (ox,oy); sibling frames' drawn positions follow from the real-ephemeris
   // world delta at viewTime × zoom (same position source as the glyphs).
+  // R6.5: each anchor also carries `depth` (real km, camera-relative, SAME
+  // convention as _trajOccludeBodies) — this body's own depth (ctx.oDepth,
+  // threaded from _trajWorldSVG's toRender; Infinity/"never occluded" if the
+  // caller hasn't threaded it) plus the local delta's own depth contribution
+  // (depth is linear under the pass's pure-rotation projection, so this is
+  // exact, not an approximation).
   const overrides = {}; // R1: calibration retired — alias ignores this anyway
   const bodyWorld = progBodyWorldPosCalibrated(body, vt, overrides);
+  const oDepth = ctx.oDepth != null ? ctx.oDepth : Infinity;
   const anchorCache = {};
   const anchorOf = frame => {
-    if (frame === body) return { x: ox, y: oy };
+    if (frame === body) return { x: ox, y: oy, depth: oDepth };
     if (anchorCache[frame]) return anchorCache[frame];
     const w = progBodyWorldPosCalibrated(frame, vt, overrides);
     if (!w) return null;
     const q = _trajProj3(w.x - bodyWorld.x, w.y - bodyWorld.y, (w.z || 0) - (bodyWorld.z || 0)); // R2: 3D world delta
-    return (anchorCache[frame] = { x: ox + q.x * zoom, y: oy + q.y * zoom });
+    return (anchorCache[frame] = { x: ox + q.x * zoom, y: oy + q.y * zoom, depth: oDepth + q.depth });
   };
   // MNODE legs (noHighFade): clamp to a 3-viewbox neighborhood so the near-
   // body portion draws at parking-orbit zoom (see viewClampUnits above).
@@ -23476,7 +23610,7 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
 // body's neighborhood (independent of the camera zoom, same "local scene
 // scale" concept as before — it just gets recentered on ox,oy instead of on
 // the SVG origin).
-function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, viewT, overrides, calib) {
+function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, viewT, overrides, calib, oDepth) {
   if (!m) return '';
   const frames = _trajGetExtraction(m);
   const sc = frames[body];
@@ -23500,7 +23634,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       // to history alpha, same treatment as an arrived leg.
       const isHistoryOrbit = rec.expendMet != null && viewT != null && rec.expendMet <= viewT;
       out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null,
-        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx, historyAlpha: isHistoryOrbit ? _TRAJ_HISTORY_ALPHA : 1 });
+        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx, historyAlpha: isHistoryOrbit ? _TRAJ_HISTORY_ALPHA : 1, centerDepth: oDepth });
     });
   }
 
@@ -23553,7 +23687,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
         const physLegS = physMissionLeg(id, leg.authIdx);
         if (physLegS && physLegS.converged && physLegS.samples && physLegS.samples.length) {
-          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true, calib, encounterChip: true });
+          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true, calib, encounterChip: true, oDepth });
           if (phys != null) { out += phys; return; }
         }
       }
@@ -23613,7 +23747,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       // continuous path (all frames, glued via anchorOf) — converged only,
       // same rule as the Sun branch (unconverged = schematic fallback).
       if (physLegL && physLegL.converged && physLegL.samples && physLegL.samples.length) {
-        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false, calib, encounterChip: true });
+        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false, calib, encounterChip: true, oDepth });
         if (phys != null) { out += phys; return; }
       }
       if (leg.fromO && leg.fromO.type === 'transit') {
@@ -23764,7 +23898,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   // ballistic path IS the content — user-authored intent, drawn wherever it
   // goes. Same _trajPhysLegRender path (continuous multi-frame anchorOf
   // gluing, transferArc LOD window, click selects the MNODE event).
-  out += _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, false);
+  out += _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, false, oDepth);
 
   // surface events (fixed-px marker + LOD-gated label, like burn markers)
   sc.surface.forEach(s => {
@@ -23991,6 +24125,29 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   const records = [];
   const emit = (depth, svg) => { if (svg) records.push({ depth, svg }); };
 
+  // R6.5: occlusion pre-pass — collect every opaque body disc drawn THIS
+  // frame (disc tier only, trueRpx >= _TRAJ_FEATURE_PX — chips/small discs
+  // don't occlude) BEFORE any ring/leg content is emitted below, so the
+  // occlusion test is order-independent (a ring embedded at body A can be
+  // correctly occluded by body B regardless of which is iterated first).
+  // Sun excluded: its glyph here (_trajGlyph) is a fixed schematic marker,
+  // never a true-scale rendered sphere, so it isn't a meaningful occluder.
+  _trajOccludeBodies = [];
+  Object.keys(PROG_HELIO_R).forEach(body => {
+    const wp = progBodyWorldPos(body, viewT);
+    const p = toRender(wp.x, wp.y, wp.z);
+    if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
+    const trueR = _trajTrueBodyRadiusKm(body);
+    if (trueR * zoom >= _TRAJ_FEATURE_PX) _trajOccludeBodies.push({ name: body, cx: p.x, cy: p.y, depth: p.depth, R: trueR });
+  });
+  Object.keys(PROG_MOON_ORBITS || {}).forEach(name => {
+    const wp = progBodyWorldPos(name, viewT);
+    const p = toRender(wp.x, wp.y, wp.z);
+    if (_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) return;
+    const trueR = _trajTrueBodyRadiusKm(name);
+    if (trueR * zoom >= _TRAJ_FEATURE_PX) _trajOccludeBodies.push({ name, cx: p.x, cy: p.y, depth: p.depth, R: trueR });
+  });
+
   // (R6.4d) Ecliptic reference grid removed — its concentric rings read as
   // stray "orbits" and, since R6.4c moved globes to a behind-layer, drew over
   // the planet when tilted. Camera tilt is legible from the bodies/orbits
@@ -23998,15 +24155,38 @@ function _trajWorldSVG(m, cam, zoom, rect) {
 
   // ── true-geometry orbit ring (R2): sampled real ellipse, projected ────────
   // centerP = the PRIMARY's projected render position; el = orbit elements.
-  const trueRingPath = (el, centerP, alphaStr, color) => {
+  // R6.5: occlusion-split (a planet/moon ring's far side hides behind another
+  // drawn body — the pre-pass above makes this order-independent) + Pe/Ap
+  // apse markers (distance in AU for heliocentric rings, raw km — center-to-
+  // body distance, not altitude — for moon rings; see MATH.md §7m).
+  const trueRingPath = (el, centerP, alphaStr, color, apseMode) => {
     const pts = progOrbitSamplePoints(el, 120);
-    let d = '';
+    const rendered = [];
+    let periIdx = 0, apoIdx = 0, periR = Infinity, apoR = -Infinity;
     for (let k = 0; k < pts.length; k++) {
       const q = _trajProj3(pts[k][0], pts[k][1], pts[k][2]);
       const x = centerP.x + q.x * zoom, y = centerP.y + q.y * zoom;
       if (!isFinite(x) || !isFinite(y)) return '';
-      d += (k ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+      rendered.push({ x, y, depth: centerP.depth + q.depth });
+      const rLocal = Math.hypot(pts[k][0], pts[k][1], pts[k][2]);
+      if (rLocal < periR) { periR = rLocal; periIdx = k; }
+      if (rLocal > apoR) { apoR = rLocal; apoIdx = k; }
     }
+    const runs = _trajOcclusionSplitRuns(rendered, zoom, _trajOccludeBodies);
+    let d = '';
+    runs.forEach(run => { d += (d ? ' ' : '') + run.map((p, k) => (k ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' '); });
+    if (apseMode) {
+      const periPt = rendered[periIdx], apoPt = rendered[apoIdx];
+      if (!_trajPointOccluded(periPt.x, periPt.y, periPt.depth, zoom, _trajOccludeBodies)) {
+        _trajRegisterLabel(periPt.x, periPt.y, [{ text: 'Pe', dy: -6, fontPx: 8.5, color }, { text: _trajFmtApseDist(periR, apseMode), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+          'orbit', { screenSize: apoR * zoom, minSize: _TRAJ_LOD_RING_MIN, opacity: parseFloat(alphaStr) / 0.55 || 0, marker: `<path d="M -2.4 2 L 0 -2.4 L 2.4 2 Z" fill="${color}" stroke="none"/>` });
+      }
+      if (!_trajPointOccluded(apoPt.x, apoPt.y, apoPt.depth, zoom, _trajOccludeBodies)) {
+        _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color }, { text: _trajFmtApseDist(apoR, apseMode), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+          'orbit', { screenSize: apoR * zoom, minSize: _TRAJ_LOD_RING_MIN, opacity: parseFloat(alphaStr) / 0.55 || 0, marker: `<path d="M -2.4 -2 L 0 2.4 L 2.4 -2 Z" fill="${color}" stroke="none"/>` });
+      }
+    }
+    if (!d) return '';
     return `<path d="${d}" fill="none" stroke="${color}" stroke-width="0.6" opacity="${alphaStr}" vector-effect="non-scaling-stroke"/>`;
   };
 
@@ -24016,7 +24196,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     if (!_trajCullPositionOffscreen(p.x, p.y, viewportDiagPx)) {
       const sunScale = _trajLocalScaleFor('Sun', m) * zoom; // km -> render units
       let s = _trajGlyph(p.x, p.y, _trajBodyPxR(6, zoom), _trajBodyColor('Sun'), 'Sun', zoom, cam.anchorBody === 'Sun', false, m && m.missionId);
-      s += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
+      s += _trajBodyFrameContent('Sun', m, sunScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib, p.depth);
       emit(p.depth, s);
     }
   }
@@ -24030,7 +24210,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const ringAlpha = _trajLodOpacity(ringScreenR, _TRAJ_LOD_WIN.heliocentricRing[0], _trajWindowHi(_TRAJ_LOD_WIN.heliocentricRing[1], viewportDiagPx));
     if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && ringAlpha > 0) {
       const oel = progBodyOrbitElementsAt(body, viewT);
-      if (oel) emit(-1e17, trueRingPath(oel, sunP, (0.55 * ringAlpha).toFixed(3), _trajBodyColor(body)));
+      if (oel) emit(-1e17, trueRingPath(oel, sunP, (0.55 * ringAlpha).toFixed(3), _trajBodyColor(body), 'au'));
     }
     const wp = progBodyWorldPos(body, viewT);
     const p = toRender(wp.x, wp.y, wp.z);
@@ -24062,13 +24242,13 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const neighborhoodExtentPx = _trajBodyPxR(trueR, zoom);
     const zoiAlpha = _trajLodOpacity(Math.max(neighborhoodExtentPx, _trajBodyNeighborhoodPx(body, zoom, m)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (zoiAlpha > 0) {
-      const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
+      const contentSvg = _trajBodyFrameContent(body, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib, p.depth);
       s += zoiAlpha < 1 ? `<g opacity="${zoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
     }
     // R3.5.2: escape (multi-frame) MNODE legs must survive heliocentric zoom —
     // cross-fade them back in as the zone-of-influence content fades out.
     if (zoiAlpha < 1 && m) {
-      const escSvg = _trajMnodeLegsSVG(m, body, zoom, p.x, p.y, viewportDiagPx, viewT, calib, _trajSelectedAuthIdx(m), true);
+      const escSvg = _trajMnodeLegsSVG(m, body, zoom, p.x, p.y, viewportDiagPx, viewT, calib, _trajSelectedAuthIdx(m), true, p.depth);
       if (escSvg) s += `<g opacity="${(1 - zoiAlpha).toFixed(3)}">${escSvg}</g>`;
     }
     emit(p.depth, s);
@@ -24084,7 +24264,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const parentZoiAlpha = _trajLodOpacity(Math.max(ringScreenR, _trajBodyPxR(3, zoom)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR) && parentZoiAlpha > 0) {
       const oel = progBodyOrbitElementsAt(name, viewT);
-      if (oel) emit(-1e17, trueRingPath(oel, parentP, (0.55 * parentZoiAlpha).toFixed(3), _trajBodyColor(name)));
+      if (oel) emit(-1e17, trueRingPath(oel, parentP, (0.55 * parentZoiAlpha).toFixed(3), _trajBodyColor(name), 'km'));
     }
     if (parentZoiAlpha <= 0) return; // moon (and its content) hidden with its parent's ZOI
     const wp = progBodyWorldPos(name, viewT);
@@ -24101,7 +24281,7 @@ function _trajWorldSVG(m, cam, zoom, rect) {
       s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${glyphSvg}</g>` : glyphSvg;
     }
     const localScale = _trajLocalScaleFor(name, m) * zoom; // km -> render units
-    const contentSvg = _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib);
+    const contentSvg = _trajBodyFrameContent(name, m, localScale, zoom, p.x, p.y, viewportDiagPx, viewT, overrides, calib, p.depth);
     s += parentZoiAlpha < 1 ? `<g opacity="${parentZoiAlpha.toFixed(3)}">${contentSvg}</g>` : contentSvg;
     emit(p.depth, s);
   });
