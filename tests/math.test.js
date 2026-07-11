@@ -2209,6 +2209,32 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// _trajTickIntervalS — time-tick ladder pick (574, added 2026-07-11 for the
+// "better time display for intercepts" backlog item: ticks/labels along
+// trajectories, scrubbable MET, encounter countdowns).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const _trajTickIntervalS = sandbox._trajTickIntervalS;
+  // A ~3-day TLC-scale leg (259200s) should land on the 1-day rung (3 ticks
+  // over the leg — the ladder's documented "finest rung with count<=8" rule).
+  ok('_trajTickIntervalS: 3-day leg picks the 1-day rung', _trajTickIntervalS(259200) === 86400);
+
+  // A short ~10-minute leg should pick the 60s rung (its own tof/step=10<=8
+  // fails, so it steps up to... verify against the ladder directly rather
+  // than assume — the ladder is [60,600,3600,21600,86400,864000,8640000]).
+  ok('_trajTickIntervalS: 10-minute leg picks the 600s rung', _trajTickIntervalS(600) === 600);
+
+  // A ~1-hour leg (3600s): 3600/60=60 (too many), 3600/600=6<=8 -> 600s rung.
+  ok('_trajTickIntervalS: 1-hour leg picks the 600s rung', _trajTickIntervalS(3600) === 600);
+
+  // Non-finite / non-positive input falls back to the finest rung rather than
+  // throwing or returning NaN (defensive — an unconverged leg can hand this
+  // Infinity for tArr-tDep).
+  ok('_trajTickIntervalS: non-positive tof falls back to the finest rung', _trajTickIntervalS(-5) === 60);
+  ok('_trajTickIntervalS: Infinity tof falls back to the coarsest rung', _trajTickIntervalS(Infinity) === 8640000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

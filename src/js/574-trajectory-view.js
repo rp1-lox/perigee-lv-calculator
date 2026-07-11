@@ -257,6 +257,24 @@ function _trajApplyCam(id, cam) {
   }
   const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
   if (footEl) footEl.innerHTML = _trajFooterHTML(cam);
+  // Scrubber: keep thumb/readout/ticks live across camera AND view-time
+  // refreshes alike (_trajSetViewTime routes through this same function).
+  // outerHTML replaces the track node, so preserve keyboard focus across the
+  // swap (arrow-key nudging calls this on every keypress — losing focus
+  // would break repeat presses) — the drag path re-queries the track fresh
+  // each tick instead of holding a reference, for the same reason.
+  const scrubEl = va.querySelector('.traj-scrubber');
+  if (scrubEl && typeof _missions !== 'undefined') {
+    const mm = (_missions || []).find(x => x.missionId === id);
+    if (mm) {
+      const hadFocus = scrubEl.contains(document.activeElement);
+      scrubEl.outerHTML = _trajScrubberHTML(mm, id);
+      if (hadFocus) {
+        const t = va.querySelector('.traj-scrub-track');
+        if (t) t.focus();
+      }
+    }
+  }
 }
 
 function trajWheelZoom(ev, id) {
@@ -1191,6 +1209,70 @@ function _trajPhysLegRender(ctx) {
     const dotP = _trajPolylinePointAt(physLeg, anchorOf, zoom, vt);
     if (dotP) out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (physics leg — interpolated from propagated samples)</title></circle>`;
   }
+
+  // ── time ticks along the polyline (backlog: readable "when do these meet")
+  // Only on legs with a real TOF (>2min) and only while the leg itself reads
+  // as visually meaningful (LOD-gated with the leg per the brief: skip ticks
+  // when the leg's alpha is low or its on-screen extent is small). Ticks
+  // inherit the leg's own color/opacity so they fade WITH their geometry
+  // (one fade authority, same rule as every other overlay symbol here).
+  if ((tArr - tDep) > 120 && isFinite(tDep) && isFinite(tArr) && alpha > 0.1 && poly.extentPx > 16) {
+    const interval = _trajTickIntervalS(tArr - tDep);
+    const epsT = Math.max(1, (tArr - tDep) * 0.004);
+    let firstTick = Math.ceil(tDep / interval) * interval;
+    if (firstTick <= tDep) firstTick += interval;
+    const tickOpacity = alpha * stateAlpha * 0.9;
+    for (let tt = firstTick; tt < tArr; tt += interval) {
+      const p0 = _trajPolylinePointAt(physLeg, anchorOf, zoom, tt);
+      if (!p0) continue;
+      const p1 = _trajPolylinePointAt(physLeg, anchorOf, zoom, Math.min(tArr, tt + epsT));
+      let nx = 0, ny = -1; // default: perpendicular "up" if the tangent degenerates
+      if (p1 && (p1.x !== p0.x || p1.y !== p0.y)) {
+        const dx = p1.x - p0.x, dy = p1.y - p0.y, len = Math.hypot(dx, dy) || 1;
+        nx = -dy / len; ny = dx / len; // rotate tangent 90° -> perpendicular unit vector
+      }
+      // Marker geometry is authored in raw PX (relative to the anchor's own
+      // <g transform="translate(...)">, resolved by _trajResolveLabels) — the
+      // (nx,ny) unit vector survives the render->px projection unchanged
+      // because _trajWorldToScreen scales x and y by the identical factor
+      // (isotropic), so it's valid to use directly as a screen direction.
+      const tickPx = 3; // half-length -> 6px tick, per the brief
+      const marker = `<line x1="${(-nx * tickPx).toFixed(2)}" y1="${(-ny * tickPx).toFixed(2)}" x2="${(nx * tickPx).toFixed(2)}" y2="${(ny * tickPx).toFixed(2)}" stroke="${color}" stroke-width="0.9" opacity="${tickOpacity.toFixed(3)}" vector-effect="non-scaling-stroke" pointer-events="none"/>`;
+      const labelDy = ny >= 0 ? 11 : -7;
+      _trajRegisterLabel(p0.x, p0.y, [{ text: _metFmt(tt), dy: labelDy, fontPx: 8, color: 'var(--text-dim)' }],
+        'zone', { screenSize: poly.extentPx, minSize: 0, selected: false, marker, opacity: tickOpacity });
+    }
+  }
+
+  // ── encounter countdown chip (backlog item, generalizes the gizmo's CA
+  // plate — 5745 — to COMMITTED legs; the gizmo's own preview plate is
+  // untouched). Only wired from the two "real" leg call sites (Sun-frame and
+  // local-frame transit legs, via ctx.encounterChip) so MNODE/vector-burn
+  // legs (which have no `.dest`) never grow a spurious chip.
+  if (ctx.encounterChip && physLeg.dest) {
+    const soiEv = (physLeg.events || []).find(ev => ev && ev.type === 'soi' && ev.to === physLeg.dest);
+    const encT = soiEv ? soiEv.t : (isFinite(tArr) ? tArr : null);
+    if (encT != null) {
+      const encP = _trajPolylinePointAt(physLeg, anchorOf, zoom, Math.min(encT, poly.tLast));
+      if (encP) {
+        const dt = encT - vt;
+        const passed = dt < 0;
+        const relTxt = passed ? `passed ${_trajDurText(-dt)} ago` : `in ${_trajDurText(dt)}`;
+        const chipColor = passed ? 'var(--text-dim)' : (emphasized ? 'var(--accent)' : color);
+        const lines = [
+          { text: `⟶ ${physLeg.dest}`, dy: -13, fontPx: 9, color: chipColor },
+          { text: `${_metFmt(encT)} · ${relTxt}`, dy: -2, fontPx: 8.5, color: 'var(--text-dim)' },
+        ];
+        // 'burn' priority tier (not 'zone', which the time ticks above use) —
+        // the encounter chip is higher-value information than a tick label
+        // and should win a collision against one, not lose silently to it
+        // (observed in flight-test: the chip nearest an SOI entry sits right
+        // next to the ticks approaching it and was losing every time).
+        _trajRegisterLabel(encP.x, encP.y, lines, 'burn',
+          { screenSize: poly.extentPx, minSize: 0, selected: emphasized, opacity: (passed ? 0.55 : 1) * alpha * stateAlpha });
+      }
+    }
+  }
   return out;
 }
 
@@ -1529,6 +1611,11 @@ function _trajGhostMarker(x, y, bodyName, zoom, parentAlpha) {
 // behavior). Guarded against firing after a real pan-drag (see trajCanvasDown).
 function _trajSelectEventFromView(id, authIdx) {
   if (_trajJustDragged) { _trajJustDragged = false; return; }
+  // Clicking a leg/marker to select its event hands view-time authority back
+  // to the "state as of this event" rule (_trajViewTime) — a lingering scrub
+  // override would otherwise silently out-rank the selection the user just
+  // made, per the "one view-time authority" integration rule.
+  delete _trajViewTimeOverride[id];
   if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
   // R3.3: selecting an MNODE event attaches the gizmo at its recorded state;
   // selecting anything else detaches a currently-committed gizmo.
@@ -1701,7 +1788,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       if (typeof physMissionLeg === 'function' && leg.authIdx != null) {
         const physLegS = physMissionLeg(id, leg.authIdx);
         if (physLegS && physLegS.converged && physLegS.samples && physLegS.samples.length) {
-          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true, calib });
+          const phys = _trajPhysLegRender({ m, leg, physLeg: physLegS, body: 'Sun', ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: true, calib, encounterChip: true });
           if (phys != null) { out += phys; return; }
         }
       }
@@ -1761,7 +1848,7 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       // continuous path (all frames, glued via anchorOf) — converged only,
       // same rule as the Sun branch (unconverged = schematic fallback).
       if (physLegL && physLegL.converged && physLegL.samples && physLegL.samples.length) {
-        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false, calib });
+        const phys = _trajPhysLegRender({ m, leg, physLeg: physLegL, body, ox, oy, zoom, viewportDiagPx, vt, emphasized, title: hoverTitle, depMarker: true, arrMarker: false, calib, encounterChip: true });
         if (phys != null) { out += phys; return; }
       }
       if (leg.fromO && leg.fromO.type === 'transit') {
@@ -2014,8 +2101,20 @@ function _trajPlanetAngle(body) {
 // "state AS OF this event" semantics (_missionSelectedEventSnapshotEntry,
 // 570): selected event's post-event time (metStart + durationUsed), else
 // mission end (m._metTotal), else 0. Guards NaN/undefined.
+//
+// SCRUBBER INTEGRATION (backlog: scrubbable MET): a manual scrub is a
+// SESSION-ONLY override (never authored/autosaved, same spirit as the
+// camera) keyed by missionId, checked FIRST — this is the single authority
+// downstream rendering reads (Earth rotation, vehicle dots, countdown chips,
+// ghost markers all go through _trajViewTime, so scrubbing one place moves
+// all of them). Selecting a log event (_trajSelectEventFromView) or the 570
+// state-panel event list CLEARS the override so "state as of event" regains
+// control, per the "integrate, don't add a second authority" brief.
+let _trajViewTimeOverride = {};
 function _trajViewTime(m) {
   if (!m) return 0;
+  const ov = _trajViewTimeOverride[m.missionId];
+  if (typeof ov === 'number' && isFinite(ov)) return ov;
   const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
   if (sel && sel.entry) {
     const ms = sel.entry.metStart, du = sel.entry.durationUsed;
@@ -2026,6 +2125,58 @@ function _trajViewTime(m) {
   }
   if (typeof m._metTotal === 'number' && !isNaN(m._metTotal)) return m._metTotal;
   return 0;
+}
+
+// Mission-wide MET ceiling for the scrubber's range: max of the replay total
+// and every log entry's own (metStart + durationUsed) — a mission with a
+// still-open final coast can have log entries past m._metTotal in rare cases,
+// so take the max rather than trusting either alone. Floors at 60s so a
+// brand-new mission still shows a usable (if trivial) track.
+function _trajMissionMaxMet(m) {
+  if (!m) return 60;
+  let max = (typeof m._metTotal === 'number' && isFinite(m._metTotal)) ? m._metTotal : 0;
+  (m.log || []).forEach(e => {
+    if (!e || typeof e.metStart !== 'number' || !isFinite(e.metStart)) return;
+    const du = typeof e.durationUsed === 'number' && isFinite(e.durationUsed) ? e.durationUsed : 0;
+    max = Math.max(max, e.metStart + du);
+  });
+  return Math.max(max, 60);
+}
+
+// Pure ladder pick for tick/nudge spacing — the ONLY math in this feature
+// pinned by the test gate. Picks the FINEST rung (smallest interval) whose
+// tick count over `tofS` is <= 8, so a leg lands in the ~3-8 ticks band
+// (a leg just past a rung boundary gets the next-coarser rung, by design —
+// see _trajTickIntervalS's own header for the tradeoff).
+const _TRAJ_TICK_LADDER = [60, 600, 3600, 6 * 3600, 86400, 10 * 86400, 100 * 86400];
+function _trajTickIntervalS(tofS) {
+  if (!(tofS > 0)) return _TRAJ_TICK_LADDER[0]; // invalid/degenerate -> finest rung (never used to draw, defensive default)
+  if (tofS === Infinity) return _TRAJ_TICK_LADDER[_TRAJ_TICK_LADDER.length - 1]; // unbounded span -> coarsest rung
+  for (const step of _TRAJ_TICK_LADDER) {
+    if (tofS / step <= 8) return step;
+  }
+  return _TRAJ_TICK_LADDER[_TRAJ_TICK_LADDER.length - 1];
+}
+
+// Short relative-duration text for countdown chips ("2d 03h", "45m") — no
+// "T+" prefix (that's _metFmt's job for absolute MET); always non-negative,
+// caller decides "in"/"passed ... ago" framing from the sign of the delta.
+function _trajDurText(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const days = Math.floor(sec / 86400), hrs = Math.floor((sec % 86400) / 3600), mins = Math.floor((sec % 3600) / 60);
+  if (days >= 1) return `${days}d ${String(hrs).padStart(2, '0')}h`;
+  if (hrs >= 1) return `${hrs}h ${String(mins).padStart(2, '0')}m`;
+  return `${mins}m`;
+}
+
+// Sets the scrub override and refreshes both layers via the existing
+// camera-refresh path (_trajApplyCam already rebuilds g.traj-scene from
+// _trajWorldSVG, which reads _trajViewTime internally — no separate repaint
+// path needed for view-time changes).
+function _trajSetViewTime(id, t, maxMet) {
+  const clamped = Math.max(0, maxMet != null ? Math.min(maxMet, t) : t);
+  _trajViewTimeOverride[id] = clamped;
+  _trajApplyCam(id, _trajCam(id));
 }
 
 // ── SVG builder (WORLD layer — geometry only, ONE PASS, C1b) ──────────────
@@ -2696,8 +2847,90 @@ function _missionTrajViewHTML(m) {
         </svg>
         <svg class="traj-overlay" data-mid="${id}" preserveAspectRatio="none"></svg>
       </div>
+      ${_trajScrubberHTML(m, id)}
       <div class="traj-footer">${_trajFooterHTML(cam)}</div>
     </div>`;
+}
+
+// ── scrubbable MET (backlog item 3) ─────────────────────────────────────────
+// Slim track spanning [0, mission max MET] with a tick per log event and a
+// draggable thumb at the CURRENT view time (_trajViewTime's manual-override
+// slot — see there for the "one authority" integration note). Refreshed by
+// _trajApplyCam/_missionTrajAfterRender's sync alongside the footer so it
+// stays live under drag, event selection, and resize alike.
+function _trajScrubberHTML(m, id) {
+  if (!m) return '';
+  const vt = _trajViewTime(m);
+  const maxMet = _trajMissionMaxMet(m);
+  const pct = maxMet > 0 ? Math.max(0, Math.min(1, vt / maxMet)) * 100 : 0;
+  const ticks = (m.log || []).map(e => {
+    if (!e || typeof e.metStart !== 'number' || !isFinite(e.metStart)) return '';
+    const p = Math.max(0, Math.min(1, e.metStart / maxMet)) * 100;
+    return `<div class="traj-scrub-tick" style="left:${p.toFixed(2)}%" title="${_tsEsc(e.type || '')} · ${_metFmt(e.metStart)}"></div>`;
+  }).join('');
+  return `<div class="traj-scrubber" data-mid="${id}">
+    <div class="traj-scrub-track" tabindex="0" data-mid="${id}" data-max-met="${maxMet}"
+         onmousedown="_trajScrubDown(event,'${id}',${maxMet})" onkeydown="_trajScrubKey(event,'${id}',${maxMet})"
+         title="Drag or click to scrub mission time · arrow keys nudge when focused">
+      ${ticks}
+      <div class="traj-scrub-thumb" style="left:${pct.toFixed(2)}%"></div>
+    </div>
+    <div class="traj-scrub-readout">${_metFmt(vt)}</div>
+  </div>`;
+}
+
+let _trajScrubDrag = null;
+let _trajScrubLastMs = 0;
+function _trajScrubPctFromEvent(ev, trackEl) {
+  const r = trackEl.getBoundingClientRect();
+  if (!(r.width > 0)) return 0;
+  return Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+}
+// `track` is re-queried live on every tick rather than held from the mousedown
+// closure: _trajSetViewTime -> _trajApplyCam replaces the track node's
+// outerHTML on every refresh (to keep the thumb/ticks in sync), which would
+// detach a held reference (getBoundingClientRect on a detached node reads as
+// all-zero) after the very first tick.
+function _trajScrubLiveTrack(id) {
+  return document.querySelector(`.traj-scrub-track[data-mid="${id}"]`);
+}
+function _trajScrubDown(ev, id, maxMet) {
+  const track = ev.currentTarget;
+  _trajScrubDrag = { id, maxMet };
+  track.focus();
+  _trajSetViewTime(id, _trajScrubPctFromEvent(ev, track) * maxMet, maxMet);
+  document.addEventListener('mousemove', _trajScrubMove);
+  document.addEventListener('mouseup', _trajScrubUp);
+  ev.preventDefault();
+}
+function _trajScrubMove(ev) {
+  if (!_trajScrubDrag) return;
+  const now = performance.now();
+  // Throttled ~30ms, same class as rotate-drag (trajPanMove) — a full
+  // world+overlay re-render (via _trajApplyCam) per mousemove tick is the
+  // same cost class as a camera rotate tick.
+  if (now - _trajScrubLastMs <= 33) return;
+  _trajScrubLastMs = now;
+  const { id, maxMet } = _trajScrubDrag;
+  const track = _trajScrubLiveTrack(id);
+  if (!track) return;
+  _trajSetViewTime(id, _trajScrubPctFromEvent(ev, track) * maxMet, maxMet);
+}
+function _trajScrubUp() {
+  _trajScrubDrag = null;
+  _trajScrubLastMs = 0;
+  document.removeEventListener('mousemove', _trajScrubMove);
+  document.removeEventListener('mouseup', _trajScrubUp);
+}
+function _trajScrubKey(ev, id, maxMet) {
+  if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+  ev.preventDefault();
+  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  if (!m) return;
+  const vt = _trajViewTime(m);
+  const step = _trajTickIntervalS(maxMet);
+  const dt = ev.key === 'ArrowLeft' ? -step : step;
+  _trajSetViewTime(id, vt + dt, maxMet);
 }
 
 // R2: footer text incl. the orientation readout — also refreshed by

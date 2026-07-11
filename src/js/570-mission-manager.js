@@ -1125,6 +1125,11 @@ function missionSelectEvent(id, idx) {
   const wasOpen = !!m.log[idx]._expanded;
   m.log.forEach(e => { e._expanded = false; });
   if (!wasOpen) m.log[idx]._expanded = true;
+  // Trajectory-view scrubber integration (574): selecting an event from the
+  // log list, same as selecting one by clicking the view directly, hands
+  // view-time authority back to "state as of this event" — clear any
+  // lingering manual scrub override so it doesn't silently out-rank this pick.
+  if (typeof _trajViewTimeOverride !== 'undefined') delete _trajViewTimeOverride[id];
   missionRenderDetail();
 }
 
