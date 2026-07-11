@@ -31,6 +31,7 @@ const FILES = [
   'src/js/565-physics-mission.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/430-program-module-phase-8-node-map.js',
+  'src/js/570-mission-core-state.js',
   'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
   'src/js/5745-maneuver-gizmo.js',

@@ -6,7 +6,7 @@ This log is append-only. Planned mappings are marked **proposed** until the corr
 
 | Old module | New module(s) | Status |
 |---|---|---|
-| `src/js/570-mission-manager.js` | Event model/predicates/migration; replay/recompute; event cards/editing; node-map rendering; band view; budget/state panel, using load-ordered `570*` modules | proposed |
+| `src/js/570-mission-manager.js` | `570-mission-core-state.js` (shared manager state) plus proposed event model/predicates/migration; replay/recompute; event cards/editing; node-map rendering; band view; budget/state panel modules | in progress |
 | `src/js/574-trajectory-view.js` | Camera/projection; world render passes; overlay/labels; event nodes/ticks/scrubber; centralized LOD constants, using load-ordered `574*` modules | proposed |
 | `src/js/5745-maneuver-gizmo.js` | Pure gizmo math; DOM interaction; shared hover/placement subsystem, using load-ordered modules between trajectory view and mission undo | proposed |
 
@@ -32,3 +32,12 @@ This log is append-only. Planned mappings are marked **proposed** until the corr
 3. **`tests/math.test.js` has a FILES list** that loads specific `src/js` modules by filename into the vm sandbox (includes 570, 385, 386, 565, 574, 5745, 410, 430, 360, among others). Any split of a listed file must update that list in the SAME commit, or the gate fails confusingly. Expect this; note it in each entry.
 4. **Coordination with concurrent feature work**: features continue landing on `dev` during the refactor. Rule: split ONE module at a time, start-to-landed quickly; feature changes to the file currently being split are held until it lands (features in other modules proceed freely). 570 remains the right first target — it also takes the most feature traffic, so splitting it early reduces future conflict surface.
 Also noted: entry [1] is dated 2026-07-10; it was written 2026-07-11.
+
+## [3] Extract shared mission manager state — 2026-07-10
+**Intent**: Begin the approved `570-mission-manager.js` split with a minimal prefix extraction that isolates shared manager state while preserving the concatenated program byte-for-byte.
+**Type**: split.
+**Files**: `src/js/570-mission-manager.js` lines 1–10 → `src/js/570-mission-core-state.js`: mission manager banner plus `_missions`, `_missionSel`, `_missionViewMode`, `_missionEvtFilter`, `_missionBandScrub`, `_missionBandSpacing`, and `_missionBandZoom`; `tests/math.test.js` `FILES` list updated to load the new file immediately before `570-mission-manager.js`.
+**Behavior delta**: none.
+**Deleted**: none.
+**Verified**: `python build.py` passed 499/499 assertions and `node --check`; actual sorted order is `570-mission-core-state.js` → `570-mission-manager.js`; concatenating the two source files is byte-identical to the original 308,556-byte module; generated `lv_calc.html` is byte-identical to the pre-split baseline with SHA-256 `AC4A0F869258A4D78F3D5E3C6ABE1F31169DBF4022FF410779BF48F9E760AB42`. Browser: Vehicles, Mission, and Orbits pages rendered; no console errors; Saturn V at 185×185 km, 28.5° produced the 150,838 kg golden. Seeded Apollo/gizmo/session flows were not run for this state-declaration-only move.
+**Risk notes**: The first proposed filename (`570-mission-state.js`) sorted after `570-mission-manager.js`; the mandatory actual-order check caught this before the build and it was renamed to `570-mission-core-state.js`. The landed filename sorts correctly. No frozen functions, persisted fields, replay hooks, physics numerics, or generated source were edited.
