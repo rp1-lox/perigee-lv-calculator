@@ -84,6 +84,7 @@ const {
   physLeapfrogStep, physFindEventTime, physPropagateSegment, physParentOf,
   physMissionLeg, _trajGizmoClosestApproach, physEscapeHorizonS,
   _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation, _trajEventNodeInfo,
+  _nmMatchOrbitToNode, _nmClassifySettledOrbit,
   _trajLatLonUnit, _trajSpinRotate, _trajBodySpinAngle, _trajTrueBodyRadiusKm,
   _evIsSolvedManeuver, _evManeuverTarget, _evIsManualBurn, _missionMigrateManeuverEntry,
 } = sandbox;
@@ -2151,6 +2152,60 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('_missionMigrateManeuverEntry: detachedFrom -> target populated', oldDetached.target.fromNode === 'P' && oldDetached.target.toNode === 'Q');
   ok('_missionMigrateManeuverEntry: detachedFrom save stays manual (mode set)', oldDetached.mode === 'manual');
   ok('_missionMigrateManeuverEntry: migrated detachedFrom save is a manual burn', _evIsManualBurn(oldDetached) === true);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R6.2' Phase C — node-map closure: _nmMatchOrbitToNode / _nmClassifySettledOrbit
+// (430's pure classifiers for manual-MNODE settled-orbit matching). Dated 2026-07-10.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const nodes = [
+    { id: 'leo', label: 'LEO', orbit: { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 } },
+    { id: 'gto', label: 'GTO', orbit: { type: 'elliptic', body: 'Earth', perigee: 185, apogee: 35786, inclination: 28.5 } },
+    { id: 'escape', label: 'ESCAPE', orbit: { type: 'escape', body: 'Earth', c3: 0.1 } },
+  ];
+
+  // Exact match.
+  const m1 = _nmMatchOrbitToNode('Earth', 185, 185, 28.5, nodes);
+  ok('_nmMatchOrbitToNode: exact match finds LEO', !!m1 && m1.id === 'leo');
+
+  // Within tolerance (peri/apo well under max(5%,25km), inc under 2deg).
+  const m2 = _nmMatchOrbitToNode('Earth', 190, 200, 29.8, nodes);
+  ok('_nmMatchOrbitToNode: within tolerance still matches LEO', !!m2 && m2.id === 'leo');
+
+  // Tolerance-edge: apogee just past the max(5%,25km) band for LEO's low value
+  // (25km floor -> 185+26=211 must miss).
+  const m3 = _nmMatchOrbitToNode('Earth', 185, 211, 28.5, nodes);
+  ok('_nmMatchOrbitToNode: just past the tolerance band misses', m3 === null);
+
+  // No match at all (odd small ellipse).
+  const m4 = _nmMatchOrbitToNode('Earth', 300, 900, 51.6, nodes);
+  ok('_nmMatchOrbitToNode: unmatched orbit returns null', m4 === null);
+
+  // Body mismatch never matches even with identical numbers.
+  const m5 = _nmMatchOrbitToNode('Moon', 185, 185, 28.5, nodes);
+  ok('_nmMatchOrbitToNode: body mismatch returns null', m5 === null);
+
+  // Escape/transit/surface node types are never matched as a "settled" orbit.
+  const m6 = _nmMatchOrbitToNode('Earth', 1e6, Infinity, 0, nodes);
+  ok('_nmMatchOrbitToNode: escape-type nodes are excluded from matching', m6 === null);
+
+  // _nmClassifySettledOrbit: elements-based wrapper, LEO circular state.
+  const REarth = PROG_BODIES.Earth.R, muE = PROG_BODIES.Earth.mu;
+  const rpLeo = REarth + 185, raLeo = REarth + 185;
+  const elLeo = { a: rpLeo, e: 0, i: 28.5 * Math.PI / 180, rp: rpLeo, ra: raLeo };
+  const c1 = _nmClassifySettledOrbit(elLeo, 'Earth', nodes);
+  ok('_nmClassifySettledOrbit: circular LEO state classifies to the LEO node', !!c1 && c1.id === 'leo');
+
+  // Hyperbolic (escaping) state never matches a bound node, regardless of nodes list.
+  const elHyp = { a: -5000, e: 1.3, i: 0, rp: 6578, ra: -Infinity };
+  const c2 = _nmClassifySettledOrbit(elHyp, 'Earth', nodes);
+  ok('_nmClassifySettledOrbit: hyperbolic state never matches (escape)', c2 === null);
+
+  // Unmatched bound ellipse -> null (caller treats as a free-burn/"orbit" outcome).
+  const elOdd = { a: REarth + 600, e: 0.3, i: 51.6 * Math.PI / 180, rp: REarth + 300, ra: REarth + 900 };
+  const c3 = _nmClassifySettledOrbit(elOdd, 'Earth', nodes);
+  ok('_nmClassifySettledOrbit: unmatched ellipse returns null', c3 === null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -542,4 +542,52 @@ function _nmEdgePhysicsAnnotation(missionId, logIdx, legLookup, caFn) {
   return { flown: true, tofSeconds, closestApproachKm, label: parts.join(' · ') };
 }
 
+// ── R6.2' Phase C — settled-orbit classification (node-map closure) ────────
+// Match a candidate orbit (body + ALTITUDE peri/apo km, matching the
+// PROG_NM_NODES/custom-node convention — NOT center-distance, inclination in
+// degrees) against a list of node records ({id,label,sub,orbit:{type,body,
+// perigee,apogee,inclination}}, i.e. PROG_NM_NODES ++ custom nodes). Escape/
+// transit/surface nodes never match (those are handled by the caller as
+// distinct outcomes, not as a "settled" bound orbit). Tolerance defaults:
+// peri/apo each within max(5% of the node's value, 25 km); inclination
+// within 2deg. Returns the first matching node record, or null.
+function _nmMatchOrbitToNode(body, periKm, apoKm, incDeg, nodes, tol) {
+  const t = Object.assign({ pct: 0.05, absKm: 25, incDeg: 2 }, tol || {});
+  if (!nodes || !body || !isFinite(periKm) || !isFinite(apoKm) || !isFinite(incDeg)) return null;
+  for (const n of nodes) {
+    const o = n && n.orbit;
+    if (!o || o.body !== body) continue;
+    if (o.type === 'escape' || o.type === 'transit' || o.type === 'surface') continue;
+    const nPeri = o.perigee != null ? o.perigee : (o.apogee || 0);
+    const nApo  = o.apogee  != null ? o.apogee  : (o.perigee || 0);
+    const periTol = Math.max(t.absKm, t.pct * Math.max(1, nPeri));
+    const apoTol  = Math.max(t.absKm, t.pct * Math.max(1, nApo));
+    if (Math.abs(periKm - nPeri) > periTol) continue;
+    if (Math.abs(apoKm  - nApo)  > apoTol)  continue;
+    const nInc = o.inclination || 0;
+    if (Math.abs(incDeg - nInc) > t.incDeg) continue;
+    return n;
+  }
+  return null;
+}
+
+// Classify a PROPAGATED settled orbit (osculating `elements` from
+// physStateToElements — rp/ra are CENTER-distance km, i in radians — about
+// `frameBody`, the body the elements were computed relative to, i.e. the
+// leg's final frame after any SOI handoff) against known node-map `nodes`.
+// Escape/hyperbolic/degenerate states (e>=1, non-finite or non-positive a)
+// never match a bound node and return null immediately — callers should
+// classify those as an escape outcome themselves (see 565's manual-MNODE leg
+// builder). Converts to the altitude-km/degree convention and defers to
+// _nmMatchOrbitToNode above. Pure, no DOM, gate-tested.
+function _nmClassifySettledOrbit(elements, frameBody, nodes, tol) {
+  if (!elements || !frameBody) return null;
+  if (elements.e >= 1 || !isFinite(elements.a) || elements.a <= 0) return null;
+  const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[frameBody]) ? PROG_BODIES[frameBody].R : 0;
+  const periKm = elements.rp - R;
+  const apoKm  = isFinite(elements.ra) ? elements.ra - R : Infinity;
+  const incDeg = elements.i * 180 / Math.PI;
+  return _nmMatchOrbitToNode(frameBody, periKm, apoKm, incDeg, nodes, tol);
+}
+
 // ── Phase 8 tests (pure JS, no DOM) ──────────────────────────────────────────

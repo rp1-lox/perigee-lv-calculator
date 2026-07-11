@@ -64,6 +64,34 @@ function _evIsManualBurn(e) {
   return !!e && e.type === 'MNODE' && !_evIsSolvedManeuver(e);
 }
 
+// ── R6.2' Phase C — node-map closure display helpers ────────────────────────
+// Reads the settled-orbit classification 565's manual-MNODE leg builder
+// stamped on the leg (`leg.settleInfo`, via 430's pure
+// _nmClassifySettledOrbit) — recomputed fresh every recompute, never
+// persisted beyond the transient card/node-map render. null if no leg (e.g.
+// propagation not yet run) or no propagable orbit at burn.
+function _missionMnodeSettleInfo(missionId, idx) {
+  if (typeof physMissionLeg !== 'function') return null;
+  const leg = physMissionLeg(missionId, idx);
+  return (leg && leg.settleInfo) || null;
+}
+// Human-readable one-liner for the MNODE card / tooltips: "settles: <node>",
+// "settles: <body> a×p km, i°", or "escapes <body> SOI". null if unknown.
+function _missionMnodeSettleLabel(missionId, idx) {
+  const info = _missionMnodeSettleInfo(missionId, idx);
+  if (!info) return null;
+  if (info.kind === 'escape') return `escapes ${info.body} SOI`;
+  if (info.kind === 'node') {
+    const n = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(info.nodeId) : null;
+    return n ? (n.sub ? `${n.label} (${n.sub})` : n.label) : info.nodeId;
+  }
+  if (info.kind === 'orbit') {
+    const apo = isFinite(info.apoKm) ? Math.round(info.apoKm).toLocaleString() : '∞';
+    return `${info.body} ${Math.round(info.periKm || 0).toLocaleString()}×${apo} km, ${(info.incDeg || 0).toFixed(1)}°`;
+  }
+  return null;
+}
+
 // Lazy-migrate a legacy MANEUVER (or an old Phase-A detachedFrom-carrying
 // MNODE) to the unified schema, in place, on first touch (gizmo open / card
 // edit). Idempotent — a no-op for an entry that's already unified or already
@@ -990,6 +1018,7 @@ function _missionLogCardHTML(entry, id, idx) {
     <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">prop &minus;${(entry.prop_consumed||0).toLocaleString()} kg &middot; ${entry.result||''}</div>
     ${tgt ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">detached — was solved ${_tsEsc(entry.fromLabel || tgt.fromLabel || tgt.fromNode || '?')} → ${_tsEsc(entry.toLabel || tgt.toLabel || tgt.toNode || '?')} · ΔV budget now uses this vector's authored magnitude, not the solved edge</div>
     <button class="act-btn" style="margin-top:6px;font-size:10px;" onclick="event.stopPropagation();missionMnodeResolveToTarget('${id}',${idx})">↺ Re-solve to target</button>` : ''}
+    ${(() => { const t = _missionMnodeSettleLabel(id, idx); return t ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:4px;">settles: ${_tsEsc(t)}</div>` : ''; })()}
   </div>`;
   }
   if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
@@ -4690,7 +4719,7 @@ function _missionNodeMapHTML(m) {
   {
     const pairs = {};
     m.log.forEach((e, i) => {
-      if (e.type !== 'MANEUVER' || !e.fromNode || !e.toNode || e.fromNode === e.toNode) return;
+      if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode || e.fromNode === e.toNode) return;
       const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
       const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
       const k = lo + '::' + hi;
@@ -4727,6 +4756,60 @@ function _missionNodeMapHTML(m) {
       }
       edgesHTML += `</g>`;
     }
+  }
+
+  // ── R6.2' Phase C: manual (vector-authored) burn node-map closure ────────
+  // A manual MNODE that classifies to a known node (leg.settleInfo.kind ===
+  // 'node', stamped by 565's leg builder via 430's pure
+  // _nmClassifySettledOrbit) draws a dashed accent2 edge from its departure
+  // point to that node, badged "vector-authored" — distinct from the solid
+  // accent solved-edge style above but sharing the same click-to-select
+  // path (missionEdgeClick → _missionNmSelectShared). A burn that does NOT
+  // settle at a known node ('orbit'/'escape'/no leg yet) instead renders as
+  // a small free-burn chip near its departure body. Display only — ΔV
+  // accounting stays the vector magnitude via the existing card/replay path.
+  let manualEdgesHTML = '', freeBurnHTML = '';
+  {
+    const bodyPos = {}; lay.blobs.forEach(b => { bodyPos[b.body] = [b.cx, b.cy]; });
+    m.log.forEach((e, i) => {
+      if (!_evIsManualBurn(e)) return;
+      const info = _missionMnodeSettleInfo(id, i);
+      const dvMag = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
+      const departBody = (e.orbitAtBurn && e.orbitAtBurn.body) || (info && info.body) || 'Earth';
+      const met = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
+      if (info && info.kind === 'node') {
+        const toNode = byId[info.nodeId]; if (!toNode) return;
+        const fromNode = info.fromNodeId ? byId[info.fromNodeId] : null;
+        const [ax, ay] = fromNode ? posOf(fromNode) : (bodyPos[departBody] || [0, 0]);
+        const [bx, by] = posOf(toNode);
+        const rB = radiusOf(toNode);
+        const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+        const Bx = bx - ux * rB, By = by - uy * rB;
+        manualEdgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${i})"><title>vector-authored maneuver — ${Math.round(dvMag).toLocaleString()} m/s · ${_metFmt(met)} → ${_tsEsc(toNode.label)}</title>`;
+        manualEdgesHTML += `<line x1="${ax}" y1="${ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
+        manualEdgesHTML += `<line x1="${ax}" y1="${ay}" x2="${Bx}" y2="${By}" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="5 4" opacity="0.85"/>`;
+        manualEdgesHTML += _nmArrowHead(ax, ay, Bx, By, 'var(--accent2)', 2);
+        const mx = (ax + Bx) / 2, my = (ay + By) / 2;
+        manualEdgesHTML += `<circle cx="${mx}" cy="${my}" r="4.5" fill="var(--bg)" stroke="var(--accent2)" stroke-width="1.4"/>`;
+        manualEdgesHTML += `<text x="${mx}" y="${my + 2.5}" text-anchor="middle" font-family="var(--mono)" font-size="6.5px" fill="var(--accent2)">⚡</text>`;
+        manualEdgesHTML += `</g>`;
+      } else {
+        const [cx, cy] = bodyPos[departBody] || [0, 0];
+        const angle = ((i * 37) % 360) * Math.PI / 180;   // deterministic spread if several chips share a body
+        const chipX = cx + Math.cos(angle) * 46, chipY = cy - 90 - (i % 3) * 16;
+        const label = (info && info.kind === 'escape')
+          ? `⚡ ${Math.round(dvMag).toLocaleString()} m/s · ${_metFmt(met)} · → escape`
+          : `⚡ free burn · ${Math.round(dvMag).toLocaleString()} m/s · ${_metFmt(met)}`;
+        const tw = Math.max(70, label.length * 4.6);
+        const detail = (info && info.kind === 'orbit')
+          ? ` (${_tsEsc(info.body)} ${Math.round(info.periKm || 0).toLocaleString()}×${isFinite(info.apoKm) ? Math.round(info.apoKm).toLocaleString() : '∞'} km, ${(info.incDeg || 0).toFixed(1)}°)`
+          : '';
+        freeBurnHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${i})"><title>Manual burn — ${(info && info.kind === 'escape') ? 'escapes ' + _tsEsc(info.body) + ' SOI' : 'settles in an unmatched orbit' + detail}</title>`;
+        freeBurnHTML += `<rect x="${chipX - tw / 2}" y="${chipY - 8}" width="${tw}" height="16" rx="8" fill="var(--bg)" stroke="var(--accent2)" stroke-width="1.2" opacity="0.92"/>`;
+        freeBurnHTML += `<text x="${chipX}" y="${chipY + 3}" text-anchor="middle" font-family="var(--mono)" font-size="7px" fill="var(--accent2)">${_tsEsc(label)}</text>`;
+        freeBurnHTML += `</g>`;
+      }
+    });
   }
 
   // ── nodes (skip surface — drawn as the body disc above) ──
@@ -4771,7 +4854,7 @@ function _missionNodeMapHTML(m) {
   }
 
   const pxW = Math.round(lay.worldW * _missionNmZoom);
-  const svgHTML = `<svg viewBox="0 0 ${lay.worldW} ${lay.worldH}" preserveAspectRatio="xMidYMid meet" style="width:${pxW}px;max-width:none;height:auto;background:transparent;display:block;" oncontextmenu="return false;" ondragover="event.preventDefault()" ondrop="missionNmDrop(event,'${id}')">${blobsHTML}${edgesHTML}${nodesHTML}</svg>`;
+  const svgHTML = `<svg viewBox="0 0 ${lay.worldW} ${lay.worldH}" preserveAspectRatio="xMidYMid meet" style="width:${pxW}px;max-width:none;height:auto;background:transparent;display:block;" oncontextmenu="return false;" ondragover="event.preventDefault()" ondrop="missionNmDrop(event,'${id}')">${blobsHTML}${edgesHTML}${manualEdgesHTML}${nodesHTML}${freeBurnHTML}</svg>`;
   return `<div class="nm-root">${ctrlHTML}<div class="nm-scroll" onwheel="missionNmWheel(event,'${id}')" onmousedown="missionNmPanStart(event,'${id}')">${svgHTML}</div></div>`;
 }
 

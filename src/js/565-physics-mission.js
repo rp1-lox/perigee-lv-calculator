@@ -852,9 +852,45 @@ function physRebuildMissionTrajectories(m) {
         res = physPropagateSegment(state, burnMet, burnMet + fullHorizon,
           { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 512 });
       }
+      // R6.2' Phase C: classify the SETTLED orbit (final propagated state,
+      // in its final frame after any SOI handoff) against the mission's
+      // known node-map nodes, for the node-map edge/chip closure + card
+      // readout (570/430). Display-only — never touches ΔV accounting.
+      let settleInfo = null;
+      if (typeof _nmClassifySettledOrbit === 'function' && res.stateF) {
+        const nodes = (typeof _missionNmNodes === 'function') ? _missionNmNodes() : [];
+        const fromNode = (typeof _nmMatchOrbitToNode === 'function')
+          ? _nmMatchOrbitToNode(o.body, o.perigee ?? o.apogee ?? 0, o.apogee ?? o.perigee ?? 0, o.inclination || 0, nodes)
+          : null;
+        // A frame change away from the departure body (including a handoff
+        // into a body our node set doesn't track, e.g. heliocentric 'Sun')
+        // is itself the unambiguous escape signal — no elements needed. Only
+        // when the frame is unchanged do we need physStateToElements to tell
+        // a settled bound orbit from an unbound one that hasn't crossed the
+        // SOI boundary within the propagated horizon.
+        const bodyMeta = PROG_BODIES[res.frame];
+        let escaped = (res.frame !== o.body) || !bodyMeta;
+        let elF = null;
+        if (!escaped) {
+          elF = physStateToElements(res.stateF.r, res.stateF.v, bodyMeta.mu);
+          if (elF.e >= 1 || !isFinite(elF.a) || elF.a <= 0) escaped = true;
+        }
+        if (escaped) {
+          settleInfo = { kind: 'escape', body: o.body, fromNodeId: fromNode ? fromNode.id : null };
+        } else {
+          const node = _nmClassifySettledOrbit(elF, res.frame, nodes);
+          settleInfo = node
+            ? { kind: 'node', nodeId: node.id, body: res.frame, fromNodeId: fromNode ? fromNode.id : null }
+            : { kind: 'orbit', body: res.frame,
+                periKm: elF.rp - bodyMeta.R,
+                apoKm: isFinite(elF.ra) ? elF.ra - bodyMeta.R : Infinity,
+                incDeg: elF.i * 180 / Math.PI,
+                fromNodeId: fromNode ? fromNode.id : null };
+        }
+      }
       legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,
         tof_s: 0, tofPhysics: null, dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
-        converged: true, kind: 'mnode', homeFrame: o.body,
+        converged: true, kind: 'mnode', homeFrame: o.body, settleInfo,
         dv_ms: Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2)) });
       continue;
     }
