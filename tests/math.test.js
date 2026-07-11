@@ -33,6 +33,7 @@ const FILES = [
   'src/js/430-program-module-phase-8-node-map.js',
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
+  'src/js/570-mission-interaction-state.js',
   'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
   'src/js/5745-maneuver-gizmo.js',
