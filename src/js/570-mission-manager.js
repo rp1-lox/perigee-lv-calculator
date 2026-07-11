@@ -4104,6 +4104,10 @@ function missionMnodeResolveToTarget(id, idx) {
   _missionMigrateManeuverEntry(e);   // detachedFrom-only saves -> target populated
   if (!e.target || !e.target.fromNode || !e.target.toNode) return;
   e.mode = 'solved';
+  // R6.2' Phase B step 5: re-solving hands the departure state back to the
+  // solver — drop the detach-time burnState stamp so a later detach re-
+  // captures the (possibly different) freshly-solved state, not a stale one.
+  delete e.burnState;
   if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
     if (typeof _trajGizmoClose === 'function') _trajGizmoClose();
   }

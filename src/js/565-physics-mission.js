@@ -162,6 +162,10 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
     : (destMoon ? [PROG_MOON_ORBITS[destMoon].parent, destMoon, 'Sun'] : [fromBody]);
   return {
     state: { r: bs.r, v: bs.v }, center: fromBody, bodies, dvVec: bs.dvVec,
+    // R6.2' Phase B step 5: the PRE-burn state (dv NOT applied) — the exact
+    // departure state the burn's dv vector is applied to, for basis-fixed
+    // decomposition downstream (leg.burnState).
+    preState: { r: bs.r, v: bs.vPre },
     coastTof_s: coastTof, dest: destMoon || destPlanet || toOrbit.body,
     kind: destMoon ? 'moon' : (destPlanet ? 'interplanetary' : 'samebody'),
   };
@@ -196,7 +200,10 @@ function physAimBurnState(fromBody, r1, theta, pitch, dv_kms, incRad, yaw, raanR
   const inPlane = physAdd(physScale(vHat, Math.cos(p)), physScale(rHat, Math.sin(p)));
   const dvDir = physAdd(physScale(inPlane, Math.cos(yw)), physScale(hHat, Math.sin(yw)));
   const dvVec = physScale(dvDir, dv_kms);
-  return { r: st.r, v: physAdd(st.v, dvVec), dvVec, rHat, vHat, hHat };
+  // R6.2' Phase B step 5: expose the PRE-burn velocity too (st.v, before dv
+  // added) so callers can stamp the exact departure state the dv vector was
+  // applied to — the basis-fix fields (leg.burnState / e.burnState) below.
+  return { r: st.r, v: physAdd(st.v, dvVec), vPre: st.v, dvVec, rHat, vHat, hHat };
 }
 
 /** Closest approach of a propagation result to body `dest`: exact periapsis
@@ -805,11 +812,24 @@ function physRebuildMissionTrajectories(m) {
       // same precedence thread as the departure/arrival cases above.
       const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
       const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
+      // R6.2' Phase B step 5 (detach fidelity): if this manual MNODE carries
+      // a stamped burnState (from detaching a solved maneuver — see 5745's
+      // _trajGizmoDetachManeuverIfNeeded), apply the dv vector in THAT exact
+      // recorded state's basis instead of the mean-motion reconstruction
+      // above, so the detached leg tracks the original solved leg's real
+      // path. Falls back to the mean-motion basis (bs) for ordinary
+      // hand-authored MNODEs, which never carry a burnState.
+      let axes = null;
+      if (e.burnState && e.burnState.r && e.burnState.v && typeof _trajGizmoAxes === 'function')
+        axes = _trajGizmoAxes(e.burnState.r, e.burnState.v);
+      const rBase = axes ? e.burnState.r : bs.r;
+      const vBase = axes ? e.burnState.v : bs.v;
+      const vHat = axes ? axes.vHat : bs.vHat, rHat = axes ? axes.rHat : bs.rHat, hHat = axes ? axes.hHat : bs.hHat;
       const dvVec = physAdd(physAdd(
-        physScale(bs.vHat, (e.dvPro_ms || 0) / 1000),
-        physScale(bs.rHat, (e.dvRad_ms || 0) / 1000)),
-        physScale(bs.hHat, (e.dvNrm_ms || 0) / 1000));
-      const state = { r: bs.r, v: physAdd(bs.v, dvVec) };
+        physScale(vHat, (e.dvPro_ms || 0) / 1000),
+        physScale(rHat, (e.dvRad_ms || 0) / 1000)),
+        physScale(hHat, (e.dvNrm_ms || 0) / 1000));
+      const state = { r: rBase, v: physAdd(vBase, dvVec) };
       const parent = physParentOf(o.body);
       const bodies = [...new Set([o.body, parent || 'Sun', 'Sun', o.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
       // horizon: 30 days, or 3 post-burn periods when the new orbit stays
@@ -884,11 +904,14 @@ function physRebuildMissionTrajectories(m) {
       }
       legs.push({ authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
         samples: bad ? [] : samples, events: [], tof_s: tof, tofPhysics: tof || null,
-        dvVec: burn.dvVec, frames: [burn.center], converged: !bad, kind: burn.kind });
-      // R6.2' Phase B (step 2): same display-only dv-component mirror as the
-      // n-body branch below, for the same-body (analytic Kepler) leg kind.
+        dvVec: burn.dvVec, frames: [burn.center], converged: !bad, kind: burn.kind,
+        // R6.2' Phase B step 5: the PRE-burn departure state the dv vector
+        // was actually applied to — basis for correct decomposition/replay.
+        burnState: burn.preState });
+      // R6.2' Phase B (step 2/5): display-only dv-component mirror, decomposed
+      // against the leg's REAL burn state (not a mean-motion reconstruction).
       if (e.type === 'MNODE' && burn.dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
-        const axes = _trajGizmoAxes(burn.state.r, burn.state.v);
+        const axes = _trajGizmoAxes(burn.preState.r, burn.preState.v);
         const d = axes ? _trajGizmoDecomposeDv(burn.dvVec, axes) : null;
         if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
       }
@@ -898,7 +921,7 @@ function physRebuildMissionTrajectories(m) {
     // n-body leg (moon / interplanetary): P4 — refine the analytic aim with
     // the differential corrector (burn anomaly ± pitch; |Δv| FIXED), cached
     // by leg signature so a warm recompute costs ~one propagation per leg.
-    let st0 = burn.state, dvVec = burn.dvVec;
+    let st0 = burn.state, dvVec = burn.dvVec, st0Pre = burn.preState;
     const r1 = physMag(burn.state.r);
     const incLeg = (fromO.inclination || 0);
     let raanUsed = 0;
@@ -921,6 +944,10 @@ function physRebuildMissionTrajectories(m) {
         const bs = physAimBurnState(burn.center, r1, aim.theta, aim.pitch || 0, dv_ms / 1000,
           incLeg * Math.PI / 180, aim.yaw || 0, raanUsed);
         st0 = { r: bs.r, v: bs.v }; dvVec = bs.dvVec;
+        // R6.2' Phase B step 5: the shooter's actual PRE-burn departure state
+        // (bs.vPre) — this is the real basis the corrector flew, distinct
+        // from the mean-motion reconstruction 5745's fallback uses.
+        st0Pre = { r: bs.r, v: bs.vPre };
       }
     }
     const cutoff = met + 1.5 * Math.max(burn.coastTof_s, 3600);
@@ -958,21 +985,29 @@ function physRebuildMissionTrajectories(m) {
       samples: res.samples, events: res.events, tof_s: burn.coastTof_s,
       tofPhysics: null,   // injection is impulsive under the corridor rule — no coast of its own
       dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
-      converged, kind: burn.kind, dest: burn.dest, departElements, arrivalElements };
+      converged, kind: burn.kind, dest: burn.dest, departElements, arrivalElements,
+      // R6.2' Phase B step 5 (basis fix): the ACTUAL departure state the dv
+      // vector was applied to — the shooter's refined state when it
+      // converged (st0Pre), else the analytic seed's pre-burn state
+      // (burn.preState). Consumers (5745 gizmo, this file's own dv-mirror
+      // below) decompose against THIS basis instead of a mean-motion
+      // reconstruction — fixes the Phase A known limitation (PHYSICS_PLAN
+      // R6.2': Apollo TLI read pro -2085/rad +2151/nrm +950 for what is
+      // physically a ~pure-prograde burn).
+      burnState: st0Pre };
     legs.push(leg);
     lastTransit = leg;
-    // R6.2' Phase B (step 2): mirror the solved leg's real dvVec onto the
+    // R6.2' Phase B (step 2/5): mirror the solved leg's real dvVec onto the
     // unified MNODE's dv components — DISPLAY ONLY (the gizmo/card handle
     // readout), never the accounting source (that stays dvVec's magnitude
     // via progNmComputeEdgeDv above, e.dvRequired/e.dv_actual). Decomposed
-    // against the departure state's local (v̂,r̂,ĥ) basis — same convention
-    // 5745's _trajGizmoManeuverSolvedDv already uses for a legacy MANEUVER's
-    // handle readout (Phase B doesn't change that convention; the basis fix
-    // is a separate later pass per PHYSICS_PLAN R6.2' Phase B note). No-op
-    // for a legacy MANEUVER entry (no dv fields to refresh) or if 5745
-    // hasn't loaded yet (guarded, never a hard dependency).
+    // against the RECORDED burn state's local (v̂,r̂,ĥ) basis (leg.burnState —
+    // the shooter's actual departure state for a moon/interplanetary leg, not
+    // the mean-motion reconstruction). No-op for a legacy MANEUVER entry (no
+    // dv fields to refresh) or if 5745 hasn't loaded yet (guarded, never a
+    // hard dependency).
     if (e.type === 'MNODE' && dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
-      const axes = _trajGizmoAxes(st0.r, st0.v);
+      const axes = _trajGizmoAxes(leg.burnState.r, leg.burnState.v);
       const d = axes ? _trajGizmoDecomposeDv(dvVec, axes) : null;
       if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
     }

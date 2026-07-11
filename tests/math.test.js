@@ -2020,6 +2020,59 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R6.2' Phase B step 5 — decomposition BASIS fix (recorded burn state, not
+// a mean-motion reconstruction). See PHYSICS_PLAN.md R6.2' "Phase A known
+// limitation" (RESOLVED 2026-07-10).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _trajGizmoAxes, _trajGizmoDecomposeDv } = vm.runInContext('({ _trajGizmoAxes, _trajGizmoDecomposeDv })', sandbox);
+
+  // synthetic circular LEO-ish state: r along +x, v along +y -> axes should
+  // read vHat=+y, rHat=+x, hHat=+z (right-hand: r x v = z).
+  const r = [7000, 0, 0], v = [0, 7.5, 0];
+  const axesRec = _trajGizmoAxes(r, v);
+  ok('basis fix: recorded-state axes are the expected right-hand triad',
+    axesRec && Math.abs(axesRec.vHat[1] - 1) < 1e-9 && Math.abs(axesRec.rHat[0] - 1) < 1e-9 && Math.abs(axesRec.hHat[2] - 1) < 1e-9);
+
+  // decomposition against a RECORDED basis returns expected components for a
+  // synthetic mixed-component case (assertion 1).
+  const dMixed = _trajGizmoDecomposeDv([0.1, 3.0, 0.4], axesRec); // km/s
+  approx('basis fix: decompose against recorded basis - pro component', dMixed.pro, 3000, 1e-9);
+  approx('basis fix: decompose against recorded basis - rad component', dMixed.rad, 100, 1e-9);
+  approx('basis fix: decompose against recorded basis - nrm component', dMixed.nrm, 400, 1e-9);
+
+  // TLI-like case: a dvVec that is PURE prograde in its own recorded basis
+  // (e.g. the shooter's real departure state) must decompose to ~pure
+  // prograde, not the pro/rad/nrm-mixed reading the old mean-motion
+  // reconstruction produced for Apollo's actual TLI (assertion 2).
+  const dvPureVHat = [0, 3.143, 0]; // km/s, exactly along axesRec.vHat
+  const dTLI = _trajGizmoDecomposeDv(dvPureVHat, axesRec);
+  approx('basis fix: TLI-like burn decomposes to ~pure prograde (pro)', dTLI.pro, 3143, 1e-9);
+  ok('basis fix: TLI-like burn decomposes to ~pure prograde (|rad| ~ 0)', Math.abs(dTLI.rad) < 1e-6);
+  ok('basis fix: TLI-like burn decomposes to ~pure prograde (|nrm| ~ 0)', Math.abs(dTLI.nrm) < 1e-6);
+
+  // round-trip compose/decompose identity (assertion 3): build a dvVec from
+  // known pro/rad/nrm against a basis, decompose it back, recover the same
+  // components (within fp tolerance).
+  const compose = (pro_ms, rad_ms, nrm_ms, axes) => [
+    axes.vHat[0] * pro_ms / 1000 + axes.rHat[0] * rad_ms / 1000 + axes.hHat[0] * nrm_ms / 1000,
+    axes.vHat[1] * pro_ms / 1000 + axes.rHat[1] * rad_ms / 1000 + axes.hHat[1] * nrm_ms / 1000,
+    axes.vHat[2] * pro_ms / 1000 + axes.rHat[2] * rad_ms / 1000 + axes.hHat[2] * nrm_ms / 1000,
+  ];
+  // r/v perpendicular (tangential velocity, no radial component) — the real
+  // shape of a recorded parking-orbit burn state (physAimBurnState's own
+  // rHat/vHat ARE orthogonal by construction); _trajGizmoAxes's simple
+  // r-hat/v-hat basis is only exactly invertible under that condition (it is
+  // intentionally NOT Gram-Schmidt-orthonormalized in general).
+  const axesTilted = _trajGizmoAxes([6771, 500, 0], [-0.4918678127743018, 6.660873920589595, 3.626406577973024]);
+  const composed = compose(-2085, 2151, 950, axesTilted);
+  const roundTrip = _trajGizmoDecomposeDv(composed, axesTilted);
+  approx('basis fix: round-trip compose/decompose identity - pro', roundTrip.pro, -2085, 1e-6);
+  approx('basis fix: round-trip compose/decompose identity - rad', roundTrip.rad, 2151, 1e-6);
+  approx('basis fix: round-trip compose/decompose identity - nrm', roundTrip.nrm, 950, 1e-6);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // R6.3 — launch-time -> RAAN authoring (MATH.md §7k, closes critique 49)
 // ═══════════════════════════════════════════════════════════════════════════
 {

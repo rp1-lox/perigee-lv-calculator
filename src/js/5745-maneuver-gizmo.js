@@ -339,13 +339,29 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  physics change (ΔV accounting is untouched: it still comes from
  *  progNmComputeEdgeDv via the leg, never recomputed here). Returns the same
  *  shape as _trajGizmoNodeState, or null. */
-function _trajGizmoManeuverNodeState(m, e) {
+function _trajGizmoManeuverNodeState(m, e, missionId, authIdx) {
   if (!e || !_evIsSolvedManeuver(e) || !e.fromNode) return null;
   const fromN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
   const o = fromN && fromN.orbit;
   if (!o) return null;
   const met = e.metStart != null ? e.metStart : 0;
-  return _trajGizmoOrbitNodeAt(o, met);
+  const fallback = _trajGizmoOrbitNodeAt(o, met);
+  if (!fallback) return null;
+  // R6.2' Phase B step 5 (basis fix): prefer the leg's RECORDED actual burn
+  // state (leg.burnState — the shooter's real departure state for a moon/
+  // interplanetary leg) over the mean-motion reconstruction above, when it's
+  // available. Only the axes (rHat/vHat/hHat) + r/v are swapped; body/mu
+  // stay from the fallback lookup.
+  if (missionId != null && authIdx != null) {
+    const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[missionId] : null;
+    const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
+    if (leg && leg.burnState && leg.burnState.r && leg.burnState.v) {
+      const axes = _trajGizmoAxes(leg.burnState.r, leg.burnState.v);
+      if (axes) return Object.assign({}, fallback, { r: leg.burnState.r, v: leg.burnState.v,
+        rHat: axes.rHat, vHat: axes.vHat, hHat: axes.hHat });
+    }
+  }
+  return fallback;
 }
 
 /** R6.2' Phase A: look up the solved Δv (leg.dvVec, km/s) for a MANEUVER's
@@ -441,7 +457,7 @@ function _trajGizmoOpenExisting(id, authIdx) {
     // flips it to 'manual' (see _trajGizmoHandleDown/_trajGizmoDetachManeuverIfNeeded)
     // — so opening/closing without dragging is a no-op, same as inspecting
     // an MNODE without touching a handle.
-    const node = _trajGizmoManeuverNodeState(m, e);
+    const node = _trajGizmoManeuverNodeState(m, e, id, authIdx);
     if (!node) return;
     const met = e.metStart != null ? e.metStart : 0;
     const solved = _trajGizmoManeuverSolvedDv(id, authIdx, node) || { pro: 0, rad: 0, nrm: 0 };
@@ -999,7 +1015,7 @@ function _trajGizmoRepaintOverlay() {
       // still-solved maneuver (not yet detached) — re-derive the solved Δv
       // in case an upstream edit (e.g. a preceding COAST commit) recomputed
       // the leg with a new magnitude/state.
-      const node = _trajGizmoManeuverNodeState(m, le);
+      const node = _trajGizmoManeuverNodeState(m, le, g.missionId, g.authIdx);
       if (node) {
         g.node = node;
         g.met = le.metStart != null ? le.metStart : g.met;
@@ -1138,6 +1154,16 @@ function _trajGizmoDetachManeuverIfNeeded() {
   e.mode = 'manual';
   e.at = { kind: 'met', value_s: g.met };
   e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;
+  // R6.2' Phase B step 5 (detach fidelity): stamp the leg's recorded ACTUAL
+  // burn state (plain {r:[...],v:[...]} arrays — JSON-safe, rides autosave
+  // fine) onto the now-manual entry, so 565's manual-MNODE leg builder
+  // applies the same dv vector in the same basis the solved leg really flew,
+  // instead of reconstructing from mean-motion phase. Falls back silently
+  // (no stamp) if the leg hasn't been computed with a burnState yet.
+  const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[g.missionId] : null;
+  const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === g.authIdx);
+  if (leg && leg.burnState && leg.burnState.r && leg.burnState.v)
+    e.burnState = { r: leg.burnState.r.slice(), v: leg.burnState.v.slice() };
   g.kind = 'mnode';
 }
 
