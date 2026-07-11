@@ -1523,26 +1523,33 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   const { _trajProjectVec, progOrbitSamplePoints } =
     vm.runInContext('({ _trajProjectVec, progOrbitSamplePoints })', sandbox);
 
-  // el=π/2, az=0 is EXACTLY the pre-R2 mapping (u=x, v=y, depth=z)
+  // R6.3 handedness fix (2026-07-11): world coords are standard right-handed
+  // ecliptic (+z north, CCW-from-+z / east-longitude convention). SVG screen
+  // space is y-DOWN, so the pre-fix "u=x, v=y" identity mirrored geography
+  // and orbital motion (Australia rendered left of Asia; prograde read as
+  // clockwise). Fix: negate screen-y in _trajProjectVec (the one seam every
+  // consumer routes through) — goldens below re-derived for the flip; see
+  // MATH.md §7m.
+  // el=π/2, az=0 is the pre-R2 mapping with y negated (u=x, v=-y, depth=z)
   {
     const p = _trajProjectVec(3, 7, 11, 0, Math.PI / 2);
     approx('R2 proj: el=90 identity u=x', p.x, 3, 1e-12);
-    approx('R2 proj: el=90 identity v=y', p.y, 7, 1e-12);
+    approx('R2 proj: el=90 identity v=-y', p.y, -7, 1e-12);
     approx('R2 proj: el=90 identity depth=z', p.depth, 11, 1e-12);
   }
-  // el=0 (edge-on): v = -z (world +z projects up-screen — SVG y is down), depth = y
+  // el=0 (edge-on): v = +z (world +z projects down-screen post-flip), depth = y
   {
     const p = _trajProjectVec(3, 7, 11, 0, 0);
     approx('R2 proj: el=0 u=x', p.x, 3, 1e-12);
-    approx('R2 proj: el=0 v=-z', p.y, -11, 1e-12);
+    approx('R2 proj: el=0 v=+z', p.y, 11, 1e-12);
     approx('R2 proj: el=0 depth=y', p.depth, 7, 1e-12);
   }
-  // az=π/2 at top-down: x-axis rotates onto -y-screen... pin the convention:
-  // xa = x·cos(az) − y·sin(az), ya = x·sin(az) + y·cos(az)
+  // az=π/2 at top-down: x-axis rotates onto +y-screen post-flip. Convention:
+  // xa = x·cos(az) − y·sin(az), ya = x·sin(az) + y·cos(az), v = -ya
   {
     const p = _trajProjectVec(1, 0, 0, Math.PI / 2, Math.PI / 2);
     approx('R2 proj: az=90 maps +x to u=0', p.x, 0, 1e-12);
-    approx('R2 proj: az=90 maps +x to v=+1', p.y, 1, 1e-12);
+    approx('R2 proj: az=90 maps +x to v=-1', p.y, -1, 1e-12);
   }
   // tilt foreshortening: an ecliptic circle's v-extent scales by sin(el)
   {

@@ -21854,7 +21854,15 @@ function _trajProjectVec(x, y, z, az, el) {
   const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
   const ct = Math.cos(t), st = Math.sin(t);
   const xa = x * ca - y * sa, ya = x * sa + y * ca;
-  return { x: xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
+  // R6.3 handedness fix (2026-07-11): world coords use the standard
+  // right-handed ecliptic convention (+z north, CCW prograde motion/east
+  // longitude as seen from +z looking down: x-right, y-UP). SVG screen space
+  // is y-DOWN, so plotting world-y directly as screen-y is a reflection —
+  // it mirrored geography (Australia rendered left of Asia) AND orbital
+  // motion (prograde appeared clockwise) system-wide, since every consumer
+  // (surface points, gizmo, hover rails, ring tangents) routes through this
+  // one seam. Negating screen-y here is the one-place fix; see MATH.md §7m.
+  return { x: xa, y: -(ya * ct - (z || 0) * st), depth: ya * st + (z || 0) * ct };
 }
 // Per-render-pass projection context (set by _trajWorldSVG from the camera;
 // helpers below read it so every emission site shares ONE projection).
