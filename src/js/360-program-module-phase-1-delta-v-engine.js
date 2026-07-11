@@ -225,6 +225,88 @@ function progOrbitSamplePoints(el, n) {
   return pts;
 }
 
+/** Single point on the same ellipse progOrbitSamplePoints walks, at ONE
+ *  eccentric anomaly E (rad). Used by the mock-ascent renderer (574) to drop
+ *  a schematic insertion marker without sampling the whole ring. Pure. */
+function progOrbitPointAtE(el, E) {
+  const { a, e, i, raan, argp } = el;
+  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
+  const cO = Math.cos(raan), sO = Math.sin(raan);
+  const ci = Math.cos(i), si = Math.sin(i);
+  const cw = Math.cos(argp), sw = Math.sin(argp);
+  const R = [
+    [cO * cw - sO * sw * ci, -cO * sw - sO * cw * ci],
+    [sO * cw + cO * sw * ci, -sO * sw + cO * cw * ci],
+    [sw * si,                 cw * si               ],
+  ];
+  const x = a * (Math.cos(E) - e), y = b * Math.sin(E);
+  return [R[0][0] * x + R[0][1] * y, R[1][0] * x + R[1][1] * y, R[2][0] * x + R[2][1] * y];
+}
+
+// ─── R6.3: launch-time -> RAAN authoring (MATH.md §7k, resolves critique 49) ─
+// Pure spherical-trig helpers. All angles in/out are DEGREES unless noted.
+// Earth's sidereal rotation period, SECONDS — must match _trajBodySpinAngle's
+// Earth constant (574) so the site-longitude math stays self-consistent with
+// what's drawn on the rotating globe (that function's prime-meridian epoch
+// offset is uncalibrated/display-flavor only — see MATH.md critique 55; the
+// RAAN this produces is therefore self-consistent within the app, not tied to
+// a real-world UTC launch-window clock).
+const PROG_EARTH_SIDEREAL_S = 86164.1;
+
+function _prog360(deg) { return ((deg % 360) + 360) % 360; }
+
+/** Required launch azimuth (deg, measured from local north) to reach
+ *  inclination incDeg from latitude latDeg, spherical-trig:
+ *  sin(az) = cos(i) / cos(lat). Two solutions (NE ascending-node departure,
+ *  SE descending-node departure) are both physically valid; returns both.
+ *  {unreachable:true} when |cos(i)/cos(lat)| > 1 (inclination below the site's
+ *  latitude — no azimuth reaches it without a plane-change dogleg). */
+function progLaunchAzimuthDeg(latDeg, incDeg) {
+  const latR = latDeg * Math.PI / 180, incR = incDeg * Math.PI / 180;
+  const cosLat = Math.cos(latR);
+  if (Math.abs(cosLat) < 1e-9) return { unreachable: true };
+  const s = Math.cos(incR) / cosLat;
+  if (s > 1 || s < -1) return { unreachable: true, raw: s };
+  const azNE = Math.asin(s) * 180 / Math.PI;      // 0..90 (or 90..180 for retrograde), NE pair
+  const azSE = 180 - azNE;                        // SE / descending-node pair
+  return { azNE, azSE, unreachable: false };
+}
+
+/** RAAN (deg, 0-360) resulting from launching into inclination incDeg from a
+ *  site at (siteLatDeg, siteLonDeg) at absolute time tLaunchSec, where
+ *  spinFn(t) returns Earth's spin angle in RADIANS at t (pass
+ *  _trajBodySpinAngle.bind(null,'Earth') from the caller — kept as an
+ *  injected fn so this stays framework-free / unit-testable without loading
+ *  574). Standard spherical-trig ascending-node relation:
+ *    Ω = λ_inertial − asin(min(1, tan(lat)/tan(i)))     (direct, NE departure)
+ *  where λ_inertial = site.lon + spin(t_launch) is the site's inertial
+ *  (non-rotating-frame) longitude at that instant. Retrograde (i>90°)
+ *  mirrors the offset (descending-node geometry). {unreachable:true} when
+ *  |tan(lat)/tan(i)| > 1 — the requested inclination is below the site's
+ *  reachable minimum (|lat|). Pure. */
+function progLaunchRaanFor(siteLatDeg, siteLonDeg, incDeg, tLaunchSec, spinFn) {
+  const latR = siteLatDeg * Math.PI / 180, incR = incDeg * Math.PI / 180;
+  const spinRad = spinFn(tLaunchSec || 0);
+  const lambdaInertial = _prog360(siteLonDeg + spinRad * 180 / Math.PI);
+  const tanInc = Math.tan(incR);
+  if (Math.abs(tanInc) < 1e-9) return { unreachable: true };
+  const arg = Math.tan(latR) / tanInc;
+  if (arg > 1 || arg < -1) return { unreachable: true, raw: arg };
+  let dOmega = Math.asin(arg) * 180 / Math.PI;
+  if (incDeg > 90) dOmega = 180 - dOmega; // retrograde mirror
+  return { raan: _prog360(lambdaInertial - dOmega), lambdaInertial, unreachable: false };
+}
+
+/** Seconds until Earth's rotation brings the site under a TARGET RAAN plane,
+ *  given the RAAN launching right now (t=0-ish reference) would produce.
+ *  Δt = ((Ω_target − Ω_now) mod 360°) / ω_earth, wrapped forward into
+ *  [0, siderealPeriod). Pure. */
+function progLaunchNextWindowS(currentRaanDeg, targetRaanDeg, siderealPeriodS) {
+  const period = siderealPeriodS || PROG_EARTH_SIDEREAL_S;
+  const deltaDeg = _prog360(targetRaanDeg - currentRaanDeg);
+  return (deltaDeg / 360) * period;
+}
+
 /** HELIOCENTRIC element-evaluated 3D state {r:[3], v:[3]} of any body at
  *  mission time t_s. Recursive for moons (parent state + local state). The
  *  ONE body-position source — physics, porkchop, and renderer all resolve

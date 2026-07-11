@@ -2130,6 +2130,12 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     if (!_trajCullByExtent(_trajBodyPxR(trueR, zoom))) {
       const sunDirAngle = Math.atan2(sunP.y - p.y, sunP.x - p.x);
       s += _trajBodyDiscTiered(p.x, p.y, trueRpx, _trajBodyColor(body), body, zoom, cam.anchorBody === body, forceLabel, m && m.missionId, viewT, sunDirAngle, viewportDiagPx);
+      // R6.3: site marker + mock ascent path — only meaningful once the disc is
+      // surfaced (same LOD tier as coastlines) and only for Earth (the only
+      // body missions currently launch from).
+      if (body === 'Earth' && trueRpx >= _TRAJ_SURFACE_PX && m) {
+        s += _trajLaunchSiteAndAscentSVG(m, p.x, p.y, trueRpx, viewT, viewportDiagPx);
+      }
     }
     // Zone-of-influence content: single fade authority for everything embedded
     // at this body (moons in the next pass share the same gate via zoiAlpha).
@@ -2484,6 +2490,75 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
   }
   const hit = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${Math.max(trueRpx, 7).toFixed(2)}" fill="transparent"/>`;
   return clickId ? `<g${clickAttr}>${disc}${hit}</g>` : `<g>${disc}</g>`;
+}
+
+// ── R6.3: launch site marker + mock ascent path (MATH.md §7n) ──────────────
+// PRESENTATION LAYER ONLY — the ascent curve is a schematic bezier, not a
+// propagated trajectory (no ΔV/physics consequence, same spirit as §7m's
+// surface rendering). Finds the first LAUNCH event carrying a resolvable
+// site (authored or inherited from its fleet vehicle — 570's
+// _missionLaunchSiteFor) and draws: (a) a small ring+label marker at the
+// site's CURRENT rotated position (rides the spin with viewT), (b) a dashed
+// schematic curve from the site's position AT LAUNCH TIME to a nominal
+// insertion point on the parking orbit.
+function _trajMissionLaunchEvent(m) {
+  if (!m || !m.log) return null;
+  for (const e of m.log) {
+    if (e.type === 'LAUNCH' && typeof _missionLaunchSiteFor === 'function') {
+      const site = _missionLaunchSiteFor(e);
+      if (site && site.lat != null && site.lon != null) return { e, site };
+    }
+  }
+  return null;
+}
+function _trajLaunchSiteAndAscentSVG(m, cx, cy, rPx, viewT, viewportDiagPx) {
+  const found = _trajMissionLaunchEvent(m);
+  if (!found) return '';
+  const { e, site } = found;
+  const lodAlpha = _trajLodOpacity(rPx, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
+  if (lodAlpha <= 0) return '';
+  const spinNow = _trajBodySpinAngle('Earth', viewT);
+  const nowPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinNow), cx, cy, rPx);
+  let svg = '';
+  if (nowPt.depth >= 0) { // hemisphere cull — same convention as the coastline paths
+    svg += `<circle cx="${nowPt.x.toFixed(2)}" cy="${nowPt.y.toFixed(2)}" r="3" fill="none" stroke="var(--accent3)" stroke-width="1.3" opacity="${lodAlpha.toFixed(3)}"/>`;
+    const lbl = (site.name || 'Launch Site');
+    _trajRegisterLabel(nowPt.x, nowPt.y - 8, [{ text: lbl, dy: 0, fontPx: 9, color: 'var(--accent3)' }], 'site',
+      { screenSize: rPx, minSize: _TRAJ_LOD_BODY_MIN, selected: false, opacity: lodAlpha });
+  }
+  // Mock ascent: site position AT LAUNCH TIME -> a nominal insertion point on
+  // the launch orbit's ring, ~8.5 min (510 s) of schematic ascent later. Both
+  // endpoints use the SAME spin/orbit conventions the rest of the view uses
+  // (_trajBodySpinAngle, progOrbitPointAtE) so the curve is self-consistent
+  // with everything else drawn, even though it is not itself propagated.
+  const tLaunch = e.launchTime_s || 0;
+  const spinAtLaunch = _trajBodySpinAngle('Earth', tLaunch);
+  const launchPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinAtLaunch), cx, cy, rPx);
+  const o = e.orbit || e.launchOrbit || {};
+  const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES.Earth && PROG_BODIES.Earth.R) || 6371;
+  const peri = R + (o.alt_km != null ? o.alt_km : 200), apo = R + (o.apo_km != null ? o.apo_km : (o.alt_km != null ? o.alt_km : 200));
+  const a = (peri + apo) / 2, ecc = (apo - peri) / (apo + peri);
+  const incRad = (o.inc_deg != null ? o.inc_deg : 28.5) * _PROG_D2R;
+  const raanRad = (o.lan_deg != null ? o.lan_deg : 0) * _PROG_D2R;
+  // schematic near-circular mean-motion approximation (E ~= M): a real
+  // insertion point requires a Kepler solve this presentation layer doesn't
+  // need — the curve is explicitly labeled schematic, not a propagated leg.
+  const mu = 398600.4418; // Earth GM, km^3/s^2 — matches PROG_BODIES.Earth.mu order of magnitude
+  const n = Math.sqrt(mu / Math.pow(a, 3)); // rad/s
+  const E = (n * 510) % (2 * Math.PI); // ~8.5 min nominal ascent
+  const insertLocal = progOrbitPointAtE({ a, e: ecc, i: incRad, raan: raanRad, argp: 0 }, E);
+  const scale = rPx / R; // render-units per km at THIS disc's current screen radius
+  const insertQ = _trajProj3(insertLocal[0] * scale, insertLocal[1] * scale, insertLocal[2] * scale);
+  const insertPt = { x: cx + insertQ.x, y: cy + insertQ.y, depth: insertQ.depth };
+  if (launchPt.depth >= -0.3) { // allow a touch past the limb so the curve can visibly leave the disc
+    // quadratic bezier, control point pulled toward the insertion point's
+    // tangent direction so the curve visibly bends off the surface rather
+    // than cutting a straight chord.
+    const midX = (launchPt.x + insertPt.x) / 2, midY = (launchPt.y + insertPt.y) / 2;
+    const bendX = midX + (insertPt.x - cx) * 0.35, bendY = midY + (insertPt.y - cy) * 0.35;
+    svg += `<path d="M ${launchPt.x.toFixed(2)} ${launchPt.y.toFixed(2)} Q ${bendX.toFixed(2)} ${bendY.toFixed(2)} ${insertPt.x.toFixed(2)} ${insertPt.y.toFixed(2)}" fill="none" stroke="var(--accent3)" stroke-width="1" stroke-dasharray="3,3" opacity="${(lodAlpha * 0.85).toFixed(3)}" vector-effect="non-scaling-stroke"><title>Mock ascent (schematic — not a propagated trajectory)</title></path>`;
+  }
+  return svg;
 }
 
 // Which body-frame(s) hold content (an orbit ring or a transfer leg) tied to

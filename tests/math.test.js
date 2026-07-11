@@ -2018,6 +2018,39 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// R6.3 — launch-time -> RAAN authoring (MATH.md §7k, closes critique 49)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { progLaunchAzimuthDeg, progLaunchRaanFor, progLaunchNextWindowS } =
+    vm.runInContext('({ progLaunchAzimuthDeg, progLaunchRaanFor, progLaunchNextWindowS })', sandbox);
+  const spin0 = t => (t / 86164.1) * 2 * Math.PI; // same convention as _trajBodySpinAngle('Earth', t)
+
+  // azimuth: launching exactly to your own latitude requires due-east (90 deg)
+  approx('progLaunchAzimuthDeg: i=lat=28.5 -> az=90 (due east)', progLaunchAzimuthDeg(28.5, 28.5).azNE, 90, 1e-9);
+  // azimuth: KSC (28.5N) to ISS inclination (51.6 deg) -> ~45 deg NE
+  approx('progLaunchAzimuthDeg: KSC->51.6deg -> az~=45.0 NE', progLaunchAzimuthDeg(28.5, 51.6).azNE, 44.97513309898836, 1e-9);
+  ok('progLaunchAzimuthDeg: SE pair mirrors NE about 90', Math.abs(progLaunchAzimuthDeg(28.5, 51.6).azSE - (180 - 44.97513309898836)) < 1e-9);
+  ok('progLaunchAzimuthDeg: i<lat is unreachable (flagged, not NaN)', progLaunchAzimuthDeg(28.5, 10).unreachable === true);
+
+  // RAAN: KSC (28.5N, -80.6E) launching to its own latitude at t=0
+  const r1 = progLaunchRaanFor(28.5, -80.6, 28.5, 0, spin0);
+  approx('progLaunchRaanFor: KSC->28.5deg @t=0 pinned RAAN', r1.raan, 189.39999999999998, 1e-9);
+  approx('progLaunchRaanFor: lambda_inertial @t=0 = site lon (no spin yet)', r1.lambdaInertial, 279.4, 1e-9);
+  // same site/time, higher (ISS) inclination -> different RAAN
+  const r2 = progLaunchRaanFor(28.5, -80.6, 51.6, 0, spin0);
+  approx('progLaunchRaanFor: KSC->51.6deg @t=0 pinned RAAN', r2.raan, 253.91077277764623, 1e-9);
+  // 2h later, Earth has rotated -> lambda_inertial and RAAN both shift by the same spin delta
+  const r3 = progLaunchRaanFor(28.5, -80.6, 28.5, 7200, spin0);
+  approx('progLaunchRaanFor: launch-time offset shifts RAAN by the spin delta', r3.raan - r1.raan, spin0(7200) * 180 / Math.PI, 1e-9);
+  ok('progLaunchRaanFor: i<lat is unreachable (flagged)', progLaunchRaanFor(28.5, -80.6, 10, 0, spin0).unreachable === true);
+
+  // next-window: wraps forward through 360 deg, never negative
+  approx('progLaunchNextWindowS: 100->190deg forward wait', progLaunchNextWindowS(100, 190, 86164.1), 90 / 360 * 86164.1, 1e-6);
+  approx('progLaunchNextWindowS: 190->100deg wraps almost a full day', progLaunchNextWindowS(190, 100, 86164.1), 270 / 360 * 86164.1, 1e-6);
+  ok('progLaunchNextWindowS: same RAAN now -> ~0 wait', progLaunchNextWindowS(42, 42, 86164.1) < 1e-6);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

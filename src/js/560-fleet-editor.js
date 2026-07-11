@@ -105,6 +105,10 @@ function _fleetVehicleSpecFromLib(source, idx) {
     boosterName: p.boosterName || null,
     boosterData: boosterData || null,
     boosterGroups: Array.isArray(p.boosterGroups) ? p.boosterGroups.map(g => ({ ...g })) : null,
+    // R6.3: carry the vehicle's launch site through to the fleet entry so a
+    // mission LAUNCH event can default its site/lon without re-picking it —
+    // lon may be null on sites saved before R6.3 (graceful degrade, see 220).
+    site: p.site ? { ...p.site } : null,
   };
 }
 
@@ -135,6 +139,7 @@ function fleetSwapVehicle(fleetId, source, idx) {
   e.boosterName = spec.boosterName;
   e.boosterData = spec.boosterData;
   e.boosterGroups = spec.boosterGroups || null;
+  e.site = spec.site || null;
   fleetRender();
 }
 

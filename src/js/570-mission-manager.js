@@ -1161,6 +1161,7 @@ function _missionEventEditFieldsHTML(m, idx) {
       return `<label style="display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text-bright);"><input type="checkbox" class="edit-launch-pay-${id}" value="${sc.spacecraftId}"${on ? ' checked' : ''}>${sc.name}</label>`;
     }).join('') || '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">No spacecraft defined</div>';
     const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
+    const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <label class="cfg-label">Launch Vehicle</label>
@@ -1173,6 +1174,7 @@ function _missionEventEditFieldsHTML(m, idx) {
           <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;"></div>
           <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;"></div>
         </div>
+        ${_missionLaunchGeoHTML(m, idx, e)}
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyLaunchEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'SEPARATE') {
@@ -2316,6 +2318,122 @@ function _missionVehByKey(m, key) {
   return (m.vehicleIds || []).map(v => PROG_ACTIVE_PROGRAM.vehicles[v]).find(v => v && v._originKey === key) || null;
 }
 
+// ── R6.3: launch-site + launch-time -> RAAN authoring (MATH.md §7k) ──────────
+// Flat [{name,short,lat,lon}] of every built-in site, for the LAUNCH card's
+// site picker. Sites without lon (shouldn't happen post-R6.3, but a custom/
+// legacy site could still lack it) are filtered — the picker only offers
+// sites the geometry math can actually use; a null e.site just degrades the
+// whole geo block to "no site" (no throw, see _missionLaunchGeoHTML).
+function _missionLaunchSiteChoices() {
+  return (typeof LAUNCH_SITES !== 'undefined' ? LAUNCH_SITES : [])
+    .flatMap(region => region.sites)
+    .filter(s => s.lon != null)
+    .map(s => ({ name: s.name, short: s.short, lat: s.lat, lon: s.lon }));
+}
+// Earth spin angle (rad) at absolute time tSec, self-consistent with the
+// rotating globe (574's _trajBodySpinAngle) when that module is loaded;
+// falls back to the same literal constant if 574 hasn't loaded yet (test
+// harness / very early UI paint) so this never throws.
+function _missionEarthSpinRad(tSec) {
+  if (typeof _trajBodySpinAngle === 'function') return _trajBodySpinAngle('Earth', tSec);
+  return (tSec / 86164.1) * 2 * Math.PI;
+}
+// The site currently associated with a LAUNCH event: authored on the event
+// itself, else inherited from the picked fleet entry's vehicle site, else null.
+function _missionLaunchSiteFor(e) {
+  if (e.site) return e.site;
+  const f = e.fleetEntryId ? _fleetGet(e.fleetEntryId) : null;
+  return (f && f.site && f.site.lat != null) ? f.site : null;
+}
+function _missionLaunchGeoHTML(m, idx, e) {
+  const id = m.missionId;
+  const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
+  const site = _missionLaunchSiteFor(e);
+  const choices = _missionLaunchSiteChoices();
+  const siteOpts = ['<option value="">— no site (RAAN unauthored) —</option>',
+    ...choices.map(s => `<option value="${_tsEsc(s.short)}"${site && site.short === s.short ? ' selected' : ''}>${_tsEsc(s.name)} (${s.lat}&deg;, ${s.lon}&deg;)</option>`)].join('');
+  const o = e.orbit || {};
+  const lanDerived = !!(e.launchTime_s != null && e.launchTime_s !== '' && o._lanFromLaunchTime);
+  return `
+    <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
+      <div class="cfg-item"><label class="cfg-label">Launch Site</label>
+        <select id="edit-launch-site-${id}" style="${_es}" onchange="missionLaunchGeoUpdate('${id}',${idx})">${siteOpts}</select></div>
+      <div class="cfg-item"><label class="cfg-label">Launch Time (s from epoch)</label>
+        <input type="number" id="edit-launch-time-${id}" class="field" placeholder="unauthored" value="${e.launchTime_s != null ? e.launchTime_s : ''}" step="any" style="width:130px;" oninput="missionLaunchGeoUpdate('${id}',${idx})"></div>
+      <div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
+        <input type="number" id="edit-launch-lan-${id}" class="field" value="${o.lan_deg ?? ''}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>
+    </div>
+    <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.inc_deg, e.launchTime_s, o.lan_deg)}</div>`;
+}
+// Pure-ish readout builder — reads no DOM, just formats the three math
+// helpers' output (progLaunchAzimuthDeg / progLaunchRaanFor / progLaunchNextWindowS,
+// 360-...js) into the small caption line under the LAN field.
+function _missionLaunchGeoReadoutHTML(site, incDeg, launchTimeS, currentLanDeg) {
+  if (!site) return '// no launch site set — RAAN stays at its authored/default value';
+  incDeg = incDeg != null ? incDeg : 28.5;
+  const az = progLaunchAzimuthDeg(site.lat, incDeg);
+  const azTxt = az.unreachable
+    ? `az: unreachable (inc ${incDeg.toFixed(1)}&deg; &lt; site lat ${site.lat}&deg;)`
+    : `az &asymp; ${az.azNE.toFixed(1)}&deg; (NE) / ${az.azSE.toFixed(1)}&deg; (SE)`;
+  let windowTxt = '';
+  if (currentLanDeg != null && currentLanDeg !== '') {
+    const rNow = progLaunchRaanFor(site.lat, site.lon, incDeg, 0, _missionEarthSpinRad);
+    if (!rNow.unreachable) {
+      const dt = progLaunchNextWindowS(rNow.raan, +currentLanDeg, 86164.1);
+      const h = Math.floor(dt / 3600), mnt = Math.round((dt % 3600) / 60);
+      windowTxt = ` &middot; window in ~${h}h ${mnt}m`;
+    }
+  }
+  return `${site.name} &middot; ${azTxt}${windowTxt}`;
+}
+// Live (no missionRecompute) update as the site/launch-time fields change —
+// recomputes RAAN and writes it into the LAN field + readout caption. Applied
+// to m.log permanently only when the card's Apply button runs missionApplyLaunchEdit.
+function missionLaunchGeoUpdate(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
+  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
+  const tRaw = document.getElementById('edit-launch-time-' + id)?.value;
+  const t = (tRaw !== '' && tRaw != null) ? +tRaw : null;
+  const incField = document.getElementById('edit-launch-inc-' + id);
+  const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.inc_deg) || 28.5;
+  const lanField = document.getElementById('edit-launch-lan-' + id);
+  const lanLabel = lanField && lanField.closest('.cfg-item')?.querySelector('.cfg-label');
+  if (site && t != null) {
+    const r = progLaunchRaanFor(site.lat, site.lon, incDeg, t, _missionEarthSpinRad);
+    if (!r.unreachable && lanField) {
+      lanField.value = r.raan.toFixed(2);
+      lanField.style.color = 'var(--text-dim)';
+      if (lanLabel) lanLabel.innerHTML = 'LAN &Omega; (deg) <span style="color:var(--text-dim);">(from launch time)</span>';
+    } else if (lanLabel) {
+      lanLabel.innerHTML = 'LAN &Omega; (deg) <span style="color:var(--danger);">(unreachable at this inc)</span>';
+    }
+  } else if (lanField) {
+    // launch time cleared -> LAN field frees up (stays at its last value, editable)
+    lanField.style.color = '';
+    if (lanLabel) lanLabel.innerHTML = 'LAN &Omega; (deg)';
+  }
+  const out = document.getElementById('launch-geo-readout-' + id);
+  if (out) out.innerHTML = _missionLaunchGeoReadoutHTML(site, incDeg, t, lanField ? lanField.value : null);
+}
+// Typing directly into LAN (with no launch time authored) is just a manual
+// override — no RAAN derivation, but the readout line should still track it
+// for the next-window preview.
+function missionLaunchGeoManualLan(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  const tRaw = document.getElementById('edit-launch-time-' + id)?.value;
+  if (tRaw !== '' && tRaw != null) return; // launch-time-driven — ignore manual edits here
+  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
+  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
+  const incField = document.getElementById('edit-launch-inc-' + id);
+  const incDeg = incField ? (+incField.value || 0) : 28.5;
+  const lanField = document.getElementById('edit-launch-lan-' + id);
+  const out = document.getElementById('launch-geo-readout-' + id);
+  if (out) out.innerHTML = _missionLaunchGeoReadoutHTML(site, incDeg, null, lanField ? lanField.value : null);
+}
+
 function missionApplyLaunchEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
@@ -2327,6 +2445,19 @@ function missionApplyLaunchEdit(id, idx) {
   o.alt_km = +document.getElementById('edit-launch-alt-' + id)?.value || 0;
   o.apo_km = +document.getElementById('edit-launch-apo-' + id)?.value || o.alt_km;
   o.inc_deg = +document.getElementById('edit-launch-inc-' + id)?.value || 0;
+  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
+  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
+  e.site = site || null;
+  const tRaw = document.getElementById('edit-launch-time-' + id)?.value;
+  e.launchTime_s = (tRaw !== '' && tRaw != null) ? +tRaw : null;
+  const lanRaw = document.getElementById('edit-launch-lan-' + id)?.value;
+  if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
+    o.lan_deg = parseFloat(lanRaw);
+    o._lanFromLaunchTime = e.launchTime_s != null && !!site;
+  } else {
+    delete o.lan_deg;
+    o._lanFromLaunchTime = false;
+  }
   e.launchOrbit = { ...o };
   missionRecompute(m); missionRenderDetail();
 }
