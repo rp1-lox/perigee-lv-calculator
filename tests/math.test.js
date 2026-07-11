@@ -34,6 +34,7 @@ const FILES = [
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
   'src/js/570-mission-interaction-state.js',
+  'src/js/570-mission-lifecycle.js',
   'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
   'src/js/5745-maneuver-gizmo.js',
