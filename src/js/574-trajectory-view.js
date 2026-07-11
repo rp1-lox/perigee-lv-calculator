@@ -254,6 +254,7 @@ function _trajApplyCam(id, cam) {
     const zoom = _trajZoomFromCam(cam);
     _trajResetLabels();
     sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);
+    _trajReconcileGlobeLayer(svgEl); // R6.4c: patch persistent globe images in place (no flicker)
     if (overlayEl && rect.width > 0 && rect.height > 0) {
       overlayEl.style.transform = ''; // clear any mid-drag pan slide
       overlayEl.setAttribute('width', rect.width);
@@ -2202,7 +2203,17 @@ function _trajSetViewTime(id, t, maxMet) {
 // `cam` = {anchorBody, relOffsetKm, wKm}; `zoom` = _TRAJ_VB/cam.wKm;
 // `rect` = the world svg's measured bounding rect (for viewport-diagonal
 // culling — falls back to a square guess pre-mount).
+// R6.4c: textured globes are collected here during the render pass and then
+// reconciled into a PERSISTENT sibling <g class="traj-globe-layer"> (behind
+// traj-scene) by _trajReconcileGlobeLayer. Reason: _trajApplyCam rebuilds
+// g.traj-scene via innerHTML EVERY rotate frame, which destroys any inline
+// <image> and forces the browser to async-decode the new data-URI on a fresh
+// node — a blank frame until decode completes (the R6.4b per-frame re-raster
+// turned this into constant flicker). Updating a persistent node's href in
+// place keeps the previous bitmap painted until the new one decodes → no gap.
+let _trajPendingGlobes = [];
 function _trajWorldSVG(m, cam, zoom, rect) {
+  _trajPendingGlobes = [];
   const viewT = _trajViewTime(m);
   const calib = null;      // R1: planet-phase calibration retired (real ephemeris)
   const overrides = {};    // kept for downstream signature stability; ignored by the alias
@@ -2981,6 +2992,39 @@ function _trajRequestRepaint() {
     if (id && cam && typeof _trajApplyCam === 'function') _trajApplyCam(id, cam);
   });
 }
+// Reconcile the persistent globe layer against _trajPendingGlobes (populated by
+// the _trajWorldSVG pass that just ran). Reuses one <image> per body, updating
+// x/y/size every call and href ONLY when it changed — an in-place href swap
+// retains the current bitmap until the new data-URI decodes, so rotation never
+// shows a blank/half-decoded planet (the flicker fix). Bodies not drawn this
+// frame are hidden (display:none), NOT removed, so their decoded bitmap is kept
+// for when the camera returns.
+const _TRAJ_SVG_NS = 'http://www.w3.org/2000/svg';
+function _trajReconcileGlobeLayer(svgEl) {
+  if (!svgEl) return;
+  const layer = svgEl.querySelector('g.traj-globe-layer');
+  if (!layer) return;
+  const seen = {};
+  for (const g of _trajPendingGlobes) {
+    seen[g.body] = true;
+    let img = layer.querySelector(`image[data-body="${g.body}"]`);
+    if (!img) {
+      img = document.createElementNS(_TRAJ_SVG_NS, 'image');
+      img.setAttribute('data-body', g.body);
+      img.setAttribute('preserveAspectRatio', 'none');
+      layer.appendChild(img);
+    }
+    img.setAttribute('x', g.x.toFixed(2));
+    img.setAttribute('y', g.y.toFixed(2));
+    img.setAttribute('width', g.size.toFixed(2));
+    img.setAttribute('height', g.size.toFixed(2));
+    if (img.getAttribute('href') !== g.url) img.setAttribute('href', g.url);
+    if (img.style.display === 'none') img.style.display = '';
+  }
+  layer.querySelectorAll('image[data-body]').forEach(img => {
+    if (!seen[img.getAttribute('data-body')]) img.style.display = 'none';
+  });
+}
 // Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
 // planets/moons (Sun keeps its own plain _trajGlyph path, untouched). Picks
 // one of the three LOD tiers from the TRUE apparent radius (trueRpx,
@@ -3004,10 +3048,14 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
       const az = _trajProjCtx.az, el = _trajProjCtx.el;
       rasterUrl = _trajRasteredDiscDataURL(body, r * 2, spin, az, el, sunDir3);
     }
-    disc = rasterUrl
-      ? `<image href="${rasterUrl}" x="${(cx - r).toFixed(2)}" y="${(cy - r).toFixed(2)}" width="${(r * 2).toFixed(2)}" height="${(r * 2).toFixed(2)}" preserveAspectRatio="none"/>` +
-        `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`
-      : _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
+    if (rasterUrl) {
+      // Globe bitmap → persistent layer (see _trajPendingGlobes note); only
+      // the crisp border stays inline in the per-frame scene.
+      _trajPendingGlobes.push({ body, url: rasterUrl, x: cx - r, y: cy - r, size: r * 2 });
+      disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
+    } else {
+      disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
+    }
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';
     disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${_TRAJ_CHIP_R}" fill="var(--nm-bg)" fill-opacity="0.15" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>` +
@@ -3181,6 +3229,7 @@ function _missionTrajViewHTML(m) {
            onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()" oncontextmenu="return false">
         ${hintChip}
         <svg class="traj-svg" data-mid="${id}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet">
+          <g class="traj-globe-layer" data-mid="${id}"></g>
           <g class="traj-scene" data-mid="${id}">
             ${svgInner}
           </g>
@@ -3340,6 +3389,7 @@ function _missionTrajAfterRender(m) {
       _trajResetLabels();
       _trajExtractionCache = { missionId: null, data: null };
       sceneEl.innerHTML = _trajWorldSVG(mm, cam, zoom, rect);
+      _trajReconcileGlobeLayer(svgEl); // R6.4c: patch persistent globe images in place (no flicker)
       if (overlayEl) {
         overlayEl.style.transform = ''; // clear any mid-drag pan slide
         overlayEl.setAttribute('width', rect.width);
