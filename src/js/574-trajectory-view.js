@@ -292,6 +292,7 @@ function _trajApplyCam(id, cam) {
 
 function trajWheelZoom(ev, id) {
   ev.preventDefault();
+  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
   const cam = _trajCam(id);
   const dir = ev.deltaY < 0 ? 1 : -1;
   const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
@@ -327,6 +328,7 @@ function trajPanStart(ev, id) {
 let _trajRotLastMs = 0;
 function trajPanMove(ev) {
   if (!_trajDrag) return;
+  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
   const cam0 = _trajDrag.cam0;
@@ -2863,10 +2865,10 @@ function _trajBilinearSample(imgData, w, h, fx, fy) {
 // (inverse of _trajSpinRotate) gives the BODY-FRAME direction that
 // _trajLatLonUnit produces lat/lon from — this is what makes the raster
 // align with the vector site markers, which route through the same chain.
-function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3) {
+function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   const tex = _trajTextureFor(body);
   if (!tex || !tex.ready) return null;
-  const size = Math.max(1, Math.min(Math.round(discPx), 512));
+  const size = Math.max(1, Math.min(Math.round(discPx), maxPx || 512));
   const canvas = document.createElement('canvas');
   canvas.width = size; canvas.height = size;
   const ctx = canvas.getContext('2d');
@@ -2925,33 +2927,46 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3) {
 // per-pixel loop every 33ms frame. Cleared whenever a texture finishes
 // decoding (fallback frames must not stick around after real data arrives).
 let _trajRasterCache = {};
-const _TRAJ_RASTER_MIN_INTERVAL_MS = 120;
+// R6.4b (user flight-test): the old 120ms raster throttle made the globe
+// visibly update at ~8fps while the vector layer moved at 30fps. Replaced
+// with a FIDELITY LADDER (gizmo-preview precedent): while the user is
+// interacting (rotate/zoom/scrub — see _trajMarkInteracting call sites) the
+// globe re-rasters EVERY frame at low resolution (≤224px ≈ 2–4ms, well
+// inside the 33ms frame budget) so it moves in lockstep with the lines; a
+// settle timer then repaints once at full 512px when the interaction ends.
+const _TRAJ_RASTER_LO_PX = 224;
+let _trajInteractingUntil = 0;
+let _trajRasterSettleTimer = null;
+function _trajMarkInteracting() {
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  _trajInteractingUntil = now + 250;
+  if (_trajRasterSettleTimer) clearTimeout(_trajRasterSettleTimer);
+  _trajRasterSettleTimer = setTimeout(() => {
+    _trajRasterSettleTimer = null;
+    _trajRequestRepaint(); // one full-res pass after the gesture ends
+  }, 300);
+}
 function _trajRasteredDiscDataURL(body, discPx, spinAngle, az, el, sunDir3) {
   const tex = _trajTextureFor(body);
   if (!tex || !tex.ready) return null;
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const interacting = now < _trajInteractingUntil;
+  const maxPx = interacting ? _TRAJ_RASTER_LO_PX : 512;
   const discBucket = Math.round(discPx / 8) * 8;
   const spinQ = Math.round((spinAngle || 0) * 100) / 100;
   const azQ = Math.round((az || 0) * 100) / 100;
   const elQ = Math.round((el != null ? el : Math.PI / 2) * 100) / 100;
-  // Coarse sun-direction quantization — the brief accepts a slightly stale
-  // globe mid-drag; 0.1 rad buckets keep the terminator visually correct
-  // without re-rastering on every frame.
   const sunQ = sunDir3 ? [Math.round(sunDir3[0] * 10) / 10, Math.round(sunDir3[1] * 10) / 10, Math.round(sunDir3[2] * 10) / 10].join(',') : '0';
-  const key = `${body}|${discBucket}|${spinQ}|${azQ}|${elQ}|${sunQ}`;
-  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const key = `${body}|${maxPx}|${discBucket}|${spinQ}|${azQ}|${elQ}|${sunQ}`;
   const cached = _trajRasterCache[key];
   if (cached) return cached.url;
-  // Throttle: if ANY raster for this body happened very recently, reuse the
-  // most recent one (even if the key differs slightly) rather than pay the
-  // per-pixel cost again mid-drag.
-  const last = _trajRasterCache['__last_' + body];
-  if (last && (now - last.t) < _TRAJ_RASTER_MIN_INTERVAL_MS) return last.url;
-  const canvas = _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3);
+  const canvas = _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx);
   if (!canvas) return null;
   const url = canvas.toDataURL('image/png');
-  const entry = { url, t: now };
-  _trajRasterCache[key] = entry;
-  _trajRasterCache['__last_' + body] = entry;
+  // Bound the cache: quantized spin/az keys churn constantly during long
+  // sessions — reset wholesale past a small cap (rasters are cheap to redo).
+  if (Object.keys(_trajRasterCache).length > 64) _trajRasterCache = {};
+  _trajRasterCache[key] = { url, t: now };
   return url;
 }
 // Repaint hook: after an async texture decode completes, re-render every
@@ -3230,6 +3245,7 @@ function _trajScrubDown(ev, id, maxMet) {
 }
 function _trajScrubMove(ev) {
   if (!_trajScrubDrag) return;
+  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
   const now = performance.now();
   // Throttled ~30ms, same class as rotate-drag (trajPanMove) — a full
   // world+overlay re-render (via _trajApplyCam) per mousemove tick is the
