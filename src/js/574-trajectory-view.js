@@ -139,8 +139,13 @@ function _trajProjectVec(x, y, z, az, el) {
   // it mirrored geography (Australia rendered left of Asia) AND orbital
   // motion (prograde appeared clockwise) system-wide, since every consumer
   // (surface points, gizmo, hover rails, ring tangents) routes through this
-  // one seam. Negating screen-y here is the one-place fix; see MATH.md §7m.
-  return { x: xa, y: -(ya * ct - (z || 0) * st), depth: ya * st + (z || 0) * ct };
+  // one seam. R6.3b (user flight-test): the first fix negated screen-Y, which
+  // repairs chirality but points north DOWN at tilted views (the tilt term's
+  // sign flipped with it) — the world read as "flipped 180°". Negating
+  // screen-X instead is the other det=−1 reflection: chirality fixed AND the
+  // north pole tilts toward the TOP of the screen (+z → v=−z·st → up in SVG's
+  // y-down space). See MATH.md §7o.
+  return { x: -xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
 }
 // Per-render-pass projection context (set by _trajWorldSVG from the camera;
 // helpers below read it so every emission site shares ONE projection).
