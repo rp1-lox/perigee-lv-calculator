@@ -6,7 +6,7 @@ This log is append-only. Planned mappings are marked **proposed** until the corr
 
 | Old module | New module(s) | Status |
 |---|---|---|
-| `src/js/570-mission-manager.js` | `570-mission-core-state.js` (shared manager state) plus proposed event model/predicates/migration; replay/recompute; event cards/editing; node-map rendering; band view; budget/state panel modules | in progress |
+| `src/js/570-mission-manager.js` | `570-mission-core-state.js` (shared manager state); `570-mission-event-model.js` (time/event predicates, lazy migration, override plumbing); plus proposed replay/recompute; event cards/editing; node-map rendering; band view; budget/state panel modules | in progress |
 | `src/js/574-trajectory-view.js` | Camera/projection; world render passes; overlay/labels; event nodes/ticks/scrubber; centralized LOD constants, using load-ordered `574*` modules | proposed |
 | `src/js/5745-maneuver-gizmo.js` | Pure gizmo math; DOM interaction; shared hover/placement subsystem, using load-ordered modules between trajectory view and mission undo | proposed |
 
@@ -41,3 +41,12 @@ Also noted: entry [1] is dated 2026-07-10; it was written 2026-07-11.
 **Deleted**: none.
 **Verified**: `python build.py` passed 499/499 assertions and `node --check`; actual sorted order is `570-mission-core-state.js` → `570-mission-manager.js`; concatenating the two source files is byte-identical to the original 308,556-byte module; generated `lv_calc.html` is byte-identical to the pre-split baseline with SHA-256 `AC4A0F869258A4D78F3D5E3C6ABE1F31169DBF4022FF410779BF48F9E760AB42`. Browser: Vehicles, Mission, and Orbits pages rendered; no console errors; Saturn V at 185×185 km, 28.5° produced the 150,838 kg golden. Seeded Apollo/gizmo/session flows were not run for this state-declaration-only move.
 **Risk notes**: The first proposed filename (`570-mission-state.js`) sorted after `570-mission-manager.js`; the mandatory actual-order check caught this before the build and it was renamed to `570-mission-core-state.js`. The landed filename sorts correctly. No frozen functions, persisted fields, replay hooks, physics numerics, or generated source were edited.
+
+## [4] Extract mission event model and overrides — 2026-07-10
+**Intent**: Continue the approved mission-manager split by isolating shared event-model helpers and override-card plumbing as a contiguous prefix move.
+**Type**: split.
+**Files**: `src/js/570-mission-manager.js` lines 1–171 → `src/js/570-mission-event-model.js`: MET formatting; duration units/conversions; `_evIsSolvedManeuver`, `_evManeuverTarget`, `_evIsManualBurn`; settled-MNODE display helpers; `_missionMigrateManeuverEntry`; duration/ΔV override handlers and `_missionDurationOverrideHTML`; `tests/math.test.js` `FILES` list updated to load the new module between `570-mission-core-state.js` and `570-mission-manager.js`.
+**Behavior delta**: none.
+**Deleted**: none.
+**Verified**: `python build.py` passed 499/499 assertions and `node --check`; actual sorted order is `570-mission-core-state.js` → `570-mission-event-model.js` → `570-mission-manager.js`; concatenating the extracted file and manager remainder is byte-identical to the prior 307,944-byte manager file; generated `lv_calc.html` is byte-identical to the pre-split artifact with SHA-256 `AC4A0F869258A4D78F3D5E3C6ABE1F31169DBF4022FF410779BF48F9E760AB42`. Browser: after dismissing the restored-session banner, Orbits and Mission rendered; Saturn V at 185×185 km, 28.5° produced the 150,838 kg golden; no console errors. Seeded Apollo/gizmo/session flows were not run for this move-only extraction.
+**Risk notes**: `tests/math.test.js` explicitly lists 570 modules, so its load order was updated in the same commit. The extracted migration shim remains unchanged and lazy; no persisted field names, replay hooks, frozen functions, physics numerics, or generated source were edited.
