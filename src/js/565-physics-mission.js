@@ -763,7 +763,7 @@ function physRebuildMissionTrajectories(m) {
   const destOrbitFor = (dest, fromIdx) => {
     for (let j = fromIdx + 1; j < (m.log || []).length; j++) {
       const ev = m.log[j];
-      if (ev.type !== 'MANEUVER' || !ev.toNode) continue;
+      if (!_evIsSolvedManeuver(ev) || !ev.toNode) continue;
       const tn = _missionNmNodeById(ev.toNode);
       const o = tn && tn.orbit;
       if (o && o.body === dest && (o.type === 'circular' || o.type === 'elliptic'))
@@ -784,7 +784,9 @@ function physRebuildMissionTrajectories(m) {
     // convention physFreeReturnSolve solves in); Δv is applied in the orbit's
     // local frame: pro·v̂ + rad·r̂ + nrm·ĥ — the Normal component is live
     // since R3 (MATH.md §7h).
-    if (e.type === 'MNODE') {
+    if (e.type === 'MNODE' && !_evIsSolvedManeuver(e)) {
+      // manual burn (mode:'manual', or a classic vector MNODE with no target
+      // at all) — vehicle-relative vector propagated from orbitAtBurn.
       const o = e.orbitAtBurn;
       const burnMet = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
       if (!o || o.transit || o.surface || !PROG_BODIES[o.body]) {
@@ -836,7 +838,7 @@ function physRebuildMissionTrajectories(m) {
         dv_ms: Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2)) });
       continue;
     }
-    if (e.type !== 'MANEUVER' || !e.fromNode || !e.toNode) continue;
+    if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode) continue;
     const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
     const fromO = fromN && fromN.orbit, toO = toN && toN.orbit;
     if (!fromO || !toO) continue;
@@ -883,6 +885,13 @@ function physRebuildMissionTrajectories(m) {
       legs.push({ authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
         samples: bad ? [] : samples, events: [], tof_s: tof, tofPhysics: tof || null,
         dvVec: burn.dvVec, frames: [burn.center], converged: !bad, kind: burn.kind });
+      // R6.2' Phase B (step 2): same display-only dv-component mirror as the
+      // n-body branch below, for the same-body (analytic Kepler) leg kind.
+      if (e.type === 'MNODE' && burn.dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
+        const axes = _trajGizmoAxes(burn.state.r, burn.state.v);
+        const d = axes ? _trajGizmoDecomposeDv(burn.dvVec, axes) : null;
+        if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
+      }
       continue;
     }
 
@@ -952,6 +961,21 @@ function physRebuildMissionTrajectories(m) {
       converged, kind: burn.kind, dest: burn.dest, departElements, arrivalElements };
     legs.push(leg);
     lastTransit = leg;
+    // R6.2' Phase B (step 2): mirror the solved leg's real dvVec onto the
+    // unified MNODE's dv components — DISPLAY ONLY (the gizmo/card handle
+    // readout), never the accounting source (that stays dvVec's magnitude
+    // via progNmComputeEdgeDv above, e.dvRequired/e.dv_actual). Decomposed
+    // against the departure state's local (v̂,r̂,ĥ) basis — same convention
+    // 5745's _trajGizmoManeuverSolvedDv already uses for a legacy MANEUVER's
+    // handle readout (Phase B doesn't change that convention; the basis fix
+    // is a separate later pass per PHYSICS_PLAN R6.2' Phase B note). No-op
+    // for a legacy MANEUVER entry (no dv fields to refresh) or if 5745
+    // hasn't loaded yet (guarded, never a hard dependency).
+    if (e.type === 'MNODE' && dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
+      const axes = _trajGizmoAxes(st0.r, st0.v);
+      const d = axes ? _trajGizmoDecomposeDv(dvVec, axes) : null;
+      if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
+    }
   }
   _physTrajByMission[m.missionId] = { legs };
 

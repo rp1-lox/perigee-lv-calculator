@@ -476,7 +476,7 @@ function _trajExtractMission(m) {
 
   // ── transfer legs: MANEUVER events with a from/to node pair ──────────────
   log.forEach(e => {
-    if (e.type !== 'MANEUVER' || !e.fromNode || !e.toNode) return;
+    if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode) return;
     const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
     if (!fromN || !toN || !fromN.orbit || !toN.orbit) return;
     const fromO = fromN.orbit, toO = toN.orbit;
@@ -519,7 +519,7 @@ function _trajExtractMission(m) {
     physLegs.forEach(L => {
       if (!L.converged || (!L.departElements && !L.arrivalElements)) return;
       const auth = m.log[L.authIdx];
-      if (!auth || auth.type !== 'MANEUVER') return;
+      if (!auth || !_evIsSolvedManeuver(auth)) return;
       const fromN = _missionNmNodeById(auth.fromNode);
       const fromO = fromN && fromN.orbit;
       if (L.departElements && fromO && fromO.body) {
@@ -1448,7 +1448,7 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
   const frames = _trajGetExtraction(m);
   const sc = frames[body];
   m.log.forEach((e, idx) => {
-    if (!e || e.type === 'MANEUVER') return; // already selectable via _trajBurnMarker — see note above
+    if (!e || _evIsSolvedManeuver(e)) return; // already selectable via _trajBurnMarker — see note above
     const info = _trajEventNodeInfo(m, idx);
     if (!info) return;
     const evBody = _trajEventNodeBody(m, idx);

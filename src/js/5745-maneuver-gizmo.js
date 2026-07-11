@@ -340,7 +340,7 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  progNmComputeEdgeDv via the leg, never recomputed here). Returns the same
  *  shape as _trajGizmoNodeState, or null. */
 function _trajGizmoManeuverNodeState(m, e) {
-  if (!e || e.type !== 'MANEUVER' || !e.fromNode) return null;
+  if (!e || !_evIsSolvedManeuver(e) || !e.fromNode) return null;
   const fromN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
   const o = fromN && fromN.orbit;
   if (!o) return null;
@@ -387,7 +387,7 @@ function _trajGizmoPickTarget(m, node, met) {
   }
   if (typeof _missionNmNodeById === 'function') {
     for (const e of m.log || []) {
-      if (e.type !== 'MANEUVER' || !e.toNode) continue;
+      if (!_evIsSolvedManeuver(e) || !e.toNode) continue;
       if ((e.metStart != null ? e.metStart : 0) < met) continue; // only look forward from the node
       const n = _missionNmNodeById(e.toNode);
       if (n && n.body && n.body !== node.body) return n.body;
@@ -424,36 +424,46 @@ function _trajGizmoOpenPending(id, met) {
 function _trajGizmoOpenExisting(id, authIdx) {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
   if (!m || !m.log[authIdx]) return;
-  const e = m.log[authIdx];
-  if (e.type === 'MNODE') {
-    const met = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
-    const node = _trajGizmoNodeState(m, met, authIdx);
-    if (!node) return;
-    _trajGizmo = { missionId: id, met, authIdx, kind: 'mnode', dv: { pro: e.dvPro_ms || 0, rad: e.dvRad_ms || 0, nrm: e.dvNrm_ms || 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
-    document.addEventListener('keydown', _trajGizmoKeydown);
-    _trajGizmoAddDismissListeners();
-    _trajGizmoRepaintOverlay();
-    return;
-  }
-  if (e.type === 'MANEUVER') {
-    // R6.2' Phase A: dblclicking a solved MANEUVER opens the SAME gizmo,
-    // showing the leg's solved Δv on the handles (kind:'maneuver'). The
-    // gizmo starts attached (authIdx set) but the log entry is untouched
-    // until the first handle drag detaches it into an MNODE (see
-    // _trajGizmoHandleDown) — so opening/closing without dragging is a
-    // no-op, same as inspecting an MNODE without touching a handle.
+  let e = m.log[authIdx];
+  // R6.2' Phase B (3b): touching (opening) a legacy MANEUVER — or an old
+  // Phase-A detachedFrom-carrying MNODE — lazy-migrates it to the unified
+  // schema in place before the gizmo reads it. A migration that only ADDS
+  // fields (type/mode/target on a MANEUVER; target on a detachedFrom MNODE)
+  // doesn't change accounting, so it's not itself an undo-worthy edit — no
+  // recompute/undo capture here, just like opening an untouched MNODE is a
+  // no-op today.
+  if (typeof _missionMigrateManeuverEntry === 'function') _missionMigrateManeuverEntry(e);
+  if (_evIsSolvedManeuver(e)) {
+    // dblclicking a solved maneuver (legacy MANEUVER shim, or unified
+    // MNODE mode:'solved') opens the SAME gizmo, showing the leg's solved Δv
+    // on the handles (kind:'maneuver'). The gizmo starts attached (authIdx
+    // set) but the log entry's MODE is untouched until the first handle drag
+    // flips it to 'manual' (see _trajGizmoHandleDown/_trajGizmoDetachManeuverIfNeeded)
+    // — so opening/closing without dragging is a no-op, same as inspecting
+    // an MNODE without touching a handle.
     const node = _trajGizmoManeuverNodeState(m, e);
     if (!node) return;
     const met = e.metStart != null ? e.metStart : 0;
     const solved = _trajGizmoManeuverSolvedDv(id, authIdx, node) || { pro: 0, rad: 0, nrm: 0 };
-    const toN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.toNode) : null;
-    const toLabel = e.toLabel || (toN && toN.label) || e.toNode || '?';
+    const tgt = _evManeuverTarget(e);
+    const toN = (typeof _missionNmNodeById === 'function' && tgt) ? _missionNmNodeById(tgt.toNode) : null;
+    const toLabel = e.toLabel || (toN && toN.label) || (tgt && tgt.toNode) || '?';
     _trajGizmo = {
       missionId: id, met, authIdx, kind: 'maneuver',
       dv: { pro: solved.pro, rad: solved.rad, nrm: solved.nrm }, node,
       drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null,
       solved: { pro: solved.pro, rad: solved.rad, nrm: solved.nrm, toLabel },
     };
+    document.addEventListener('keydown', _trajGizmoKeydown);
+    _trajGizmoAddDismissListeners();
+    _trajGizmoRepaintOverlay();
+    return;
+  }
+  if (e.type === 'MNODE') {
+    const met = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
+    const node = _trajGizmoNodeState(m, met, authIdx);
+    if (!node) return;
+    _trajGizmo = { missionId: id, met, authIdx, kind: 'mnode', dv: { pro: e.dvPro_ms || 0, rad: e.dvRad_ms || 0, nrm: e.dvNrm_ms || 0 }, node, drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null };
     document.addEventListener('keydown', _trajGizmoKeydown);
     _trajGizmoAddDismissListeners();
     _trajGizmoRepaintOverlay();
@@ -530,7 +540,7 @@ function _trajGizmoLegDblClick(id, authIdx, evt) {
   // of the "spawn a pending MNODE at the nearest sample" behavior below
   // (which remains the fallback for other physics-leg dblclicks, e.g. an
   // arrival/exiting-corridor leg with no MANEUVER of its own at this index).
-  if (m.log[authIdx] && m.log[authIdx].type === 'MANEUVER') { _trajGizmoOpenExisting(id, authIdx); return; }
+  if (m.log[authIdx] && _evIsSolvedManeuver(m.log[authIdx])) { _trajGizmoOpenExisting(id, authIdx); return; }
   const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[id] : null;
   const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
   const vt = _trajViewTime(m);
@@ -981,12 +991,12 @@ function _trajGizmoRepaintOverlay() {
   if (g.authIdx != null && !g.drag && !g.centerDrag) {
     const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
     const le = m && m.log[g.authIdx];
-    if (le && le.type === 'MNODE') {
-      const node = _trajGizmoNodeState(m, g.met, g.authIdx);
-      if (node) g.node = node;
-      g.kind = 'mnode';
-    } else if (le && le.type === 'MANEUVER' && g.kind === 'maneuver') {
-      // still-solved MANEUVER (not yet detached) — re-derive the solved Δv
+    // Solved check FIRST: a unified MNODE(mode:'solved') is still type
+    // 'MNODE' at the storage level, so testing le.type alone would
+    // misclassify a still-solved gizmo as 'mnode' kind before ever reaching
+    // the maneuver branch below.
+    if (le && _evIsSolvedManeuver(le) && g.kind === 'maneuver') {
+      // still-solved maneuver (not yet detached) — re-derive the solved Δv
       // in case an upstream edit (e.g. a preceding COAST commit) recomputed
       // the leg with a new magnitude/state.
       const node = _trajGizmoManeuverNodeState(m, le);
@@ -996,6 +1006,10 @@ function _trajGizmoRepaintOverlay() {
         const solved = _trajGizmoManeuverSolvedDv(g.missionId, g.authIdx, node);
         if (solved) { g.dv = { pro: solved.pro, rad: solved.rad, nrm: solved.nrm }; g.solved = Object.assign({}, g.solved, solved); }
       }
+    } else if (le && le.type === 'MNODE') {
+      const node = _trajGizmoNodeState(m, g.met, g.authIdx);
+      if (node) g.node = node;
+      g.kind = 'mnode';
     } else {
       _trajGizmo = null; // the event was deleted/undone out from under us
       return;
@@ -1027,7 +1041,7 @@ function _trajGizmoRenderMenu(va, rect) {
   // MNODE card's button (570).
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   const le = m && g.authIdx != null ? m.log[g.authIdx] : null;
-  const resolveBtn = (le && le.type === 'MNODE' && le.detachedFrom)
+  const resolveBtn = (le && _evIsManualBurn(le) && (le.target || le.detachedFrom))
     ? `<button onclick="missionMnodeResolveToTarget('${g.missionId}',${g.authIdx})">↺ Re-solve to target</button>` : '';
   const html = `
     <button onclick="_trajGizmoOrbitStep(1)">+1 orbit</button>
@@ -1091,7 +1105,7 @@ function _trajGizmoApplyMet(newMet) {
   g.node = node;
   g.preview = null;
   g.ca = null;
-  if (g.authIdx != null && m.log[g.authIdx] && m.log[g.authIdx].type === 'MNODE') {
+  if (g.authIdx != null && m.log[g.authIdx] && _evIsManualBurn(m.log[g.authIdx])) {
     m.log[g.authIdx].at = { kind: 'met', value_s: newMet };
     missionRecompute(m);
     missionRenderDetail();
@@ -1101,29 +1115,29 @@ function _trajGizmoApplyMet(newMet) {
 }
 
 // ── Drag mechanics — handles (Δv) ───────────────────────────────────────────
-/** R6.2' Phase A item 3: the first Δv-handle drag on a solved MANEUVER
- *  gizmo DETACHES it — the log entry is replaced in place with an MNODE
- *  seeded at the solved components (already sitting in g.dv, since the
- *  gizmo opened showing them), stashing the whole original MANEUVER object
- *  on `detachedFrom` so "Re-solve to target" (missionMnodeResolveToTarget,
- *  570) can swap it back verbatim. No recompute here — the existing
- *  MNODE drag/commit path (unchanged below) recomputes on release, exactly
- *  like authoring a fresh MNODE. Idempotent: a no-op once g.kind is already
- *  'mnode' (e.g. dragging a second handle on an already-detached node). */
+/** R6.2' Phase B: the first Δv-handle drag on a solved maneuver gizmo
+ *  DETACHES it — now a pure MODE-FLIP ('solved' -> 'manual') on the SAME
+ *  unified log entry (lazy-migrated to unified form when the gizmo opened,
+ *  see _trajGizmoOpenExisting) instead of Phase A's object swap-and-stash:
+ *  `target` stays on the entry so "Re-solve to target"
+ *  (missionMnodeResolveToTarget, 570) can flip it straight back, and
+ *  dvPro/rad/nrm_ms are seeded to the solved values already sitting in
+ *  g.dv (the gizmo opened showing them) so the manual burn starts
+ *  byte-identical to what was flying a moment ago. No recompute here — the
+ *  existing MNODE drag/commit path (unchanged below) recomputes on release,
+ *  exactly like authoring a fresh MNODE. Idempotent: a no-op once g.kind is
+ *  already 'mnode' (e.g. dragging a second handle on an already-detached
+ *  node). */
 function _trajGizmoDetachManeuverIfNeeded() {
   const g = _trajGizmo;
   if (!g || g.kind !== 'maneuver' || g.authIdx == null) return;
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
-  if (!m || !m.log[g.authIdx] || m.log[g.authIdx].type !== 'MANEUVER') return;
-  const orig = m.log[g.authIdx];
-  const mnode = {
-    type: 'MNODE',
-    at: { kind: 'met', value_s: g.met },
-    dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm,
-    activeKey: orig.activeKey, activeName: orig.activeName,
-    detachedFrom: orig,
-  };
-  m.log[g.authIdx] = mnode;
+  if (!m || !m.log[g.authIdx] || !_evIsSolvedManeuver(m.log[g.authIdx])) return;
+  const e = m.log[g.authIdx];
+  if (typeof _missionMigrateManeuverEntry === 'function') _missionMigrateManeuverEntry(e); // no-op if already unified
+  e.mode = 'manual';
+  e.at = { kind: 'met', value_s: g.met };
+  e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;
   g.kind = 'mnode';
 }
 
@@ -1301,7 +1315,7 @@ function _trajGizmoManeuverCommitTimeDrag(dMetSec) {
   const g = _trajGizmo;
   if (!g || g.authIdx == null) return;
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
-  if (!m || !m.log[g.authIdx] || m.log[g.authIdx].type !== 'MANEUVER') return;
+  if (!m || !m.log[g.authIdx] || !_evIsSolvedManeuver(m.log[g.authIdx])) return;
   const idx = g.authIdx;
   const prev = idx >= 1 ? m.log[idx - 1] : null;
   if (prev && prev.type === 'COAST') {
@@ -1459,7 +1473,7 @@ function _trajGizmoCommit() {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   if (!m) return;
   g.preview = null;
-  if (g.authIdx != null && m.log[g.authIdx] && m.log[g.authIdx].type === 'MNODE') {
+  if (g.authIdx != null && m.log[g.authIdx] && _evIsManualBurn(m.log[g.authIdx])) {
     const e = m.log[g.authIdx];
     e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;
     missionRecompute(m);

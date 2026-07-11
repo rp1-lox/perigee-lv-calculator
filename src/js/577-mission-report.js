@@ -26,7 +26,11 @@ function _mrEventDesc(e) {
 }
 
 function _mrEventRow(e, i) {
-  const type = _mrEsc(e.type || '');
+  // R6.2' Phase B: report label stays "MANEUVER" for a unified solved MNODE
+  // (mode:'solved') — the printed report is a plain-English document, not a
+  // schema dump, so it shows the same type word a legacy MANEUVER always did.
+  const isSolvedMv = (typeof _evIsSolvedManeuver === 'function') && _evIsSolvedManeuver(e);
+  const type = _mrEsc(isSolvedMv ? 'MANEUVER' : (e.type || ''));
   const desc = _mrEsc(_mrEventDesc(e));
   let dv = '', prop = '', veh = '';
   if (e.type === 'LAUNCH') {
@@ -34,7 +38,7 @@ function _mrEventRow(e, i) {
     dv = _mrNum(sr.dvDelivered);
     prop = _mrNum((sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0));
     veh = _mrEsc(e.label || '');
-  } else if (e.type === 'BURN' || e.type === 'MANEUVER') {
+  } else if (e.type === 'BURN' || isSolvedMv) {
     dv = _mrNum(e.dv_actual != null ? e.dv_actual : e.dv);
     prop = _mrNum(e.prop_consumed);
     veh = _mrEsc(e.vehicleName || e.activeName || '');

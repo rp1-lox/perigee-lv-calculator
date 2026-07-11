@@ -37,6 +37,62 @@ function _missionNaturalDurationUnit(sec) {
 }
 function _missionSecondsToUnitValue(sec, unit) { return sec == null ? 0 : +(sec / (_MISSION_DURATION_UNITS[unit] || 1)).toFixed(4); }
 
+// ── R6.2' Phase B — maneuver unification predicates ──────────────────────────
+// Unified target schema going forward: MNODE{mode:'solved', target:{fromNode,toNode}}
+// behaves EXACTLY like a legacy MANEUVER{fromNode,toNode} entry for accounting
+// purposes (same progNmComputeEdgeDv path, same node-map edge). These three
+// predicates are the ONE place every consumer (replay, cards, node-map dedup,
+// checks, report, gizmo) tests "is this a solved/targeted maneuver" so the
+// legacy MANEUVER type keeps working as a shim without every call site
+// special-casing it. Pure, no mutation.
+function _evIsSolvedManeuver(e) {
+  if (!e) return false;
+  if (e.type === 'MANEUVER') return true;
+  return e.type === 'MNODE' && e.mode === 'solved' && !!e.target && !!e.target.fromNode && !!e.target.toNode;
+}
+// {fromNode,toNode} for a solved/targeted event, from whichever field it's
+// stored in (legacy top-level fields vs. unified e.target); null otherwise.
+function _evManeuverTarget(e) {
+  if (!e) return null;
+  if (e.type === 'MANEUVER') return { fromNode: e.fromNode, toNode: e.toNode };
+  if (e.type === 'MNODE' && e.target && e.target.fromNode && e.target.toNode) return { fromNode: e.target.fromNode, toNode: e.target.toNode };
+  return null;
+}
+// A vector-authored burn whose magnitude is the |dv| itself, not a solved edge
+// — today's classic MNODE, or a unified MNODE that's been detached (mode:'manual').
+function _evIsManualBurn(e) {
+  return !!e && e.type === 'MNODE' && !_evIsSolvedManeuver(e);
+}
+
+// Lazy-migrate a legacy MANEUVER (or an old Phase-A detachedFrom-carrying
+// MNODE) to the unified schema, in place, on first touch (gizmo open / card
+// edit). Idempotent — a no-op for an entry that's already unified or already
+// a plain manual MNODE with no detachedFrom baggage. dv components are left
+// at 0 for a freshly-migrated solved node; missionRecompute's leg-decompose
+// step (565/570) refreshes them from the physics leg immediately after, so
+// they're display-only from the very next repaint. Returns true if it
+// mutated the entry (caller decides whether that's an undo-worthy edit).
+function _missionMigrateManeuverEntry(e) {
+  if (!e) return false;
+  if (e.type === 'MANEUVER') {
+    const target = { fromNode: e.fromNode, toNode: e.toNode };
+    e.type = 'MNODE';
+    e.mode = 'solved';
+    e.target = target;
+    e.at = { kind: 'met', value_s: e.metStart != null ? e.metStart : 0 };
+    if (e.dvPro_ms == null) e.dvPro_ms = 0;
+    if (e.dvRad_ms == null) e.dvRad_ms = 0;
+    if (e.dvNrm_ms == null) e.dvNrm_ms = 0;
+    return true;
+  }
+  if (e.type === 'MNODE' && e.detachedFrom && !e.target) {
+    e.target = { fromNode: e.detachedFrom.fromNode, toNode: e.detachedFrom.toNode };
+    if (e.mode == null) e.mode = 'manual';   // detachedFrom always meant "currently manual"
+    return true;
+  }
+  return false;
+}
+
 // Apply a duration override typed in the event card's inline edit section (BURN/MANEUVER only).
 function missionApplyDurationOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
@@ -890,7 +946,10 @@ function _missionLogCardHTML(entry, id, idx) {
   if (entry.type === 'BURN')     return _missionBurnLogCardHTML(entry);
   if (entry.type === 'SEPARATE') return _missionSeparateLogCardHTML(entry);
   if (entry.type === 'DOCK')     return _missionDockLogCardHTML(entry);
-  if (entry.type === 'MANEUVER') return _missionManeuverLogCardHTML(entry, id, idx);
+  // Unified schema (R6.2' Phase B): a solved MNODE (mode:'solved', has a
+  // target) renders through the SAME card as a legacy MANEUVER — the
+  // predicate is the shim that keeps both forms indistinguishable to the UI.
+  if (_evIsSolvedManeuver(entry)) return _missionManeuverLogCardHTML(entry, id, idx);
   if (entry.type === 'EXPEND') return `<div class="mission-log-card" style="padding:8px 14px;display:flex;align-items:center;gap:8px;">
     <span class="mission-log-type">EXPEND</span>
     <span style="font-family:var(--mono);font-size:11px;color:var(--text-bright)">${entry.vehicleLevel ? entry.vehicleName : entry.stageName}</span>
@@ -920,13 +979,19 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">RECOVER</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${entry.vehicleName||'?'} recovered</div>
   </div>`;
-  if (entry.type === 'MNODE') return `<div class="mission-log-card" style="padding:8px 14px;">
+  if (entry.type === 'MNODE') {
+    // Manual burn (mode:'manual', or classic vector MNODE with no target at
+    // all). A retained `target`/legacy `detachedFrom` means this was once
+    // (or can again be) a solved maneuver — offer the mode-flip back.
+    const tgt = entry.target || entry.detachedFrom;
+    return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">MANEUVER NODE (vector)</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">Δv ${(entry.dvRequired||0).toLocaleString()} m/s <span style="color:var(--text-dim);">(pro ${Math.round(entry.dvPro_ms||0)} / rad ${Math.round(entry.dvRad_ms||0)} / nrm ${Math.round(entry.dvNrm_ms||0)})</span></div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;">prop &minus;${(entry.prop_consumed||0).toLocaleString()} kg &middot; ${entry.result||''}</div>
-    ${entry.detachedFrom ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">detached — was solved ${_tsEsc(entry.detachedFrom.fromLabel || entry.detachedFrom.fromNode || '?')} → ${_tsEsc(entry.detachedFrom.toLabel || entry.detachedFrom.toNode || '?')} · ΔV budget now uses this vector's authored magnitude, not the solved edge</div>
+    ${tgt ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:4px;">detached — was solved ${_tsEsc(entry.fromLabel || tgt.fromLabel || tgt.fromNode || '?')} → ${_tsEsc(entry.toLabel || tgt.toLabel || tgt.toNode || '?')} · ΔV budget now uses this vector's authored magnitude, not the solved edge</div>
     <button class="act-btn" style="margin-top:6px;font-size:10px;" onclick="event.stopPropagation();missionMnodeResolveToTarget('${id}',${idx})">↺ Re-solve to target</button>` : ''}
   </div>`;
+  }
   if (entry.type === 'COAST') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">COAST</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.days||0).toLocaleString()} d${entry.label ? ' — ' + entry.label : ''}${entry.metStart!=null?` <span style="color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>`:''}</div>
@@ -1074,7 +1139,7 @@ function _missionEventEditFieldsHTML(m, idx) {
           ${_missionDurationOverrideHTML(id, idx, e)}
         </div>
       </div>`;
-  } else if (e.type === 'MANEUVER') {
+  } else if (_evIsSolvedManeuver(e)) {
     const _nm  = _missionNmNodes();
     const _opt = sel => _nm.map(n => `<option value="${n.id}"${n.id===sel?' selected':''}>${n.label}${n.sub?' ('+n.sub+')':''}</option>`).join('');
     const _selStyle = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
@@ -1267,8 +1332,8 @@ function _missionEventEditFieldsHTML(m, idx) {
     : '';
   // mid-coast: only meaningful after a transfer-type event (MANEUVER / BURN) — places
   // this event partway along that transfer's coast in the band view.
-  const prevType = idx >= 1 ? m.log[idx - 1].type : null;
-  const coastToggle = (idx >= 1 && (prevType === 'MANEUVER' || prevType === 'BURN'))
+  const prevEv = idx >= 1 ? m.log[idx - 1] : null;
+  const coastToggle = (idx >= 1 && (_evIsSolvedManeuver(prevEv) || (prevEv && prevEv.type === 'BURN')))
     ? `<label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text-bright);">
         <input type="checkbox"${e.midCoast ? ' checked' : ''} onchange="missionToggleMidCoast('${id}',${idx})">
         ⤵ Occurs during the previous transfer's coast (show it mid-maneuver)
@@ -1397,7 +1462,7 @@ function missionBudget(m) {
       dvExpended  += sr.dvDelivered || 0;
       propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
       payloadMass  = e.payloadMass || payloadMass;
-    } else if (e.type === 'BURN' || e.type === 'MANEUVER') {
+    } else if (e.type === 'BURN' || e.type === 'MANEUVER' || e.type === 'MNODE') {
       dvExpended  += e.dv_actual || 0;
       propConsumed += e.prop_consumed || 0;
     }
@@ -1970,7 +2035,14 @@ function missionRecompute(m) {
       // here since the burn already completed; it matters for OTHER live vehicles idling
       // through the same span, e.g. a docked depot).
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
-    } else if (e.type === 'MANEUVER') {
+    } else if (_evIsSolvedManeuver(e)) {
+      // R6.2' Phase B (step 2): a unified MNODE(mode:'solved') replays through
+      // this IDENTICAL accounting path as a legacy MANEUVER — same
+      // progNmComputeEdgeDv call inside _missionApplyManeuver, same duration
+      // precedence, same physics leg build (565's leg builder is keyed off
+      // this same predicate). fromNode/toNode/fromLabel/toLabel are mirrored
+      // at the top level on both forms (migration/authoring keep them in
+      // sync), so every read below is unchanged from the legacy MANEUVER path.
       active = resolveActive(e);
       if (active) e.vehicleId = active.vehicleId;
       // T2 ordering devil: this MANEUVER's duration is the COAST that PRECEDES it
@@ -2262,11 +2334,17 @@ function missionApplyBurnEdit(id, idx) {
 
 function missionApplyManeuverEdit(id, idx) {
   const m = _missionGet(id); if(!m) return;
-  const e = m.log[idx]; if(!e || e.type!=='MANEUVER') return;
+  const e = m.log[idx]; if(!e || !_evIsSolvedManeuver(e)) return;
+  // R6.2' Phase B (3b): touching a legacy MANEUVER's card lazy-migrates it to
+  // the unified MNODE(mode:'solved') schema in place, one undo step (the
+  // migration mutation + the field edit below land in the SAME recompute's
+  // undo capture, matching the drag-commit discipline elsewhere).
+  _missionMigrateManeuverEntry(e);
   const from = document.getElementById('edit-mv-from-'+id)?.value || e.fromNode;
   const to   = document.getElementById('edit-mv-to-'+id)?.value || e.toNode;
   const lbl = nid => { const n = _missionNmNodeById(nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
   e.fromNode = from; e.toNode = to; e.fromLabel = lbl(from); e.toLabel = lbl(to);
+  e.target = { fromNode: from, toNode: to };
   missionRecompute(m);   // recompute refreshes ΔV/prop from the new node pair (steps unchanged)
   missionRenderDetail();
 }
@@ -2963,7 +3041,7 @@ function _missionMultiVehicleHTML(m) {
         dvExpended += sr.dvDelivered || 0;
         propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
         payloadMass = e.payloadMass || payloadMass;
-      } else if (e.type === 'BURN' || e.type === 'MANEUVER') {
+      } else if (e.type === 'BURN' || e.type === 'MANEUVER' || e.type === 'MNODE') {
         dvExpended += e.dv_actual || 0;
         propConsumed += e.prop_consumed || 0;
       }
@@ -3102,7 +3180,7 @@ function _missionNodePath(m) {
   const path = [];
   const vid = m.vehicleId;
   if (m.log.some(e => e.type === 'LAUNCH' || e.type === 'DEPLOY')) path.push(_missionNodeForLaunch(m));
-  for (const e of m.log) if (e.type === 'MANEUVER' && e.toNode && (!vid || e.vehicleId === vid)) path.push(e.toNode);
+  for (const e of m.log) if (_evIsSolvedManeuver(e) && e.toNode && (!vid || e.vehicleId === vid)) path.push(e.toNode);
   return path;
 }
 
@@ -3369,8 +3447,18 @@ function missionExecManeuver(id, fromId, toId) {
   // copy the draft step program (if any) onto the new maneuver; empty → legacy single burn
   const steps = (_missionAddMv && Array.isArray(_missionAddMv.steps) && _missionAddMv.steps.length)
     ? _missionAddMv.steps.map(s => ({ ...s })) : undefined;
+  // R6.2' Phase B (3a): the node-map bridge now authors the UNIFIED schema
+  // directly — MNODE(mode:'solved', target) — instead of the legacy MANEUVER
+  // literal. fromNode/toNode/fromLabel/toLabel stay mirrored at the top level
+  // (every existing consumer that reads them directly, e.g. the maneuver
+  // card/band label/node-map path builder, keeps working unchanged); dv
+  // components start at 0 and are refreshed from the solved leg on the very
+  // next recompute (display-only mirror, see physRebuildMissionTrajectories).
   m.log.push({
-    type: 'MANEUVER',
+    type: 'MNODE', mode: 'solved',
+    target: { fromNode: fromId, toNode: toId },
+    at: { kind: 'met', value_s: 0 },
+    dvPro_ms: 0, dvRad_ms: 0, dvNrm_ms: 0,
     fromNode: fromId, toNode: toId, fromLabel: lbl(fromId), toLabel: lbl(toId),
     steps,
     activeKey: actFv ? actFv._originKey : null,
@@ -3399,7 +3487,7 @@ function missionNodeClick(id, nodeId) {
   }
   // Not drawing — jump to the most recent event that lands on this node.
   let target = -1;
-  m.log.forEach((e, i) => { if (e.type === 'MANEUVER' && e.toNode === nodeId) target = i; });
+  m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.toNode === nodeId) target = i; });
   if (target < 0 && nodeId === _missionNodeForLaunch(m)) m.log.forEach((e, i) => { if (e.type === 'LAUNCH' || e.type === 'DEPLOY') target = i; });
   if (target >= 0) {
     // R5 item 3: route through the shared selection model (m.log[i]._expanded,
@@ -3583,7 +3671,7 @@ function _missionBandModel(m) {
     Object.values(byVehicle).forEach(keys => { if (keys.length > 1) dockTies.push({ col: c, ownerKeys: [...new Set(keys)] }); });
     let label = e.type;
     if (e.type === 'BURN') label = e.burnLabel || 'BURN';
-    else if (e.type === 'MANEUVER') label = '→ ' + (e.toLabel || e.toNode || '');
+    else if (_evIsSolvedManeuver(e)) label = '→ ' + (e.toLabel || e.toNode || '');
     events.push({ index: i, type: e.type, col: c, label, met: e.metStart, durationUsed: e.durationUsed });
   });
 
@@ -3966,7 +4054,7 @@ function missionSolveFreeReturn(id) {
 // Apply edits from the MNODE event's inline edit section — standard mutation path
 // (update log entry → missionRecompute → render).
 function missionApplyMnodeEdit(id, idx) {
-  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const m = _missionGet(id); if (!m || !m.log[idx] || !_evIsManualBurn(m.log[idx])) return;
   const e = m.log[idx];
   const gv = f => { const el = document.getElementById(`edit-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
   e.at = { kind: 'met', value_s: Math.max(0, gv('met')) };
@@ -3982,7 +4070,7 @@ function missionApplyMnodeEdit(id, idx) {
 // (1 m/s / 10 s).
 function missionMnodeNudge(id, idx, field, sign, ev) {
   if (ev && ev.stopPropagation) ev.stopPropagation();
-  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE') return;
+  const m = _missionGet(id); if (!m || !m.log[idx] || !_evIsManualBurn(m.log[idx])) return;
   const e = m.log[idx];
   const fine = !!(ev && ev.shiftKey);
   if (field === 'met') {
@@ -3998,17 +4086,24 @@ function missionMnodeNudge(id, idx, field, sign, ev) {
   missionRenderDetail();
 }
 
-// R6.2' Phase A item 4: swap a detached MNODE back to its original solved
-// MANEUVER — the exact object stashed on `detachedFrom` at detach time
-// (5745's _trajGizmoDetachManeuverIfNeeded), restored verbatim (byte-
-// identical fromNode/toNode/dvOverride/etc.) so ΔV accounting flips back to
-// progNmComputeEdgeDv and totals match the pre-detach values exactly — the
-// parity check the R6.2' spec requires. If the gizmo is open on this same
-// log index, close it (its cached kind/authIdx would otherwise be stale
-// against the just-swapped-back MANEUVER; re-dblclick to reopen).
+// R6.2' Phase B: re-solve a detached (manual) MNODE back to its target —
+// now a pure MODE-FLIP ('manual' -> 'solved') instead of Phase A's object
+// swap-back, since the unified schema keeps `target` around on a manual node
+// specifically so this doesn't need a stashed copy of anything. ΔV
+// accounting flips back to progNmComputeEdgeDv via _evIsSolvedManeuver on
+// the very next recompute — dvPro/rad/nrm_ms are left as-is (display-only
+// once solved; refreshed from the leg's dvVec by the same recompute) and
+// dvOverride (if the user had one) is untouched, matching legacy MANEUVER
+// semantics exactly. Falls back to reading a legacy Phase-A `detachedFrom`
+// object for any old save that hasn't been touched since (lazy-migrated in
+// place first, so it never needs a second read of this field again).
 function missionMnodeResolveToTarget(id, idx) {
-  const m = _missionGet(id); if (!m || !m.log[idx] || m.log[idx].type !== 'MNODE' || !m.log[idx].detachedFrom) return;
-  m.log[idx] = m.log[idx].detachedFrom;
+  const m = _missionGet(id); if (!m || !m.log[idx]) return;
+  const e = m.log[idx];
+  if (e.type !== 'MNODE') return;
+  _missionMigrateManeuverEntry(e);   // detachedFrom-only saves -> target populated
+  if (!e.target || !e.target.fromNode || !e.target.toNode) return;
+  e.mode = 'solved';
   if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
     if (typeof _trajGizmoClose === 'function') _trajGizmoClose();
   }

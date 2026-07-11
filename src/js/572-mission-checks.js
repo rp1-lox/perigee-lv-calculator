@@ -128,13 +128,14 @@ function missionRunChecks(m) {
     // so there is no separate "the burn silently overdrew the tank" failure mode
     // distinct from #1's FAILED handling. We fold #2 into a MARGINAL-shortfall
     // check here (still its own catalog id) rather than skip it outright.
-    if ((e.type === 'BURN' || e.type === 'MANEUVER') && e.result !== 'FAILED') {
-      // BURN caches its target on e.dvTarget; MANEUVER caches it on e.dvRequired
+    if ((e.type === 'BURN' || _evIsSolvedManeuver(e)) && e.result !== 'FAILED') {
+      // BURN caches its target on e.dvTarget; a solved maneuver (legacy
+      // MANEUVER or unified MNODE mode:'solved') caches it on e.dvRequired
       // (dvOverride-aware — see _missionApplyManeuver, 570) — read whichever the
       // event type actually populates rather than only the BURN field (pre-T2 bug:
       // this check silently never fired for MANEUVER shortfalls before T2 surfaced
       // it via boiloff-starved arrival burns).
-      const target = e.type === 'MANEUVER' ? (e.dvRequired != null ? e.dvRequired : null) : (e.dvTarget != null ? e.dvTarget : null);
+      const target = e.type === 'BURN' ? (e.dvTarget != null ? e.dvTarget : null) : (e.dvRequired != null ? e.dvRequired : null);
       const actual = e.dv_actual != null ? e.dv_actual : null;
       if (target != null && actual != null && actual < target - 1 && target > 0) {
         const pct = Math.round((1 - actual / target) * 100);
@@ -147,24 +148,26 @@ function missionRunChecks(m) {
       }
     }
 
-    // R6.2' Phase A item 5: soft info note for a detached MNODE (a MANEUVER
-    // pulled into a manual vector burn via the gizmo's handle-drag detach,
-    // 5745). Not a failure — just a heads-up that ΔV accounting for this leg
-    // switched from the solved edge (progNmComputeEdgeDv) to the authored
-    // vector's own magnitude, which won't auto-track a later change to the
-    // original from/to nodes the way a still-solved MANEUVER would.
-    if (e.type === 'MNODE' && e.detachedFrom) {
-      const df = e.detachedFrom;
-      const fromLbl = _mcEscape(df.fromLabel || df.fromNode || '?');
-      const toLbl = _mcEscape(df.toLabel || df.toNode || '?');
+    // R6.2' Phase B: soft info note for a manual burn that still carries a
+    // target — i.e. a solved maneuver detached (mode-flipped) into a manual
+    // vector burn via the gizmo's handle-drag detach (5745), OR a legacy
+    // Phase-A detachedFrom save not yet touched. Not a failure — just a
+    // heads-up that ΔV accounting for this leg switched from the solved edge
+    // (progNmComputeEdgeDv) to the authored vector's own magnitude, which
+    // won't auto-track a later change to the original from/to nodes the way
+    // a still-solved maneuver would.
+    if (_evIsManualBurn(e) && (e.target || e.detachedFrom)) {
+      const tgt = e.target || e.detachedFrom;
+      const fromLbl = _mcEscape(e.fromLabel || tgt.fromLabel || tgt.fromNode || '?');
+      const toLbl = _mcEscape(e.toLabel || tgt.toLabel || tgt.toNode || '?');
       push('mnode-detached', 'info', 'Vector-authored burn replaces a solved maneuver',
         `This maneuver node was detached from a solved ${fromLbl} → ${toLbl} transfer — &Delta;V budget now uses the authored vector's own magnitude, not the solved edge. Use "Re-solve to target" to restore the solved maneuver.`,
         authIdx);
     }
 
-    // #3 RED maneuver-from-mismatch: MANEUVER whose from-node != the acting
-    // vehicle's orbit state at that event (pre-event snapshot).
-    if (e.type === 'MANEUVER' && e.fromNode) {
+    // #3 RED maneuver-from-mismatch: a solved maneuver whose from-node != the
+    // acting vehicle's orbit state at that event (pre-event snapshot).
+    if (_evIsSolvedManeuver(e) && e.fromNode) {
       const node = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
       const prevSnap = (k > 0 && expanded[k - 1].snapshot) ? expanded[k - 1].snapshot : null;
       const activeKeyPrev = (k > 0) ? expanded[k - 1].activeOriginKey : null;

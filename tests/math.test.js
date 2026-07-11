@@ -31,6 +31,7 @@ const FILES = [
   'src/js/565-physics-mission.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/430-program-module-phase-8-node-map.js',
+  'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
   'src/js/5745-maneuver-gizmo.js',
 ];
@@ -84,6 +85,7 @@ const {
   physMissionLeg, _trajGizmoClosestApproach, physEscapeHorizonS,
   _nmSoiLayoutRadius, _nmEdgePhysicsAnnotation, _trajEventNodeInfo,
   _trajLatLonUnit, _trajSpinRotate, _trajBodySpinAngle, _trajTrueBodyRadiusKm,
+  _evIsSolvedManeuver, _evManeuverTarget, _evIsManualBurn, _missionMigrateManeuverEntry,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -2048,6 +2050,54 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   approx('progLaunchNextWindowS: 100->190deg forward wait', progLaunchNextWindowS(100, 190, 86164.1), 90 / 360 * 86164.1, 1e-6);
   approx('progLaunchNextWindowS: 190->100deg wraps almost a full day', progLaunchNextWindowS(190, 100, 86164.1), 270 / 360 * 86164.1, 1e-6);
   ok('progLaunchNextWindowS: same RAAN now -> ~0 wait', progLaunchNextWindowS(42, 42, 86164.1) < 1e-6);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R6.2' Phase B — maneuver-unification predicates (570-mission-manager.js):
+// _evIsSolvedManeuver / _evManeuverTarget / _evIsManualBurn /
+// _missionMigrateManeuverEntry. Dated 2026-07-10.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const legacyMv = { type: 'MANEUVER', fromNode: 'A', toNode: 'B', metStart: 100 };
+  const unifiedSolved = { type: 'MNODE', mode: 'solved', target: { fromNode: 'A', toNode: 'B' }, fromNode: 'A', toNode: 'B' };
+  const manualMnode = { type: 'MNODE', dvPro_ms: 10 };
+  const detachedManual = { type: 'MNODE', mode: 'manual', target: { fromNode: 'A', toNode: 'B' } };
+  const halfUnified = { type: 'MNODE', mode: 'solved', target: { fromNode: 'A' } }; // missing toNode -> not solved
+
+  ok('_evIsSolvedManeuver: legacy MANEUVER is solved', _evIsSolvedManeuver(legacyMv) === true);
+  ok('_evIsSolvedManeuver: unified mode:solved+target is solved', _evIsSolvedManeuver(unifiedSolved) === true);
+  ok('_evIsSolvedManeuver: manual MNODE is not solved', _evIsSolvedManeuver(manualMnode) === false);
+  ok('_evIsSolvedManeuver: incomplete target is not solved', _evIsSolvedManeuver(halfUnified) === false);
+  ok('_evIsSolvedManeuver: null-safe', _evIsSolvedManeuver(null) === false);
+
+  const t1 = _evManeuverTarget(legacyMv), t2 = _evManeuverTarget(unifiedSolved);
+  ok('_evManeuverTarget: legacy MANEUVER target', t1 && t1.fromNode === 'A' && t1.toNode === 'B');
+  ok('_evManeuverTarget: unified MNODE target', t2 && t2.fromNode === 'A' && t2.toNode === 'B');
+  ok('_evManeuverTarget: manual MNODE has no target', _evManeuverTarget(manualMnode) === null);
+
+  ok('_evIsManualBurn: manual MNODE is a manual burn', _evIsManualBurn(manualMnode) === true);
+  ok('_evIsManualBurn: detached (mode:manual, has target) is a manual burn', _evIsManualBurn(detachedManual) === true);
+  ok('_evIsManualBurn: solved MNODE is not a manual burn', _evIsManualBurn(unifiedSolved) === false);
+  ok('_evIsManualBurn: legacy MANEUVER is not a manual burn', _evIsManualBurn(legacyMv) === false);
+
+  // lazy migration: legacy MANEUVER -> unified solved, in place, fields mirrored
+  const mig = { type: 'MANEUVER', fromNode: 'X', toNode: 'Y', fromLabel: 'X node', toLabel: 'Y node', metStart: 50, dvOverride: 3000 };
+  const mutated = _missionMigrateManeuverEntry(mig);
+  ok('_missionMigrateManeuverEntry: reports a mutation', mutated === true);
+  ok('_missionMigrateManeuverEntry: type flips to MNODE', mig.type === 'MNODE');
+  ok('_missionMigrateManeuverEntry: mode becomes solved', mig.mode === 'solved');
+  ok('_missionMigrateManeuverEntry: target mirrors fromNode/toNode', mig.target.fromNode === 'X' && mig.target.toNode === 'Y');
+  ok('_missionMigrateManeuverEntry: legacy top-level fields survive (mirrored)', mig.fromNode === 'X' && mig.toNode === 'Y' && mig.fromLabel === 'X node' && mig.dvOverride === 3000);
+  ok('_missionMigrateManeuverEntry: post-migration predicate agrees', _evIsSolvedManeuver(mig) === true);
+  ok('_missionMigrateManeuverEntry: idempotent (already-unified entry -> no mutation)', _missionMigrateManeuverEntry(mig) === false);
+
+  // lazy migration: old Phase-A detachedFrom MNODE -> target populated, still manual
+  const oldDetached = { type: 'MNODE', dvPro_ms: 42, detachedFrom: { fromNode: 'P', toNode: 'Q' } };
+  const mutated2 = _missionMigrateManeuverEntry(oldDetached);
+  ok('_missionMigrateManeuverEntry: detachedFrom save reports a mutation', mutated2 === true);
+  ok('_missionMigrateManeuverEntry: detachedFrom -> target populated', oldDetached.target.fromNode === 'P' && oldDetached.target.toNode === 'Q');
+  ok('_missionMigrateManeuverEntry: detachedFrom save stays manual (mode set)', oldDetached.mode === 'manual');
+  ok('_missionMigrateManeuverEntry: migrated detachedFrom save is a manual burn', _evIsManualBurn(oldDetached) === true);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
