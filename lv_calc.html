@@ -15786,6 +15786,42 @@ function physEscapeHorizonS(samples, fallbackS) {
   return Math.min(result, CAP_S);
 }
 
+/** R6.2′ (round-3 item 5): MET of the next MNODE authored after log index
+ *  `idx`, or null. Used to cap a covering leg's propagation horizon so it
+ *  doesn't render past a mid-leg maneuver placed inside it (the new node's
+ *  own leg continues the trajectory from there). Pure log scan. */
+function physNextMnodeMetAfter(m, idx) {
+  const log = (m && m.log) || [];
+  for (let j = idx + 1; j < log.length; j++) {
+    const ev2 = log[j];
+    if (!ev2 || ev2.type !== 'MNODE') continue;
+    const t2 = (ev2.at && ev2.at.value_s != null) ? ev2.at.value_s : (ev2.metStart != null ? ev2.metStart : null);
+    if (t2 != null) return t2;
+  }
+  return null;
+}
+
+/** R6.2′ (round-3 item 5): exact state at an arbitrary query MET inside a leg
+ *  the mission already propagated — the machinery mid-leg maneuver placement
+ *  builds on. RE-DERIVES from the SAME initial post-burn state + propagation
+ *  context physRebuildMissionTrajectories captured on the leg record
+ *  (leg.initState/center/bodies/dtMax — one source of truth, not duplicated
+ *  here) via ONE extra physPropagateSegment call to tQuery. Returns
+ *  {r, v, frame} or null when the leg/state is missing or tQuery falls
+ *  outside [legStart, last sample]. Pure (DOM-free), side-table read only. */
+function physLegStateAt(missionId, authIdx, tQuery) {
+  const leg = physMissionLeg(missionId, authIdx);
+  if (!leg || !leg.initState || !leg.samples || !leg.samples.length) return null;
+  const legStart = leg.met;
+  const legEnd = leg.samples[leg.samples.length - 1].t;
+  const EPS = 1e-6;
+  if (tQuery == null || tQuery < legStart - EPS || tQuery > legEnd + EPS) return null;
+  const res = physPropagateSegment(leg.initState, legStart, tQuery,
+    { center: leg.center, bodies: leg.bodies, overrides: {}, dtMax: leg.dtMax }, { maxSamples: 8 });
+  if (!res || !res.stateF) return null;
+  return { r: res.stateF.r, v: res.stateF.v, frame: res.frame };
+}
+
 function physRebuildMissionTrajectories(m) {
   if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
   // R1: planet-phase calibration retired — real ephemeris rails need no
@@ -15830,61 +15866,91 @@ function physRebuildMissionTrajectories(m) {
       // at all) — vehicle-relative vector propagated from orbitAtBurn.
       const o = e.orbitAtBurn;
       const burnMet = (e.at && e.at.value_s != null) ? e.at.value_s : (e.metStart || 0);
-      if (!o || o.transit || o.surface || !PROG_BODIES[o.body]) {
+      const oValid = o && !o.transit && !o.surface && PROG_BODIES[o.body];
+      // R6.2″ (round-3 item 5): a mid-leg MNODE placed via the leg placement
+      // menu carries a stamped e.burnState/e.burnFrame but has NO orbitAtBurn
+      // context at all (it wasn't authored from the vehicle's settled orbit —
+      // it was authored from a point mid-transfer). Previously that meant
+      // `!o` and this leg bailed with the "no propagable orbit at burn" note
+      // — the deliberate R6.2.1 withholding this round replaces with real
+      // support: when e.burnState/e.burnFrame are present, use them directly
+      // as the burn body/state, skipping the mean-motion reconstruction
+      // entirely (there is no "orbit" to reconstruct from at a mid-transfer
+      // point). oValid still takes precedence when present (detach-fidelity
+      // path, R6.2' Phase B step 5, unchanged).
+      const hasBurnState = e.burnState && e.burnState.r && e.burnState.v && e.burnFrame && PROG_BODIES[e.burnFrame];
+      const bodyForBurn = oValid ? o.body : (hasBurnState ? e.burnFrame : null);
+      if (!bodyForBurn) {
         legs.push({ authIdx: i, met: burnMet, samples: [], events: [], tof_s: 0, tofPhysics: null,
           dvVec: null, frames: [], converged: false, kind: 'mnode',
           note: 'no propagable orbit at burn (transit corridor / surface / unknown body)' });
         continue;
       }
-      const mu = PROG_BODIES[o.body].mu;
-      const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
-      const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
-      const theta = (nMean * burnMet) % (2 * Math.PI);
-      const incMn = ((o.inclination || 0) * Math.PI) / 180;
-      // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
-      // the MNODE builder reconstructs the burn frame in THAT plane too —
-      // same precedence thread as the departure/arrival cases above.
-      const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
-      const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
-      // R6.2' Phase B step 5 (detach fidelity): if this manual MNODE carries
-      // a stamped burnState (from detaching a solved maneuver — see 5745's
-      // _trajGizmoDetachManeuverIfNeeded), apply the dv vector in THAT exact
-      // recorded state's basis instead of the mean-motion reconstruction
-      // above, so the detached leg tracks the original solved leg's real
-      // path. Falls back to the mean-motion basis (bs) for ordinary
-      // hand-authored MNODEs, which never carry a burnState.
-      let axes = null;
-      if (e.burnState && e.burnState.r && e.burnState.v && typeof _trajGizmoAxes === 'function')
-        axes = _trajGizmoAxes(e.burnState.r, e.burnState.v);
-      const rBase = axes ? e.burnState.r : bs.r;
-      const vBase = axes ? e.burnState.v : bs.v;
-      const vHat = axes ? axes.vHat : bs.vHat, rHat = axes ? axes.rHat : bs.rHat, hHat = axes ? axes.hHat : bs.hHat;
+      const mu = PROG_BODIES[bodyForBurn].mu;
+      let rBase, vBase, vHat, rHat, hHat;
+      if (oValid) {
+        const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+        const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
+        const theta = (nMean * burnMet) % (2 * Math.PI);
+        const incMn = ((o.inclination || 0) * Math.PI) / 180;
+        // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
+        // the MNODE builder reconstructs the burn frame in THAT plane too —
+        // same precedence thread as the departure/arrival cases above.
+        const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
+        const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
+        // R6.2' Phase B step 5 (detach fidelity): if this manual MNODE carries
+        // a stamped burnState (from detaching a solved maneuver — see 5745's
+        // _trajGizmoDetachManeuverIfNeeded), apply the dv vector in THAT exact
+        // recorded state's basis instead of the mean-motion reconstruction
+        // above, so the detached leg tracks the original solved leg's real
+        // path. Falls back to the mean-motion basis (bs) for ordinary
+        // hand-authored MNODEs, which never carry a burnState.
+        let axes = null;
+        if (e.burnState && e.burnState.r && e.burnState.v && typeof _trajGizmoAxes === 'function')
+          axes = _trajGizmoAxes(e.burnState.r, e.burnState.v);
+        rBase = axes ? e.burnState.r : bs.r;
+        vBase = axes ? e.burnState.v : bs.v;
+        vHat = axes ? axes.vHat : bs.vHat; rHat = axes ? axes.rHat : bs.rHat; hHat = axes ? axes.hHat : bs.hHat;
+      } else {
+        // mid-leg placement: the burn point IS the recorded state — no
+        // reconstruction needed or possible (no authored orbit at this MET).
+        const axes = _trajGizmoAxes(e.burnState.r, e.burnState.v);
+        rBase = e.burnState.r; vBase = e.burnState.v;
+        vHat = axes.vHat; rHat = axes.rHat; hHat = axes.hHat;
+      }
       const dvVec = physAdd(physAdd(
         physScale(vHat, (e.dvPro_ms || 0) / 1000),
         physScale(rHat, (e.dvRad_ms || 0) / 1000)),
         physScale(hHat, (e.dvNrm_ms || 0) / 1000));
       const state = { r: rBase, v: physAdd(vBase, dvVec) };
-      const parent = physParentOf(o.body);
-      const bodies = [...new Set([o.body, parent || 'Sun', 'Sun', o.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
+      const parent = physParentOf(bodyForBurn);
+      const bodies = [...new Set([bodyForBurn, parent || 'Sun', 'Sun', bodyForBurn === 'Earth' ? 'Moon' : null].filter(Boolean))];
       // horizon: 30 days, or 3 post-burn periods when the new orbit stays
       // comfortably inside this body's SOI (shows the settled orbit without
       // integrating 500 LEO revs)
       let horizon = 30 * 86400;
       const el = physStateToElements(state.r, state.v, mu);
-      if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(o.body) * 0.8)
+      if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(bodyForBurn) * 0.8)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
       // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
       // what the gizmo's full-fidelity preview showed before commit.
-      else if (el && (el.a < 0 || el.ra >= physSoiRadius(o.body) * 0.8)) horizon = 90 * 86400;
+      else if (el && (el.a < 0 || el.ra >= physSoiRadius(bodyForBurn) * 0.8)) horizon = 90 * 86400;
+      // R6.2″ (round-3 item 5): cap the horizon at the NEXT authored MNODE's
+      // MET so a covering leg's rendered polyline stops at a mid-leg node
+      // instead of drawing a phantom continuation past the new burn.
+      const nextMnodeMet = physNextMnodeMetAfter(m, i);
+      if (nextMnodeMet != null && nextMnodeMet > burnMet) horizon = Math.min(horizon, nextMnodeMet - burnMet);
       let res = physPropagateSegment(state, burnMet, burnMet + horizon,
-        { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 256 });
+        { center: bodyForBurn, bodies, overrides: calOverrides }, { maxSamples: 256 });
       // R3.5.3: if the 90-day pass reached heliocentric space, re-propagate
       // once to a full-orbit horizon (physEscapeHorizonS) so the committed
       // arc shows at least one full solar orbit instead of a quarter-orbit.
-      const fullHorizon = physEscapeHorizonS(res.samples, horizon);
+      // Skipped when a next-node cap is already in force (that cap is a hard
+      // authored bound, not a display convenience — never overrun it).
+      const fullHorizon = (nextMnodeMet != null && nextMnodeMet > burnMet) ? horizon : physEscapeHorizonS(res.samples, horizon);
       if (fullHorizon > horizon) {
         res = physPropagateSegment(state, burnMet, burnMet + fullHorizon,
-          { center: o.body, bodies, overrides: calOverrides }, { maxSamples: 512 });
+          { center: bodyForBurn, bodies, overrides: calOverrides }, { maxSamples: 512 });
       }
       // R6.2' Phase C: classify the SETTLED orbit (final propagated state,
       // in its final frame after any SOI handoff) against the mission's
@@ -15893,7 +15959,7 @@ function physRebuildMissionTrajectories(m) {
       let settleInfo = null;
       if (typeof _nmClassifySettledOrbit === 'function' && res.stateF) {
         const nodes = (typeof _missionNmNodes === 'function') ? _missionNmNodes() : [];
-        const fromNode = (typeof _nmMatchOrbitToNode === 'function')
+        const fromNode = (oValid && typeof _nmMatchOrbitToNode === 'function')
           ? _nmMatchOrbitToNode(o.body, o.perigee ?? o.apogee ?? 0, o.apogee ?? o.perigee ?? 0, o.inclination || 0, nodes)
           : null;
         // A frame change away from the departure body (including a handoff
@@ -15903,14 +15969,14 @@ function physRebuildMissionTrajectories(m) {
         // a settled bound orbit from an unbound one that hasn't crossed the
         // SOI boundary within the propagated horizon.
         const bodyMeta = PROG_BODIES[res.frame];
-        let escaped = (res.frame !== o.body) || !bodyMeta;
+        let escaped = (res.frame !== bodyForBurn) || !bodyMeta;
         let elF = null;
         if (!escaped) {
           elF = physStateToElements(res.stateF.r, res.stateF.v, bodyMeta.mu);
           if (elF.e >= 1 || !isFinite(elF.a) || elF.a <= 0) escaped = true;
         }
         if (escaped) {
-          settleInfo = { kind: 'escape', body: o.body, fromNodeId: fromNode ? fromNode.id : null };
+          settleInfo = { kind: 'escape', body: bodyForBurn, fromNodeId: fromNode ? fromNode.id : null };
         } else {
           const node = _nmClassifySettledOrbit(elF, res.frame, nodes);
           settleInfo = node
@@ -15924,7 +15990,12 @@ function physRebuildMissionTrajectories(m) {
       }
       legs.push({ authIdx: i, met: burnMet, samples: res.samples, events: res.events,
         tof_s: 0, tofPhysics: null, dvVec, frames: [...new Set(res.samples.map(s => s.frame))],
-        converged: true, kind: 'mnode', homeFrame: o.body, settleInfo,
+        converged: true, kind: 'mnode', homeFrame: bodyForBurn, settleInfo,
+        // R6.2″ (round-3 item 5): initial post-burn state + propagation
+        // context, captured so physLegStateAt can re-derive an exact
+        // mid-leg state later without duplicating any of the construction
+        // above — one source of truth for "how this leg's state was built".
+        initState: state, center: bodyForBurn, bodies, dtMax: undefined,
         dv_ms: Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2)) });
       continue;
     }
@@ -15964,7 +16035,12 @@ function physRebuildMissionTrajectories(m) {
       // pure two-body: analytic Kepler samples at ~64 even time steps (no integrator)
       const mu = PROG_BODIES[burn.center].mu;
       const N = 64, samples = [];
-      const tof = burn.coastTof_s || 0;
+      // R6.2″ (round-3 item 5): cap the analytic coast at the next authored
+      // MNODE's MET so this leg's samples (and rendered polyline) stop at a
+      // mid-leg maneuver instead of coasting past it.
+      const nextMnodeMetSb = physNextMnodeMetAfter(m, i);
+      const tof = (nextMnodeMetSb != null && nextMnodeMetSb > met)
+        ? Math.min(burn.coastTof_s || 0, nextMnodeMetSb - met) : (burn.coastTof_s || 0);
       let bad = false;
       for (let k = 0; k <= N; k++) {
         const dt = tof * k / N;
@@ -15977,7 +16053,11 @@ function physRebuildMissionTrajectories(m) {
         dvVec: burn.dvVec, frames: [burn.center], converged: !bad, kind: burn.kind,
         // R6.2' Phase B step 5: the PRE-burn departure state the dv vector
         // was actually applied to — basis for correct decomposition/replay.
-        burnState: burn.preState });
+        burnState: burn.preState,
+        // R6.2″ (round-3 item 5): initial post-burn state + propagation
+        // context for physLegStateAt (one source of truth with the samples
+        // built above — same burn.state/burn.center this loop already used).
+        initState: burn.state, center: burn.center, bodies: [burn.center], dtMax: undefined });
       // R6.2' Phase B (step 2/5): display-only dv-component mirror, decomposed
       // against the leg's REAL burn state (not a mean-motion reconstruction).
       if (e.type === 'MNODE' && burn.dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
@@ -16020,10 +16100,15 @@ function physRebuildMissionTrajectories(m) {
         st0Pre = { r: bs.r, v: bs.vPre };
       }
     }
-    const cutoff = met + 1.5 * Math.max(burn.coastTof_s, 3600);
+    let cutoff = met + 1.5 * Math.max(burn.coastTof_s, 3600);
+    // R6.2″ (round-3 item 5): cap at the next authored MNODE's MET so this
+    // covering leg's polyline stops at a mid-leg maneuver placed inside it.
+    const nextMnodeMetNb = physNextMnodeMetAfter(m, i);
+    if (nextMnodeMetNb != null && nextMnodeMetNb > met && nextMnodeMetNb < cutoff) cutoff = nextMnodeMetNb;
+    const nbDtMax = burn.kind === 'interplanetary' ? 16384 : undefined;
     const res = physPropagateSegment(st0, met, cutoff,
       { center: burn.center, bodies: burn.bodies, overrides: calOverrides,
-        dtMax: burn.kind === 'interplanetary' ? 16384 : undefined }, { maxSamples: 256 });
+        dtMax: nbDtMax }, { maxSamples: 256 });
     const converged = res.events.some(ev => ev.type === 'soi' && ev.to === burn.dest);
     // R3.1 (MATH.md §7i): departure/arrival ORIENTATION for the state-derived
     // ring (574 consumes these; the ΔV-engine's authored {peri,apo,inc} stay
@@ -16064,7 +16149,12 @@ function physRebuildMissionTrajectories(m) {
       // reconstruction — fixes the Phase A known limitation (PHYSICS_PLAN
       // R6.2': Apollo TLI read pro -2085/rad +2151/nrm +950 for what is
       // physically a ~pure-prograde burn).
-      burnState: st0Pre };
+      burnState: st0Pre,
+      // R6.2″ (round-3 item 5): initial post-burn state + propagation
+      // context for physLegStateAt — st0/burn.center/burn.bodies/nbDtMax are
+      // the EXACT values this leg's own res = physPropagateSegment(...) call
+      // above just used (one source of truth, not duplicated).
+      initState: st0, center: burn.center, bodies: burn.bodies, dtMax: nbDtMax };
     legs.push(leg);
     lastTransit = leg;
     // R6.2' Phase B (step 2/5): mirror the solved leg's real dvVec onto the
@@ -16105,20 +16195,38 @@ function physRebuildMissionTrajectories(m) {
 
 // ── MNODE authoring (no dock UI yet — P4; console/API entry point) ───────────
 /** Push a vector maneuver node: spec = { value_s (MET), dvPro_ms, dvRad_ms,
- *  dvNrm_ms }. Same push→recompute→render pattern as missionExecManeuver. */
-function missionExecManeuverNode(id, spec) {
+ *  dvNrm_ms }. Same push→recompute→render pattern as missionExecManeuver.
+ *  `opts` (R6.2″, round-3 item 5, mid-leg placement):
+ *    - afterAuthIdx: insert right after this log index instead of appending
+ *      at the end (a mid-leg node must sit between the covering leg's own
+ *      authored event and any later event, not after everything — array
+ *      order IS execution order, see missionRecompute).
+ *    - burnState {r,v} / burnFrame: stamped onto the entry so 565's MNODE
+ *      leg builder (above) uses this EXACT pre-burn state instead of trying
+ *      to reconstruct one from orbitAtBurn (there is none, mid-transfer).
+ *  Returns the entry's final index in m.log. */
+function missionExecManeuverNode(id, spec, opts) {
   const m = _missionGet(id);
   if (!m || !spec) return;
   const actFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
-  m.log.push({
+  const entry = {
     type: 'MNODE',
     at: { kind: 'met', value_s: spec.value_s || 0 },
     dvPro_ms: spec.dvPro_ms || 0, dvRad_ms: spec.dvRad_ms || 0, dvNrm_ms: spec.dvNrm_ms || 0,
     activeKey: actFv ? actFv._originKey : null,
     activeName: actFv ? _missionVehicleDisplayName(actFv) : null,
-  });
+  };
+  if (opts && opts.burnState && opts.burnState.r && opts.burnState.v && opts.burnFrame) {
+    entry.burnState = { r: opts.burnState.r.slice(), v: opts.burnState.v.slice() };
+    entry.burnFrame = opts.burnFrame;
+  }
+  let insertAt = m.log.length;
+  if (opts && opts.afterAuthIdx != null && opts.afterAuthIdx >= 0 && opts.afterAuthIdx < m.log.length)
+    insertAt = opts.afterAuthIdx + 1;
+  m.log.splice(insertAt, 0, entry);
   missionRecompute(m);
   missionRenderDetail();
+  return insertAt;
 }
 
 // ─── MISSION MANAGER ─────────────────────────────────────────────────────
@@ -25074,6 +25182,39 @@ function _trajGizmoOpenPending(id, met) {
   missionRenderDetail();
 }
 
+// R6.2″ (round-3 item 5): "+ Maneuver node here" on a PHYSICS-LEG polyline.
+// R6.2.1 deliberately withheld this because _trajGizmoOpenPending's node
+// state (via _trajGizmoNodeState(m, met, null)) reconstructs from the
+// vehicle's SETTLED orbitState — wrong mid-transfer (it would snap the node
+// onto the parking/destination ring instead of the hovered leg point). This
+// builds the node's state from physLegStateAt (565) instead — an EXACT
+// re-propagation of the covering leg from its own recorded initial state to
+// the hovered MET, so a node dropped mid-TLC gets a real cislunar state (and
+// the right frame/mu when the hovered point lies inside the Moon's SOI).
+function _trajGizmoOpenPendingOnLeg(missionId, authIdx, met) {
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
+  if (!m) return;
+  if (typeof physLegStateAt !== 'function') return;
+  const st = physLegStateAt(missionId, authIdx, met);
+  if (!st || !st.r || !st.v || !st.frame || !PROG_BODIES[st.frame]) return;
+  const axes = _trajGizmoAxes(st.r, st.v);
+  if (!axes) return;
+  const node = { body: st.frame, mu: PROG_BODIES[st.frame].mu, r: st.r, v: st.v,
+    rHat: axes.rHat, vHat: axes.vHat, hHat: axes.hHat };
+  _trajGizmo = { missionId, met, authIdx: null, kind: 'mnode', dv: { pro: 0, rad: 0, nrm: 0 }, node,
+    drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null,
+    // legAuthIdx marks this pending node as leg-spawned: _trajGizmoCommit
+    // inserts it right after the covering leg's own authored event (instead
+    // of appending at the end of the log) and stamps e.burnState/burnFrame
+    // from node.r/node.v (the PRE-burn state — dv hasn't been added to it)
+    // so 565's MNODE leg builder can fly from this exact point without an
+    // orbitAtBurn context.
+    legAuthIdx: authIdx };
+  document.addEventListener('keydown', _trajGizmoKeydown);
+  _trajGizmoAddDismissListeners();
+  missionRenderDetail();
+}
+
 function _trajGizmoOpenExisting(id, authIdx) {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
   if (!m || !m.log[authIdx]) return;
@@ -25325,12 +25466,13 @@ function _trajRingMenuRender() {
   const existing = document.querySelector('.traj-ring-menu');
   if (!rm || !va) { if (existing) existing.remove(); return; }
   const fb = rm.feedback ? ` (${_metFmt(rm.met)})` : '';
-  // legMode (R6.2.1): no "+ Maneuver node here" on physics legs — a pending
-  // gizmo reconstructs its node from the vehicle's CURRENT settled orbitState
-  // (_trajGizmoNodeState with authIdx null), which mid-transfer would snap
-  // the node onto the parking orbit instead of the hovered leg point.
+  // legMode (R6.2.1, resolved R6.2″ round-3 item 5): "+ Maneuver node here"
+  // now works on physics legs too — legMode routes the click through
+  // _trajGizmoOpenPendingOnLeg (physLegStateAt re-propagation), not through
+  // the ring-only _trajGizmoOpenPending path (settled orbitState, wrong
+  // mid-transfer). See _trajRingMenuPlaceNode below.
   const html = `
-    ${rm.legMode ? '' : '<button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>'}
+    <button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>
     <button onclick="_trajRingMenuUseAddEvent()">Use time in Add Event${fb}</button>
     <button onclick="_trajRingMenuClose()">✕ close</button>`;
   let menu = existing;
@@ -25368,8 +25510,10 @@ function _trajRingMenuPlaceNode() {
   const rm = _trajRingMenu;
   if (!rm) return;
   const id = rm.missionId, met = rm.met;
+  const legMode = rm.legMode, authIdx = rm.authIdx;
   _trajRingMenuClose();
-  _trajGizmoOpenPending(id, met);
+  if (legMode && authIdx != null) _trajGizmoOpenPendingOnLeg(id, authIdx, met);
+  else _trajGizmoOpenPending(id, met);
 }
 
 // "Use time in Add Event": if the Add Event dock is currently in Vector-Burn
@@ -25482,12 +25626,10 @@ function _trajLegHoverMove(evt, missionId, authIdx, color) {
 
 /** Wired from the leg hit path's onclick — preserves the pre-existing
  *  select-event behavior (_trajSelectEventFromView, same drag guard), then
- *  opens the placement menu at the nearest-sample MET. `legMode:true` limits
- *  the menu to "Use time in Add Event": a pending gizmo's node state comes
- *  from _trajGizmoNodeState(m, met, null), which for a PENDING node
- *  reconstructs from the vehicle's CURRENT settled orbitState — placing
- *  "+ Maneuver node here" mid-transfer would silently snap the node onto the
- *  parking-orbit ring, not the hovered leg point, so it is not offered. */
+ *  opens the placement menu at the nearest-sample MET. `legMode:true` (+
+ *  `authIdx`) routes "+ Maneuver node here" through _trajGizmoOpenPendingOnLeg
+ *  (physLegStateAt re-propagation, 565) instead of the ring-only
+ *  _trajGizmoOpenPending path — see _trajRingMenuPlaceNode. */
 function _trajLegClick(id, authIdx, evt) {
   const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
   if (typeof _trajSelectEventFromView === 'function') _trajSelectEventFromView(id, authIdx);
@@ -25508,7 +25650,7 @@ function _trajLegClick(id, authIdx, evt) {
     }
   }
   if (met == null) return;
-  _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false, legMode: true };
+  _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false, legMode: true, authIdx };
   _trajRingMenuAddDismiss();
   _trajRingMenuRender();
 }
@@ -26232,10 +26374,19 @@ function _trajGizmoCommit() {
     e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;
     missionRecompute(m);
     missionRenderDetail();
+  } else if (g.legAuthIdx != null) {
+    // R6.2″ (round-3 item 5): mid-leg placement — insert right after the
+    // covering leg's own authored event, and stamp the PRE-burn state
+    // (g.node.r/v — dv hasn't been added to it) so 565's leg builder flies
+    // from this exact recorded point instead of trying (and failing) to
+    // reconstruct one from a nonexistent orbitAtBurn.
+    const idx = missionExecManeuverNode(g.missionId,
+      { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm },
+      { afterAuthIdx: g.legAuthIdx, burnState: { r: g.node.r, v: g.node.v }, burnFrame: g.node.body });
+    if (idx != null && m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
   } else {
-    missionExecManeuverNode(g.missionId, { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm });
-    const idx = m.log.length - 1;
-    if (m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
+    const idx = missionExecManeuverNode(g.missionId, { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm });
+    if (idx != null && m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
   }
 }
 

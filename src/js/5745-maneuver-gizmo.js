@@ -437,6 +437,39 @@ function _trajGizmoOpenPending(id, met) {
   missionRenderDetail();
 }
 
+// R6.2″ (round-3 item 5): "+ Maneuver node here" on a PHYSICS-LEG polyline.
+// R6.2.1 deliberately withheld this because _trajGizmoOpenPending's node
+// state (via _trajGizmoNodeState(m, met, null)) reconstructs from the
+// vehicle's SETTLED orbitState — wrong mid-transfer (it would snap the node
+// onto the parking/destination ring instead of the hovered leg point). This
+// builds the node's state from physLegStateAt (565) instead — an EXACT
+// re-propagation of the covering leg from its own recorded initial state to
+// the hovered MET, so a node dropped mid-TLC gets a real cislunar state (and
+// the right frame/mu when the hovered point lies inside the Moon's SOI).
+function _trajGizmoOpenPendingOnLeg(missionId, authIdx, met) {
+  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
+  if (!m) return;
+  if (typeof physLegStateAt !== 'function') return;
+  const st = physLegStateAt(missionId, authIdx, met);
+  if (!st || !st.r || !st.v || !st.frame || !PROG_BODIES[st.frame]) return;
+  const axes = _trajGizmoAxes(st.r, st.v);
+  if (!axes) return;
+  const node = { body: st.frame, mu: PROG_BODIES[st.frame].mu, r: st.r, v: st.v,
+    rHat: axes.rHat, vHat: axes.vHat, hHat: axes.hHat };
+  _trajGizmo = { missionId, met, authIdx: null, kind: 'mnode', dv: { pro: 0, rad: 0, nrm: 0 }, node,
+    drag: null, centerDrag: null, menuOpen: false, preview: null, ca: null,
+    // legAuthIdx marks this pending node as leg-spawned: _trajGizmoCommit
+    // inserts it right after the covering leg's own authored event (instead
+    // of appending at the end of the log) and stamps e.burnState/burnFrame
+    // from node.r/node.v (the PRE-burn state — dv hasn't been added to it)
+    // so 565's MNODE leg builder can fly from this exact point without an
+    // orbitAtBurn context.
+    legAuthIdx: authIdx };
+  document.addEventListener('keydown', _trajGizmoKeydown);
+  _trajGizmoAddDismissListeners();
+  missionRenderDetail();
+}
+
 function _trajGizmoOpenExisting(id, authIdx) {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
   if (!m || !m.log[authIdx]) return;
@@ -688,12 +721,13 @@ function _trajRingMenuRender() {
   const existing = document.querySelector('.traj-ring-menu');
   if (!rm || !va) { if (existing) existing.remove(); return; }
   const fb = rm.feedback ? ` (${_metFmt(rm.met)})` : '';
-  // legMode (R6.2.1): no "+ Maneuver node here" on physics legs — a pending
-  // gizmo reconstructs its node from the vehicle's CURRENT settled orbitState
-  // (_trajGizmoNodeState with authIdx null), which mid-transfer would snap
-  // the node onto the parking orbit instead of the hovered leg point.
+  // legMode (R6.2.1, resolved R6.2″ round-3 item 5): "+ Maneuver node here"
+  // now works on physics legs too — legMode routes the click through
+  // _trajGizmoOpenPendingOnLeg (physLegStateAt re-propagation), not through
+  // the ring-only _trajGizmoOpenPending path (settled orbitState, wrong
+  // mid-transfer). See _trajRingMenuPlaceNode below.
   const html = `
-    ${rm.legMode ? '' : '<button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>'}
+    <button onclick="_trajRingMenuPlaceNode()">+ Maneuver node here</button>
     <button onclick="_trajRingMenuUseAddEvent()">Use time in Add Event${fb}</button>
     <button onclick="_trajRingMenuClose()">✕ close</button>`;
   let menu = existing;
@@ -731,8 +765,10 @@ function _trajRingMenuPlaceNode() {
   const rm = _trajRingMenu;
   if (!rm) return;
   const id = rm.missionId, met = rm.met;
+  const legMode = rm.legMode, authIdx = rm.authIdx;
   _trajRingMenuClose();
-  _trajGizmoOpenPending(id, met);
+  if (legMode && authIdx != null) _trajGizmoOpenPendingOnLeg(id, authIdx, met);
+  else _trajGizmoOpenPending(id, met);
 }
 
 // "Use time in Add Event": if the Add Event dock is currently in Vector-Burn
@@ -845,12 +881,10 @@ function _trajLegHoverMove(evt, missionId, authIdx, color) {
 
 /** Wired from the leg hit path's onclick — preserves the pre-existing
  *  select-event behavior (_trajSelectEventFromView, same drag guard), then
- *  opens the placement menu at the nearest-sample MET. `legMode:true` limits
- *  the menu to "Use time in Add Event": a pending gizmo's node state comes
- *  from _trajGizmoNodeState(m, met, null), which for a PENDING node
- *  reconstructs from the vehicle's CURRENT settled orbitState — placing
- *  "+ Maneuver node here" mid-transfer would silently snap the node onto the
- *  parking-orbit ring, not the hovered leg point, so it is not offered. */
+ *  opens the placement menu at the nearest-sample MET. `legMode:true` (+
+ *  `authIdx`) routes "+ Maneuver node here" through _trajGizmoOpenPendingOnLeg
+ *  (physLegStateAt re-propagation, 565) instead of the ring-only
+ *  _trajGizmoOpenPending path — see _trajRingMenuPlaceNode. */
 function _trajLegClick(id, authIdx, evt) {
   const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
   if (typeof _trajSelectEventFromView === 'function') _trajSelectEventFromView(id, authIdx);
@@ -871,7 +905,7 @@ function _trajLegClick(id, authIdx, evt) {
     }
   }
   if (met == null) return;
-  _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false, legMode: true };
+  _trajRingMenu = { missionId: id, met, x: sx + 14, y: sy + 14, feedback: false, legMode: true, authIdx };
   _trajRingMenuAddDismiss();
   _trajRingMenuRender();
 }
@@ -1595,10 +1629,19 @@ function _trajGizmoCommit() {
     e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;
     missionRecompute(m);
     missionRenderDetail();
+  } else if (g.legAuthIdx != null) {
+    // R6.2″ (round-3 item 5): mid-leg placement — insert right after the
+    // covering leg's own authored event, and stamp the PRE-burn state
+    // (g.node.r/v — dv hasn't been added to it) so 565's leg builder flies
+    // from this exact recorded point instead of trying (and failing) to
+    // reconstruct one from a nonexistent orbitAtBurn.
+    const idx = missionExecManeuverNode(g.missionId,
+      { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm },
+      { afterAuthIdx: g.legAuthIdx, burnState: { r: g.node.r, v: g.node.v }, burnFrame: g.node.body });
+    if (idx != null && m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
   } else {
-    missionExecManeuverNode(g.missionId, { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm });
-    const idx = m.log.length - 1;
-    if (m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
+    const idx = missionExecManeuverNode(g.missionId, { value_s: g.met, dvPro_ms: g.dv.pro, dvRad_ms: g.dv.rad, dvNrm_ms: g.dv.nrm });
+    if (idx != null && m.log[idx] && m.log[idx].type === 'MNODE') g.authIdx = idx;
   }
 }
 

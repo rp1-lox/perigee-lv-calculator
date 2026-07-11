@@ -972,8 +972,9 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 {
   const { physPhaseBurnAngle, physSolveNodeBurn, physSchematicCoastTof,
           physKeplerPropagate, physMissionLeg, progBodyAngleAt, progHohmannTOF,
-          PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission } =
-    vm.runInContext('({ physPhaseBurnAngle, physSolveNodeBurn, physSchematicCoastTof, physKeplerPropagate, physMissionLeg, progBodyAngleAt, progHohmannTOF, PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission })', sandbox);
+          PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission,
+          physLegStateAt, physNextMnodeMetAfter } =
+    vm.runInContext('({ physPhaseBurnAngle, physSolveNodeBurn, physSchematicCoastTof, physKeplerPropagate, physMissionLeg, progBodyAngleAt, progHohmannTOF, PROG_BODIES, PROG_MOON_ORBIT_R, _physTrajByMission, physLegStateAt, physNextMnodeMetAfter })', sandbox);
 
   // phasing geometry: burn point diametrically opposite the arrival point
   approx('P2 phasing: arrival at π → burn at 0', physPhaseBurnAngle(Math.PI), 0, 1e-12);
@@ -1027,6 +1028,58 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('P2 side-table: physMissionLeg finds by authIdx', physMissionLeg('test-mid', 2).tof_s === 42);
     ok('P2 side-table: miss returns null', physMissionLeg('test-mid', 5) === null && physMissionLeg('nope', 0) === null);
     delete _physTrajByMission['test-mid'];
+  }
+
+  // physNextMnodeMetAfter — round-3 item 5 (mid-leg maneuver placement)
+  {
+    const log = [
+      { type: 'LAUNCH' },
+      { type: 'MNODE', at: { kind: 'met', value_s: 500 } },
+      { type: 'MNODE', metStart: 900 },
+      { type: 'MNODE', at: { kind: 'met', value_s: 0 } },
+    ];
+    ok('physNextMnodeMetAfter: finds the next MNODE by value_s', physNextMnodeMetAfter({ log }, 0) === 500);
+    ok('physNextMnodeMetAfter: falls back to metStart', physNextMnodeMetAfter({ log }, 1) === 900);
+    ok('physNextMnodeMetAfter: no later MNODE with a determinable met -> null after the last usable one',
+      physNextMnodeMetAfter({ log }, 2) === 0);
+    ok('physNextMnodeMetAfter: past the end -> null', physNextMnodeMetAfter({ log }, 3) === null);
+    ok('physNextMnodeMetAfter: empty/missing log -> null', physNextMnodeMetAfter({ log: [] }, 0) === null && physNextMnodeMetAfter(null, 0) === null);
+  }
+
+  // physLegStateAt — round-3 item 5: exact mid-leg re-propagation off a leg's
+  // own recorded initState/center/bodies (built by physRebuildMissionTrajectories,
+  // reused here directly against a synthetic leg record — the same shape).
+  {
+    const muE = PROG_BODIES.Earth.mu;
+    const r0 = PROG_BODIES.Earth.R + 185;
+    const v0 = Math.sqrt(muE / r0);
+    const state0 = { r: [r0, 0, 0], v: [0, v0, 0] };
+    const T = physOrbitPeriod(muE, r0);
+    const legMet = 1000;
+    const ctx = { center: 'Earth', bodies: ['Earth'], overrides: {}, dtMax: undefined };
+    const full = physPropagateSegment(state0, legMet, legMet + T, ctx, { maxSamples: 64 });
+    _physTrajByMission['test-legstate'] = { legs: [{
+      authIdx: 7, met: legMet, initState: state0, center: 'Earth', bodies: ['Earth'], dtMax: undefined,
+      samples: full.samples, kind: 'mnode',
+    }] };
+    const tQuery = legMet + T / 4;
+    const st = physLegStateAt('test-legstate', 7, tQuery);
+    ok('physLegStateAt: returns a state inside the leg span', !!st && !!st.r && !!st.v && st.frame === 'Earth');
+    // cross-check against the analytic two-body propagation of the same
+    // initial state to the same query time — the exact quantity a mid-leg
+    // maneuver placement needs (independent of the leg's own decimated
+    // sample spacing).
+    const expected = physKeplerPropagate(state0.r, state0.v, tQuery - legMet, muE);
+    const deltaKm = (st && expected) ? Math.hypot(st.r[0] - expected.r[0], st.r[1] - expected.r[1], st.r[2] - expected.r[2]) : Infinity;
+    // physPropagateSegment's numerical integrator (maxSamples-driven step
+    // size) vs. the closed-form Kepler solution over a quarter LEO period —
+    // a few hundred km of integration error is expected at this coarseness;
+    // catches gross basis/frame errors (which would be off by thousands+ km).
+    ok(`physLegStateAt: matches analytic two-body propagation closely (Δ ${deltaKm.toFixed(2)} km)`, deltaKm < 1500);
+    ok('physLegStateAt: null before the leg starts', physLegStateAt('test-legstate', 7, legMet - 10) === null);
+    ok('physLegStateAt: null after the last sample', physLegStateAt('test-legstate', 7, legMet + T + 10) === null);
+    ok('physLegStateAt: null for a missing leg/mission', physLegStateAt('test-legstate', 99, tQuery) === null && physLegStateAt('nope', 7, tQuery) === null);
+    delete _physTrajByMission['test-legstate'];
   }
 }
 
