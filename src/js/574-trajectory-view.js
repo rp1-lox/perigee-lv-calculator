@@ -2242,27 +2242,10 @@ function _trajWorldSVG(m, cam, zoom, rect) {
   const records = [];
   const emit = (depth, svg) => { if (svg) records.push({ depth, svg }); };
 
-  // ── ecliptic reference grid (visible only when tilted) ────────────────────
-  if (tilt > 0.17) {
-    const gridAlpha = Math.min(0.35, Math.sin(tilt) * 0.4);
-    let step = Math.pow(10, Math.floor(Math.log10(cam.wKm / 4)));
-    if (cam.wKm / step > 8) step *= 2;
-    let g = '';
-    for (let k = 1; k <= 4; k++) {
-      const rKm = step * k;
-      const pts = [];
-      for (let s = 0; s <= 72; s++) {
-        const a = 2 * Math.PI * s / 72;
-        const q = _trajProjLocal(Math.cos(a) * rKm * zoom, Math.sin(a) * rKm * zoom);
-        pts.push((s ? 'L ' : 'M ') + q.x.toFixed(2) + ' ' + q.y.toFixed(2));
-      }
-      g += `<path d="${pts.join(' ')}" fill="none" stroke="var(--border)" stroke-width="0.5" opacity="${gridAlpha.toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
-    }
-    const ax = _trajProjLocal(step * 4 * zoom, 0), ay = _trajProjLocal(0, step * 4 * zoom);
-    g += `<line x1="${(-ax.x).toFixed(2)}" y1="${(-ax.y).toFixed(2)}" x2="${ax.x.toFixed(2)}" y2="${ax.y.toFixed(2)}" stroke="var(--border)" stroke-width="0.5" opacity="${(gridAlpha * 0.7).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
-    g += `<line x1="${(-ay.x).toFixed(2)}" y1="${(-ay.y).toFixed(2)}" x2="${ay.x.toFixed(2)}" y2="${ay.y.toFixed(2)}" stroke="var(--border)" stroke-width="0.5" opacity="${(gridAlpha * 0.7).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
-    emit(-Infinity, g);
-  }
+  // (R6.4d) Ecliptic reference grid removed — its concentric rings read as
+  // stray "orbits" and, since R6.4c moved globes to a behind-layer, drew over
+  // the planet when tilted. Camera tilt is legible from the bodies/orbits
+  // themselves; the grid added clutter without orientation value.
 
   // ── true-geometry orbit ring (R2): sampled real ellipse, projected ────────
   // centerP = the PRIMARY's projected render position; el = orbit elements.

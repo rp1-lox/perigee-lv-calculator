@@ -879,16 +879,20 @@ function _trajLegHoverMove(evt, missionId, authIdx, color) {
   _trajRingHoverPaint(missionId);
 }
 
-/** Wired from the leg hit path's onclick — preserves the pre-existing
- *  select-event behavior (_trajSelectEventFromView, same drag guard), then
- *  opens the placement menu at the nearest-sample MET. `legMode:true` (+
- *  `authIdx`) routes "+ Maneuver node here" through _trajGizmoOpenPendingOnLeg
- *  (physLegStateAt re-propagation, 565) instead of the ring-only
- *  _trajGizmoOpenPending path — see _trajRingMenuPlaceNode. */
+/** Wired from the leg hit path's onclick. R6.4d (user): a polyline click is
+ *  purely for AUTHORING — it opens the placement menu at the hovered circle's
+ *  MET so that MET becomes the base of a NEW event, and it no longer selects
+ *  or focuses the leg's existing (older) event at all (that reads as
+ *  "clicking the line just re-opens the old node"). `legMode:true` (+ authIdx)
+ *  routes "+ Maneuver node here" through _trajGizmoOpenPendingOnLeg
+ *  (physLegStateAt re-propagation, 565), spawning the pending node at the
+ *  exact mid-leg state. Events remain selectable via the event list / node
+ *  map / event-node markers. */
 function _trajLegClick(id, authIdx, evt) {
-  const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
-  if (typeof _trajSelectEventFromView === 'function') _trajSelectEventFromView(id, authIdx);
-  if (dragged) return;
+  // Same drag guard the ring/glyph clicks use — a camera rotate ends with a
+  // click too; consume the flag and bail (we no longer call
+  // _trajSelectEventFromView, which used to reset it as a side effect).
+  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) { _trajJustDragged = false; return; }
   evt.stopPropagation();
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
   const svgEl = va && va.querySelector('svg.traj-svg');
