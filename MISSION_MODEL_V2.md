@@ -1,6 +1,6 @@
 # MISSION_MODEL_V2 — physics-primary mission model
 
-**Status: DRAFT v0.2 (2026-07-12) — design agreed on 5 of 6 decisions (§9); one recommended default pending confirmation. No code yet.**
+**Status: AGREED v1.0 (2026-07-12) — all six decisions settled (§0). Phase 1 spec is the next artifact; no implementation code yet.**
 
 This is the architecture spec for inverting the mission model's center of gravity: from **ΔV-accounting-primary** (physics derived as a side-table) to **physics-primary** (accounting derived from a real simulated vehicle state). It is an *evolutionary re-architecture of the replay core*, not a rewrite. Prime directive: **the gate stays green at every step, and V2's derived accounting reconciles with V1's goldens within a documented tolerance (D6).**
 
@@ -13,7 +13,7 @@ This is the architecture spec for inverting the mission model's center of gravit
 | **D1** | Drag an intermediate orbit — which burn absorbs? | **Upstream.** The transfer that *delivers* you to the node re-solves to hit the new orbit; downstream edges keep their own targets fixed and re-solve only because their origin state moved. Changes never propagate past adjacent edges. |
 | **D2** | Reference-orbit library scope | **Global catalog** (like STAGE_LIBRARY/vehicle libraries) — Gateway-style reuse across programs. Programs may still define local one-offs; the catalog is the shared tier. |
 | **D3** | Legacy missions | **Retired entirely. Breaking change, by design.** V1 `.program`/autosave mission blobs are NOT migrated — on load, a version gate detects them and says so plainly (old builds remain published for old files). This deletes the whole compatibility tax: no lazy-migration shims, no legacy `MANEUVER` replay case, no `detachedFrom` fallbacks, no parallel accounting path kept alive for old saves. |
-| **D4** | Master clock | **RECOMMENDED (pending confirmation): MET stays the simulation clock; the epoch anchor (`epochJD`) is promoted to a first-class, user-visible mission start DATE.** Window-driven quantities (launch time, departure windows, rendezvous dates) are authored/displayed as real calendar dates (JD) and converted to MET internally. No change to the time plumbing's core. |
+| **D4** | Master clock | **EPOCH-PRIMARY (settled 2026-07-12).** The mission timeline runs on absolute time: a required, user-visible mission start date (JD/calendar), events authored and displayed at absolute dates, launches as events *at* dates (which naturally enables multiple launches on one timeline — the Gateway/multi-vehicle prerequisite). Window-pinned events (Grand Tour flybys, porkchop departures, rendezvous) anchor to the calendar and do NOT slip if the start date moves. T+ (from a chosen reference, e.g. first launch) remains available as a derived readout, not the authority. Implementation note: the internal simulation clock is ALREADY seconds-from-`epochJD` (what V1 calls "MET"), so the propagation/ephemeris plumbing is unchanged — this decision governs authoring + display semantics and the persistence format. |
 | **D5** | Vehicle model beyond r,v | **NEVER attitude. Point-mass forever.** This is a hard non-goal, not a deferral: vehicles are state vectors + staged mass, full stop. Docking/rendezvous are modeled as position/phase coincidence, never orientation. (We are not building a KSP clone.) |
 | **D6** | Reconciliation strictness | **Documented tolerance, not byte parity.** V1's stretched-ΔV accounting is acknowledged as the less accurate model; where physics-primary disagrees, physics is presumed right. Shadow-phase gate goldens compare V2-derived accounting to V1 within stated margins (default: per-burn ΔV within 1% or 5 m/s, whichever is larger; totals within 1%); any excursion beyond margin must be understood and documented before the flip. After the flip, goldens are RE-PINNED to V2's numbers and V1's are historical. |
 
@@ -81,8 +81,8 @@ Global catalog + per-program one-offs. Nodes **bind by id** — Orion, HLS, and 
 - **Edge = a transfer** between dwell orbits — internally possibly multi-burn (departure + midcourse + insertion). **TLI is the departure burn on the LEO→(lunar destination) edge, not a node.** Rule: *dwell = node, transit = edge.* (Terminology pass rides along: TLI/TMI/LOI/MOI etc. name burns; nodes are named as orbits.)
 - **Solved vs manual** (R6.2′ unification, kept): edges default `solved` and re-solve **locally** on endpoint manipulation per D1 (upstream edge delivers the change; adjacent edges only). Detaching a burn pins it `manual` — the user's explicit "stop re-solving this." That's what keeps free manipulation non-brittle.
 
-### 4.5 Time model (D4, recommended default)
-MET remains the internal simulation clock and the T+ display convention. `PROG_ACTIVE_PROGRAM.epochJD` is promoted to a visible **mission start date**; window-driven values (launch time, transfer departure/arrival, rendezvous windows) are authored and shown as calendar dates/JD and converted to MET at the seam. One conversion seam, no dual clocks inside the simulation.
+### 4.5 Time model (D4 — epoch-primary)
+The timeline is **absolute**: a required mission start date (`epochJD`, user-visible and user-set), events authored/stored at absolute time, displayed as calendar dates. Rationale: window-pinned missions (Voyager-style Grand Tours, porkchop departures, rendezvous) are calendar phenomena — an event tied to a window must NOT slip when the start date moves. Launches are events *at* dates, so several vehicles can launch at different dates on one timeline (multi-vehicle prerequisite). T+ from a chosen reference (e.g. first launch) is a derived display, not the authority. Internally the simulation clock stays seconds-from-`epochJD` (identical to V1's "MET" plumbing) — propagation, ephemeris, and the scrubber are unchanged; the decision governs authoring, display, and persistence semantics. One time axis, one conversion seam (JD ↔ sim-seconds).
 
 ## 5. Event redefinition — operations on VehicleState
 
@@ -128,10 +128,10 @@ Each phase ships alone: gate green, D6 reconciliation (through Phase 2), browser
 - LV calculator core frozen; Saturn V 150,838 kg immortal.
 - D6 tolerance discipline through the flip; goldens re-pinned after.
 
-## 9. Remaining open item
+## 9. Open items
 
-- **D4 confirmation:** MET-as-simulation-clock + first-class mission start date + calendar-authored windows (recommended above). Confirm or amend.
+None — all six decisions settled (§0). **Status: AGREED v1.0 (2026-07-12).**
 
 ---
 
-*Once D4 is confirmed, Phase 1 (shadow state) gets its concrete per-step spec and becomes the first code — provably behavior-neutral under the D6 goldens.*
+*Next: Phase 1 (shadow state) gets its concrete per-step spec and becomes the first code — provably behavior-neutral under the D6 goldens.*
