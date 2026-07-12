@@ -1,6 +1,6 @@
 # MISSION_MODEL_V2 — physics-primary mission model
 
-**Status: AGREED v1.0 (2026-07-12) — all six decisions settled (§0). Phase 1 spec is the next artifact; no implementation code yet.**
+**Status: AGREED v1.0 (2026-07-12) — all six decisions settled (§0). Phase 1 spec: §10. This program is the v3.0 release train** (v2.1 was abandoned; the last released version remains v2.0.0 "Integral", and old files stay readable there per D3).
 
 This is the architecture spec for inverting the mission model's center of gravity: from **ΔV-accounting-primary** (physics derived as a side-table) to **physics-primary** (accounting derived from a real simulated vehicle state). It is an *evolutionary re-architecture of the replay core*, not a rewrite. Prime directive: **the gate stays green at every step, and V2's derived accounting reconciles with V1's goldens within a documented tolerance (D6).**
 
@@ -134,4 +134,83 @@ None — all six decisions settled (§0). **Status: AGREED v1.0 (2026-07-12).**
 
 ---
 
-*Next: Phase 1 (shadow state) gets its concrete per-step spec and becomes the first code — provably behavior-neutral under the D6 goldens.*
+## 10. PHASE 1 SPEC — shadow state (the first code)
+
+**Goal:** `missionRecompute` builds a complete `VehicleState` timeline for every vehicle *alongside* the V1 model, with **zero user-visible change**, and a reconciliation harness proves the shadow's derived accounting matches V1 within D6 margins. Nothing reads the shadow yet except the reconciliation tooling. This is pure de-risking: when Phase 2 flips primacy, the thing it flips TO will already have been proven equivalent.
+
+### 10.1 The key architectural move: PROMOTE, don't recompute
+
+`_physTrajByMission` legs already contain real propagated segments with samples, burn states (`leg.burnState`), solved Δv vectors (`leg.dvVec`), frames, and SOI events. The V1 replay already produces per-event vehicle snapshots and mass/prop states. **Phase 1 stitches these existing artifacts into per-vehicle timelines; it does not re-propagate.** New propagation happens only where no leg exists (gap coasts between anchored events — and even those defer to `stateAt()`-on-demand rather than eager propagation). Consequence: the shadow build is cheap (target: recompute stays under ~2.5 ms on the Apollo seed vs. the 2.05 ms baseline in PERF_BASELINE.md) and correct by construction wherever a leg exists.
+
+### 10.2 New module: `src/js/566-mission-state-v2.js`
+
+(Loads after 565. All cross-module calls at runtime, never module-eval.)
+
+Data (side-table, missionId-keyed, NEVER on `m` — invariant §8):
+```
+_v2StateByMission = {
+  [missionId]: {
+    vehicles: {
+      [ownerKey]: {                    // same owner keys tagOwners already assigns
+        anchors: [ V2Anchor... ],      // time-ordered
+      }
+    },
+    builtJD,                           // epochJD at build (staleness guard)
+  }
+}
+
+V2Anchor = {
+  t,                    // sim-seconds from epochJD (V1 "MET" — same clock, per D4 note)
+  frame, r, v,          // physical state (r,v may be null for surface/pre-launch anchors — explicit kind instead)
+  kind,                 // 'launch' | 'deploy' | 'burn' | 'composition' | 'coast-start' | 'terminal'
+  authIdx,              // the m.log entry that created this anchor (provenance)
+  mass: { perStage },   // composition snapshot at this anchor
+  dvApplied,            // [x,y,z] km/s for kind:'burn' (the delta this anchor applied), else null
+  legRef,               // authIdx of the _physTrajByMission leg covering [this anchor, next), or null
+}
+```
+
+API (all pure over the side-table + existing artifacts):
+- `v2BuildShadow(m)` — walks `m.log` post-replay (called from the recompute tail, AFTER `physRebuildMissionTrajectories`, guarded `typeof`-safe), builds the timelines. Idempotent; full rebuild each recompute (same discipline as the legs).
+- `v2StateAt(missionId, ownerKey, t)` — state at any time: find bracketing anchor; if `legRef`, interpolate/propagate within the leg's samples (reuse `physLegStateAt`'s machinery); else Kepler-propagate from the anchor via `physPropagateSegment` with `maxSamples` tiny. Returns `{frame, r, v, mass}` or null (pre-launch/post-terminal).
+- `v2DeriveBudget(missionId)` — the accounting readout: per-burn Δv = |dvApplied| (km/s→m/s), prop per burn re-derived by the SAME rocket-eq path V1 uses (`progRocketEqPropNeeded` on the anchor's mass snapshot), totals summed. Returns `{ perBurn: [{authIdx, dv_ms, prop_kg}], dvTotal, propTotal }`.
+- `v2Reconcile(missionId)` — the proof tool: pairs each V2 burn with its V1 log entry (`dvRequired`/`dv_actual`, `prop_consumed`) and `missionBudget(m)`, returns `{ rows: [{authIdx, v1_dv, v2_dv, delta, withinMargin}], totals: {...}, allWithin: bool }` using D6 margins (per-burn max(1%, 5 m/s); totals 1%).
+
+### 10.3 Per-event shadow semantics (Phase 1 subset — V1 meanings, recorded not redefined)
+
+| Event | Shadow action |
+|---|---|
+| LAUNCH / DEPLOY | Anchor `kind:'launch'/'deploy'` at the event's time: state from the parking-orbit spec via the SAME reconstruction the leg builders use (elements→state at the orbit's phase convention; reuse, don't fork). Mass = V1's post-event vehicle snapshot. |
+| MNODE (solved) | Anchor `kind:'burn'`: pre-state from `leg.burnState`, `dvApplied = leg.dvVec`, `legRef` = its leg. |
+| MNODE (manual) | Same, from the manual leg (burnState stamp when present, else the mean-motion reconstruction the leg builder used — read what the leg RECORDED, never re-derive differently). |
+| Legacy MANEUVER (shim) | Treated identically to solved MNODE via `_evIsSolvedManeuver` (predicates already unify them). |
+| COAST | No anchor needed when a leg covers it; a `coast-start` anchor only when it begins an un-legged gap. |
+| SEPARATE / DOCK / EXPEND / TRANSFER (prop/crew) | Anchor `kind:'composition'`: r,v carried through from `v2StateAt` at that time; mass/composition delta from V1's replay result. New owner keys inherit their state from the parent's anchor at separation time. |
+| REENTER / RECOVER | Anchor `kind:'terminal'`; timeline ends. |
+| Groups/repetition | Phase 1 shadows the EXPANDED log exactly as replay sees it (clones included) — no special handling. |
+
+**Rule of the phase:** where V1 and the legs disagree or an event can't be shadowed faithfully, record the anchor with a `note` and surface it in `v2Reconcile` — never silently skip, never "fix" V1's meaning in Phase 1. Discrepancies are FINDINGS for Phase 2, not bugs to patch here.
+
+### 10.4 Implementation steps (each gate-green before the next)
+
+1. **S1 — skeleton:** module, data shapes, `v2BuildShadow` no-op hook in the recompute tail (after `physRebuildMissionTrajectories`, `typeof`-guarded), `v2StateAt` for a single-anchor timeline. Gate: pure-shape tests.
+2. **S2 — launch/deploy anchors + leg stitching:** timelines for launched vehicles with `legRef` coverage; `v2StateAt` inside legs. Gate: synthetic one-launch mission in the vm harness (570 loads there already) — state at t matches the orbit spec's expected radius.
+3. **S3 — burns:** solved + manual MNODE anchors with `dvApplied`; per-burn Δv derivation. Gate: synthetic log with one solved + one manual burn — v2 per-burn Δv equals the authored/solved values within D6.
+4. **S4 — composition events + owner forking:** separation forks timelines with inherited state; mass snapshots flow. Gate: synthetic separate → two owners, mass conservation asserted.
+5. **S5 — reconciliation harness:** `v2DeriveBudget` + `v2Reconcile` + gate goldens on a synthetic 5-event mission (launch, coast, solved burn, manual burn, separate) asserting `allWithin === true`. Browser: run `v2Reconcile` on the full Apollo seed (`devSeedApolloMission({force:true})` + a manual gizmo burn) and RECORD the actual per-burn deltas in §10.6.
+6. **S6 — docs:** MATH.md §8-adjacent "V2 shadow state" section (data model + reconciliation results); this doc's §10.6 filled with measured numbers; PHYSICS_PLAN cross-reference note.
+
+### 10.5 Explicitly OUT of scope for Phase 1
+
+No UI change of any kind. No persistence change (the side-table is transient; autosave blobs are byte-identical). No event redefinition (V1 meanings are *recorded*, not changed). No reference-orbit catalog, no epoch-display work, no node/edge rework — those are Phases 2–3. No performance optimization beyond the §10.1 promote-don't-recompute discipline.
+
+### 10.6 Acceptance (numbers to be filled at completion)
+
+- Gate: green, prior 555+ assertions plus Phase-1 additions (~15–25 expected).
+- Apollo seed reconciliation: per-burn deltas ≤ max(1%, 5 m/s) — measured: ___ ; totals ≤ 1% — measured: ___ (vs dvExpended 13010).
+- Recompute wall-time on the Apollo seed ≤ ~2.5 ms (baseline 2.05 ms) — measured: ___.
+- Zero autosave-blob diff with the shadow active (byte-compare a session export before/after) — verified: ___.
+
+---
+
+*After Phase 1's acceptance table is filled, Phase 2 (the flip) gets its spec: events read/write VehicleState as primary, accounting derived, V1 path + legacy shims deleted (D3), goldens re-pinned (D6).*
