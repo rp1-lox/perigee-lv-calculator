@@ -17864,6 +17864,7 @@ function _missionEventEditFieldsHTML(m, idx) {
           <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;"></div>
           <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;"></div>
         </div>
+        ${_missionLaunchPlanHTML(m, idx, e)}
         ${_missionLaunchGeoHTML(m, idx, e)}
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyLaunchEdit('${id}',${idx})">Apply</button>
       </div>`;
@@ -19064,6 +19065,98 @@ function _missionLaunchGeoHTML(m, idx, e) {
     </div>
     <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.inc_deg, e.launchTime_s, o.lan_deg)}</div>`;
 }
+// ── R7 phase 1: "Plan for destination" — auto-set the ideal parking orbit ──
+// A launch's parking orbit should be the plane that sets up the lowest-DV
+// departure toward a destination. This block picks a destination + optional
+// departure date, calls the pure planner (progPlanLaunchToDestination, 415),
+// and FILLS the inc/LAN/alt fields + launch time — all of which stay editable
+// (Apply commits whatever's in the fields). Nothing here mutates m.log; the
+// only persisted state is e.planDest/e.planDepJD, written by missionApplyLaunchEdit.
+function _missionLaunchPlanHTML(m, idx, e) {
+  const id = m.missionId;
+  const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
+  // Bodies the phase-1 heliocentric solver handles (Moon/lunar transfer is a
+  // later phase — the solver returns a null-fields note for it, so it's omitted).
+  const dests = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
+  const cur = e.planDest || '';
+  const destOpts = ['<option value="">&mdash; none (manual orbit) &mdash;</option>',
+    ...dests.map(d => `<option value="${d}"${d === cur ? ' selected' : ''}>${d}</option>`)].join('');
+  const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
+  const initReadout = e.planDest
+    ? `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`
+    : '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
+  return `
+    <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;padding:8px;background:var(--accent-tint-faint);border-radius:3px;">
+      <div class="cfg-item"><label class="cfg-label">Plan for destination</label>
+        <select id="edit-launch-dest-${id}" style="${_es}">${destOpts}</select></div>
+      <div class="cfg-item"><label class="cfg-label">Depart (JD)</label>
+        <input type="number" id="edit-launch-depjd-${id}" class="field" placeholder="auto (min &Delta;V)" value="${depVal}" step="any" style="width:120px;"></div>
+      <button class="act-btn" style="padding:4px 12px;" onclick="missionLaunchPlanOptimize('${id}',${idx})">&#x27F3; Optimize parking orbit</button>
+    </div>
+    <div id="launch-plan-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;line-height:1.5;">${initReadout}</div>`;
+}
+// Optimize handler: runs the planner and fills the DOM fields (no commit until
+// Apply). Uses the site currently picked in THIS card (falls back to the
+// event's site) so azimuth/launch-window reflect the user's in-progress choice.
+function missionLaunchPlanOptimize(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  const readEl = document.getElementById('launch-plan-readout-' + id);
+  const setReadout = html => { if (readEl) readEl.innerHTML = html; };
+  const dest = document.getElementById('edit-launch-dest-' + id)?.value;
+  if (!dest) { setReadout('// no destination selected &mdash; pick one, then Optimize'); return; }
+  if (typeof progPlanLaunchToDestination !== 'function') { setReadout('// planner module unavailable'); return; }
+  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
+  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : _missionLaunchSiteFor(e);
+  const siteLat = site ? site.lat : 28.5;
+  const altKm = +document.getElementById('edit-launch-alt-' + id)?.value || 185;
+  const depRaw = document.getElementById('edit-launch-depjd-' + id)?.value;
+  const epochJD = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && isFinite(PROG_ACTIVE_PROGRAM.epochJD))
+    ? PROG_ACTIVE_PROGRAM.epochJD : (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
+  let plan;
+  try {
+    plan = progPlanLaunchToDestination({ fromBody: 'Earth', destBody: dest, epochJD, siteLatDeg: siteLat, altKm,
+      tDepartJD: (depRaw !== '' && depRaw != null) ? +depRaw : undefined });
+  } catch (err) { setReadout('// planner error: ' + _mrEsc(String((err && err.message) || err))); return; }
+  if (!plan || plan.inc_deg == null) { setReadout('// ' + _mrEsc((plan && plan.note) || 'no solution for this destination')); return; }
+  const setV = (fid, v) => { const el = document.getElementById(fid + '-' + id); if (el != null && v != null) el.value = v; };
+  setV('edit-launch-inc', plan.inc_deg.toFixed(2));
+  setV('edit-launch-lan', plan.lan_deg.toFixed(2));
+  setV('edit-launch-alt', Math.round(plan.alt_km));
+  setV('edit-launch-apo', Math.round(plan.alt_km)); // circular parking orbit
+  // Set launch time to establish the ideal LAN plane (needs a site with lon).
+  if (site && site.lon != null && typeof progLaunchRaanFor === 'function') {
+    const rNow = progLaunchRaanFor(site.lat, site.lon, plan.inc_deg, 0, _missionEarthSpinRad);
+    if (!rNow.unreachable) setV('edit-launch-time', Math.round(progLaunchNextWindowS(rNow.raan, plan.lan_deg, 86164.1)));
+  }
+  setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site));
+}
+// Formats the planner result into the readout caption. Handles the azimuth
+// object ({azNE,azSE,unreachable}) and the null dla (Earth-orbit target).
+function _missionLaunchPlanReadoutHTML(plan, dest, site) {
+  const az = plan.azimuthDeg;
+  const azTxt = (az && !az.unreachable && isFinite(az.azNE))
+    ? ` &middot; az ${az.azNE.toFixed(0)}&deg;/${az.azSE.toFixed(0)}&deg; (NE/SE)`
+    : (az && az.unreachable ? ' &middot; az unreachable at this inc' : '');
+  const tof = (plan.tArrJD != null && plan.tDepartJD != null) ? Math.round(plan.tArrJD - plan.tDepartJD) : null;
+  const penalty = plan.planePenalty > 0.1 ? ` &middot; <span style="color:var(--warn);">site-limited (+${plan.planePenalty.toFixed(1)}&deg; plane penalty)</span>` : '';
+  const dlaTxt = plan.dla_deg != null ? ` &middot; plane through departure asymptote (DLA ${plan.dla_deg.toFixed(1)}&deg;)${penalty}` : ' &middot; coplanar with target';
+  let winTxt = '';
+  if (site && site.lon != null && plan.lan_deg != null && typeof progLaunchRaanFor === 'function') {
+    const rNow = progLaunchRaanFor(site.lat, site.lon, plan.inc_deg, 0, _missionEarthSpinRad);
+    if (!rNow.unreachable) {
+      const dt = progLaunchNextWindowS(rNow.raan, plan.lan_deg, 86164.1);
+      winTxt = ` &middot; launch window in ~${Math.floor(dt / 3600)}h ${Math.round((dt % 3600) / 60)}m`;
+    }
+  }
+  const energyTxt = (plan.c3 != null && plan.c3 > 0)
+    ? `C3 ${plan.c3.toFixed(1)} km&sup2;/s&sup2; &middot; v&infin; ${plan.vInfMag.toFixed(2)} km/s${tof != null ? ` &middot; TOF ${tof} d` : ''}`
+    : 'same-body transfer (no departure hyperbola)';
+  return `<span style="color:var(--accent);">Ideal parking for ${_mrEsc(dest)}</span>: `
+    + `${Math.round(plan.alt_km)} km &times; ${plan.inc_deg.toFixed(1)}&deg; incl, &Omega; ${plan.lan_deg.toFixed(1)}&deg;${dlaTxt}`
+    + `<br>${energyTxt}${azTxt}${winTxt}`
+    + `<br><span style="color:var(--text-dim);">ecliptic-frame approximation (no axial tilt) &middot; every field editable before Apply</span>`;
+}
 // Pure-ish readout builder — reads no DOM, just formats the three math
 // helpers' output (progLaunchAzimuthDeg / progLaunchRaanFor / progLaunchNextWindowS,
 // 360-...js) into the small caption line under the LAN field.
@@ -19158,6 +19251,12 @@ function missionApplyLaunchEdit(id, idx) {
     o._lanFromLaunchTime = false;
   }
   e.launchOrbit = { ...o };
+  // R7 phase 1: remember the destination-plan inputs (authoring metadata only;
+  // the actual orbit lives in e.orbit above — replay/accounting ignore these).
+  const destPick = document.getElementById('edit-launch-dest-' + id)?.value;
+  e.planDest = destPick || null;
+  const depPick = document.getElementById('edit-launch-depjd-' + id)?.value;
+  e.planDepJD = (depPick !== '' && depPick != null && isFinite(+depPick)) ? +depPick : null;
   missionRecompute(m); missionRenderDetail();
 }
 // Provisionally set which vehicle separates, then re-render so the stage list in
