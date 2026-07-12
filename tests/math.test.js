@@ -30,6 +30,7 @@ const FILES = [
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
+  'src/js/415-launch-planner.js',
   'src/js/430-program-module-phase-8-node-map.js',
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
@@ -92,6 +93,8 @@ const {
   _trajLatLonUnit, _trajSpinRotate, _trajBodySpinAngle, _trajTrueBodyRadiusKm,
   _trajHemiClipRuns,
   _evIsSolvedManeuver, _evManeuverTarget, _evIsManualBurn, _missionMigrateManeuverEntry,
+  progLambert3D, progDepartVinf, progOptimalDeparture, progIdealParkingOrbit,
+  progPlanLaunchToDestination, progLaunchAzimuthDeg,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -2414,6 +2417,108 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   const wrapPoly = [onCircle(10), onCircle(60), onCircle(200), onCircle(170)]; // front,front,back,front
   const c5 = _trajHemiClipRuns(wrapPoly);
   ok('_trajHemiClipRuns: run spanning the array wraparound stays a single run (not split)', c5.closed === false && c5.runs.length === 1 && c5.runs[0].length === 5);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R7 phase 1 — launch-to-destination planner (415), 2026-07-11
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  // DLA: a vInf purely in the ecliptic plane (z=0) -> dla ~ 0.
+  const flat = progIdealParkingOrbit({ vInfVec: [3, 4, 0], siteLatDeg: 28.5, altKm: 185 });
+  approx('progIdealParkingOrbit: in-plane vInf -> dla ~ 0', flat.dla_deg, 0, 1e-9);
+
+  // DLA: a tilted vInf -> dla = asin(z/|v|) exactly.
+  const tiltedVec = [3, 4, 2];
+  const tiltedMag = Math.sqrt(3 * 3 + 4 * 4 + 2 * 2);
+  const expectedDla = Math.asin(2 / tiltedMag) * 180 / Math.PI;
+  const tilted = progIdealParkingOrbit({ vInfVec: tiltedVec, siteLatDeg: 28.5, altKm: 185 });
+  approx('progIdealParkingOrbit: tilted vInf -> dla = asin(z/|v|) exactly', tilted.dla_deg, expectedDla, 1e-9);
+
+  // ideal inc = max(|dla|, siteLat): dla 23 deg, site 28.5 deg -> inc 28.5 (penalty 5.5).
+  {
+    const dlaR = 23 * Math.PI / 180;
+    const v = [Math.cos(dlaR), 0, Math.sin(dlaR)]; // alpha=0, dla=23deg
+    const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: 28.5, altKm: 185 });
+    approx('progIdealParkingOrbit: dla=23 site=28.5 -> inc=28.5', r.inc_deg, 28.5, 1e-6);
+    approx('progIdealParkingOrbit: dla=23 site=28.5 -> planePenalty=5.5', r.planePenalty, 5.5, 1e-6);
+  }
+  // dla 40 deg, site 28.5 deg -> inc 40 (penalty 0).
+  {
+    const dlaR = 40 * Math.PI / 180;
+    const v = [Math.cos(dlaR), 0, Math.sin(dlaR)];
+    const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: 28.5, altKm: 185 });
+    approx('progIdealParkingOrbit: dla=40 site=28.5 -> inc=40', r.inc_deg, 40, 1e-6);
+    approx('progIdealParkingOrbit: dla=40 site=28.5 -> planePenalty=0', r.planePenalty, 0, 1e-9);
+  }
+
+  // Plane-contains-vInf invariant: for computed {inc, lan}, the orbit-plane
+  // normal n(inc, lan) = [sin(lan)sin(inc), -cos(lan)sin(inc), cos(inc)] must
+  // be perpendicular to vInf (n . vInf ~ 0) -- the plane truly contains the
+  // asymptote. Tested across several vInf directions / site latitudes.
+  const testVecs = [
+    [3, 4, 2], [1, 0, 0.3], [-2, 5, -1.2], [0.5, -0.8, 0.9], [4, -3, -2.5],
+  ];
+  const testLats = [0, 28.5, -51.6, 60];
+  for (const v of testVecs) {
+    for (const lat of testLats) {
+      const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: lat, altKm: 185 });
+      const incR = r.inc_deg * Math.PI / 180, lanR = r.lan_deg * Math.PI / 180;
+      const n = [Math.sin(lanR) * Math.sin(incR), -Math.cos(lanR) * Math.sin(incR), Math.cos(incR)];
+      const vMag = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+      const residual = (n[0] * v[0] + n[1] * v[1] + n[2] * v[2]) / vMag;
+      approx(`progIdealParkingOrbit: plane contains vInf [${v}] @ lat ${lat} (n.vInf/|v| residual)`, residual, 0, 1e-6);
+    }
+  }
+
+  // Azimuth ties to progLaunchAzimuthDeg directly.
+  {
+    const r = progIdealParkingOrbit({ vInfVec: [3, 4, 2], siteLatDeg: 28.5, altKm: 185 });
+    const expectedAz = progLaunchAzimuthDeg(28.5, r.inc_deg);
+    ok('progIdealParkingOrbit: azimuthDeg ties to progLaunchAzimuthDeg(siteLat, inc)',
+      Math.abs(r.azimuthDeg.azNE - expectedAz.azNE) < 1e-9 && Math.abs(r.azimuthDeg.azSE - expectedAz.azSE) < 1e-9);
+  }
+
+  // Real Mars case: progOptimalDeparture(Earth, Mars, epoch~2026) -- loose
+  // sanity band, not a pinned magic number (real min-C3 Earth-Mars transfers
+  // run roughly 8-20 km^2/s^2 with TOF roughly 150-350 days).
+  {
+    const t0 = Date.now();
+    const opt = progOptimalDeparture('Earth', 'Mars', PROG_DEFAULT_EPOCH_JD, {});
+    const elapsedMs = Date.now() - t0;
+    ok('progOptimalDeparture(Earth,Mars): found a converged optimum', !!opt);
+    if (opt) {
+      const tof = opt.tArrJD - opt.tDepartJD;
+      console.log(`[415] Mars optimum: dep JD=${opt.tDepartJD.toFixed(1)} tof=${tof.toFixed(1)}d C3=${opt.c3.toFixed(2)} km^2/s^2 vInf=${opt.dvDepart.toFixed(3)} km/s (scan ${elapsedMs}ms)`);
+      ok('progOptimalDeparture(Earth,Mars): C3 in a sane band (~8-20 km^2/s^2, approximate)', opt.c3 > 4 && opt.c3 < 30);
+      ok('progOptimalDeparture(Earth,Mars): TOF in a sane band (~150-350 d, approximate)', tof >= 150 && tof <= 350);
+
+      const parking = progIdealParkingOrbit({ vInfVec: opt.vInfVec, siteLatDeg: 28.5, altKm: 185 });
+      const incR = parking.inc_deg * Math.PI / 180, lanR = parking.lan_deg * Math.PI / 180;
+      const n = [Math.sin(lanR) * Math.sin(incR), -Math.cos(lanR) * Math.sin(incR), Math.cos(incR)];
+      const vMag = Math.sqrt(opt.vInfVec[0] ** 2 + opt.vInfVec[1] ** 2 + opt.vInfVec[2] ** 2);
+      const residual = (n[0] * opt.vInfVec[0] + n[1] * opt.vInfVec[1] + n[2] * opt.vInfVec[2]) / vMag;
+      console.log(`[415] Mars ideal parking @ lat 28.5: inc=${parking.inc_deg.toFixed(3)} lan=${parking.lan_deg.toFixed(3)} dla=${parking.dla_deg.toFixed(3)} plane.vInf residual=${residual.toExponential(3)}`);
+      approx('progOptimalDeparture(Earth,Mars): resulting ideal parking plane contains vInf', residual, 0, 1e-6);
+    }
+  }
+
+  // Earth-orbit-target short-circuit: parking inc == target inc, c3/vInf = 0.
+  {
+    const target = { inc: 51.6, lan: 120, alt: 400 };
+    const plan = progPlanLaunchToDestination({ fromBody: 'Earth', destBody: target, epochJD: PROG_DEFAULT_EPOCH_JD, siteLatDeg: 28.5, altKm: 185 });
+    ok('progPlanLaunchToDestination: Earth-orbit target short-circuit inc matches target', plan.inc_deg === 51.6);
+    ok('progPlanLaunchToDestination: Earth-orbit target short-circuit lan matches target', plan.lan_deg === 120);
+    ok('progPlanLaunchToDestination: Earth-orbit target short-circuit c3=0', plan.c3 === 0);
+    ok('progPlanLaunchToDestination: Earth-orbit target short-circuit vInfMag=0', plan.vInfMag === 0);
+  }
+
+  // Moon deferred: returns an object (not a throw) with a clear note and no
+  // fabricated numeric result.
+  {
+    const plan = progPlanLaunchToDestination({ fromBody: 'Earth', destBody: 'Moon', epochJD: PROG_DEFAULT_EPOCH_JD, siteLatDeg: 28.5, altKm: 185 });
+    ok('progPlanLaunchToDestination: Moon deferred to a later phase (inc_deg null, note present)', plan.inc_deg === null && typeof plan.note === 'string');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
