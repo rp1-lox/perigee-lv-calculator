@@ -1658,6 +1658,13 @@ function missionRecompute(m) {
   if (typeof PHYS_ENABLED !== 'undefined' && PHYS_ENABLED && typeof physRebuildMissionTrajectories === 'function') {
     try { physRebuildMissionTrajectories(m); } catch (err) { console.warn('physics trajectory rebuild failed:', err); }
   }
+  // MISSION_MODEL_V2 Phase 1 (shadow state, 566): builds a VehicleState timeline
+  // alongside V1, promoting the legs just rebuilt above. Transient side-table
+  // only (never on m — §8); read only by v2Reconcile/reconciliation tooling.
+  // Zero user-visible effect — see MISSION_MODEL_V2.md §10.
+  if (typeof v2BuildShadow === 'function') {
+    try { v2BuildShadow(m); } catch (err) { console.warn('v2 shadow build failed:', err); }
+  }
   if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
   if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
   // Flight Readiness checks are derived state — computed LAST, after autosave has

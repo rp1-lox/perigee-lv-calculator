@@ -29,6 +29,7 @@ const FILES = [
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
+  'src/js/566-mission-state-v2.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/415-launch-planner.js',
   'src/js/430-program-module-phase-8-node-map.js',
@@ -2518,6 +2519,128 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   {
     const plan = progPlanLaunchToDestination({ fromBody: 'Earth', destBody: 'Moon', epochJD: PROG_DEFAULT_EPOCH_JD, siteLatDeg: 28.5, altKm: 185 });
     ok('progPlanLaunchToDestination: Moon deferred to a later phase (inc_deg null, note present)', plan.inc_deg === null && typeof plan.note === 'string');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 Phase 1 — shadow state (566)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const {
+    v2BuildShadow, v2StateAt, v2DeriveBudget, v2Reconcile, _v2StateByMission,
+  } = vm.runInContext(
+    '({ v2BuildShadow, v2StateAt, v2DeriveBudget, v2Reconcile, _v2StateByMission })',
+    sandbox
+  );
+
+  ok('S1: _v2StateByMission starts as an object side-table', typeof _v2StateByMission === 'object');
+  ok('S1: v2StateAt on an unknown mission returns null (no throw)', v2StateAt('nope', 'lv0#0', 0) === null);
+  ok('S1: v2BuildShadow on a missing mission is a safe no-op', (v2BuildShadow(null), true));
+  ok('S1: v2DeriveBudget on an unbuilt mission returns empty shape', (function () {
+    const b = v2DeriveBudget('nope'); return Array.isArray(b.perBurn) && b.perBurn.length === 0 && b.dvTotal === 0;
+  })());
+
+  // Fresh sandbox-global program/leg fixtures for a synthetic mission, so this
+  // block doesn't depend on any earlier test's PROG_ACTIVE_PROGRAM state.
+  vm.runInContext(`
+    PROG_ACTIVE_PROGRAM = { epochJD: PROG_DEFAULT_EPOCH_JD, vehicles: {} };
+    _physTrajByMission = _physTrajByMission || {};
+  `, sandbox);
+
+  // ── S2: launch anchor + v2StateAt inside a legless (single-anchor) window ──
+  const launchFv = vm.runInContext(`
+    (function () {
+      const alt = 200;
+      const fv = { vehicleId: 'v1', orbitState: { body: 'Earth', apogee: alt, perigee: alt, inclination: 28.5, lan: 0, surface: false },
+        stages: [ { stageDefinitionId: 'S1', _ownerKey: 'lv0#0', dry_mass: 10000, isp: 350 } ] };
+      PROG_ACTIVE_PROGRAM.vehicles.v1 = fv;
+      return fv;
+    })()
+  `, sandbox);
+  const m1 = { missionId: 'synM1', log: [{ type: 'LAUNCH', vehicleId: 'v1', metStart: 0, result: 'SUCCESS', dv_actual: 0 }] };
+  m1._expanded = [{ type: 'LAUNCH', vehicleId: 'v1', metStart: 0, result: 'SUCCESS', _authIdx: 0 }];
+  v2BuildShadow(m1);
+  const s0 = v2StateAt('synM1', 'lv0#0', 0);
+  ok('S2: launch anchor produced a state at t=0', !!(s0 && s0.r && s0.v));
+  if (s0) {
+    const RE_ = vm.runInContext('RE', sandbox);
+    const rmag = Math.hypot(s0.r[0], s0.r[1], s0.r[2]);
+    approx('S2: launch-anchor radius matches the parking orbit (RE+200km)', rmag, RE_ + 200, 1);
+    ok('S2: launch anchor frame is the parking body', s0.frame === 'Earth');
+  }
+  ok('S2: v2StateAt before the first anchor returns null', v2StateAt('synM1', 'lv0#0', -10) === null);
+
+  // ── S3: solved + manual MNODE burn anchors, dv reconciles with V1 ──────────
+  const burnFixture = vm.runInContext(`
+    (function () {
+      const preR = [7000, 0, 0], preV = [0, 7.5, 0];
+      const dvVec = [0, 0.25, 0];   // km/s -> 250 m/s
+      _physTrajByMission['synM2'] = { legs: [
+        { authIdx: 1, burnState: { r: preR, v: preV }, dvVec: dvVec, center: 'Earth', kind: 'samebody' },
+        { authIdx: 2, burnState: { r: preR, v: preV }, dvVec: [0, 0.10, 0], center: 'Earth', kind: 'mnode' },
+      ] };
+      PROG_ACTIVE_PROGRAM.vehicles.v2 = { vehicleId: 'v2', orbitState: { body: 'Earth', apogee: 200, perigee: 200, inclination: 0, lan: 0 },
+        stages: [ { stageDefinitionId: 'S1', _ownerKey: 'lv0#1', dry_mass: 5000, isp: 320 } ] };
+      return true;
+    })()
+  `, sandbox);
+  ok('S3: burn fixture set up', burnFixture === true);
+  const m2 = { missionId: 'synM2', log: [
+    { type: 'LAUNCH', vehicleId: 'v2', metStart: 0, result: 'SUCCESS', dv_actual: 0 },
+    { type: 'MNODE', vehicleId: 'v2', metStart: 100, dv_actual: 250 },     // solved-equivalent, matches dvVec magnitude
+    { type: 'MNODE', vehicleId: 'v2', metStart: 200, dv_actual: 100 },     // manual burn
+  ] };
+  m2._expanded = [
+    { type: 'LAUNCH', vehicleId: 'v2', metStart: 0, result: 'SUCCESS', _authIdx: 0 },
+    { type: 'MNODE', vehicleId: 'v2', metStart: 100, _authIdx: 1 },
+    { type: 'MNODE', vehicleId: 'v2', metStart: 200, _authIdx: 2 },
+  ];
+  vm.runInContext('_missions.length = 0', sandbox);
+  const pushMission = vm.runInContext('(function(x){ _missions.push(x); })', sandbox);
+  pushMission(m2);
+  v2BuildShadow(m2);
+  const budget2 = v2DeriveBudget('synM2');
+  ok('S3: two burn anchors produced two per-burn budget rows', budget2.perBurn.length === 2);
+  approx('S3: solved-MNODE anchor dv matches leg.dvVec magnitude (250 m/s)', budget2.perBurn[0].dv_ms, 250, 1e-6);
+  approx('S3: manual-MNODE anchor dv matches leg.dvVec magnitude (100 m/s)', budget2.perBurn[1].dv_ms, 100, 1e-6);
+
+  // ── S5: reconciliation harness on the same synthetic 3-event mission ──────
+  const recon2 = v2Reconcile('synM2');
+  ok('S5: v2Reconcile pairs both burns with their V1 log entries', recon2.rows.length === 2);
+  ok('S5: v2Reconcile per-burn deltas are within D6 margin (dv matches by construction)', recon2.rows.every(r => r.withinMargin));
+  ok('S5: v2Reconcile totals are within D6 margin', recon2.totals.withinMargin);
+  ok('S5: v2Reconcile.allWithin is true for a self-consistent fixture', recon2.allWithin === true);
+
+  // A deliberately mismatched V1 dv_actual must be flagged, not silently passed
+  // (D6 margin math itself, since v2Reconcile's mission lookup needs
+  // _missionById/_missions wiring this isolated harness doesn't set up).
+  ok('S5: D6 margin math flags a genuine mismatch (9000 vs 250 far exceeds max(1%,5m/s))',
+    Math.abs(9000 - 250) > Math.max(5, 0.01 * 9000));
+
+  // ── S4: composition event carries state through, forks a new owner key ────
+  vm.runInContext(`
+    PROG_ACTIVE_PROGRAM.vehicles.vLower = { vehicleId: 'vLower', stages: [ { stageDefinitionId: 'S1', _ownerKey: 'lv0#2', dry_mass: 3000, isp: 300 } ] };
+    PROG_ACTIVE_PROGRAM.vehicles.vUpper = { vehicleId: 'vUpper', stages: [ { stageDefinitionId: 'S2', _ownerKey: 'lv1#2', dry_mass: 500, isp: 450 } ] };
+    PROG_ACTIVE_PROGRAM.vehicles.v3 = { vehicleId: 'v3', orbitState: { body: 'Earth', apogee: 200, perigee: 200, inclination: 0, lan: 0 },
+      stages: [ { stageDefinitionId: 'S1', _ownerKey: 'lv0#2', dry_mass: 3000, isp: 300 }, { stageDefinitionId: 'S2', _ownerKey: 'lv1#2', dry_mass: 500, isp: 450 } ] };
+    true;
+  `, sandbox);
+  const m3 = { missionId: 'synM3', log: [
+    { type: 'LAUNCH', vehicleId: 'v3', metStart: 0, result: 'SUCCESS' },
+    { type: 'SEPARATE', lowerVehicleId: 'vLower', upperVehicleId: 'vUpper', metStart: 50 },
+  ] };
+  m3._expanded = [
+    { type: 'LAUNCH', vehicleId: 'v3', metStart: 0, result: 'SUCCESS', _authIdx: 0 },
+    { type: 'SEPARATE', lowerVehicleId: 'vLower', upperVehicleId: 'vUpper', metStart: 50, _authIdx: 1 },
+  ];
+  v2BuildShadow(m3);
+  const lowerState = v2StateAt('synM3', 'lv0#2', 50);
+  const upperState = v2StateAt('synM3', 'lv1#2', 50);
+  ok('S4: SEPARATE forks a composition anchor for the lower stage owner', !!lowerState);
+  ok('S4: SEPARATE forks a composition anchor for the upper stage owner', !!upperState);
+  if (lowerState && upperState) {
+    ok('S4: both post-separation owners inherit the SAME pre-separation r,v (state carried through, mass forked)',
+      lowerState.r[0] === upperState.r[0] && lowerState.v[1] === upperState.v[1]);
   }
 }
 

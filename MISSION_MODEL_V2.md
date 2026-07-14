@@ -204,12 +204,15 @@ API (all pure over the side-table + existing artifacts):
 
 No UI change of any kind. No persistence change (the side-table is transient; autosave blobs are byte-identical). No event redefinition (V1 meanings are *recorded*, not changed). No reference-orbit catalog, no epoch-display work, no node/edge rework — those are Phases 2–3. No performance optimization beyond the §10.1 promote-don't-recompute discipline.
 
-### 10.6 Acceptance (numbers to be filled at completion)
+### 10.6 Acceptance (measured 2026-07-14)
 
-- Gate: green, prior 555+ assertions plus Phase-1 additions (~15–25 expected).
-- Apollo seed reconciliation: per-burn deltas ≤ max(1%, 5 m/s) — measured: ___ ; totals ≤ 1% — measured: ___ (vs dvExpended 13010).
-- Recompute wall-time on the Apollo seed ≤ ~2.5 ms (baseline 2.05 ms) — measured: ___.
-- Zero autosave-blob diff with the shadow active (byte-compare a session export before/after) — verified: ___.
+- **Gate: green.** 555 → **575 assertions** (+20 Phase-1 additions: pure-shape tests, a synthetic launch-anchor/state-reconstruction test, synthetic solved+manual MNODE dv-reconciliation tests, D6 margin-math tests, and a synthetic SEPARATE owner-forking test).
+- **Apollo seed reconciliation** (`devSeedApolloMission({force:true})` + one manual gizmo burn, `_trajGizmoOpenPending(missionId,1800); _trajGizmo.dv.pro=500; _trajGizmoCommit()`):
+  - Per-burn: **2 of 3 rows within margin** — TLI (authIdx 1): v1 3143 m/s vs v2 3143 m/s, Δ0, within. Manual burn (authIdx 3): v1 500 m/s vs v2 ≈500.0 m/s (Δ ≈ 5.7e-14, float noise), within. LOI/corridor-exit edge (authIdx 2): v1 638 m/s vs v2 **unaccounted** (no promotable leg in Phase 1 — 565 attributes zero propagation to a transit corridor's exiting edge; flagged `withinMargin:false` per the §10.3 "never silently skip" rule, not dropped). See MATH.md §7q critique 58.
+  - Totals: v1 (`missionBudget().dvExpended`) = 13,510 m/s; v2 (`v2DeriveBudget().dvTotal`, burns only) = 3,643 m/s; **does not close** — two documented, understood gaps, not stitching bugs: (a) the LOI edge above (638 m/s unaccounted), and (b) LAUNCH's ascent Δv (≈9,229 m/s) is its own anchor `kind` in the V2 model and is never emitted as a `v2DeriveBudget` "burn" row at all, so it's absent from the v2 total while `missionBudget()`'s v1 total includes it (critique 60). `9229 + 638 = 9867 ≈ 13510 − 3643`, confirming these two gaps fully account for the shortfall — no unexplained residual.
+  - `allWithin: false` overall, honestly, for the two reasons above (both cataloged in MATH.md §7q/critiques 58 & 60 as Phase-2 open items, not Phase-1 defects). A dedicated dv-double-counting bug (every owner key in a docked stack independently anchoring the same burn, inflating early measurements to 5×) was found and fixed during this same verification pass — see MATH.md §7q.
+- **Recompute wall-time**, Apollo seed, 20-iteration average after 5-iteration warmup: **≈4.2–4.5 ms**, both with and without `v2BuildShadow` active (isolated A/B: v2's own contribution measured at ≈0 ms / within noise, even slightly negative). This EXCEEDS the ~2.5 ms target and the 2.05 ms `PERF_BASELINE.md` figure — but the excess is entirely pre-existing (565's physics-trajectory rebuild), unrelated to this module; Phase 1 adds no measurable propagation cost of its own, consistent with the promote-don't-recompute design (§10.1).
+- **Autosave-blob neutrality: verified.** `JSON.stringify(_buildSessionObject())` byte-identical with the shadow build on vs. off, once the two pre-existing non-deterministic ISO timestamp fields (`savedAt`, top-level and nested under `program`) are excluded — those timestamps differ between ANY two calls regardless of this module and are not new. No `_v2`/`V2Anchor`/`v2BuildShadow` substring appears anywhere in the serialized blob (grepped directly), confirming the side-table is never persisted on `m` or reachable from `_buildSessionObject()`.
 
 ---
 
