@@ -289,3 +289,26 @@ Mockups: claude.ai/code artifact "Mission View Unification — Concepts" (v2-swa
 - **Sequencing** (rides Phases 2–3): Timeline dock first (Band+scrubber merge, self-contained); Plan rail with Phase 3 (it is the natural home for reference-orbit nodes and the direct-manipulation handles); promotion mechanics once both rails exist; toggle retired last. Concept B (semantic zoom morph) remains a possible later enhancement on top — never a prerequisite.
 
 *After Phase 2: Phase 3 (reference-orbit catalog + dwell/transit node-edge model + direct manipulation) builds on a mission model that is finally, actually, the physics — and lands inside the §12 shell.*
+
+---
+
+## 13. PHASE 3 SPEC — reference orbits, dwell/transit, direct manipulation (drafted 2026-07-14)
+
+**Goal:** orbits become first-class shared objects (§4.3), the node map becomes the dwell/transit intent model (§4.4), and manipulating an orbit re-solves its adjacent transfers locally (D1). This is the substrate for Gateway-style architectures and the §12 Plan rail.
+
+### T1 — Reference-orbit catalog (model + persistence)
+New module `src/js/425-reference-orbits.js`: `PROG_ORBIT_CATALOG` (builtin tier: LEO 185, LEO 400/51.6 "station", SSO 800, GTO, GEO, LLO 100, lunar NRHO placeholder marked `kind:'propagated'` but UNSEEDED until Phase 4) + user tier (global catalog, persisted via a new session/autosave key + `.program` bundling; join `_buildSessionObject` per 455's rule). API: `refOrbitGet(id)`, `refOrbitAdd/Update/Delete`, `refOrbitResolve(id)` → elements. Keplerian kind only in Phase 3; `propagated` kind exists in the schema + resolver stub (returns null with note) so Phase 4 slots in without schema change. Gate: CRUD + persistence round-trip + resolve.
+
+### T2 — Events bind by orbitId
+LAUNCH/DEPLOY orbit specs and solved-maneuver targets gain `orbitRefId` alongside the inline numbers; the inline numbers become the CACHED RESOLUTION of the ref (re-resolved on recompute; a ref edit propagates to every binder on next recompute — this is "hit the same orbit multiple times" working). Authoring boundaries: the launch card + node map bridge offer catalog picks; editing an inline value on a bound event DETACHES it to a one-off (explicit, visible), mirroring solved/manual. Node-map nodes carry the binding. Gate: two events bound to one ref; ref edit moves both on recompute; detach isolates.
+
+### T3 — Dwell/transit + terminology
+Transit corridors (TLC-class) stop being NODES: the node map renders dwell orbits only; the transfer between them is the EDGE, carrying its burns (departure TLI / arrival LOI as named burn chips on the edge). `devSeedApolloMission` re-authored: LEO 185 (dwell) → edge [TLI 3143 … LOI ~1028] → LLO 100 (dwell). Terminology audit rides along: TLC→"trans-lunar" edge, TLI/TMI/LOI/MOI name BURNS. The transit state still EXISTS in the timeline (the corridor leg) — it's just not a planning node. Band/report/checks re-verified against the new seed shape. Gate: seed produces dwell-only node map; totals unchanged (13,400-class).
+
+### T4 — Direct manipulation (the §12 payoff)
+Selecting a dwell node (node map or plan-rail-precursor) flies the trajectory camera to it and opens the ORBIT INSPECTOR: sliders + numeric fields for alt(peri/apo)/inc/LAN (the user's requested representation), editing the bound reference orbit (or one-off) live: scrub → cheap re-render of the ring; release → recompute, and the UPSTREAM edge re-solves (D1) while downstream edges re-solve only from their moved origin. Solved edges follow; manual burns pinned (existing mode semantics). Undo = one step per slider release. Gate: pure re-solve-locality test (edit node N: edge N-1 re-solved, edge N+1 re-solved from new origin, edge N+2 UNTOUCHED). Browser: full flow on the seed.
+
+### T5 — Acceptance
+Gate green (570 + new). Seed: dwell-only map, bound orbits, slider edit → upstream re-solve → totals move sensibly, undo clean. Ref shared by two launches: one edit moves both. All §11-era numbers stable where unaffected. Docs: MATH.md (edge-burn naming, re-solve locality), this section's measured results.
+
+*Out of scope: NRHO seeding (Phase 4), phase-matching/rendezvous (Phase 5+), the full §12 shell (Timeline dock/promotion — separate track), semantic zoom.*
