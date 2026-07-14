@@ -1896,7 +1896,21 @@ function _trajMissionExtentForBody(body, m) {
   const isSun = body === 'Sun';
   const R = isSun ? 0 : ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0);
   let maxR = 0;
-  sc.orbits.forEach(rec => { maxR = Math.max(maxR, R + rec.apo); });
+  sc.orbits.forEach(rec => {
+    // Phase 5a fix (user flight-test "corrupted Moon view"): a PROPAGATED
+    // record (NRHO) has no rec.apo — `R + undefined` = NaN, which poisons
+    // every Math.max downstream and lands as a NaN camera width in
+    // _trajFitWKmForBody (zoom = 400/NaN → the whole scene culls to nothing).
+    // Use the propagated loop's real sampled extent instead.
+    if (rec.kind === 'propagated') {
+      if (typeof refOrbitSamplePropagated === 'function' && rec.refId) {
+        const samples = refOrbitSamplePropagated(rec.refId, 24);
+        samples.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (isFinite(d)) maxR = Math.max(maxR, d); });
+      }
+      return;
+    }
+    if (isFinite(rec.apo)) maxR = Math.max(maxR, R + rec.apo);
+  });
   sc.legs.forEach(leg => {
     if (isSun) {
       // transit orbits live in the Sun frame with body 'Sun' — their ring

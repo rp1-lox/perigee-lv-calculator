@@ -76,6 +76,30 @@ function _oiClassify(m, authIdx, e) {
     const n = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.toNode) : null;
     if (!n || !n.orbit || n.orbit.type === 'transit' || n.orbit.type === 'escape') return null;
     const o = n.orbit;
+    // Phase 5a fix (user flight-test): a maneuver TARGETING a propagated ref
+    // (the NRHO node carries orbitRefId) gets the READ-ONLY propagated card —
+    // its Kepler-ish peri/apo are label-only pricing values; sliders here
+    // implied you could drag an NRHO's inclination, which is meaningless.
+    if (n.orbitRefId && typeof refOrbitGet === 'function') {
+      const refE = refOrbitGet(n.orbitRefId);
+      if (refE && refE.kind === 'propagated') {
+        const samples = (typeof refOrbitSamplePropagated === 'function') ? refOrbitSamplePropagated(n.orbitRefId, 48) : [];
+        let periKm = null, apoKm = null;
+        const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[o.body]) ? PROG_BODIES[o.body].R : 0;
+        if (samples.length) {
+          let minD = Infinity, maxD = -Infinity;
+          samples.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (d < minD) minD = d; if (d > maxD) maxD = d; });
+          periKm = Math.max(0, minD - R); apoKm = Math.max(0, maxD - R);
+        }
+        return {
+          authIdx, source: 'propagated', evType: e.type,
+          body: o.body, refId: n.orbitRefId,
+          name: refE.name || (n.sub ? n.label + ' (' + n.sub + ')' : n.label),
+          periodDays: refE.period_s ? refE.period_s / 86400 : null,
+          periKm, apoKm,
+        };
+      }
+    }
     if (o.perigee == null) return null;
     return {
       authIdx, source: 'maneuver', nodeId: e.toNode,

@@ -2897,6 +2897,60 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §15 5a — LEO -> lunar NRHO direct-transfer solver gate
+// ═══════════════════════════════════════════════════════════════════════════
+// physSolveNrhoTransfer is expensive (an n-body shoot, ~2-7s cold even with
+// its own solve cache) — this gate runs it ONCE from the canonical LEO
+// (185x185 @28.5) with the SAME dv the mission model actually passes in
+// (progNmComputeEdgeDv('leo','tlc') = 3,143 m/s — the injection leg's edge).
+//
+// CONVERGENCE HISTORY (honest, keep — measured 2026-07-14, scratchpad
+// t2/t4-t20.js): the FIRST 5a attempt let the arrival TOF float freely and
+// solved the departure RAAN against the Moon's center; Newton settled on
+// apolune-phase arrivals (~50,000+ km off the Moon, out of plane) that a
+// fixed-|Δv| single burn genuinely cannot reach — best miss ~14,000-25,000
+// km. Fixed by (a) quantizing the arrival epoch to PERILUNE crossings
+// (tArr ≡ tPeri mod period — the perilune point is only ~3,000 km from the
+// Moon's center, physically reachable by a TLI-class departure), (b) the
+// RAAN solve aimed at the target's own Earth-frame direction (Stage 1), and
+// (c) a Stage-2 mid-course correction burn (free small Δv at 50% TOF, 3-DOF
+// Newton — the architecture real missions fly). Measured converged numbers
+// at the canonical case (dv 3.143 km/s, t0=0): miss 378 km, TOF 4.71 d,
+// MCC 183 m/s, insertion 996 m/s, TOTAL ~4.32 km/s (4.3-5.1 across epochs).
+{
+  const nrhoSolve = vm.runInContext(`(function(){
+    const edge = { dv: 3143 }; // pinned: progNmComputeEdgeDv('leo','tlc') — the injection edge's real magnitude
+    const fromOrbit = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    const t0 = Date.now();
+    let sol, threw = false;
+    try { sol = physSolveNrhoTransfer(fromOrbit, 'nrho-nominal', 0, { dv_kms: edge.dv / 1000 }); }
+    catch (err) { threw = true; sol = null; }
+    const elapsedMs = Date.now() - t0;
+    return { threw, sol: sol ? {
+      converged: sol.converged, missKm: sol.missKm, tof_s: sol.tof_s, met: sol.met,
+      dvMag: sol.dvDepartVec ? Math.hypot(sol.dvDepartVec[0], sol.dvDepartVec[1], sol.dvDepartVec[2]) : null,
+      mcc_ms: sol.mccBurn ? Math.hypot(sol.mccBurn.dvVec[0], sol.mccBurn.dvVec[1], sol.mccBurn.dvVec[2]) * 1000 : 0,
+      ins_ms: sol.insertionBurn ? Math.hypot(sol.insertionBurn.dvVec[0], sol.insertionBurn.dvVec[1], sol.insertionBurn.dvVec[2]) * 1000 : 0,
+      hasNote: typeof sol.note === 'string' || sol.note === null,
+    } : null, elapsedMs };
+  })()`, sandbox);
+  const s5a = nrhoSolve.sol;
+  const total5a = s5a ? 3143 + s5a.mcc_ms + s5a.ins_ms : 0;
+  ok('5a: physSolveNrhoTransfer never throws', !nrhoSolve.threw);
+  ok('5a: CONVERGED from the canonical LEO', !!s5a && s5a.converged === true);
+  ok('5a: miss inside the spec acceptance window (< 2,000 km)', s5a && s5a.missKm < 2000);
+  ok('5a: TOF in a TLI-class band (2.5-7.3 d, perilune-quantized)', s5a && s5a.tof_s > 2.5 * 86400 && s5a.tof_s < 7.3 * 86400);
+  ok('5a: |dvDepartVec| preserves the fixed input magnitude (accounting parity)', s5a && Math.abs(s5a.dvMag - 3.143) < 1e-6);
+  // APPROXIMATE dv band (per the task, comment it as approximate): TLI + MCC
+  // + insertion. Loose on purpose — the ephemeris phase at t0 moves the MCC/
+  // insertion costs (measured 4.3-5.1 km/s across departure epochs).
+  ok('5a: total dv (TLI+MCC+insertion) in a loose ~3.0-5.5 km/s band (approximate)', total5a > 3000 && total5a < 5500);
+  ok('5a: MCC is a genuinely small correction (< 700 m/s at the canonical epoch)', s5a && s5a.mcc_ms > 0 && s5a.mcc_ms < 700);
+  ok('5a: carries a note either way', s5a && s5a.hasNote);
+  ok('5a: gate runtime stays sane (<15s for one full cold solve)', nrhoSolve.elapsedMs < 15000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

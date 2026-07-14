@@ -52,6 +52,18 @@ const PROG_NM_NODES = [
     orbit:{ type:'circular', body:'Moon',  perigee:100,   apogee:100,   inclination:90 } },
   { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:483, cy:138, r:18,
     orbit:{ type:'circular', body:'Moon',  perigee:68300, apogee:68300, inclination:0 } },
+  // MISSION_MODEL_V2 §15 5a: Gateway NRHO destination — bound to the SEEDED
+  // propagated ref-orbit catalog entry (425's 'nrho-nominal'). orbit.{perigee,
+  // apogee} are the SAME approximate label-only values 425 stores (NOT
+  // authoritative Keplerian truth — the real shape is the propagated
+  // seedState); they exist only so progNmComputeEdgeDv (LOI-style patched-
+  // conic) can price the leg like any other Moon-orbit destination. The
+  // orbitRefId marker (absent on every other builtin node) is what routes
+  // the leg builder (565's nrhoRefAfter) to physSolveNrhoTransfer instead of
+  // the generic Keplerian moon-leg shooter.
+  { id:'nrho',          label:'NRHO',    sub:'Gateway (9:2-class)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
+    orbit:{ type:'circular', body:'Moon',  perigee:3000, apogee:60000, inclination:58 },
+    orbitRefId:'nrho-nominal' },
   // Surface node at Moon body center — disc is the node.
   { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:192, r:12,
     orbit:{ type:'surface',  body:'Moon' } },

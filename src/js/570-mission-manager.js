@@ -2968,7 +2968,24 @@ function _missionApplyManeuver(active, e) {
   if (node && node.orbit) {
     const o = node.orbit;
     if (o.type === 'surface') active.orbitState = { body: o.body, perigee: 0, apogee: 0, inclination: 0, lan: 0, epoch: 0, surface: true };
-    else if (o.type === 'circular' || o.type === 'elliptic') active.orbitState = { body: o.body, perigee: o.perigee ?? o.apogee ?? 0, apogee: o.apogee ?? o.perigee ?? 0, inclination: o.inclination ?? 0, lan: 0, epoch: 0, surface: false };
+    else if (o.type === 'circular' || o.type === 'elliptic') {
+      active.orbitState = { body: o.body, perigee: o.perigee ?? o.apogee ?? 0, apogee: o.apogee ?? o.perigee ?? 0, inclination: o.inclination ?? 0, lan: 0, epoch: 0, surface: false };
+      // Phase 5a fix (user flight-test): a destination node bound to a
+      // PROPAGATED catalog ref (the NRHO) must stamp propagated/refId onto the
+      // arrived orbitState — the node's Kepler-ish peri/apo are label-only
+      // pricing values (see 430's nrho comment). Without the stamp, snapshots
+      // register a bogus Kepler ring record ("Moon 3000×60000"), the real
+      // halo loop never renders after arrival, and the state panel shows
+      // wrong ellipse numbers instead of "NRHO (propagated)".
+      if (node.orbitRefId && typeof refOrbitGet === 'function') {
+        const refE = refOrbitGet(node.orbitRefId);
+        if (refE && refE.kind === 'propagated') {
+          active.orbitState.propagated = true;
+          active.orbitState.refId = node.orbitRefId;
+          active.orbitState.perigee = null; active.orbitState.apogee = null; active.orbitState.inclination = null;
+        }
+      }
+    }
     // escape / transit: put the vehicle on its departure trajectory so the band view
     // jumps UP immediately (TLI → cislunar, TMI/interplanetary → transit) instead of
     // appearing stuck in the parking orbit.
@@ -4436,10 +4453,16 @@ function _missionNodeMapHTML(m) {
           const lo = e.fromNode, hi = arrival.e.toNode;
           const k = lo + '::' + hi + '::t';
           const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
+          // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
+          // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
+          // not the generic same-body arrival name (LOI) — it's a distinct
+          // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
+          const arrNode = byId[arrival.e.toNode];
+          const arrName = (arrNode && arrNode.orbitRefId) ? 'NRHO insertion' : names.arr;
           pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
           chipsByKey[k] = [
             { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
-            { name: names.arr, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
+            { name: arrName, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
           ];
           continue;
         }
