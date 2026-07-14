@@ -2801,6 +2801,44 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 Phase 3 T4 — orbit inspector: pure D1 re-solve-locality
+// ═══════════════════════════════════════════════════════════════════════════
+// D1 (§0): "the transfer that DELIVERS you to the node re-solves... changes
+// never propagate past adjacent edges." Synthetic 4-dwell chain A-B-C-D (all
+// real circular Earth orbits so progNmComputeEdgeDv takes the generic
+// coaxial vis-viva path, unlike the seed's transit-corridor LOI leg which is
+// a fixed patched-conic lookup — see MATH.md §7r for why the seed's LLO leg
+// doesn't move under this same edit and why LEO-origin edits were used for
+// the browser-measured evidence instead). Edit node B's altitude: edge(A,B)
+// (B is the delivering edge's target) and edge(B,C) (B is the departing
+// edge's origin) both re-solve; edge(C,D), two hops away, must NOT move.
+{
+  const t4 = vm.runInContext(`(function(){
+    if (typeof PROG_ACTIVE_PROGRAM === 'undefined' || !PROG_ACTIVE_PROGRAM) globalThis.PROG_ACTIVE_PROGRAM = { vehicles:{} };
+    PROG_ACTIVE_PROGRAM.nodeMapCustomNodes = [
+      { id:'t4-a', nodeId:'t4-a', label:'A', custom:true, orbit:{ type:'circular', body:'Earth', perigee:200, apogee:200, inclination:28.5 } },
+      { id:'t4-b', nodeId:'t4-b', label:'B', custom:true, orbit:{ type:'circular', body:'Earth', perigee:400, apogee:400, inclination:28.5 } },
+      { id:'t4-c', nodeId:'t4-c', label:'C', custom:true, orbit:{ type:'circular', body:'Earth', perigee:800, apogee:800, inclination:28.5 } },
+      { id:'t4-d', nodeId:'t4-d', label:'D', custom:true, orbit:{ type:'circular', body:'Earth', perigee:1200, apogee:1200, inclination:28.5 } },
+    ];
+    const dvAB_before = progNmComputeEdgeDv('t4-a','t4-b').dv;
+    const dvBC_before = progNmComputeEdgeDv('t4-b','t4-c').dv;
+    const dvCD_before = progNmComputeEdgeDv('t4-c','t4-d').dv;
+    // edit node B (like _oiResolveManeuverNodeId mutating a custom node in place)
+    PROG_ACTIVE_PROGRAM.nodeMapCustomNodes[1].orbit.perigee = 600;
+    PROG_ACTIVE_PROGRAM.nodeMapCustomNodes[1].orbit.apogee = 600;
+    const dvAB_after = progNmComputeEdgeDv('t4-a','t4-b').dv;
+    const dvBC_after = progNmComputeEdgeDv('t4-b','t4-c').dv;
+    const dvCD_after = progNmComputeEdgeDv('t4-c','t4-d').dv;
+    delete PROG_ACTIVE_PROGRAM.nodeMapCustomNodes;
+    return { dvAB_before, dvBC_before, dvCD_before, dvAB_after, dvBC_after, dvCD_after };
+  })()`, sandbox);
+  ok('T4 D1: editing node B re-solves the DELIVERING edge A→B', t4.dvAB_after !== t4.dvAB_before);
+  ok('T4 D1: editing node B re-solves the DEPARTING edge B→C', t4.dvBC_after !== t4.dvBC_before);
+  ok('T4 D1: edge C→D (two hops from B) is UNTOUCHED', t4.dvCD_after === t4.dvCD_before);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

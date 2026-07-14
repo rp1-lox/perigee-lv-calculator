@@ -1773,6 +1773,11 @@ function _trajSelectEventFromView(id, authIdx) {
     const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
     _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
   }
+  // T4: same dwell-orbit-inspector hook as the node-map click path (_missionNmSelectShared).
+  if (typeof _oiOnEventSelected === 'function') {
+    const m2 = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+    _oiOnEventSelected(id, authIdx, m2 && m2.log && m2.log[authIdx]);
+  }
 }
 
 // Compute the min zoom-worthy extent (max body-centered radius, km) of a
@@ -3391,6 +3396,7 @@ function _missionTrajViewHTML(m) {
            onmousedown="trajPanStart(event,'${id}')" onmousemove="trajPanMove(event)"
            onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()" oncontextmenu="return false">
         ${hintChip}
+        ${(typeof _oiCardHTML === 'function') ? _oiCardHTML(m) : ''}
         <svg class="traj-svg" data-mid="${id}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet">
           <g class="traj-globe-layer" data-mid="${id}"></g>
           <g class="traj-scene" data-mid="${id}">

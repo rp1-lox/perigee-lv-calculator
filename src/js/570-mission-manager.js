@@ -3148,6 +3148,9 @@ function _missionNmSelectShared(id, idx) {
   m.log.forEach(e => { e._expanded = false; });
   m.log[idx]._expanded = true;
   if (typeof _trajGizmoOnEventSelected === 'function') _trajGizmoOnEventSelected(id, idx, m.log[idx]);
+  // T4: opens/closes the orbit inspector for dwell-orbit selections; coexists
+  // with the gizmo hook above (different UI surfaces — see 5746).
+  if (typeof _oiOnEventSelected === 'function') _oiOnEventSelected(id, idx, m.log[idx]);
 }
 
 // SVG arrowhead pointing from (sx,sy) toward (tx,ty), backed off the target by `back`.

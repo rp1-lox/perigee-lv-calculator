@@ -353,6 +353,16 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-gizmo-menu button.danger{color:var(--danger);}
 .traj-gizmo-menu button.danger:hover{background:var(--danger-tint);}
 
+/* MISSION_MODEL_V2 §13 T4 — orbit inspector card. Deliberately a SEPARATE
+   class from .traj-gizmo-menu (same visual family, styles duplicated below)
+   because _trajGizmoRenderMenu (5745) unconditionally removes any element
+   matching .traj-gizmo-menu when no gizmo flyout is open — sharing the class
+   made the inspector vanish the instant the trajectory view's after-render
+   sync ran. See 5746-orbit-inspector.js. */
+.traj-oi-card{position:absolute;z-index:55;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 6px 18px rgba(0,0,0,.4);}
+.traj-oi-card button{background:transparent;border:none;color:var(--text-dim);font-family:var(--mono);font-size:11px;cursor:pointer;}
+.traj-oi-card button:hover{background:var(--border-bright);color:var(--text-bright);}
+
 /* focus-bar planet+moons flyout — same overflow discipline as mcc-export-menu
    (absolute inside a relative wrap, positioned outside the scrolling view
    area) so it never clips against .mcc-view-area's overflow:auto */
