@@ -103,6 +103,25 @@ function _missionRefreshLaunchModal(id) {
   if (body) body.innerHTML = _missionLaunchModalBody(m);
 }
 
+// MISSION_MODEL_V2 Phase 2 S1 (F3 — deterministic replay identity): runtime
+// vehicleIds default to a fresh progUUID() per replay, which dirties the
+// autosave blob (m.log stamps e.vehicleId/e.lowerVehicleId/etc.) on every
+// recompute even when nothing changed. `_originKey` is ALREADY a stable
+// function of (authIdx, repetition) — see tagOwners/kid below — so rekey the
+// runtime vehicleId to a deterministic derivative of it right after a
+// FlightVehicle's _originKey is assigned, before anything reads/stamps
+// fv.vehicleId. Same log + same replay ⇒ byte-identical vehicleIds every time.
+function _missionRekeyVehicleId(fv, missionId) {
+  if (!fv || !fv._originKey || !missionId) return fv;
+  const newId = 'v_' + missionId + '_' + String(fv._originKey).replace(/[^A-Za-z0-9_:-]/g, '_');
+  if (fv.vehicleId === newId) return fv;
+  const oldId = fv.vehicleId;
+  if (oldId && PROG_ACTIVE_PROGRAM.vehicles[oldId] === fv) delete PROG_ACTIVE_PROGRAM.vehicles[oldId];
+  fv.vehicleId = newId;
+  PROG_ACTIVE_PROGRAM.vehicles[newId] = fv;
+  return fv;
+}
+
 // ── PURE APPLIER: builds the launch vehicle, runs ascent staging, returns results.
 // Does NOT push to m.log or set m.vehicleId — that is done by missionRecompute.
 function _missionApplyLaunch(m, e) {
@@ -1376,6 +1395,7 @@ function missionRecompute(m) {
       const r = _missionApplyLaunch(m, e);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
       r.fv._originKey = 'launch:' + kid;
+      _missionRekeyVehicleId(r.fv, m.missionId);
       tagOwners(r.fv, kid, (m.vehicleNames && m.vehicleNames['launch:' + kid]) || e.label || 'Vehicle'); markBirth(r.fv);
       e.vehicleId = r.fv.vehicleId; e.stagingResult = r.stagingResult;
       e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
@@ -1393,6 +1413,7 @@ function missionRecompute(m) {
       const r = _missionApplyDeploy(m, e);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
       r.fv._originKey = 'deploy:' + kid;
+      _missionRekeyVehicleId(r.fv, m.missionId);
       tagOwners(r.fv, kid, (m.vehicleNames && m.vehicleNames['deploy:' + kid]) || e.label || 'Vehicle'); markBirth(r.fv);
       e.vehicleId = r.fv.vehicleId; e.payloadMass = r.payloadMass; e.payloadNames = r.payloadNames;
       live.push(r.fv); active = r.fv;
@@ -1462,8 +1483,10 @@ function missionRecompute(m) {
         // persistent depot can be docked again next repetition; the jettisoned upper is new.
         if (lower) lower._originKey = (e.groupId && parentKey) ? parentKey : ('sepL:' + kid);
         if (upper) upper._originKey = 'sepU:' + kid;
+        if (lower) _missionRekeyVehicleId(lower, m.missionId);
+        if (upper) _missionRekeyVehicleId(upper, m.missionId);
         markBirth(lower); markBirth(upper);
-        e.parentVehicleId = active.vehicleId; e.lowerVehicleId = res.lowerVehicleId; e.upperVehicleId = res.upperVehicleId;
+        e.parentVehicleId = active.vehicleId; e.lowerVehicleId = lower ? lower.vehicleId : res.lowerVehicleId; e.upperVehicleId = upper ? upper.vehicleId : res.upperVehicleId;
         e.parentName = _missionVehicleDisplayName(active);
         e.lowerName = lower ? _missionVehicleDisplayName(lower) : '?'; e.upperName = upper ? _missionVehicleDisplayName(upper) : '?';
         e.lowerStages = lower ? lower.stages.length : 0; e.upperStages = upper ? upper.stages.length : 0;
@@ -1500,11 +1523,12 @@ function missionRecompute(m) {
           const merged = PROG_ACTIVE_PROGRAM.vehicles[res.vehicleId];
           if (merged) {
             merged._originKey = targetKey0 || ('dock:' + kid);   // keep the depot's identity across repetitions
+            _missionRekeyVehicleId(merged, m.missionId);
             markBirth(merged);
             // preserve each stage's owner tag (progMakeFlightVehicle reuses the stage objects)
             merged.stages.forEach(st => { if (st._ownerKey == null) { const sc = _missionStageOwner(st.stageDefinitionId); st._ownerKey = (sc ? 'sc:' + sc.spacecraftId : 'lv') + '#dock'; } });
           }
-          e.aVehId = active.vehicleId; e.tVehId = target.vehicleId; e.mergedVehicleId = res.vehicleId;
+          e.aVehId = active.vehicleId; e.tVehId = target.vehicleId; e.mergedVehicleId = merged ? merged.vehicleId : res.vehicleId;
           e.mergedName = merged ? _missionVehicleDisplayName(merged) : '?'; e.mergedStages = merged ? merged.stages.length : 0;
           live = live.filter(v => v !== active && v !== target); if (merged) live.push(merged);
           active = merged || null;

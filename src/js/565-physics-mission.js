@@ -232,20 +232,21 @@ function physClosestApproachKm(res, dest, overrides) {
   return { dKm: best, t: tBest, dz };
 }
 
-/** R3.1: osculating plane of a converged leg's actual arrival, for the
- *  STATE-DERIVED orbit ring (MATH.md §7f-R2/§7h/§7i). The propagator only
- *  records POSITION samples (no velocity) plus periapsis events (rMag + t,
- *  no vector) — so the arrival velocity is reconstructed by a central finite
+/** R3.1 / MISSION_MODEL_V2 Phase 2 S2: raw arrival {r,v,t} of a converged leg's
+ *  actual encounter, for BOTH the state-derived ring orientation
+ *  (physArrivalOsculatingElements, below) and the F1 arrival-burn construction
+ *  (physRebuildMissionTrajectories' 'arrival' leg branch). The propagator only
+ *  records POSITION samples (no velocity) plus periapsis events (rMag + t, no
+ *  vector) — so the arrival velocity is reconstructed by a central finite
  *  difference of the two dest-frame samples bracketing the arrival periapsis
  *  event's time, and the arrival radius vector is that same bracket's linear
  *  position interpolation rescaled onto the event's exact rMag. This is an
  *  approximation (decimated samples, not a re-integration) — good enough for
- *  RING ORIENTATION (i, raan, argp), which is all this phase consumes; it is
- *  NOT precise enough for a targeting residual. Deterministic given fixed
- *  samples/events (same propagation -> same bracket -> same result).
- *  Returns osculating {a,e,i,raan,argp,nu,hVec} (physStateToElements' full
- *  return) or null if no periapsis event was recorded in `dest`'s frame. */
-function physArrivalOsculatingElements(res, dest, mu) {
+ *  RING ORIENTATION and for sizing an arrival Δv, NOT precise enough for a
+ *  targeting residual. Deterministic given fixed samples/events.
+ *  Returns {r, v, t} or null if no periapsis event was recorded in `dest`'s
+ *  frame (or fewer than 2 dest-frame samples exist to bracket it). */
+function physArrivalStateAt(res, dest) {
   const peris = (res.events || []).filter(ev => ev.type === 'periapsis' && ev.frame === dest);
   if (!peris.length) return null;
   const ev = peris[peris.length - 1];   // last = the post-encounter periapsis nearest actual arrival
@@ -264,7 +265,18 @@ function physArrivalOsculatingElements(res, dest, mu) {
   if (!(rMagInterp > 0)) return null;
   const rDir = physScale(rInterp, 1 / rMagInterp);
   const r = physScale(rDir, ev.rMag != null ? ev.rMag : rMagInterp);
-  return physStateToElements(r, v, mu);
+  return { r, v, t: ev.t };
+}
+
+/** R3.1: osculating plane of a converged leg's actual arrival, for the
+ *  STATE-DERIVED orbit ring (MATH.md §7f-R2/§7h/§7i). This phase only
+ *  consumes (i, raan, argp) — NOT precise enough for a targeting residual.
+ *  Returns osculating {a,e,i,raan,argp,nu,hVec} (physStateToElements' full
+ *  return) or null if physArrivalStateAt found nothing to bracket. */
+function physArrivalOsculatingElements(res, dest, mu) {
+  const st = physArrivalStateAt(res, dest);
+  if (!st) return null;
+  return physStateToElements(st.r, st.v, mu);
 }
 
 /**
@@ -979,6 +991,25 @@ function physRebuildMissionTrajectories(m) {
     // the injection leg already flew it. Physics TOF from that propagation.
     if (fromO.type === 'transit') {
       let tofPhysics = null, converged = false;
+      // MISSION_MODEL_V2 Phase 2 S2 (F1 — real arrival burns, critique 58): the
+      // exiting leg of a transit corridor carries no propagation of its own
+      // (the injection leg already flew the whole trajectory) — but under D5/
+      // §11.1 the arrival burn is now a real state-delta, not pure bookkeeping.
+      // CONVENTION (documented per the task): at the injection leg's actual
+      // arrival state (physArrivalStateAt — last periapsis event in the dest
+      // frame, reconstructed by finite difference), the arrival Δv VECTOR is
+      // (target dwell-orbit velocity at that position) − (corridor arrival
+      // velocity). The target velocity is built from `toO` (this edge's own
+      // toNode — the real destination orbit, not the transit corridor): vis-
+      // viva magnitude from toO's authored (peri,apo) semi-major axis at the
+      // arrival radius, DIRECTION = ĥ_target × r̂_arr (tangential, in the
+      // authored target plane; Ω=0-convention normal, same formula as
+      // planeMissKm above) — i.e. this assumes the arrival radius already
+      // sits in the target plane and targets a near-periapsis/circular
+      // insertion, consistent with how the corridor was aimed (§7i). This
+      // will generally NOT equal V1's schematic dv_actual for this edge — see
+      // MISSION_MODEL_V2.md §11.1/§11.5 and MATH.md for the measured delta.
+      let arrivalBurn = null;
       if (lastTransit && lastTransit.dest && (toO.body === lastTransit.dest || toO.destination === lastTransit.dest)) {
         converged = lastTransit.converged;
         if (converged) {
@@ -986,11 +1017,31 @@ function physRebuildMissionTrajectories(m) {
           const peri = lastTransit.events.find(ev => ev.type === 'periapsis' && ev.frame === lastTransit.dest && (!soi || ev.t >= soi.t));
           const tArr = (peri && peri.t) || (soi && soi.t);
           if (tArr != null) tofPhysics = tArr - lastTransit.met;
+          const muDest = PROG_BODIES[lastTransit.dest] && PROG_BODIES[lastTransit.dest].mu;
+          const arrSt = muDest ? physArrivalStateAt(lastTransit, lastTransit.dest) : null;
+          if (arrSt) {
+            const rMag = physMag(arrSt.r);
+            const rp = PROG_BODIES[lastTransit.dest].R + (toO.perigee ?? toO.apogee ?? 0);
+            const ra = PROG_BODIES[lastTransit.dest].R + (toO.apogee ?? toO.perigee ?? 0);
+            const aTarget = (rp + ra) / 2;
+            const vTargetMag = (aTarget > 0 && rMag > 0) ? Math.sqrt(Math.max(0, muDest * (2 / rMag - 1 / aTarget))) : null;
+            const incT = (toO.inclination || 0) * Math.PI / 180;
+            const raanT = toO.lan_deg != null ? (toO.lan_deg * Math.PI / 180) : 0;
+            const hHatT = [Math.sin(raanT) * Math.sin(incT), -Math.cos(raanT) * Math.sin(incT), Math.cos(incT)];
+            const rHat = rMag > 0 ? physScale(arrSt.r, 1 / rMag) : null;
+            const vDirRaw = rHat ? physCross(hHatT, rHat) : null;
+            const vDirMag = vDirRaw ? physMag(vDirRaw) : 0;
+            if (vTargetMag != null && isFinite(vTargetMag) && vDirMag > 1e-9) {
+              const vTargetVec = physScale(vDirRaw, vTargetMag / vDirMag);
+              arrivalBurn = { t: arrSt.t, frame: lastTransit.dest, r: arrSt.r, vPre: arrSt.v,
+                dvVec: physSub(vTargetVec, arrSt.v) };
+            }
+          }
         }
       }
       legs.push({ authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
         samples: [], events: [], tof_s: e.durationUsed != null ? e.durationUsed : 0,
-        tofPhysics, dvVec: null, frames: [], converged, kind: 'arrival' });
+        tofPhysics, dvVec: null, frames: [], converged, kind: 'arrival', arrivalBurn });
       continue;
     }
 

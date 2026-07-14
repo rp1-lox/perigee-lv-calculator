@@ -101,8 +101,17 @@ function v2BuildShadow(m) {
         note = 'surface/pre-orbit state at ' + e.type + ' — r,v not modeled (D5 point-mass has no launch-pad frame)';
       }
       const mass = { perStage: _v2StageSnapshot(fv) };
+      // MISSION_MODEL_V2 Phase 2 S3 (F2, critique 60): the launch anchor
+      // carries ascentDv, sourced from the SAME staging result V1 stamps
+      // today (e.stagingResult.dvDelivered — read, never recomputed). Ascent
+      // is sub-orbital LV-calculator territory (the state timeline begins at
+      // parking-orbit insertion, D5) — it is an accounting attribute OF the
+      // launch anchor, never a fake 'burn' row (v2DeriveBudget below).
+      const ascentDv = (e.type === 'LAUNCH' && e.stagingResult) ? (e.stagingResult.dvDelivered || 0) : 0;
       _v2OwnerKeysOf(fv).forEach(function (k) {
-        timelineFor(k).anchors.push(_v2MakeAnchor(met, frame, r, v, e.type === 'LAUNCH' ? 'launch' : 'deploy', authIdx, mass, null, null, note));
+        const anchor = _v2MakeAnchor(met, frame, r, v, e.type === 'LAUNCH' ? 'launch' : 'deploy', authIdx, mass, null, null, note);
+        if (e.type === 'LAUNCH') anchor.ascentDv = ascentDv;
+        timelineFor(k).anchors.push(anchor);
       });
 
     } else if (e.type === 'BURN' || e.type === 'MNODE' || e.type === 'MANEUVER') {
@@ -130,16 +139,23 @@ function v2BuildShadow(m) {
       } else if (leg && leg.initState && leg.initState.r) {
         r = leg.initState.r; v = leg.initState.v; frame = leg.center || null; legRef = authIdx;
         note = 'leg carries no burnState/dvVec — anchored from initState only, no dv attributed here';
+      } else if (leg && leg.kind === 'arrival' && leg.arrivalBurn && leg.arrivalBurn.dvVec) {
+        // MISSION_MODEL_V2 Phase 2 S2 (F1, critique 58 resolved): the exiting
+        // leg of a transit corridor now carries a real arrival-burn record
+        // (565's physRebuildMissionTrajectories) — promote it exactly like a
+        // solved MNODE burn. Pre-state = the burn's PRE-burn arrival state
+        // (arrivalBurn.vPre), dvApplied = the real Δv vector. This is the
+        // first place physics disagrees with V1's schematic dv_actual for
+        // this edge on purpose — see MISSION_MODEL_V2.md §11.1/§11.5.
+        r = leg.arrivalBurn.r; v = leg.arrivalBurn.vPre;
+        frame = leg.arrivalBurn.frame; dvApplied = leg.arrivalBurn.dvVec; legRef = authIdx;
       } else if (leg && leg.kind === 'arrival') {
-        // Corridor/arrival edges (fromNode.type === 'transit'): the EXITING
-        // leg of a transit corridor carries no propagation/dv of its own (565
-        // — the injection leg already flew the whole trajectory), yet V1
-        // attributes a real dv (e.g. LOI) to this log entry via
-        // progNmComputeEdgeDv, off the physics side entirely. Phase 1 has no
-        // leg to promote this dv from — record the anchor with dvApplied:null
+        // Corridor/arrival edges (fromNode.type === 'transit'): unconverged,
+        // or the arrival-burn construction couldn't find a bracketing
+        // periapsis event this replay. Record the anchor with dvApplied:null
         // + a note (never silently drop it; v2Reconcile/v2DeriveBudget
-        // surface it as an unaccounted finding for Phase 2).
-        note = 'corridor/arrival edge — V1 dv (' + (e.dv_actual || 0) + ' m/s) has no promotable physics leg in Phase 1 (565 attributes no propagation to this edge); see MISSION_MODEL_V2.md §10.3';
+        // surface it as an unaccounted finding).
+        note = 'corridor/arrival edge — V1 dv (' + (e.dv_actual || 0) + ' m/s); no arrival-burn state this replay (unconverged leg or no bracketing periapsis event); see MISSION_MODEL_V2.md §11.1';
       } else {
         note = 'no propagated leg found for this burn (physics disabled, unconverged, or classic scalar BURN with no 565 leg) — shadow left unanchored per §10.3';
       }
@@ -228,8 +244,8 @@ function v2StateAt(missionId, ownerKey, t) {
  *  a genuine limitation, not a bug, see MATH.md). */
 function v2DeriveBudget(missionId) {
   const md = _v2StateByMission[missionId];
-  const perBurn = []; let dvTotal = 0, propTotal = 0;
-  if (!md) return { perBurn: perBurn, dvTotal: 0, propTotal: 0 };
+  const perBurn = []; let dvTotal = 0, propTotal = 0, ascent = 0;
+  if (!md) return { perBurn: perBurn, dvTotal: 0, propTotal: 0, ascent: 0 };
   // A single physical burn moves every stage in the current (possibly docked,
   // multi-owner) stack, so tagOwners' per-stage keys ALL get an anchor for the
   // same authIdx. That's correct per-timeline (each owner's VehicleState really
@@ -237,10 +253,19 @@ function v2DeriveBudget(missionId) {
   // each authored burn exactly once — same discipline as missionBudget, which
   // sums m.log once per entry, not once per stage. Dedupe by authIdx, keeping
   // the first owner's anchor (arbitrary but stable — they all carry the same
-  // dvApplied/mass-derived dv_ms by construction).
+  // dvApplied/mass-derived dv_ms by construction). Same dedupe discipline
+  // applies to 'launch' anchors' ascentDv (§11.1 F2/S3) — a multi-stage
+  // vehicle's stages all get a 'launch' anchor for the same authIdx.
   const seenAuth = {};
+  const seenLaunchAuth = {};
   Object.keys(md.vehicles).forEach(function (k) {
     md.vehicles[k].anchors.forEach(function (a) {
+      if (a.kind === 'launch') {
+        if (seenLaunchAuth[a.authIdx]) return;
+        seenLaunchAuth[a.authIdx] = true;
+        ascent += a.ascentDv || 0;
+        return;
+      }
       if (a.kind !== 'burn') return;
       if (seenAuth[a.authIdx]) return;
       seenAuth[a.authIdx] = true;
@@ -263,7 +288,8 @@ function v2DeriveBudget(missionId) {
     });
   });
   perBurn.sort(function (a, b) { return a.authIdx - b.authIdx; });
-  return { perBurn: perBurn, dvTotal: dvTotal, propTotal: propTotal };
+  // S3: dvTotal = ascent + Σ|burns| — ascent is its own line, never a burn row.
+  return { perBurn: perBurn, dvTotal: ascent + dvTotal, propTotal: propTotal, ascent: ascent };
 }
 
 /** v2Reconcile(missionId) — proof tool: pairs each V2 burn with its V1 log
