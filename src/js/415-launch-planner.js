@@ -279,10 +279,25 @@ function progPlanLaunchToDestination(args) {
   const alt_km = isFinite(altKm) ? altKm : 185;
 
   if (destBody === 'Moon') {
+    // Lunar departure is GEOCENTRIC, not a heliocentric Lambert transfer --
+    // route through the existing cislunar plane math instead of
+    // progOptimalDeparture. The "ideal" parking orbit for a lunar transfer
+    // is simply coplanar with the Moon's instantaneous orbital plane at the
+    // planned TLI time (a real free-return/plane-change trade exists, but
+    // coplanar minimizes the TLI-to-LOI plane-change cost -- see MATH.md
+    // critique 58). dvDepart reuses progDvTLI (360) so the readout's ΔV
+    // number matches what the mission's TLI burn will actually cost.
+    const tDep = isFinite(tDepartJD) ? (tDepartJD - epochJD) * 86400 : 0;
+    const plane = progMoonPlaneAt(epochJD, tDep);
+    const inc_deg = Math.max(plane.inc_deg, Math.abs(siteLatDeg || 0));
+    const planePenalty = Math.max(0, Math.abs(siteLatDeg || 0) - plane.inc_deg);
     return {
-      inc_deg: null, lan_deg: null, alt_km, c3: null, vInfMag: null, dla_deg: null,
-      azimuthDeg: null, planePenalty: null, tDepartJD: null, tArrJD: null, dvDepart: null,
-      note: 'lunar transfer deferred to a later phase',
+      inc_deg, lan_deg: plane.lan_deg, alt_km, c3: null, vInfMag: null, dla_deg: null,
+      azimuthDeg: progLaunchAzimuthDeg(siteLatDeg || 0, inc_deg),
+      planePenalty, tDepartJD: isFinite(tDepartJD) ? tDepartJD : epochJD, tArrJD: null,
+      dvDepart: (typeof progDvTLI === 'function') ? progDvTLI(alt_km) : null,
+      note: `coplanar with the Moon's instantaneous orbital plane at TLI time (inc ${plane.inc_deg.toFixed(2)} deg vs ecliptic)`
+        + (planePenalty > 0.05 ? `; site latitude exceeds the plane's inclination by ${planePenalty.toFixed(2)} deg -- dogleg required` : ''),
     };
   }
 
@@ -318,4 +333,56 @@ function progPlanLaunchToDestination(args) {
     tDepartJD: opt.tDepartJD, tArrJD: opt.tArrJD, dvDepart: opt.dvDepart,
     note: parking.note,
   };
+}
+
+/**
+ * Moon's instantaneous orbital-plane inclination/LAN (deg, ecliptic frame --
+ * the same reference frame every other body position resolves in) at
+ * mission time t_s, derived from the orbit-normal vector h = r x v of the
+ * Moon's GEOCENTRIC state (progBodyLocalEphemState, 360 -- the parent-
+ * relative state BEFORE Earth's own heliocentric position is added back in,
+ * i.e. already Earth-centered).
+ * inc = acos(h_z/|h|); LAN = atan2(h_x, -h_y) (node vector N = k x h).
+ * CRITIQUE: this is the INSTANTANEOUS osculating plane, not the Moon's mean
+ * orbital plane -- it nutates with the ~18.6yr regression of nodes baked
+ * into PROG_MOON_ELEMENTS.OmDot, which is physically correct for "the
+ * plane at this exact epoch" but will drift over a long mission if reused
+ * without recomputing at the new epoch. See MATH.md §7p critique 58.
+ * Returns { inc_deg, lan_deg }.
+ */
+function progMoonPlaneAt(epochJD, t_s) {
+  const st = progBodyLocalEphemState('Moon', t_s || 0);
+  const h = physCross(st.r, st.v);
+  const hMag = physMag(h);
+  if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };
+  const inc_deg = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
+  const lan_deg = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
+  return { inc_deg, lan_deg };
+}
+
+/**
+ * Generic "match this plane" resolver for the launch card's plane-target
+ * picker (R7 phase 2 / user feedback item 2). target is either the string
+ * 'Moon' or a catalog reference-orbit object with a defined plane
+ * (kind:'keplerian', inc [+ lan if pinned]).
+ * Returns { inc_deg, lan_deg, source, unreachable, penalty_deg } given the
+ * launch site latitude -- unreachable/penalty surfaced by the CALLER (UI),
+ * never silently clamped away (feedback item 2).
+ */
+function progResolvePlaneTarget(target, epochJD, t_s, siteLatDeg) {
+  let inc_deg, lan_deg, source;
+  if (target === 'Moon') {
+    const p = progMoonPlaneAt(epochJD, t_s || 0);
+    inc_deg = p.inc_deg; lan_deg = p.lan_deg; source = "Moon's current orbital plane";
+  } else if (target && typeof target === 'object') {
+    inc_deg = isFinite(target.inc) ? target.inc : 0;
+    lan_deg = isFinite(target.lan) ? target.lan : 0;
+    source = target.name || 'reference orbit';
+  } else {
+    return null;
+  }
+  const lat = Math.abs(siteLatDeg || 0);
+  const unreachable = lat > inc_deg + 1e-9;
+  const penalty_deg = unreachable ? (lat - inc_deg) : 0;
+  return { inc_deg, lan_deg, source, unreachable, penalty_deg };
 }

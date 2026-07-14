@@ -61,6 +61,38 @@ function progEpochJD() {
   return (p && isFinite(p.epochJD)) ? p.epochJD : PROG_DEFAULT_EPOCH_JD;
 }
 
+// ── Julian date <-> calendar-date conversion (feedback items 3/5) ───────────
+// Standard Unix-epoch-anchored conversion (JS Date is proleptic-Gregorian,
+// UTC-internal, which matches how JD is used everywhere else in this
+// program — no leap seconds modeled anywhere here). JD of the Unix epoch
+// (1970-01-01T00:00:00Z) is the fixed constant 2440587.5.
+const PROG_UNIX_EPOCH_JD = 2440587.5;
+/** Julian date -> a real Date object (UTC). Pure. */
+function progJDToDate(jd) {
+  return new Date((jd - PROG_UNIX_EPOCH_JD) * 86400000);
+}
+/** Date object (or anything the Date constructor accepts) -> Julian date. Pure. */
+function progDateToJD(date) {
+  const d = (date instanceof Date) ? date : new Date(date);
+  return d.getTime() / 86400000 + PROG_UNIX_EPOCH_JD;
+}
+/** Mission time t_s (seconds from program epoch) -> a real Date object (UTC). */
+function progMissionTimeToDate(t_s) {
+  return progJDToDate(progEpochJD() + (t_s || 0) / 86400);
+}
+/** A real Date (or datetime-local string) -> mission time t_s seconds from
+ *  program epoch. */
+function progDateToMissionTime(date) {
+  return (progDateToJD(date) - progEpochJD()) * 86400;
+}
+/** Format a Date as the value a <input type="datetime-local"> wants:
+ *  "YYYY-MM-DDTHH:mm" in UTC (so the picker reads/writes the same UTC
+ *  instant the JD math uses — no local-timezone drift). */
+function progDateToLocalInputValue(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${p(date.getUTCMonth() + 1)}-${p(date.getUTCDate())}T${p(date.getUTCHours())}:${p(date.getUTCMinutes())}`;
+}
+
 // { a0 (AU), aDot (AU/cty), e0, eDot, I0 (deg), IDot, L0, LDot, wbar0, wbarDot, Om0, OmDot }
 const PROG_BODY_ELEMENTS = {
   Mercury: { a0: 0.38709927, aDot:  0.00000037, e0: 0.20563593, eDot:  0.00001906, I0: 7.00497902,  IDot: -0.00594749, L0: 252.25032350,  LDot: 149472.67411175, wbar0: 77.45779628,  wbarDot: 0.16047689,  Om0: 48.33076593,  OmDot: -0.12534081 },

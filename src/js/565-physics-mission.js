@@ -1218,8 +1218,23 @@ function physRebuildMissionTrajectories(m) {
     }
     return null;
   };
+  // BUG FIX (feedback item 6): canonical node-map dwell templates (PROG_NM_NODES,
+  // 'leo'/'tlc'/etc, 430) carry a FIXED inclination and NO lan_deg at all —
+  // they are shared visual anchors, not per-mission state. A solved-maneuver
+  // leg's fromO/toO used to come straight from those templates, so editing a
+  // LAUNCH's authored inc/LAN never reached physSolveNodeBurn/physShootLegAim
+  // — the trajectory ring and the maneuver node silently kept flying the
+  // template's inc=28.5/lan=0 plane no matter what the launch card said. Fix:
+  // track the most recently AUTHORED plane (from the LAUNCH event, then from
+  // each subsequent solved maneuver's own toO when IT authored one) and
+  // overlay it onto a same-body canonical fromO/toO before solving, so the
+  // authored plane actually threads through the whole leg chain.
+  let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
+    if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.inc_deg != null) {
+      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.inc_deg, lan_deg: e.orbit.lan_deg ?? 0 };
+    }
     // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
     // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point
     // sits at anomaly theta = n·MET on the mean-altitude circular ring in the
@@ -1371,8 +1386,14 @@ function physRebuildMissionTrajectories(m) {
     }
     if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode) continue;
     const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
-    const fromO = fromN && fromN.orbit, toO = toN && toN.orbit;
+    let fromO = fromN && fromN.orbit, toO = toN && toN.orbit;
     if (!fromO || !toO) continue;
+    // Overlay the last-authored plane onto a canonical (lan_deg-less) fromO
+    // that shares its body — see lastAuthoredPlane note above.
+    if (lastAuthoredPlane && fromO.body === lastAuthoredPlane.body && fromO.lan_deg == null) {
+      fromO = { ...fromO, inclination: lastAuthoredPlane.inclination, lan_deg: lastAuthoredPlane.lan_deg };
+    }
+    if (toO.lan_deg != null && toO.body) lastAuthoredPlane = { body: toO.body, inclination: toO.inclination || 0, lan_deg: toO.lan_deg };
 
     // burn magnitude from the EXISTING engine (identical to _missionApplyManeuver)
     const edge = progNmComputeEdgeDv(e.fromNode, e.toNode);
@@ -1523,9 +1544,15 @@ function physRebuildMissionTrajectories(m) {
     const incLeg = (fromO.inclination || 0);
     let raanUsed = 0;
     {
-      // R3: signature includes the departure inclination — editing a node's
-      // inclination must re-shoot the leg
-      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|i${incLeg}`;
+      // R3: signature includes the departure inclination AND lan/raan —
+      // editing a node's inclination OR LAN must re-shoot the leg. The
+      // lan_deg term was MISSING here (bug fix, feedback item 6): a LAN edit
+      // changed fromO.lan_deg but left this signature identical, so the
+      // differential-corrector cache kept returning the shot solved under
+      // the OLD plane — the trajectory ring/maneuver node visibly stuck to
+      // the previous LAN despite the authored orbit having changed.
+      const lanLeg = (fromO.lan_deg != null) ? fromO.lan_deg : 0;
+      const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|i${incLeg}|o${lanLeg}`;
       let aim = _physShootCache[sig];
       if (!aim) {
         let sol = null;

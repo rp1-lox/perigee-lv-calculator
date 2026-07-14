@@ -97,7 +97,9 @@ const {
   _trajHemiClipRuns,
   _evIsSolvedManeuver, _evManeuverTarget, _evIsManualBurn, _missionMigrateManeuverEntry,
   progLambert3D, progDepartVinf, progOptimalDeparture, progIdealParkingOrbit,
-  progPlanLaunchToDestination, progLaunchAzimuthDeg,
+  progPlanLaunchToDestination, progLaunchAzimuthDeg, progMoonPlaneAt, progResolvePlaneTarget,
+  progJDToDate, progDateToJD, progMissionTimeToDate, progDateToMissionTime, progDateToLocalInputValue,
+  progDvTLI,
 } = sandbox;
 const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
   vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
@@ -2502,11 +2504,74 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('progPlanLaunchToDestination: Earth-orbit target short-circuit vInfMag=0', plan.vInfMag === 0);
   }
 
-  // Moon deferred: returns an object (not a throw) with a clear note and no
-  // fabricated numeric result.
+  // Moon: routed through the geocentric cislunar plane math (progMoonPlaneAt),
+  // NOT the heliocentric Lambert scan — returns a real numeric parking plane.
   {
     const plan = progPlanLaunchToDestination({ fromBody: 'Earth', destBody: 'Moon', epochJD: PROG_DEFAULT_EPOCH_JD, siteLatDeg: 28.5, altKm: 185 });
-    ok('progPlanLaunchToDestination: Moon deferred to a later phase (inc_deg null, note present)', plan.inc_deg === null && typeof plan.note === 'string');
+    ok('progPlanLaunchToDestination: Moon returns a real numeric inc/lan (not deferred)', typeof plan.inc_deg === 'number' && typeof plan.lan_deg === 'number');
+    ok('progPlanLaunchToDestination: Moon inc within plausible lunar-plane range [18,29] deg', plan.inc_deg >= 18 && plan.inc_deg <= 29);
+    ok('progPlanLaunchToDestination: Moon dvDepart ~ TLI dv (progDvTLI(185))', Math.abs(plan.dvDepart - progDvTLI(185)) < 1e-6);
+  }
+
+  // progMoonPlaneAt: instantaneous Moon orbital-plane inc/lan from r x v —
+  // sanity range check against the ~5.14deg inclination to the ecliptic
+  // PLUS whatever the site/ecliptic frame conventions add (this program's
+  // Moon elements are referenced to the ecliptic, so inc should track near
+  // the Moon's ~18-29 deg oscillation band once combined with obliquity-free
+  // frame, i.e. same range as above).
+  {
+    const p = progMoonPlaneAt(PROG_DEFAULT_EPOCH_JD, 0);
+    ok('progMoonPlaneAt: inc_deg finite and in [0,90]', isFinite(p.inc_deg) && p.inc_deg >= 0 && p.inc_deg <= 90);
+    ok('progMoonPlaneAt: lan_deg finite and in [0,360)', isFinite(p.lan_deg) && p.lan_deg >= 0 && p.lan_deg < 360);
+  }
+
+  // progResolvePlaneTarget: Moon target matches progMoonPlaneAt directly;
+  // unreachable flag fires when site lat exceeds the plane's inclination
+  // (surfaced as a warning per feedback item 2, never silently clamped).
+  {
+    const p = progMoonPlaneAt(PROG_DEFAULT_EPOCH_JD, 0);
+    const res = progResolvePlaneTarget('Moon', PROG_DEFAULT_EPOCH_JD, 0, 10);
+    ok('progResolvePlaneTarget(Moon): inc matches progMoonPlaneAt', res.inc_deg === p.inc_deg);
+    ok('progResolvePlaneTarget(Moon): lan matches progMoonPlaneAt', res.lan_deg === p.lan_deg);
+    const hiLat = progResolvePlaneTarget('Moon', PROG_DEFAULT_EPOCH_JD, 0, 89);
+    ok('progResolvePlaneTarget(Moon): high site latitude flags unreachable (not clamped)', hiLat.unreachable === true && hiLat.penalty_deg > 0);
+    const catTarget = { inc: 51.6, lan: 120, name: 'Station' };
+    const resCat = progResolvePlaneTarget(catTarget, PROG_DEFAULT_EPOCH_JD, 0, 28.5);
+    ok('progResolvePlaneTarget(catalog object): inc/lan pass through', resCat.inc_deg === 51.6 && resCat.lan_deg === 120 && resCat.unreachable === false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JD <-> calendar-date conversion (feedback items 3/5) — round-trip + known dates
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Known JD/date pair: 2000-01-01 12:00:00 UTC = JD 2451545.0 (J2000.0 epoch).
+  const j2000 = progJDToDate(2451545.0);
+  ok('progJDToDate: J2000.0 -> 2000-01-01T12:00:00Z', j2000.toISOString() === '2000-01-01T12:00:00.000Z');
+  approx('progDateToJD: 2000-01-01T12:00:00Z -> JD 2451545.0', progDateToJD('2000-01-01T12:00:00Z'), 2451545.0, 1e-9);
+
+  // Round-trip: JD -> Date -> JD for the program's default epoch and a few offsets.
+  // Date is millisecond-resolution, so round-trip tolerance is 1ms in JD days.
+  for (const jd of [PROG_DEFAULT_EPOCH_JD, PROG_DEFAULT_EPOCH_JD + 123.456, PROG_DEFAULT_EPOCH_JD - 500.25]) {
+    const rt = progDateToJD(progJDToDate(jd));
+    approx(`JD<->Date round-trip @ JD=${jd}`, rt, jd, 2e-8);
+  }
+
+  // Mission-time round-trip (seconds-from-epoch is the authored storage model
+  // per D4 -- the picker only converts for DISPLAY, never changes what's stored).
+  {
+    const savedEpoch = PROG_DEFAULT_EPOCH_JD;
+    for (const t_s of [0, 3600, 86400 * 30.5, -7200]) {
+      const d = progMissionTimeToDate(t_s);
+      const back = progDateToMissionTime(d);
+      approx(`mission-time<->Date round-trip @ t_s=${t_s}`, back, t_s, 2e-3);
+    }
+  }
+
+  // datetime-local input value format: "YYYY-MM-DDTHH:mm", UTC fields.
+  {
+    const d = new Date(Date.UTC(2026, 6, 14, 9, 30));
+    ok('progDateToLocalInputValue: formats as YYYY-MM-DDTHH:mm (UTC)', progDateToLocalInputValue(d) === '2026-07-14T09:30');
   }
 }
 

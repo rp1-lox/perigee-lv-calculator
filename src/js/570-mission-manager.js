@@ -693,7 +693,9 @@ function _missionEventEditFieldsHTML(m, idx) {
           <div class="cfg-item"><label class="cfg-label">Body</label><select id="edit-launch-body-${id}" style="${_es}">${bodies.map(b => `<option${b === (o.body || 'Earth') ? ' selected' : ''}>${b}</option>`).join('')}</select></div>
           <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
           <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
-          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
+          ${_missionLaunchLanFieldHTML(m, idx, e)}
+          ${_missionLaunchPlaneMatchHTML(m, idx, e)}
         </div>
         ${_missionLaunchPlanHTML(m, idx, e)}
         ${_missionLaunchGeoHTML(m, idx, e)}
@@ -1725,7 +1727,12 @@ function missionRecompute(m) {
         // P4: cache the vehicle's node-map orbit at the burn so the physics
         // rebuild (565) can reconstruct + propagate the post-burn trajectory
         // (same replay-derived-cache pattern as e.orbitAfter / e.stagingResult).
-        e.orbitAtBurn = active.orbitState ? { ...active.orbitState } : null;
+        // BUG FIX (feedback item 6): orbitState's plane key is `lan` everywhere
+        // it's constructed (573-380), but the 565 physics consumers of
+        // orbitAtBurn all read `lan_deg` (the e.orbit/node-orbit convention) —
+        // that key mismatch silently dropped the authored LAN for every
+        // manual-MNODE burn frame. Carry both so neither convention breaks.
+        e.orbitAtBurn = active.orbitState ? { ...active.orbitState, lan_deg: active.orbitState.lan } : null;
         if (authEntry) authEntry.orbitAtBurn = e.orbitAtBurn;
         const fullDv = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
         e.dvRequired = Math.round(fullDv);
@@ -1996,17 +2003,97 @@ function _missionLaunchGeoHTML(m, idx, e) {
   const siteOpts = ['<option value="">— no site (RAAN unauthored) —</option>',
     ...choices.map(s => `<option value="${_tsEsc(s.short)}"${site && site.short === s.short ? ' selected' : ''}>${_tsEsc(s.name)} (${s.lat}&deg;, ${s.lon}&deg;)</option>`)].join('');
   const o = e.orbit || {};
-  const lanDerived = !!(e.launchTime_s != null && e.launchTime_s !== '' && o._lanFromLaunchTime);
+  const hasTime = e.launchTime_s != null && e.launchTime_s !== '';
+  const dtVal = hasTime && typeof progMissionTimeToDate === 'function'
+    ? progDateToLocalInputValue(progMissionTimeToDate(+e.launchTime_s)) : '';
+  const epochDateTxt = (typeof progEpochJD === 'function' && typeof progJDToDate === 'function')
+    ? progJDToDate(progEpochJD()).toUTCString().replace(':00 GMT', ' UTC')
+    : '';
+  const launchDateTxt = hasTime ? progJDToDate(progEpochJD() + (+e.launchTime_s) / 86400).toUTCString().replace(':00 GMT', ' UTC') : '';
   return `
     <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
       <div class="cfg-item"><label class="cfg-label">Launch Site</label>
         <select id="edit-launch-site-${id}" style="${_es}" onchange="missionLaunchGeoUpdate('${id}',${idx})">${siteOpts}</select></div>
-      <div class="cfg-item"><label class="cfg-label">Launch Time (s from epoch)</label>
-        <input type="number" id="edit-launch-time-${id}" class="field" placeholder="unauthored" value="${e.launchTime_s != null ? e.launchTime_s : ''}" step="any" style="width:130px;" oninput="missionLaunchGeoUpdate('${id}',${idx})"></div>
-      <div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
-        <input type="number" id="edit-launch-lan-${id}" class="field" value="${o.lan_deg ?? ''}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>
+      <div class="cfg-item"><label class="cfg-label">Launch Time (UTC)</label>
+        <input type="datetime-local" id="edit-launch-time-${id}" class="field" data-raw-s="${hasTime ? e.launchTime_s : ''}" value="${dtVal}" style="width:190px;${_es}" onchange="missionLaunchGeoUpdate('${id}',${idx})">
+        <button type="button" class="act-btn" style="padding:2px 8px;font-size:9px;margin-left:4px;" onclick="missionLaunchClearTime('${id}',${idx})" title="unauthor launch time (RAAN reverts to manual)">&times; clear</button></div>
+    </div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">
+      Program epoch: <span style="color:var(--text-bright);">${_mrEsc(epochDateTxt)}</span>
+      ${launchDateTxt ? ` &middot; this launch: <span style="color:var(--text-bright);">${_mrEsc(launchDateTxt)}</span> (MET +${(+e.launchTime_s).toLocaleString()} s)` : ''}
     </div>
     <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.inc_deg, e.launchTime_s, o.lan_deg)}</div>`;
+}
+// LAN field, relocated to sit alongside Inc (feedback item 4) instead of
+// buried in the separate launch-geo block. Always shows an effective value
+// (defaults to 0, never blank) and labels whether it's a manual authored
+// value or derived from the launch site + time.
+function _missionLaunchLanFieldHTML(m, idx, e) {
+  const id = m.missionId;
+  const o = e.orbit || {};
+  const lanDerived = !!(e.launchTime_s != null && e.launchTime_s !== '' && o._lanFromLaunchTime);
+  const lanVal = (o.lan_deg != null) ? o.lan_deg : 0;
+  return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
+    <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
+}
+// "Match plane" picker (feedback item 2) — offers the Moon's current
+// orbital plane (from its ephemeris state at the launch epoch) and any
+// catalog reference orbit with a defined (non-null) inclination. Picking
+// one fills inc/LAN — still user-overridable afterward, same philosophy as
+// R7's "Plan for destination." Surfaces an unreachable-at-this-latitude
+// warning rather than silently clamping (per the feedback).
+function _missionLaunchPlaneMatchHTML(m, idx, e) {
+  const id = m.missionId;
+  const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
+  const catalog = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries() : [];
+  const planeEntries = catalog.filter(o => o.kind === 'keplerian' && isFinite(o.inc));
+  const opts = ['<option value="">— match plane —</option>', '<option value="Moon">Moon (current plane)</option>',
+    ...planeEntries.map(o => `<option value="${_tsEsc(o.id)}">${_tsEsc(o.name)}${o.lan != null ? '' : ' (LAN free)'}</option>`)].join('');
+  return `<div class="cfg-item"><label class="cfg-label">&nbsp;</label>
+    <select id="edit-launch-planematch-${id}" style="${_es}" onchange="missionLaunchMatchPlane('${id}',${idx},this.value)">${opts}</select></div>`;
+}
+// Fills inc/LAN from the picked plane target. Warns (not clamps) if the
+// site latitude exceeds the plane's inclination — that combination is a
+// real dogleg/unreachable case, not something to silently fix up.
+function missionLaunchMatchPlane(id, idx, targetVal) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  if (!targetVal) return;
+  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
+  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : _missionLaunchSiteFor(e);
+  const siteLat = site ? site.lat : 28.5;
+  const tRaw = document.getElementById('edit-launch-time-' + id)?.dataset.rawS;
+  const t_s = (tRaw !== '' && tRaw != null) ? +tRaw : 0;
+  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  let target = targetVal;
+  if (targetVal !== 'Moon') {
+    const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
+    if (!entry) return;
+    target = { inc: entry.inc, lan: entry.lan, name: entry.name };
+  }
+  if (typeof progResolvePlaneTarget !== 'function') return;
+  const res = progResolvePlaneTarget(target, epochJD, t_s, siteLat);
+  if (!res) return;
+  const setV = (fid, v) => { const el = document.getElementById(fid + '-' + id); if (el != null && v != null) el.value = v; };
+  setV('edit-launch-inc', res.inc_deg.toFixed(2));
+  setV('edit-launch-lan', res.lan_deg.toFixed(2));
+  const lanField = document.getElementById('edit-launch-lan-' + id);
+  const lanLabel = lanField && lanField.closest('.cfg-item')?.querySelector('.cfg-label');
+  if (lanLabel) {
+    lanLabel.innerHTML = res.unreachable
+      ? `LAN &Omega; (deg) <span style="color:var(--danger);">(matched to ${_mrEsc(res.source)} — UNREACHABLE at site lat ${siteLat}&deg;, penalty ${res.penalty_deg.toFixed(1)}&deg;)</span>`
+      : `LAN &Omega; (deg) <span style="color:var(--text-dim);">(matched to ${_mrEsc(res.source)})</span>`;
+  }
+  const incField = document.getElementById('edit-launch-inc-' + id);
+  if (incField) missionLaunchOrbitDetach(id, idx);
+}
+// Clear button for the datetime-local field (native inputs have no easy
+// "unset" affordance) — reverts to unauthored launch time (LAN frees up to
+// manual, matching the old empty-field behavior).
+function missionLaunchClearTime(id, idx) {
+  const t = document.getElementById('edit-launch-time-' + id);
+  if (t) { t.value = ''; t.dataset.rawS = ''; }
+  missionLaunchGeoUpdate(id, idx);
 }
 // ── R7 phase 1: "Plan for destination" — auto-set the ideal parking orbit ──
 // A launch's parking orbit should be the plane that sets up the lowest-DV
@@ -2018,9 +2105,10 @@ function _missionLaunchGeoHTML(m, idx, e) {
 function _missionLaunchPlanHTML(m, idx, e) {
   const id = m.missionId;
   const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
-  // Bodies the phase-1 heliocentric solver handles (Moon/lunar transfer is a
-  // later phase — the solver returns a null-fields note for it, so it's omitted).
-  const dests = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
+  // Moon routes through the geocentric cislunar plane math (progMoonPlaneAt)
+  // inside progPlanLaunchToDestination rather than the heliocentric Lambert
+  // scan the other bodies use — see 415's Moon branch.
+  const dests = ['Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
   const cur = e.planDest || '';
   const destOpts = ['<option value="">&mdash; none (manual orbit) &mdash;</option>',
     ...dests.map(d => `<option value="${d}"${d === cur ? ' selected' : ''}>${d}</option>`)].join('');
@@ -2070,7 +2158,14 @@ function missionLaunchPlanOptimize(id, idx) {
   // Set launch time to establish the ideal LAN plane (needs a site with lon).
   if (site && site.lon != null && typeof progLaunchRaanFor === 'function') {
     const rNow = progLaunchRaanFor(site.lat, site.lon, plan.inc_deg, 0, _missionEarthSpinRad);
-    if (!rNow.unreachable) setV('edit-launch-time', Math.round(progLaunchNextWindowS(rNow.raan, plan.lan_deg, 86164.1)));
+    if (!rNow.unreachable) {
+      const t_s = Math.round(progLaunchNextWindowS(rNow.raan, plan.lan_deg, 86164.1));
+      const tField = document.getElementById('edit-launch-time-' + id);
+      if (tField && typeof progMissionTimeToDate === 'function') {
+        tField.value = progDateToLocalInputValue(progMissionTimeToDate(t_s));
+        tField.dataset.rawS = t_s;
+      }
+    }
   }
   setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site));
 }
@@ -2094,7 +2189,9 @@ function _missionLaunchPlanReadoutHTML(plan, dest, site) {
   }
   const energyTxt = (plan.c3 != null && plan.c3 > 0)
     ? `C3 ${plan.c3.toFixed(1)} km&sup2;/s&sup2; &middot; v&infin; ${plan.vInfMag.toFixed(2)} km/s${tof != null ? ` &middot; TOF ${tof} d` : ''}`
-    : 'same-body transfer (no departure hyperbola)';
+    : (dest === 'Moon' && plan.dvDepart != null)
+      ? `TLI &Delta;V &asymp; ${Math.round(plan.dvDepart)} m/s (geocentric departure, not a heliocentric hyperbola)`
+      : 'same-body transfer (no departure hyperbola)';
   return `<span style="color:var(--accent);">Ideal parking for ${_mrEsc(dest)}</span>: `
     + `${Math.round(plan.alt_km)} km &times; ${plan.inc_deg.toFixed(1)}&deg; incl, &Omega; ${plan.lan_deg.toFixed(1)}&deg;${dlaTxt}`
     + `<br>${energyTxt}${azTxt}${winTxt}`
@@ -2105,6 +2202,10 @@ function _missionLaunchPlanReadoutHTML(plan, dest, site) {
 // 360-...js) into the small caption line under the LAN field.
 function _missionLaunchGeoReadoutHTML(site, incDeg, launchTimeS, currentLanDeg) {
   if (!site) return '// no launch site set — RAAN stays at its authored/default value';
+  // Defensive: a site sourced from the fleet-vehicle's saved launch-site strip
+  // carries {lat,lon} but not the {name,short} catalog shape — fall back
+  // rather than interpolate "undefined" into the readout.
+  if (site.name == null) site = { ...site, name: site.short || `${site.lat}°, ${site.lon}°` };
   incDeg = incDeg != null ? incDeg : 28.5;
   const az = progLaunchAzimuthDeg(site.lat, incDeg);
   const azTxt = az.unreachable
@@ -2129,8 +2230,11 @@ function missionLaunchGeoUpdate(id, idx) {
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
   const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
-  const tRaw = document.getElementById('edit-launch-time-' + id)?.value;
-  const t = (tRaw !== '' && tRaw != null) ? +tRaw : null;
+  const timeField = document.getElementById('edit-launch-time-' + id);
+  const dtRaw = timeField?.value;
+  const t = (dtRaw !== '' && dtRaw != null && typeof progDateToMissionTime === 'function')
+    ? progDateToMissionTime(dtRaw + ':00Z') : null;
+  if (timeField) timeField.dataset.rawS = (t != null) ? t : '';
   const incField = document.getElementById('edit-launch-inc-' + id);
   const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.inc_deg) || 28.5;
   const lanField = document.getElementById('edit-launch-lan-' + id);
@@ -2221,8 +2325,9 @@ function missionApplyLaunchEdit(id, idx) {
   const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
   const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
   e.site = site || null;
-  const tRaw = document.getElementById('edit-launch-time-' + id)?.value;
-  e.launchTime_s = (tRaw !== '' && tRaw != null) ? +tRaw : null;
+  const timeField = document.getElementById('edit-launch-time-' + id);
+  const tRaw = timeField ? timeField.dataset.rawS : '';
+  e.launchTime_s = (tRaw !== '' && tRaw != null && isFinite(+tRaw)) ? +tRaw : null;
   const lanRaw = document.getElementById('edit-launch-lan-' + id)?.value;
   if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
     o.lan_deg = parseFloat(lanRaw);
