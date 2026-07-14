@@ -267,4 +267,14 @@ Reference-orbit catalog, node/edge dwell-transit rework, epoch-primary *authorin
 
 ---
 
-*After Phase 2: Phase 3 (reference-orbit catalog + dwell/transit node-edge model + direct manipulation) builds on a mission model that is finally, actually, the physics.*
+## 12. v3.0 UI SHELL — agreed direction (2026-07-14)
+
+Mockups: claude.ai/code artifact "Mission View Unification — Concepts" (v2-swappable-primacy). **Concept A accepted with the A′ amendment.** The Band | Orbit Map | Trajectory toggle is retired in favor of a fixed layout grammar:
+
+- **One STAGE + two RAILS, any surface promotable.** The stage is the large working surface; the Plan rail (the node/edge skeleton, compressed vertical — was the Orbit Map) and the Timeline dock (Band lanes merged with the scrubber onto one time axis) flank it. Every rail carries a promote control (⤢); promoting swaps it with the stage, the demoted surface docks in its place, and NOTHING unmounts — the world keeps rendering live as a thumbnail when demoted, so camera/selection/time context survives every swap.
+- **State inspector**: the "Vehicles & Mission State" panel becomes a dockable, event-aware card pinned to a corner of whatever surface is the stage (same content, compressed; "— at EVENT / — current" behavior preserved).
+- **One time cursor, one selection, one camera intent** across all surfaces (extends R5's shared selection).
+- Workflow presets fall out of promotion, not modes: world-stage = flying/authoring; timeline-stage = history audit & multi-vehicle choreography; plan-stage = early sketching.
+- **Sequencing** (rides Phases 2–3): Timeline dock first (Band+scrubber merge, self-contained); Plan rail with Phase 3 (it is the natural home for reference-orbit nodes and the direct-manipulation handles); promotion mechanics once both rails exist; toggle retired last. Concept B (semantic zoom morph) remains a possible later enhancement on top — never a prerequisite.
+
+*After Phase 2: Phase 3 (reference-orbit catalog + dwell/transit node-edge model + direct manipulation) builds on a mission model that is finally, actually, the physics — and lands inside the §12 shell.*
