@@ -216,4 +216,50 @@ No UI change of any kind. No persistence change (the side-table is transient; au
 
 ---
 
-*After Phase 1's acceptance table is filled, Phase 2 (the flip) gets its spec: events read/write VehicleState as primary, accounting derived, V1 path + legacy shims deleted (D3), goldens re-pinned (D6).*
+## 11. PHASE 2 SPEC — the flip (drafted 2026-07-14)
+
+**Goal:** `VehicleState` becomes the PRIMARY record. Every number the user sees about a mission — ΔV required/delivered, prop consumed, margins, per-vehicle state — is **derived from the simulation timeline**, not from parallel bookkeeping. The V1 accounting computation and all legacy compatibility are **deleted** (D3). Goldens re-pin to V2 (D6). Phase 1's three findings are resolved as part of the flip, not bolted on after.
+
+### 11.0 The blast-radius trick that makes this tractable
+
+Consumers (band view, state panel, 572 checks, 577 report, node-map labels, trajectory markers) read mission numbers from two places: **stamped fields on log entries** (`e.dvRequired`, `e.dv_actual`, `e.stagingResult`, `e.prop_consumed`) and **`missionBudget(m)`**. Phase 2 keeps those exact read surfaces but changes their SOURCE: recompute stamps them **from the V2 timeline**. Consumers don't change at all in this phase — the flip happens beneath them. (Consumer-visible redesign is Phase 3+ territory.)
+
+### 11.1 Resolve the Phase-1 findings (these are the real model work)
+
+- **F1 — Arrival/corridor-exit burns become real (critique 58).** V1 treats a transfer's arrival burn (LOI/MOI/capture-circularize) as pure bookkeeping on the edge — zero propagated existence, which is why Phase 1 couldn't shadow it. Phase 2 makes arrival a first-class burn anchor: at the corridor's arrival state (the leg's final sample / SOI-frame state), the burn Δv VECTOR = (target dwell-orbit velocity at the insertion point) − (arrival corridor velocity), applied to the state; magnitude derived from that vector. **Expectation, stated up front:** the physics-derived arrival Δv will NOT generally equal V1's schematic 638/822-style numbers — D6 governs: investigate, document in MATH.md, re-pin. This is the first place "physics is presumed right" does real work.
+- **F2 — Ascent ΔV representation (critique 60).** Launch ascent is sub-orbital abstraction (the LV calculator's domain, not the mission simulation's — the state timeline BEGINS at parking-orbit insertion). Ascent ΔV therefore stays an accounting attribute OF the launch anchor (`anchor.ascentDv`, sourced from the staging result exactly as today), and `v2DeriveBudget` gains an `ascent` line so mission totals close: `dvTotal = ascent + Σ burns`. It is never a state delta and never a fake "burn row."
+- **F3 — Deterministic replay identity (blob churn).** Runtime vehicle ids become deterministic functions of (missionId, log position, repetition index) instead of fresh `progUUID()` per replay — same log ⇒ byte-identical blob. This is required anyway for "recompute is pure replay" to be literally true, and it stops every recompute dirtying autosave. Repetition-clone keys join the same scheme (groups/repetition machinery otherwise unchanged — it clones log entries pre-replay, orthogonal to the state model; re-validated by a gate case).
+
+### 11.2 The flip itself
+
+1. **Replay produces the timeline as its primary output.** The V1 exec functions' composition/mass machinery (stage states, prop burn via `progRocketEqPropNeeded`, tagOwners keys) is KEPT — it becomes the **mass track** of the timeline (it already computes exactly what `anchor.mass` needs). What gets deleted is the parallel ΔV/margin bookkeeping that duplicates what the timeline knows.
+2. **Stamp-from-V2:** after the timeline builds, recompute writes the legacy-named fields (`dvRequired`, `dv_actual`, `stagingResult`, `prop_consumed`) from `v2DeriveBudget`/anchor data. Solved-edge required-Δv still comes from `progNmComputeEdgeDv` (unchanged authority, §2) — what flips is that *delivered/actual/prop/margins* come from the simulated state, and required-vs-delivered comparisons are simulation-vs-target rather than bookkeeping-vs-bookkeeping.
+3. **`missionBudget(m)` delegates to `v2DeriveBudget`** (plus the F2 ascent line). The old summation path is deleted. (This also retires the pre-existing aggregate-undercount bug flagged 2026-07-11 — the +3-for-200 m/s manual-burn anomaly — which dies with the path that produced it.)
+4. **Delete, per D3:** the legacy `MANEUVER` replay case, `_missionMigrateManeuverEntry`, all `detachedFrom` fallback reads, and every "old save" tolerance in mission load paths. `buildProgramObject`/`_buildSessionObject` stamp `modelVersion: 2`; `applyProgramObject`/`_applySessionObject` REFUSE mission blobs without it: clear message naming the v2.0.0 release for old files. (Worksheet/vehicle/stage/orbit/theme persistence is untouched — the gate applies to MISSIONS only.)
+5. **Re-pin goldens (D6):** gate mission goldens move to V2-derived values. Solved-edge magnitudes (3143) should hold exactly (same authority); arrival burns (F1) and totals WILL move — each moved number gets a MATH.md entry stating old, new, and why physics disagrees with the old model. `devSeedApolloMission` continues to be the canonical case.
+
+### 11.3 Steps (each gate-green; browser-verified where marked)
+
+1. **S1 — F3 determinism:** deterministic ids + repetition keys; gate: two recomputes ⇒ identical blob (savedAt excluded); browser: autosave no longer dirtied by recompute alone.
+2. **S2 — F1 arrival burns:** 565's transfer legs produce arrival anchors with real Δv vectors; `v2Reconcile` reports the physics-vs-V1 delta for LOI; investigate + document the delta (browser, numbers recorded in §11.5).
+3. **S3 — F2 ascent line:** `v2DeriveBudget` totals close against a hand-summed expectation on the seed.
+4. **S4 — stamp-from-V2 + budget delegation:** consumers now read V2-derived numbers through unchanged surfaces; browser: state panel / checks / report / node map / band all render sane values on the seed + a detached-burn + a mid-leg-burn mission; goldens re-pinned in the same commit.
+5. **S5 — deletions (D3):** legacy paths removed; version gate on load with the refusal message; gate case: a synthetic V1 blob is refused, a V2 blob round-trips.
+6. **S6 — docs:** MATH.md accounting sections rewritten as "derived from the state timeline" (old text moved to an appendix or deleted); critiques 58/60 closed; §11.5 filled; PHYSICS_PLAN cross-note.
+
+### 11.4 Explicitly OUT of scope for Phase 2
+
+Reference-orbit catalog, node/edge dwell-transit rework, epoch-primary *authoring UI* (D4's display work — the internal clock is already epoch-seconds), NRHO, phase-matching, any consumer-visible redesign. Phase 2 ends with the app LOOKING the same, computing from the simulation, and carrying zero legacy weight.
+
+### 11.5 Acceptance (to be measured)
+
+- Gate: green, goldens re-pinned; count: ___.
+- Determinism: two recomputes ⇒ byte-identical session blob (savedAt excluded) — verified: ___.
+- Apollo seed: solved-edge dv unchanged (3143) — ___; arrival-burn physics value + documented delta vs V1's 638/822 — ___; totals close (ascent + burns = dvTotal) — ___.
+- The 2026-07-11 aggregate-undercount anomaly (manual 200 m/s → +3 total) is dead: manual burn moves the total by its physical cost — verified: ___.
+- V1-blob refusal message shown; V2 blob round-trips byte-identically — ___.
+- Recompute wall-time within noise of Phase-1 baseline (~4.5 ms seed) — ___.
+
+---
+
+*After Phase 2: Phase 3 (reference-orbit catalog + dwell/transit node-edge model + direct manipulation) builds on a mission model that is finally, actually, the physics.*
