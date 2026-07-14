@@ -26924,38 +26924,15 @@ function _trajLaunchSiteAndAscentSVG(m, cx, cy, rPx, viewT, viewportDiagPx) {
     _trajRegisterLabel(nowPt.x, nowPt.y - 8, [{ text: lbl, dy: 0, fontPx: 9, color: 'var(--accent3)' }], 'site',
       { screenSize: rPx, minSize: _TRAJ_LOD_BODY_MIN, selected: false, opacity: lodAlpha });
   }
-  // Mock ascent: site position AT LAUNCH TIME -> a nominal insertion point on
-  // the launch orbit's ring, ~8.5 min (510 s) of schematic ascent later. Both
-  // endpoints use the SAME spin/orbit conventions the rest of the view uses
-  // (_trajBodySpinAngle, progOrbitPointAtE) so the curve is self-consistent
-  // with everything else drawn, even though it is not itself propagated.
-  const tLaunch = e.launchTime_s || 0;
-  const spinAtLaunch = _trajBodySpinAngle('Earth', tLaunch);
-  const launchPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinAtLaunch), cx, cy, rPx);
-  const o = e.orbit || e.launchOrbit || {};
-  const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES.Earth && PROG_BODIES.Earth.R) || 6371;
-  const peri = R + (o.alt_km != null ? o.alt_km : 200), apo = R + (o.apo_km != null ? o.apo_km : (o.alt_km != null ? o.alt_km : 200));
-  const a = (peri + apo) / 2, ecc = (apo - peri) / (apo + peri);
-  const incRad = (o.inc_deg != null ? o.inc_deg : 28.5) * _PROG_D2R;
-  const raanRad = (o.lan_deg != null ? o.lan_deg : 0) * _PROG_D2R;
-  // schematic near-circular mean-motion approximation (E ~= M): a real
-  // insertion point requires a Kepler solve this presentation layer doesn't
-  // need — the curve is explicitly labeled schematic, not a propagated leg.
-  const mu = 398600.4418; // Earth GM, km^3/s^2 — matches PROG_BODIES.Earth.mu order of magnitude
-  const n = Math.sqrt(mu / Math.pow(a, 3)); // rad/s
-  const E = (n * 510) % (2 * Math.PI); // ~8.5 min nominal ascent
-  const insertLocal = progOrbitPointAtE({ a, e: ecc, i: incRad, raan: raanRad, argp: 0 }, E);
-  const scale = rPx / R; // render-units per km at THIS disc's current screen radius
-  const insertQ = _trajProj3(insertLocal[0] * scale, insertLocal[1] * scale, insertLocal[2] * scale);
-  const insertPt = { x: cx + insertQ.x, y: cy + insertQ.y, depth: insertQ.depth };
-  if (launchPt.depth >= -0.3) { // allow a touch past the limb so the curve can visibly leave the disc
-    // quadratic bezier, control point pulled toward the insertion point's
-    // tangent direction so the curve visibly bends off the surface rather
-    // than cutting a straight chord.
-    const midX = (launchPt.x + insertPt.x) / 2, midY = (launchPt.y + insertPt.y) / 2;
-    const bendX = midX + (insertPt.x - cx) * 0.35, bendY = midY + (insertPt.y - cy) * 0.35;
-    svg += `<path d="M ${launchPt.x.toFixed(2)} ${launchPt.y.toFixed(2)} Q ${bendX.toFixed(2)} ${bendY.toFixed(2)} ${insertPt.x.toFixed(2)} ${insertPt.y.toFixed(2)}" fill="none" stroke="var(--accent3)" stroke-width="1" stroke-dasharray="3,3" opacity="${(lodAlpha * 0.85).toFixed(3)}" vector-effect="non-scaling-stroke"><title>Mock ascent (schematic — not a propagated trajectory)</title></path>`;
-  }
+  // v3.0 backlog fix (user, 2026-07-14): the mock-ascent bezier is REMOVED.
+  // It connected the site's surface point to an insertion point on the orbit
+  // ring — two points that are generally NOT plane-aligned unless the launch
+  // time/RAAN were actually solved for this site, so it drew an unphysical
+  // ~45° climb into an orbit it visibly didn't intersect. The LAUNCH event's
+  // position on the trajectory is the ORBIT (the R6.1 event-node marker
+  // resolves to the ring at the launch MET); the site ring above remains as
+  // a purely cosmetic surface highlight. An honest ascent curve would need a
+  // real plane-aligned launch solution — future work, not a fake curve.
   return svg;
 }
 

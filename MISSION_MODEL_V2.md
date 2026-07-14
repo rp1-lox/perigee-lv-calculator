@@ -358,3 +358,14 @@ Gate green: 570 (Phase 2 end) → 606 (T1-T3) → **609 (T4)**, `python build.py
 - V2: 430's `nrho` node (bound via `orbitRefId:'nrho-nominal'`) + 565's `nrhoRefAfter` lookahead route a LEO→TLC→NRHO authored chain through the dedicated solver; edge chips read TLI / "NRHO insertion" (570). `devSeedGatewayMission({force:true})` (573) seeds the full reference mission. Known accounting limit: the MCC is on the leg record (physics/display) but not yet an authored budget-charged event (MATH.md §7t.66).
 - V3: gate (`tests/math.test.js`, "5a:" block, 9 assertions) pins converged:true, miss < 2,000 km, TLI-class TOF band, `|Δv|` accounting parity, and the approximate total-dv band; browser-verified end-to-end via the dev seed.
 - 5b (rendezvous phase-matching, multi-vehicle timing) remains explicitly OPEN, as scoped.
+
+---
+
+## 16. v3.0 BACKLOG (user, 2026-07-14 — running list, capture only, NOT next-up)
+
+- **Lunar Lagrange-point orbits (EML1/EML2 halos, Lyapunov)** as propagated catalog entries — same corrector machinery as the NRHO (§14). Caveat carried in from §14's finding: EML2 sits at the edge of the Moon's SOI in the patched model, so EML2-family orbits will be "class" approximations like the 9:2; EML1 should converge cleanly. Widely used in mission design — high value.
+- **NASA Eyes visual direction**: better textures (current JPEGs read flat), starfield background, softer body lighting/atmosphere glow, possibly smoother fly-to easing. Incremental polish track, not one big rewrite.
+- **Dev GitHub Pages**: publish the dev branch's build to a separate Pages URL (workflow or dev-path commit) so flight-testing never touches the released page. Small, standalone.
+- **Multi-vehicle handling + multiple launch sites**: the Gateway seed already strains single-vehicle assumptions (one launch site strip, one active-vehicle framing in several panels). Needs a design pass; adjacent to 5b (rendezvous/multi-vehicle timing).
+- **Plane-aware Band view**: orbits out-of-plane by more than ~5-10° get their own band lane (band zones currently only know body groups; plane identity is cheap to answer post-V2). "Make Band view a lot more intelligent."
+- **Mock ascent path defect — FIXED 2026-07-14** (same day as capture): the schematic surface→orbit bezier drew a misleading ~45° climb into an orbit it visibly didn't intersect (site lat ≠ orbit plane at the drawn instant). Per user direction: the LAUNCH event marker now maps onto the ORBIT (insertion point); the site marker remains as a cosmetic surface highlight; the connecting bezier is removed rather than faked.
