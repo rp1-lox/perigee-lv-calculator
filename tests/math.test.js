@@ -2703,13 +2703,14 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const r = refOrbitResolve('llo-100'); return r && r.body === 'Moon' && r.peri === 100 && r.apo === 100 && r.inc === 90;
   })());
 
-  // ── propagated stub: nrho-nominal has NO seed, resolves null-ish with note ──
+  // ── propagated entry: nrho-nominal — SEEDED as of Phase 4 (see the U4 test
+  // block below for the full corrector/sampling gate); this T1-era check now
+  // just confirms the kind + that resolve() carries the seed through. ──
   const nrho = refOrbitGet('nrho-nominal');
   ok('T1: nrho-nominal exists as kind:propagated', !!nrho && nrho.kind === 'propagated');
   const nrhoResolved = refOrbitResolve('nrho-nominal');
-  ok('T1: unseeded propagated entry resolves peri/apo/inc null with a Phase-4 note',
-    nrhoResolved && nrhoResolved.peri === null && nrhoResolved.apo === null && nrhoResolved.inc === null
-    && /Phase 4/i.test(nrhoResolved.note || ''));
+  ok('T1: (Phase 4) propagated entry resolves with its seedState, inc null (no Kepler elements)',
+    nrhoResolved && nrhoResolved.inc === null && !!nrhoResolved.seedState);
 
   // ── builtin immutability ──
   ok('T1: refOrbitIsBuiltin true for a builtin id', refOrbitIsBuiltin('leo-185') === true);
@@ -2836,6 +2837,63 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('T4 D1: editing node B re-solves the DELIVERING edge A→B', t4.dvAB_after !== t4.dvAB_before);
   ok('T4 D1: editing node B re-solves the DEPARTING edge B→C', t4.dvBC_after !== t4.dvBC_before);
   ok('T4 D1: edge C→D (two hops from B) is UNTOUCHED', t4.dvCD_after === t4.dvCD_before);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 Phase 4 U4 — NRHO catalog + propagated-ring gate
+// ═══════════════════════════════════════════════════════════════════════════
+// Per §14 U4: "the corrector run in the gate should use the HARD-CODED seed
+// ... if the full correction is slow, gate only VERIFIES the pinned seed's
+// closure rather than re-running Newton." This is that verification: one
+// physPropagateSegment call over the pinned seed's period (fast, <1s).
+{
+  const nrho = vm.runInContext(`(function(){
+    const entry = refOrbitGet('nrho-nominal');
+    const res = refOrbitResolve('nrho-nominal');
+    const samples = refOrbitSamplePropagated('nrho-nominal', 96);
+    let closureKm = null;
+    if (entry && entry.seedState && entry.period_s) {
+      const ctx = { center: entry.frame || entry.body, bodies: [entry.frame || entry.body, 'Earth', 'Sun'] };
+      const st0 = { r: entry.seedState.r.slice(), v: entry.seedState.v.slice() };
+      const out = physPropagateSegment(st0, 0, entry.period_s, ctx, { maxSamples: 400 });
+      if (out && out.stateF) {
+        const dr = [out.stateF.r[0]-st0.r[0], out.stateF.r[1]-st0.r[1], out.stateF.r[2]-st0.r[2]];
+        closureKm = Math.hypot(dr[0], dr[1], dr[2]);
+      }
+    }
+    let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+    samples.forEach(s => { if (s.r[0]<minX) minX=s.r[0]; if (s.r[0]>maxX) maxX=s.r[0]; if (s.r[2]<minZ) minZ=s.r[2]; if (s.r[2]>maxZ) maxZ=s.r[2]; });
+    return {
+      kind: entry && entry.kind, resKind: res && res.kind,
+      hasSeed: !!(entry && entry.seedState), periodDays: entry ? entry.period_s / 86400 : null,
+      closureKm, nSamples: samples.length,
+      bboxW: maxX - minX, bboxH: maxZ - minZ,
+    };
+  })()`, sandbox);
+  ok('NRHO U2: nrho-nominal is kind:propagated', nrho.kind === 'propagated');
+  ok('NRHO U2: refOrbitResolve returns kind:propagated with a seed', nrho.resKind === 'propagated' && nrho.hasSeed);
+  ok('NRHO U1: period in a sane multi-day band (3-8 d)', nrho.periodDays > 3 && nrho.periodDays < 8);
+  ok('NRHO U1: pinned-seed one-rev position closure < 500 km', nrho.closureKm != null && nrho.closureKm < 500);
+  ok('NRHO U2: refOrbitSamplePropagated returns a real sample loop', nrho.nSamples > 10);
+  ok('NRHO U3: sample loop is non-degenerate (nonzero extent both axes)', nrho.bboxW > 1000 && nrho.bboxH > 1000);
+  ok('NRHO U3: sample loop is tall/asymmetric, not circular (aspect check)', Math.abs(nrho.bboxW - nrho.bboxH) > 0.05 * Math.max(nrho.bboxW, nrho.bboxH));
+}
+
+// Catalog exposes at least one propagated entry (§14 U3: launch picker excludes it).
+{
+  const propagatedIds = vm.runInContext(`refOrbitCatalogList().filter(o => o.kind === 'propagated').map(o => o.id)`, sandbox);
+  ok('NRHO U3: catalog exposes at least one propagated entry (nrho-nominal)', propagatedIds.includes('nrho-nominal'));
+}
+
+// DEPLOY-on-NRHO synthetic timeline anchor (§14 U3/U4): exercise
+// refOrbitPropagatedStateAt the same way _missionApplyDeploy does, at a
+// nonzero MET offset, and confirm it returns a real finite state.
+{
+  const deployAnchor = vm.runInContext(`(function(){
+    const st = refOrbitPropagatedStateAt('nrho-nominal', 123456);
+    return st && st.r && st.v ? { ok: true, r: st.r } : { ok: false };
+  })()`, sandbox);
+  ok('NRHO U3: refOrbitPropagatedStateAt returns a finite v2-anchor-ready state', deployAnchor.ok && deployAnchor.r.every(v => isFinite(v)));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -39,6 +39,27 @@ function _oiClassify(m, authIdx, e) {
   if (!m || !e) return null;
   if (e.type === 'LAUNCH' || e.type === 'DEPLOY') {
     const o = e.orbit || {};
+    // §14 U3: a propagated ref (NRHO) has no peri/apo/inc — read-only card,
+    // no sliders (there is nothing here to drag: parameters are fixed by the
+    // catalog seed, not authored per-event).
+    if (o.propagated && e.orbitRefId) {
+      const refEntry = (typeof refOrbitGet === 'function') ? refOrbitGet(e.orbitRefId) : null;
+      const samples = (typeof refOrbitSamplePropagated === 'function') ? refOrbitSamplePropagated(e.orbitRefId, 48) : [];
+      let periKm = null, apoKm = null;
+      const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[o.body]) ? PROG_BODIES[o.body].R : 0;
+      if (samples.length) {
+        let minD = Infinity, maxD = -Infinity;
+        samples.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (d < minD) minD = d; if (d > maxD) maxD = d; });
+        periKm = Math.max(0, minD - R); apoKm = Math.max(0, maxD - R);
+      }
+      return {
+        authIdx, source: 'propagated', evType: e.type,
+        body: o.body, refId: e.orbitRefId,
+        name: refEntry ? refEntry.name : 'propagated orbit',
+        periodDays: refEntry && refEntry.period_s ? refEntry.period_s / 86400 : null,
+        periKm, apoKm,
+      };
+    }
     if (o.body == null || o.alt_km == null) return null;
     const isBuiltinRef = e.orbitRefId && typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId);
     const refEntry = e.orbitRefId && typeof refOrbitGet === 'function' ? refOrbitGet(e.orbitRefId) : null;
@@ -279,6 +300,7 @@ function _oiCardHTML(m) {
   if (!st || !m || st.missionId !== m.missionId) return '';
   const e = m.log[st.authIdx];
   if (!e) return '';
+  if (st.source === 'propagated') return _oiPropagatedCardHTML(st);
   const title = st.source === 'launch' ? (st.name || 'custom orbit') : (st.name || 'custom orbit');
   return `<div class="traj-oi-card" style="position:absolute;top:8px;right:8px;left:auto;min-width:230px;padding:8px 10px;z-index:55;" onclick="event.stopPropagation();">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
@@ -290,5 +312,22 @@ function _oiCardHTML(m) {
     ${_oiSliderRow('Apo', 'apo', st.apo, 100, 500000, 1, 'km')}
     ${_oiSliderRow('Inc', 'inc', st.inc, 0, 180, 0.1, 'deg')}
     ${_oiSliderRow('LAN', 'lan', st.lan, 0, 360, 0.1, 'deg')}
+  </div>`;
+}
+
+// §14 U3: read-only card for a propagated orbit — name/body/period/peri/apo
+// (measured from samples), no sliders (nothing here is authored per-event).
+function _oiPropagatedCardHTML(st) {
+  const kv = (k, v) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-family:var(--mono);font-size:10px;"><span style="color:var(--text-dim);">${k}</span><span style="color:var(--text-bright);">${v}</span></div>`;
+  return `<div class="traj-oi-card" style="position:absolute;top:8px;right:8px;left:auto;min-width:210px;padding:8px 10px;z-index:55;" onclick="event.stopPropagation();">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);font-weight:600;">${_tsEsc(st.name)}</div>
+      <button class="act-btn" style="padding:0 6px;" title="Close (Esc)" onclick="_oiClose()">&times;</button>
+    </div>
+    ${kv('Body', _tsEsc(st.body))}
+    ${kv('Period', st.periodDays != null ? st.periodDays.toFixed(2) + ' d' : '—')}
+    ${kv('Perilune', st.periKm != null ? Math.round(st.periKm).toLocaleString() + ' km' : '—')}
+    ${kv('Apolune', st.apoKm != null ? Math.round(st.apoKm).toLocaleString() + ' km' : '—')}
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:6px;">// propagated orbit — parameters fixed</div>
   </div>`;
 }

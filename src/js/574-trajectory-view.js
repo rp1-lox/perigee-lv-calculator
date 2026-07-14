@@ -486,11 +486,41 @@ function _trajExtractMission(m) {
     return rec;
   };
 
+  // Phase 4 U3: a propagated ref (e.g. nrho-nominal) has no peri/apo — keyed
+  // by refId instead of the (body,peri,apo) size key. The actual loop shape
+  // is resolved at RENDER time via refOrbitSamplePropagated (574's ring
+  // emitter), not here — this just registers the group (owners/color/label).
+  const addPropagatedRing = (body, refId, refName, ownerKeys, authIdx) => {
+    if (body == null || !refId) return null;
+    const sc = frameFor(body);
+    const key = 'propagated:' + refId;
+    const lane = laneColorFor(ownerKeys);
+    if (!sc.orbits.has(key)) {
+      sc.orbits.set(key, {
+        key, body, kind: 'propagated', refId,
+        label: refName || 'Propagated orbit',
+        colors: new Set(), names: new Set(),
+        firstAuthIdx: authIdx != null ? authIdx : null,
+        ownerKeys: new Set(),
+      });
+    }
+    const rec = sc.orbits.get(key);
+    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
+    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
+    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
+    return rec;
+  };
+
   // ── snapshots: every distinct orbit any vehicle occupies ─────────────────
   log.forEach(e => {
     (e.snapshot || []).forEach(v => {
       if (!v.orbit || v.orbit.surface) return;
       const o = v.orbit;
+      if (o.propagated && o.refId) {
+        const refEntry = (typeof refOrbitGet === 'function') ? refOrbitGet(o.refId) : null;
+        addPropagatedRing(o.body || 'Moon', o.refId, refEntry ? refEntry.name : null, v.owners, e._authIdx);
+        return;
+      }
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
       addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
@@ -1017,6 +1047,81 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   }).join('');
   return `<g${clickAttr}>
     <title>${title}${incTxt}</title>
+    ${segPaths}
+    ${hitArea}
+  </g>`;
+}
+
+// Phase 4 U3: propagated-orbit ring — same visual language as _trajRingSVG
+// (occlusion, direction fade, apse markers) but the LOOP comes from real
+// samples (refOrbitSamplePropagated) instead of a Keplerian ellipse. Reuses
+// the same projection/occlusion/label primitives _trajRingSVG uses, kept as
+// a separate function since a propagated loop has no (a,e,i,raan,argp) basis
+// to route through progOrbitSamplePoints.
+function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
+  opts = opts || {};
+  if (typeof refOrbitSamplePropagated !== 'function') return '';
+  const zoom = opts.zoom || 1;
+  const viewportDiagPx = opts.viewportDiagPx || Infinity;
+  const emphasized = !!opts.emphasized;
+  const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
+  const strokeW = emphasized ? 1.4 : 0.7;
+  const baseOpacity = emphasized ? 1 : 0.85;
+  const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
+  const names = [...rec.names].join(', ');
+  const title = `${names ? names + ' — ' : ''}${rec.label} (propagated)`;
+  const ox = opts.originX || 0, oy = opts.originY || 0;
+  const raw = refOrbitSamplePropagated(rec.refId, 96);
+  if (!raw.length) return '';
+  let maxR = 0;
+  raw.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (d > maxR) maxR = d; });
+  const screenSize = maxR * scale;
+  if (_trajCullByExtent(screenSize)) return '';
+  if (_trajCullRingByDiagonal(screenSize, viewportDiagPx)) return '';
+  const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
+  if (lodAlpha <= 0) return '';
+  const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
+  const centerDepth = opts.centerDepth != null ? opts.centerDepth : Infinity;
+  const screenPts = [];
+  let topX = ox, topY = Infinity;
+  let periIdx = 0, apoIdx = 0, periRLocal = Infinity, apoRLocal = -Infinity;
+  for (let k = 0; k < raw.length; k++) {
+    const p = raw[k].r;
+    const qRaw = _trajProj3(p[0], p[1], p[2]);
+    const x = ox + qRaw.x * scale, y = oy + qRaw.y * scale;
+    if (!isFinite(x) || !isFinite(y)) return '';
+    const depth = centerDepth + qRaw.depth;
+    screenPts.push({ x, y, depth });
+    if (y < topY) { topY = y; topX = x; }
+    const rLocal = Math.hypot(p[0], p[1], p[2]);
+    if (rLocal < periRLocal) { periRLocal = rLocal; periIdx = k; }
+    if (rLocal > apoRLocal) { apoRLocal = rLocal; apoIdx = k; }
+  }
+  const visRuns = _trajOcclusionSplitRuns(screenPts, zoom, _trajOccludeBodies);
+  if (!visRuns.length) return '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',0,0,0)"` : '';
+  const fullD = visRuns.map(run => run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ')).join(' ');
+  const hitArea = opts.authIdx != null ? `<path d="${fullD}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  const periPt = screenPts[periIdx], apoPt = screenPts[apoIdx];
+  _trajRegisterLabel(topX, topY, [{ text: rec.label + ' (propagated)', dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }],
+    'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
+  if (!_trajPointOccluded(periPt.x, periPt.y, periPt.depth, zoom, _trajOccludeBodies)) {
+    const mk = `<path d="M -2.6 2.2 L 0 -2.6 L 2.6 2.2 Z" fill="${strokeColor}" stroke="none"/>`;
+    _trajRegisterLabel(periPt.x, periPt.y, [{ text: 'Pe', dy: -6, fontPx: 8.5, color: strokeColor }, { text: _trajFmtApseDist(Math.max(0, periRLocal - R), 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+      'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
+  }
+  if (!_trajPointOccluded(apoPt.x, apoPt.y, apoPt.depth, zoom, _trajOccludeBodies)) {
+    const mk = `<path d="M -2.6 -2.2 L 0 2.6 L 2.6 -2.2 Z" fill="${strokeColor}" stroke="none"/>`;
+    _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: strokeColor }, { text: _trajFmtApseDist(Math.max(0, apoRLocal - R), 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
+      'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
+  }
+  const segPaths = visRuns.map(run => {
+    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  return `<g${clickAttr}>
+    <title>${title}</title>
     ${segPaths}
     ${hitArea}
   </g>`;
@@ -1889,8 +1994,10 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       // C2: a ring whose owning vehicle(s) are ALL expended by viewTime dims
       // to history alpha, same treatment as an arrived leg.
       const isHistoryOrbit = rec.expendMet != null && viewT != null && rec.expendMet <= viewT;
-      out += _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null,
-        { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx, historyAlpha: isHistoryOrbit ? _TRAJ_HISTORY_ALPHA : 1, centerDepth: oDepth });
+      const ringOpts = { emphasized, authIdx: rec.firstAuthIdx, missionId: id, zoom, originX: ox, originY: oy, viewportDiagPx, historyAlpha: isHistoryOrbit ? _TRAJ_HISTORY_ALPHA : 1, centerDepth: oDepth };
+      out += rec.kind === 'propagated'
+        ? _trajPropagatedRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts)
+        : _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts);
     });
   }
 

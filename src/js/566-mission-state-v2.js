@@ -84,7 +84,14 @@ function v2BuildShadow(m) {
       const fv = PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId];
       let r = null, v = null, frame = null, note = null;
       const os = fv && fv.orbitState;
-      if (os && !os.surface && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[os.body] && typeof physElementsToState === 'function') {
+      if (os && os.propagated) {
+        // Phase 4 U3: propagated-orbit anchor — r,v were already sampled at
+        // deploy time (_missionApplyDeploy via refOrbitPropagatedStateAt);
+        // promote them directly, no elements->state reconstruction (there
+        // ARE no Kepler elements for this orbit).
+        if (os.r && os.v) { r = os.r; v = os.v; frame = os.frame || os.body; }
+        else note = 'propagated orbit — sampled state unavailable this replay';
+      } else if (os && !os.surface && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[os.body] && typeof physElementsToState === 'function') {
         try {
           const alt = ((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2;
           const bodyMeta = PROG_BODIES[os.body];

@@ -240,7 +240,7 @@ function _missionApplyLaunch(m, e) {
   return { fv, stagingResult, payloadMass, payloadNames };
 }
 
-function _missionApplyDeploy(m, e) {
+function _missionApplyDeploy(m, e, metNow) {
   e = e || {};
   // DEPLOY places a single SPACECRAFT directly in orbit (e.g. a station like the
   // ISS) — no launch vehicle, no ascent staging, full tanks.
@@ -250,7 +250,20 @@ function _missionApplyDeploy(m, e) {
   // Optionally deploy with EMPTY tanks (a dry depot to be filled by prop transfer later).
   if (e.emptyTanks) allStages.forEach(st => (st.tanks || []).forEach(t => { t.fill = 0; }));
   const o = e.orbit || m.launchOrbit || {};
-  const orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
+  let orbitState;
+  if (o.propagated && o.refId) {
+    // Phase 4 U3: deploy ON the propagated ref — sample it at the event's own
+    // MET (phase into the period) rather than always the seed epoch, so a
+    // DEPLOY authored later in the timeline still lands somewhere ON the loop.
+    const st0 = (typeof refOrbitPropagatedStateAt === 'function') ? refOrbitPropagatedStateAt(o.refId, metNow || 0) : null;
+    orbitState = {
+      body: o.body, propagated: true, refId: o.refId,
+      r: st0 ? st0.r : null, v: st0 ? st0.v : null, frame: st0 ? st0.frame : o.body,
+      perigee: null, apogee: null, inclination: null, lan: null, epoch: 0, surface: false,
+    };
+  } else {
+    orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
+  }
   const fv = progMakeFlightVehicle(sc.name, allStages, orbitState, '#e5c07b');
   fv.status = 'ORBIT';
   PROG_ACTIVE_PROGRAM.vehicles[fv.vehicleId] = fv;
@@ -388,7 +401,13 @@ function _missionLogCardHTML(entry, id, idx) {
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${(entry.days||0).toLocaleString()} d${entry.label ? ' — ' + entry.label : ''}${entry.metStart!=null?` <span style="color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>`:''}</div>
     ${entry.boiloffKg > 0 ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:2px;">boiloff &minus;${Math.round(entry.boiloffKg).toLocaleString()} kg</div>` : ''}
   </div>`;
-  if (entry.type === 'DEPLOY') return `<div class="mission-log-card"><div class="mission-log-header"><span class="mission-log-type">DEPLOY</span><span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.label||''}</span></div><div class="mission-state-grid"><div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${(entry.orbit&&entry.orbit.alt_km||0).toLocaleString()} km${entry.orbit&&entry.orbit.apo_km&&entry.orbit.apo_km!==entry.orbit.alt_km?' × '+entry.orbit.apo_km.toLocaleString():''}</span></div><div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${entry.orbit&&entry.orbit.body||'Earth'}</span></div></div></div>`;
+  if (entry.type === 'DEPLOY') {
+    // §14 U3: propagated orbit (NRHO) has no alt_km/apo_km — honest label.
+    const orbitVal = (entry.orbit && entry.orbit.propagated)
+      ? 'NRHO (propagated)'
+      : `${(entry.orbit&&entry.orbit.alt_km||0).toLocaleString()} km${entry.orbit&&entry.orbit.apo_km&&entry.orbit.apo_km!==entry.orbit.alt_km?' × '+entry.orbit.apo_km.toLocaleString():''}`;
+    return `<div class="mission-log-card"><div class="mission-log-header"><span class="mission-log-type">DEPLOY</span><span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.label||''}</span></div><div class="mission-state-grid"><div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${orbitVal}</span></div><div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${entry.orbit&&entry.orbit.body||'Earth'}</span></div></div></div>`;
+  }
   if (entry.type !== 'LAUNCH') return '';
   const o  = entry.orbit;
   const sr = entry.stagingResult || {};
@@ -577,12 +596,26 @@ function _missionEventEditFieldsHTML(m, idx) {
   } else if (e.type === 'DEPLOY') {
     const scs = _scEdSC || [];
     const o = scs.map(s => `<option value="${s.spacecraftId}"${s.spacecraftId===e.spacecraftId?' selected':''}>${s.name}</option>`).join('');
+    // §14 U3: DEPLOY (unlike LAUNCH) MAY target a propagated ref — a station
+    // parked on the NRHO is exactly the use case. Picking one binds
+    // e.orbitRefId + e.orbit; leaving it "— default —" keeps the pre-existing
+    // "orbit follows the Launch Orbit" behavior (e.orbit unset).
+    const deployRefOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList() : [];
+    const eOrbit = e.orbit || {};
+    const deployRefSelectHTML = `
+        <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Ref Orbit</label>
+          <select id="edit-deploy-ref-${id}" style="${_es}" onchange="missionDeployRefPick('${id}',${idx},this.value)">
+            <option value="">— default (follows Launch Orbit) —</option>
+            ${deployRefOpts.map(r => `<option value="${r.id}"${r.id === e.orbitRefId ? ' selected' : ''}>${_mrEsc(r.name)}${r.kind === 'propagated' ? ' (propagated)' : ''}${r.builtin ? '' : ' (user)'}</option>`).join('')}
+          </select>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:6px;">${eOrbit.propagated ? 'on propagated orbit' : ''}${e._refNote ? ' // ' + _mrEsc(e._refNote) : ''}</span></div>`;
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Spacecraft</label>
           <select id="edit-deploy-sc-${id}" class="mcc-field-select">${o}</select></div>
+        ${deployRefSelectHTML}
         <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="edit-deploy-empty-${id}" style="accent-color:var(--accent);"${e.emptyTanks?' checked':''}> Deploy with empty tanks (depot)</label>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// orbit follows the Launch Orbit set in the left panel</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// unbound orbit follows the Launch Orbit set in the left panel</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyDeployEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'COAST') {
@@ -639,7 +672,9 @@ function _missionEventEditFieldsHTML(m, idx) {
     // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
     // sets orbitRefId + fills the fields; hand-editing a bound field clears orbitRefId
     // (see missionApplyLaunchEdit / missionLaunchOrbitDetach) and shows '(custom)'.
-    const refOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList() : [];
+    // §14 U3: a LAUNCH cannot target a propagated ref (not a launch-insertion
+    // orbit — it's a DEPLOY/maneuver-target orbit) — filtered out of this picker.
+    const refOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList().filter(r => r.kind !== 'propagated') : [];
     const refSelectHTML = `
         <div class="cfg-item"><label class="cfg-label">Ref Orbit</label>
           <select id="edit-launch-ref-${id}" style="${_es}" onchange="missionLaunchRefPick('${id}',${idx},this.value)">
@@ -925,7 +960,11 @@ function _missionBudgetCardHTML(m) {
   const kv = (k, v, color) => `<div class="mission-state-kv"><span class="mission-state-key">${k}</span><span class="mission-state-val"${color ? ` style="color:${color}"` : ''}>${v}</span></div>`;
   const _fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const _os = _fv && _fv.orbitState ? _fv.orbitState : null;
-  const orbitGrid = _os ? `<div class="mission-state-grid">${kv('Body', _os.body || 'Earth')}${kv('Apogee', Math.round(_os.apogee || 0).toLocaleString() + ' km')}${kv('Perigee', Math.round(_os.perigee ?? _os.apogee ?? 0).toLocaleString() + ' km')}${kv('Inc', (_os.inclination || 0) + '&deg;')}</div>` : '';
+  // §14 U3: a propagated orbit (NRHO) has no Kepler peri/apo/inc — an honest
+  // label beats wrong ellipse numbers (spec's own phrasing).
+  const orbitGrid = _os && _os.propagated
+    ? `<div class="mission-state-grid">${kv('Body', _os.body || 'Moon')}${kv('Orbit', 'NRHO (propagated)')}</div>`
+    : _os ? `<div class="mission-state-grid">${kv('Body', _os.body || 'Earth')}${kv('Apogee', Math.round(_os.apogee || 0).toLocaleString() + ' km')}${kv('Perigee', Math.round(_os.perigee ?? _os.apogee ?? 0).toLocaleString() + ' km')}${kv('Inc', (_os.inclination || 0) + '&deg;')}</div>` : '';
   return `
     <div class="mcc-section-header">Mission ΔV Budget</div>
     <div class="mission-log-card">
@@ -1187,7 +1226,8 @@ function _missionCaptureSnapshot(live, baseOf) {
       vehicleId: v.vehicleId,
       originKey: v._originKey || null,
       name, status: v.status || 'ORBIT',
-      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination, surface: !!os.surface } : null,
+      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination, surface: !!os.surface,
+        propagated: !!os.propagated, refId: os.refId || null } : null,
       alt,
       owners: [...new Set(v.stages.map(st => st._ownerKey || _missionStageOwnerKey(st.stageDefinitionId)))],
       remDv: Math.round(_missionVehicleRemainingDv(v)),
@@ -1432,10 +1472,25 @@ function missionRecompute(m) {
     // never throw.
     if ((e.type === 'LAUNCH' || e.type === 'DEPLOY') && e.orbitRefId) {
       const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(e.orbitRefId) : null;
-      if (res && res.peri != null) {
+      if (res && res.kind === 'propagated' && res.seedState) {
+        // Phase 4 U3: a propagated ref (nrho-nominal) has no peri/apo/inc to
+        // write into the inline Kepler fields — a LAUNCH can never target one
+        // (excluded from the launch picker, §14 U3), so this only fires for
+        // DEPLOY. Stamp a propagated marker instead of Kepler fields.
+        if (e.type === 'DEPLOY') {
+          const o = e.orbit || (e.orbit = {});
+          o.body = res.body; o.propagated = true; o.refId = e.orbitRefId;
+          delete o.alt_km; delete o.apo_km; delete o.inc_deg;
+          delete e._refNote;
+          if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
+        } else {
+          e._refNote = 'a LAUNCH cannot target a propagated orbit — ref ignored';
+        }
+      } else if (res && res.peri != null) {
         const o = e.orbit || (e.orbit = {});
         o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
         if (res.lan != null) o.lan_deg = res.lan;
+        delete o.propagated; delete o.refId;
         if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
         delete e._refNote;
         if (authEntry) { authEntry.orbit = { ...o }; if (e.type === 'LAUNCH') authEntry.launchOrbit = { ...o }; delete authEntry._refNote; }
@@ -1464,7 +1519,7 @@ function missionRecompute(m) {
       // propellant history yet) unless a depot etc. is already on-orbit.
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
     } else if (e.type === 'DEPLOY') {
-      const r = _missionApplyDeploy(m, e);
+      const r = _missionApplyDeploy(m, e, metClock);
       if (!r || !r.fv) { e.result = 'FAILED'; continue; }
       r.fv._originKey = 'deploy:' + kid;
       _missionRekeyVehicleId(r.fv, m.missionId);
@@ -2132,6 +2187,18 @@ function missionLaunchRefPick(id, idx, refId) {
   missionRecompute(m);
   missionRenderDetail();
 }
+// §14 U3: DEPLOY equivalent of missionLaunchRefPick — the only ref-picker path
+// that accepts a propagated ref (a LAUNCH never can, see the filtered picker
+// above). Binds e.orbitRefId; e.orbit gets the resolved fields (or the
+// propagated marker) on the NEXT missionRecompute (the T2 resolution block).
+function missionDeployRefPick(id, idx, refId) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'DEPLOY') return;
+  if (!refId) { e.orbitRefId = null; e.orbit = null; delete e._refNote; missionRecompute(m); missionRenderDetail(); return; }
+  e.orbitRefId = refId;
+  missionRecompute(m);
+  missionRenderDetail();
+}
 // Hand-editing a bound field detaches it to a one-off (explicit, per §13 T2 spec).
 function missionLaunchOrbitDetach(id, idx) {
   const m = _missionGet(id); if (!m) return;
@@ -2647,7 +2714,7 @@ function _missionMultiVehicleHTML(m) {
       const expended = v.status === 'EXPENDED';
       const os = v.orbit || null;
       const orbitLine = os
-        ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
+        ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
       return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
@@ -2709,7 +2776,7 @@ function _missionMultiVehicleHTML(m) {
     const remDv = Math.round(_missionVehicleRemainingDv(fv));
     const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
     const orbitLine = os
-      ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;</span>`
+      ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
       : '';
     // whole row is clickable to make this the active vehicle; active = green
     return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
