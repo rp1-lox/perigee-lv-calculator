@@ -369,3 +369,33 @@ Gate green: 570 (Phase 2 end) → 606 (T1-T3) → **609 (T4)**, `python build.py
 - **Multi-vehicle handling + multiple launch sites**: the Gateway seed already strains single-vehicle assumptions (one launch site strip, one active-vehicle framing in several panels). Needs a design pass; adjacent to 5b (rendezvous/multi-vehicle timing).
 - **Plane-aware Band view**: orbits out-of-plane by more than ~5-10° get their own band lane (band zones currently only know body groups; plane identity is cheap to answer post-V2). "Make Band view a lot more intelligent."
 - **Mock ascent path defect — FIXED 2026-07-14** (same day as capture): the schematic surface→orbit bezier drew a misleading ~45° climb into an orbit it visibly didn't intersect (site lat ≠ orbit plane at the drawn instant). Per user direction: the LAUNCH event marker now maps onto the ORBIT (insertion point); the site marker remains as a cosmetic surface highlight; the connecting bezier is removed rather than faked.
+
+---
+
+## 17. N-SERIES SPEC — true n-body, SOI demoted, switchable frames (drafted 2026-07-14)
+
+**Thesis (user):** this project exists to outline 21st-century mission architectures — NRHO, L-point staging, ballistic lunar transfers, WSB trajectories — which live exactly in the dynamical regime that SOI-patching amputates. The dynamics are ALREADY n-body (`physAccel` sums a real body list); what must die is the SOI machinery's third job: force-model truncation and SOI-as-terminal-condition. SOIs become visual/organizational only.
+
+### N1 — SOI demoted to bookkeeping (the honesty fix; everything else stands on it)
+- `physPropagateSegment` integrates the FULL `ctx.bodies` list at every step regardless of the current frame center. Frame handoffs (physFrameOf crossings) become pure coordinate re-centering + sample tags — never a physics change. The frame-restricted body list (the R3-era `frameBodies` perf optimization) becomes an explicit opt-in (`ctx.truncateToFrame: true`) used ONLY by the gizmo's cheap preview tier; solvers and committed legs never truncate.
+- Solver/leg acceptance windows currently phrased in SOI terms (physShootLegAim's acceptance min(SOI/3, 25000km), corridor-exit detection, escape classification) are re-phrased in explicit distance/energy terms with the same numeric values where they were sensible (mechanical; audit each use of `physSoiRadius` — it survives ONLY in rendering/labels/LOD and as the frame-selection heuristic).
+- **Gate proof of the whole phase**: propagate one trajectory across an SOI boundary under the old handoff path and under a forced single-frame path — the physical states must agree to float noise at matched epochs (the boundary means nothing dynamically). Plus: existing goldens (free return, NRHO closure, 5a transfer) re-verified; expected small numeric drifts re-pinned per D6 with documented cause ("dynamics gained continuity").
+
+### N1b — Fidelity setting (user decision 2026-07-14: contextual default, user-switchable)
+- **New Settings surface** (the app has none; add a small `openModal`-based Settings modal reachable from the header, seeded with exactly ONE setting so it doesn't become a junk drawer): **Physics fidelity** = `contextual` (default: Sun + frame-relevant bodies + mission-target bodies — today's behavior made honest) | `full system` (Sun + all 8 planets + Moon + Titan in every propagation; ~2-3× propagation cost, still ms-scale for cislunar, meaningful for multi-year interplanetary).
+- Persisted via `_buildSessionObject` (455 shared-format rule). Missions RECOMPUTE on change (the setting is a physics input; the D6 note applies — switching fidelity may legitimately move numbers, which is the point). The active fidelity is stamped into the mission report header for honesty.
+- Body-set resolution becomes ONE function (`physBodySetFor(ctx, fidelity)`) so "contextual" has a single auditable definition.
+
+### N2 — cash the unlocked checks
+- **True 9:2 NRHO**: re-run the §14 corrector without the SOI wall (apolune ~70,000 km is now just a place); replace the seeded 9:2-class entry, retire its caveat (MATH.md critique 61 update). Expected: real rp≈3,400/ra≈70,000/P≈6.56d family member.
+- **EML1/EML2 halos + Lyapunov** (backlog §16 item 1): same corrector, seeded at the L-point distances; EML2 no longer edge-of-model. Catalog entries + read-only inspector cards like the NRHO.
+- **BLT substrate**: no new feature yet — but verify the physics now supports it: a known WSB-class seed state (Sun-perturbed, ~100-day lunar transfer) propagates sensibly with `full system`/contextual-with-Sun fidelity. A real BLT solver remains future work (5b-adjacent); this phase only proves the dynamics no longer forbid it.
+
+### N3 — switchable reference frames (Principia-style; pure rendering)
+- Frame selector in the trajectory toolbar: **body-centered inertial** (today) · **body-fixed** (rotates with the body's spin — launch-site work) · **Earth-Moon rotating** (the Moon is pinned; NRHOs/L-points render as stationary loops) · **Sun-Earth rotating** (WSB/L1/L2 work). Agreed initial set (user 2026-07-14).
+- Implementation seam: the ONE floating-origin + projection point in `_trajWorldSVG` gains a pre-projection world→frame transform. THE key detail: trajectory polylines/rings transform EACH SAMPLE BY ITS OWN EPOCH's rotation angle (samples carry `t`), which is what makes a rotating-frame trajectory render as the physically meaningful loop instead of spaghetti. Bodies/markers transform at viewT. Camera az composes with the frame rotation (document the convention).
+- Occlusion/LOD/labels ride the transformed positions automatically (they consume projected output). Spin-textured globes in body-fixed frame: the globe stops rotating on screen (the frame rotates with it) — verify, it falls out of the same transform.
+- Frame choice is per-mission transient view state (like camera), not persisted in the log; session-persist alongside the camera if cheap.
+
+### Sequencing & risk
+N1 (+N1b settings) first — smallest, everything stands on it; gate-proof of dynamical continuity before anything consumes it. N2 second (mostly re-running existing machinery in the freed model; re-pins per D6). N3 last (rendering-only; the per-sample-epoch transform is the one genuinely new renderer concept). Perf watch: full-system fidelity on multi-year legs (profile before optimizing; the dt ladder already coarsens far from bodies).
