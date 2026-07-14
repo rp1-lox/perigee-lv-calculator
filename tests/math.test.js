@@ -2847,36 +2847,92 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 // closure rather than re-running Newton." This is that verification: one
 // physPropagateSegment call over the pinned seed's period (fast, <1s).
 {
-  const nrho = vm.runInContext(`(function(){
-    const entry = refOrbitGet('nrho-nominal');
-    const res = refOrbitResolve('nrho-nominal');
-    const samples = refOrbitSamplePropagated('nrho-nominal', 96);
-    let closureKm = null;
+  // N2 re-pin (2026-07-14, round 2): the closure criterion moved to the
+  // Earth-Moon ROTATING frame — the frame where a three-body orbit is
+  // actually (quasi-)periodic. The seed is the TRUE 9:2 family member
+  // (P = 566,987.3 s = 6.5624 d, the literal resonance, LOCKED in the
+  // corrector), apolune-seeded pattern search (tests/corrector_harness.js):
+  // measured rotating-frame closure 345.6 km / 28.33 m/s — BETTER than the
+  // old 4.71 d compromise seed's 468.6 km, at the real Gateway-class shape
+  // (perilune 5,544 / apolune 71,203 km). The INERTIAL closure is ~27,241 km
+  // by physics (the rotating frame turns ~86.5°/rev), which is why the
+  // measurement below uses _refToRot, and why refOrbitSamplePropagated /
+  // refOrbitPropagatedStateAt re-base through the rotating frame.
+  const propCheck = id => vm.runInContext(`(function(){
+    const entry = refOrbitGet('${id}');
+    const res = refOrbitResolve('${id}');
+    const samples = refOrbitSamplePropagated('${id}', 96);
+    let closureRotKm = null;
     if (entry && entry.seedState && entry.period_s) {
       const ctx = { center: entry.frame || entry.body, bodies: [entry.frame || entry.body, 'Earth', 'Sun'] };
       const st0 = { r: entry.seedState.r.slice(), v: entry.seedState.v.slice() };
-      const out = physPropagateSegment(st0, 0, entry.period_s, ctx, { maxSamples: 400 });
+      // singleFrame: the 9:2 apolune crosses the Moon-SOI bookkeeping boundary;
+      // without it stateF comes back Earth-centered and the closure is bogus.
+      const out = physPropagateSegment(st0, 0, entry.period_s, ctx, { maxSamples: 400, singleFrame: true });
       if (out && out.stateF) {
-        const dr = [out.stateF.r[0]-st0.r[0], out.stateF.r[1]-st0.r[1], out.stateF.r[2]-st0.r[2]];
-        closureKm = Math.hypot(dr[0], dr[1], dr[2]);
+        const rotF = _refToRot(out.stateF, out.tF);
+        const rot0 = _refToRot(st0, 0);
+        closureRotKm = Math.hypot(rotF.r[0]-rot0.r[0], rotF.r[1]-rot0.r[1], rotF.r[2]-rot0.r[2]);
       }
     }
     let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
     samples.forEach(s => { if (s.r[0]<minX) minX=s.r[0]; if (s.r[0]>maxX) maxX=s.r[0]; if (s.r[2]<minZ) minZ=s.r[2]; if (s.r[2]>maxZ) maxZ=s.r[2]; });
+    // ring-gap: the sampled (rotating-re-based) loop's first-to-last distance
+    // — this is what the rendered ring's visual closure actually is.
+    let ringGapKm = null;
+    if (samples.length > 2) {
+      const a = samples[0].r, b = samples[samples.length-1].r;
+      ringGapKm = Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+    }
+    // rotating-frame wrap sanity: state at t = 1.5 P must sit on the loop
+    // (distance from Moon inside the orbit's min/max band, padded)
+    const entryP = entry ? entry.period_s : 0;
+    const wrapped = refOrbitPropagatedStateAt('${id}', entryP * 1.5);
+    const wrapR = wrapped ? Math.hypot(wrapped.r[0], wrapped.r[1], wrapped.r[2]) : null;
     return {
       kind: entry && entry.kind, resKind: res && res.kind,
       hasSeed: !!(entry && entry.seedState), periodDays: entry ? entry.period_s / 86400 : null,
-      closureKm, nSamples: samples.length,
-      bboxW: maxX - minX, bboxH: maxZ - minZ,
+      closureRotKm, nSamples: samples.length,
+      bboxW: maxX - minX, bboxH: maxZ - minZ, ringGapKm, wrapR,
+      periKm: entry ? entry.peri : null, apoKm: entry ? entry.apo : null,
     };
   })()`, sandbox);
+
+  const nrho = propCheck('nrho-nominal');
   ok('NRHO U2: nrho-nominal is kind:propagated', nrho.kind === 'propagated');
   ok('NRHO U2: refOrbitResolve returns kind:propagated with a seed', nrho.resKind === 'propagated' && nrho.hasSeed);
-  ok('NRHO U1: period in a sane multi-day band (3-8 d)', nrho.periodDays > 3 && nrho.periodDays < 8);
-  ok('NRHO U1: pinned-seed one-rev position closure < 500 km', nrho.closureKm != null && nrho.closureKm < 500);
+  ok('NRHO N2: period is the literal 9:2 resonance (6.5624 d ± 0.01)', Math.abs(nrho.periodDays - 6.5624) < 0.01);
+  ok(`NRHO N2: rotating-frame one-rev closure ${nrho.closureRotKm && nrho.closureRotKm.toFixed(1)} km < 500 km (measured 345.6 at pin time; old seed 468.6)`,
+    nrho.closureRotKm != null && nrho.closureRotKm < 500);
   ok('NRHO U2: refOrbitSamplePropagated returns a real sample loop', nrho.nSamples > 10);
   ok('NRHO U3: sample loop is non-degenerate (nonzero extent both axes)', nrho.bboxW > 1000 && nrho.bboxH > 1000);
   ok('NRHO U3: sample loop is tall/asymmetric, not circular (aspect check)', Math.abs(nrho.bboxW - nrho.bboxH) > 0.05 * Math.max(nrho.bboxW, nrho.bboxH));
+  ok(`NRHO N2: rendered ring visually closes (rotating re-base; gap ${nrho.ringGapKm && nrho.ringGapKm.toFixed(0)} km < 2000)`,
+    nrho.ringGapKm != null && nrho.ringGapKm < 2000);
+  ok('NRHO N2: rotating-frame wrap puts t=1.5P on the loop (Moon distance inside the peri/apo band, 20% pad)',
+    nrho.wrapR != null && nrho.wrapR > nrho.periKm * 0.8 && nrho.wrapR < nrho.apoKm * 1.2);
+
+  // ── N2: EML1/EML2 libration-orbit catalog entries (same check battery;
+  // per-entry closure pins are their measured single-shooting basin floors —
+  // see the seed provenance comments in 425 and MATH.md §7v for why the
+  // halos are looser than the 500 km standard and why that is safe (phase
+  // wrap = idealized station-keeping; no consumer propagates past 1 period))
+  const lyap = propCheck('eml1-lyapunov');
+  ok('EML1 Lyapunov: kind:propagated with seed', lyap.kind === 'propagated' && lyap.hasSeed);
+  ok('EML1 Lyapunov: period in band (12.42 d ± 0.1)', Math.abs(lyap.periodDays - 12.421) < 0.1);
+  ok(`EML1 Lyapunov: rotating-frame closure ${lyap.closureRotKm && lyap.closureRotKm.toFixed(1)} km < 150 (measured 47.4 at pin time)`,
+    lyap.closureRotKm != null && lyap.closureRotKm < 150);
+  ok('EML1 Lyapunov: wrap at 1.5P lands on the loop', lyap.wrapR != null && lyap.wrapR > lyap.periKm * 0.8 && lyap.wrapR < lyap.apoKm * 1.2);
+  const h1 = propCheck('eml1-halo-s');
+  ok('EML1 Halo: kind:propagated with seed', h1.kind === 'propagated' && h1.hasSeed);
+  ok(`EML1 Halo: rotating-frame closure ${h1.closureRotKm && h1.closureRotKm.toFixed(1)} km < 1000 (measured 672.5 basin floor — see §7v)`,
+    h1.closureRotKm != null && h1.closureRotKm < 1000);
+  ok('EML1 Halo: wrap at 1.5P lands on the loop', h1.wrapR != null && h1.wrapR > h1.periKm * 0.8 && h1.wrapR < h1.apoKm * 1.2);
+  const h2 = propCheck('eml2-halo-s');
+  ok('EML2 Halo: kind:propagated with seed', h2.kind === 'propagated' && h2.hasSeed);
+  ok(`EML2 Halo: rotating-frame closure ${h2.closureRotKm && h2.closureRotKm.toFixed(1)} km < 2000 (measured 1459.7 basin floor — L2 halos are strongly unstable, see §7v)`,
+    h2.closureRotKm != null && h2.closureRotKm < 2000);
+  ok('EML2 Halo: wrap at 1.5P lands on the loop', h2.wrapR != null && h2.wrapR > h2.periKm * 0.8 && h2.wrapR < h2.apoKm * 1.2);
 }
 
 // Catalog exposes at least one propagated entry (§14 U3: launch picker excludes it).
@@ -2943,8 +2999,14 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('5a: |dvDepartVec| preserves the fixed input magnitude (accounting parity)', s5a && Math.abs(s5a.dvMag - 3.143) < 1e-6);
   // APPROXIMATE dv band (per the task, comment it as approximate): TLI + MCC
   // + insertion. Loose on purpose — the ephemeris phase at t0 moves the MCC/
-  // insertion costs (measured 4.3-5.1 km/s across departure epochs).
-  ok('5a: total dv (TLI+MCC+insertion) in a loose ~3.0-5.5 km/s band (approximate)', total5a > 3000 && total5a < 5500);
+  // insertion costs.
+  // N2 re-pin (2026-07-14): old band 3.0-5.5 km/s (old seed apolune ~60,000
+  // km). New measurement against the true-9:2 nrho-nominal (apolune
+  // ~64,000-70,000 km, more eccentric): mcc_ms=151.2, ins_ms=4206.3,
+  // total=7500.5 m/s (7.5 km/s) — cause: inserting into a bigger, more
+  // eccentric NRHO costs a genuinely bigger insertion burn; MCC stayed small
+  // (still < 700 m/s, unchanged assertion below).
+  ok('5a: total dv (TLI+MCC+insertion) in a loose ~3.0-8.0 km/s band (approximate)', total5a > 3000 && total5a < 8000);
   ok('5a: MCC is a genuinely small correction (< 700 m/s at the canonical epoch)', s5a && s5a.mcc_ms > 0 && s5a.mcc_ms < 700);
   ok('5a: carries a note either way', s5a && s5a.hasNote);
   ok('5a: gate runtime stays sane (<15s for one full cold solve)', nrhoSolve.elapsedMs < 15000);
@@ -3033,6 +3095,65 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     return Object.keys(t).length >= 10 && Object.keys(t).map(b => Math.abs(t[b] - physSoiRadius(b))).every(d => d < 1e-6);
   })()`, sandbox);
   ok('N1: PHYS_ENCOUNTER_SCALE_KM literals match physSoiRadius to <1e-6 km (all 10 bodies)', encPin);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §17 N2 — BLT/WSB substrate verification (measurement, not
+// a new UI feature): confirm physPropagateSegment at full-system fidelity
+// (Sun included) actually reaches the weak-stability-boundary region and
+// that the Sun materially perturbs the trajectory vs an identical Sun-less
+// propagation, with no truncation/rejection by the solver. Measured
+// 2026-07-14 (theta=0 case of tests/corrector_harness.js's `blt` case,
+// pinned here for the gate): a rp=6,563 km / target-ra=1.4M km / TOF=135 d
+// seed, propagated with ctx.bodies=['Earth','Moon','Sun'] vs
+// ['Earth','Moon'] (identical seed state, singleFrame:true).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const blt = vm.runInContext(`(function(){
+    const rp = 6563, ra = 1.4e6;
+    const a = (rp + ra) / 2;
+    const MU_E = PROG_BODIES.Earth.mu;
+    const v0 = Math.sqrt(MU_E * (2 / rp - 1 / a));
+    const TOF = 135 * 86400;
+    const r0 = [rp, 0, 0];
+    const vv = [0, v0, 0];
+    const ctxSun = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] };
+    const ctxNoSun = { center: 'Earth', bodies: ['Earth', 'Moon'] };
+    const A = physPropagateSegment({ r: r0, v: vv }, 0, TOF, ctxSun, { maxSamples: 2048, singleFrame: true, maxSteps: 4e6 });
+    const B = physPropagateSegment({ r: r0, v: vv }, 0, TOF, ctxNoSun, { maxSamples: 2048, singleFrame: true, maxSteps: 4e6 });
+    function post(res) {
+      let mx = 0, mxI = 0;
+      res.samples.forEach((s, i) => { const m = physMag(s.r); if (m > mx) { mx = m; mxI = i; } });
+      let mn = Infinity;
+      for (let i = mxI; i < res.samples.length; i++) { const m = physMag(res.samples[i].r); if (m < mn) mn = m; }
+      const vF = physMag(res.stateF.v), rF = physMag(res.stateF.r);
+      return { apo: mx, periAfter: mn, energy: vF * vF / 2 - MU_E / rF, tF: res.tF, steps: res.steps };
+    }
+    const pa = post(A), pb = post(B);
+    return { apoWithSunMkm: pa.apo / 1e6, periAfterWithSun: pa.periAfter, energyWithSun: pa.energy,
+      periAfterNoSun: pb.periAfter, energyNoSun: pb.energy, tFokA: pa.tF >= TOF - 1, tFokB: pb.tF >= TOF - 1,
+      stepsA: pa.steps, stepsB: pb.steps };
+  })()`, sandbox);
+  // (a) reaches the WSB region: with-Sun apogee is well past the 1.4M km
+  // target apogee (the Sun's perturbation actually redirects the trajectory,
+  // it doesn't just coast to a clean apogee) — measured 4.676M km.
+  ok('N2 BLT: with-Sun trajectory reaches the WSB region (apogee > 1.5M km)', blt.apoWithSunMkm > 1.5);
+  // (b) Sun perturbation is material: measured with-Sun energy = +0.3458
+  // km^2/s^2 (UNBOUND — escapes Earth) vs no-Sun energy = -0.3631 km^2/s^2
+  // (bound ellipse, returns to periAfter ~2,554 km). This theta=0 case is a
+  // genuine WSB-class result: the Sun's third-body perturbation flips the
+  // orbit from bound to escape, which is exactly the physical effect a BLT
+  // substrate needs to be able to represent.
+  ok('N2 BLT: Sun materially changes post-apogee energy (delta > 0.5 km^2/s^2)',
+    Math.abs(blt.energyWithSun - blt.energyNoSun) > 0.5);
+  ok('N2 BLT: with-Sun energy is positive (escape) at this seed/theta — real WSB behavior', blt.energyWithSun > 0);
+  ok('N2 BLT: no-Sun energy is negative (bound ellipse) at the identical seed', blt.energyNoSun < 0);
+  // (c) no truncation/rejection: both legs ran to the full requested TOF and
+  // took a finite, sane number of integrator steps.
+  ok('N2 BLT: with-Sun leg reaches full TOF (no early truncation)', blt.tFokA);
+  ok('N2 BLT: no-Sun leg reaches full TOF (no early truncation)', blt.tFokB);
+  ok('N2 BLT: step counts are finite and sane (no runaway/rejection)',
+    blt.stepsA > 0 && blt.stepsA < 4e6 && blt.stepsB > 0 && blt.stepsB < 4e6);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

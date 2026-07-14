@@ -13925,33 +13925,96 @@ function progFmtT(s) {
 // Persistence: user tier + program one-offs join _buildSessionObject (455)
 // and buildProgramObject/applyProgramObject (450) exactly like customThemes.
 
-// ─── MISSION_MODEL_V2 Phase 4 U1/U2 — NRHO seed (provenance) ────────────────
-// Corrector: physPeriodicOrbitCorrect-style FD-Jacobian Newton (565), 3 free
-// params [vx, vy, P] targeting position closure at t0+P, run OFFLINE in the
-// REAL ephemeris model (ctx = {center:'Moon', bodies:['Moon','Earth','Sun']}).
-// Run 2026-07-14. Seed family scanned: perilune south-pole (-z, ecliptic
-// convention per the task), velocity in-plane (xz plane, contains z per the
-// task's "orbit plane contains z" instruction). The canonical 9:2 apolune
-// (~70,000 km) escapes the integrator's Moon-SOI patch in THIS restricted
-// 3-body approximation (SOI ~66,100 km) before one rev completes; a lower-
-// apolune family member converges cleanly and stays inside the SOI:
-//   rp=3,000 km, ra=60,000 km -> converged v=[1.764338088034402,0,0] km/s,
-//   P=406944 s (4.71 d), one-rev position closure = 468.6 km (< 500 km gate).
-// HONEST caveat (documented per the task + MATH.md §7s): this is a SHORTER-
-// period family member than the literal 9:2 resonance (4.71 d vs 6.56 d) —
-// the real 9:2 NRHO's outer arc goes near L2, deep in Earth-perturbed
-// territory our SOI-patched integrator doesn't model as a bound orbit.
-// 3-rev boundedness is WEAK: perilune distance decays across revs (measured
-// min ~330 km by rev 3, i.e. drifts toward the surface) — real NRHOs are
-// weakly unstable and a single-rev correction does not enforce a long-term
-// invariant torus; this is acknowledged, not hidden (critique in MATH.md).
+// ─── MISSION_MODEL_V2 §17 N2 — TRUE 9:2 NRHO seed (provenance) ─────────────
+// Superseded 2026-07-14 (N1 removed the SOI-wall constraint that forced the
+// old rp=3,000/ra=60,000, 4.71 d compromise — see git history / MATH.md §7s
+// for that context; critique 61 retired in §7v).
+//
+// Corrector: `node tests/corrector_harness.js nrho` (the re-runnable
+// provenance for every seed pinned here), 2026-07-14. Method that WORKED,
+// after two documented failures (§7v):
+//   - perilune-seeded shooting collapsed onto a small non-NRHO loop and FD
+//     Newton stalled at iteration 0 (the full-period map through perilune is
+//     so sensitive that finite-difference Jacobians are noise-dominated);
+//   - seed at APOLUNE instead (slow, well-conditioned dynamics): southern-
+//     family rotating-frame r=[xa,0,-za], v=[0,vy,0], P LOCKED to the literal
+//     9:2 synodic resonance (29.530589 d * 2/9 = 566,987.3 s), then a
+//     derivative-free compass/pattern search on [xa,za,vy] minimizing
+//     |r(t0+P)-r(t0)| in the instantaneous Earth-Moon ROTATING frame — the
+//     frame where a three-body orbit is actually (quasi-)periodic.
+// Propagation: REAL ephemeris, ctx={center:'Moon',bodies:['Moon','Earth','Sun']},
+// singleFrame:true (N1 proved handoffs are pure coordinate bookkeeping).
+//
+// CONVERGED (measured, ~220 search evaluations): xa=18,417.97 km,
+// za=68,440.43 km, vy=-0.1449707 km/s at P=566,987.3 s (6.5624 d, EXACT 9:2):
+//   rotating-frame closure  = 345.6 km / 28.33 m/s   (old seed: 468.6 km)
+//   perilune/apolune (1 rev)= 5,544 / 71,203 km      (real Gateway-class shape)
+//   3-rev boundedness       = 3,199 / 72,195 km      (bounded, no escape)
+// NOTE the INERTIAL Moon-frame closure is 27,241 km and that is CORRECT
+// PHYSICS, not an error: the rotating frame turns ~86.5° per 6.56 d rev, so a
+// rotating-frame-periodic orbit never closes inertially. Every consumer that
+// phase-wraps this orbit MUST wrap in the rotating frame (see
+// refOrbitPropagatedStateAt / refOrbitSamplePropagated below); the old seed
+// tolerated inertial wrapping only because it was corrected inertially.
 const NRHO_NOMINAL_SEED = {
-  r_km: [0, 0, -3000],
-  v_kms: [1.764338088034402, 0, 0],
-  period_s: 406944,          // 4.71 days
-  closureKm: 468.6,          // measured one-rev position closure
+  r_km: [18219.2291035, 15494.38552169, -66718.04626085],
+  v_kms: [0.05068548537847, -0.07685209763387, -0.004006795365559],
+  period_s: 566987.3,          // 6.5624 d — the literal 9:2 synodic resonance
+  closureRotKm: 345.6,         // measured one-rev ROTATING-frame position closure
+  closureRotVelMs: 28.33,      // measured one-rev rotating-frame velocity closure
   frame: 'Moon',
   epochRef: 0,                // t0 = PROG_ACTIVE_PROGRAM.epochJD (epoch-anchored, quasi-periodic away from t0)
+};
+
+// ─── §17 N2 — EML1 planar Lyapunov seed (provenance) ────────────────────────
+// Same harness (`node tests/corrector_harness.js lyap`), same rotating-frame
+// pattern search, 2026-07-14. Seed on the Earth-Moon line Moon-ward of L1
+// (L1 at -55,835 km from the Moon at t0), planar (z≈0), free [vy, P].
+// CONVERGED: vy=-0.1593066 km/s, P=1,073,193 s = 12.421 d:
+//   rotating-frame closure = 47.4 km / 16.94 m/s   (tightest orbit shipped)
+//   Moon-distance min/max  = 9,812 / 41,118 km
+//   3-rev boundedness      = 9,813 / 41,116 km     (essentially invariant)
+const EML1_LYAPUNOV_SEED = {
+  r_km: [-34060.04038065, -22296.1086471, -3206.293042091],
+  v_kms: [0.1520427319945, -0.2305354836106, -0.01201930117416],
+  period_s: 1073193.0,         // 12.421 d
+  closureRotKm: 47.4,
+  closureRotVelMs: 16.94,
+  frame: 'Moon',
+  epochRef: 0,
+};
+
+// ─── §17 N2 — EML1/EML2 southern halo seeds (provenance) ────────────────────
+// Same harness (`node tests/corrector_harness.js eml1|eml2`), free-amplitude
+// rotating-frame pattern search + fine polish restart, 2026-07-14. These are
+// the single-shooting basin floors in the real ephemeris model — halos are
+// genuinely quasi-periodic there, and EML2's is strongly unstable:
+//   EML1 halo: closure 672.5 km / 44.12 m/s, P=11.106 d, r 51,488–61,496 km
+//              (3-rev min decays to 4,956 km — unstable, as real halos are)
+//   EML2 halo: closure 1,459.7 km / 45.97 m/s, P=13.711 d, r 48,011–73,856 km
+//              (3-rev max ESCAPES to 705,611 km — L2 halos e-fold in days)
+// Both are safe to ship because every catalog read path phase-wraps to at
+// most ONE period from the seed (refOrbitPropagatedStateAt /
+// refOrbitSamplePropagated) — the wrap acts as idealized station-keeping, so
+// the multi-rev divergence never reaches a user-visible path. Documented as
+// a critique in MATH.md §7v, not hidden.
+const EML1_HALO_SEED = {
+  r_km: [-45495.62608715, -28438.46343298, -30052.02700166],
+  v_kms: [0.03974905976731, -0.06026969258125, -0.003142247672519],
+  period_s: 959543.8,          // 11.106 d
+  closureRotKm: 672.5,
+  closureRotVelMs: 44.12,
+  frame: 'Moon',
+  epochRef: 0,
+};
+const EML2_HALO_SEED = {
+  r_km: [53455.26172791, 37077.6876603, -34963.64865522],
+  v_kms: [-0.01586593820016, 0.02405680092647, 0.001254236142279],
+  period_s: 1184607.2,         // 13.711 d
+  closureRotKm: 1459.7,
+  closureRotVelMs: 45.97,
+  frame: 'Moon',
+  epochRef: 0,
 };
 
 const PROG_ORBIT_CATALOG_BUILTIN = [
@@ -13967,14 +14030,32 @@ const PROG_ORBIT_CATALOG_BUILTIN = [
     peri: 35786, apo: 35786, inc: 0 },
   { id: 'llo-100',      name: 'LLO 100 (polar)', body: 'Moon',  kind: 'keplerian',
     peri: 100,   apo: 100,   inc: 90 },
-  { id: 'nrho-nominal', name: 'Lunar NRHO (9:2-class)', body: 'Moon', kind: 'propagated',
+  { id: 'nrho-nominal', name: 'Lunar NRHO (true 9:2)', body: 'Moon', kind: 'propagated',
     frame: NRHO_NOMINAL_SEED.frame,
     seedState: { r: NRHO_NOMINAL_SEED.r_km.slice(), v: NRHO_NOMINAL_SEED.v_kms.slice() },
     period_s: NRHO_NOMINAL_SEED.period_s,
     // approximate peri/apo for label/culling purposes only — real shape comes
     // from refOrbitSamplePropagated; NOT authoritative Keplerian elements.
-    peri: 3000, apo: 60000, inc: null,
+    peri: 5544, apo: 71203, inc: null,
     note: 'propagated — see NRHO_NOMINAL_SEED provenance comment above' },
+  { id: 'eml1-lyapunov', name: 'EML1 Lyapunov', body: 'Moon', kind: 'propagated',
+    frame: EML1_LYAPUNOV_SEED.frame,
+    seedState: { r: EML1_LYAPUNOV_SEED.r_km.slice(), v: EML1_LYAPUNOV_SEED.v_kms.slice() },
+    period_s: EML1_LYAPUNOV_SEED.period_s,
+    peri: 9812, apo: 41118, inc: null,
+    note: 'propagated — see EML1_LYAPUNOV_SEED provenance comment above' },
+  { id: 'eml1-halo-s', name: 'EML1 Halo (southern)', body: 'Moon', kind: 'propagated',
+    frame: EML1_HALO_SEED.frame,
+    seedState: { r: EML1_HALO_SEED.r_km.slice(), v: EML1_HALO_SEED.v_kms.slice() },
+    period_s: EML1_HALO_SEED.period_s,
+    peri: 51488, apo: 61496, inc: null,
+    note: 'propagated — see EML1_HALO_SEED provenance comment above' },
+  { id: 'eml2-halo-s', name: 'EML2 Halo (southern)', body: 'Moon', kind: 'propagated',
+    frame: EML2_HALO_SEED.frame,
+    seedState: { r: EML2_HALO_SEED.r_km.slice(), v: EML2_HALO_SEED.v_kms.slice() },
+    period_s: EML2_HALO_SEED.period_s,
+    peri: 48011, apo: 73856, inc: null,
+    note: 'propagated — see EML2_HALO_SEED provenance comment above' },
   // NOTE: builtin entries deliberately leave lan/argp UNSET — "free" per the
   // task's instruction ("builtins: lan/argp unset = free"): a binder resolves
   // whatever plane it needs; only a user one-off pins a specific lan/argp.
@@ -14057,37 +14138,104 @@ function refOrbitResolve(id) {
   };
 }
 
+// ── §17 N2 — Earth-Moon rotating frame (the frame where libration orbits are
+// actually periodic). A rotating-frame-periodic orbit does NOT close in the
+// inertial Moon frame (the frame turns ~86.5°/rev for the NRHO — measured
+// inertial "closure" 27,241 km on a 345.6 km rotating-frame closure), so
+// phase-wrapping MUST happen here: wrap in rotating coordinates at the
+// wrapped epoch, reconstruct inertial at the TRUE epoch. Same math as
+// tests/corrector_harness.js's emFrame/toRot/fromRot (keep in sync).
+function _refEmRotBasis(t) {
+  const e = physBodyStateAt('Earth', t), m = physBodyStateAt('Moon', t);
+  const rE = physSub(e.r, m.r), vE = physSub(e.v, m.v);   // Earth rel Moon
+  const d = physMag(rE);
+  const xh = physScale(rE, -1 / d);                        // +x: away from Earth (L2 side)
+  const h = physCross(rE, vE);
+  const om = physScale(h, 1 / (d * d));                    // instantaneous angular velocity
+  const zh = physScale(om, 1 / physMag(om));
+  const yh = physCross(zh, xh);
+  return { xh, yh, zh, om };
+}
+function _refToRot(state, t) {
+  const f = _refEmRotBasis(t);
+  const vr = physSub(state.v, physCross(f.om, state.r));
+  const proj = a => [physDot(a, f.xh), physDot(a, f.yh), physDot(a, f.zh)];
+  return { r: proj(state.r), v: proj(vr) };
+}
+function _refFromRot(rRot, vRot, t) {
+  const f = _refEmRotBasis(t);
+  const mk = c => physAdd(physAdd(physScale(f.xh, c[0]), physScale(f.yh, c[1])), physScale(f.zh, c[2]));
+  const r = mk(rRot);
+  return { r, v: physAdd(mk(vRot), physCross(f.om, r)) };
+}
+// Only Moon-frame refs get the rotating-frame treatment (the basis is the
+// Earth-Moon line; another frame would need its own primary pair).
+function _refRotCapable(res) {
+  return res.frame === 'Moon' && typeof physBodyStateAt === 'function';
+}
+
 // Phase 4 U2: propagate a SEEDED propagated ref one full period, returning
 // samples in its own body-centered frame (Moon for nrho-nominal). Consumers
 // (ring rendering, orbit inspector, DEPLOY anchor sampling) all go through
 // this ONE function so the "what does this orbit actually look like" answer
 // never diverges. Returns [] if unseeded/unresolvable/integrator unavailable.
+// N2: samples are re-based through the rotating frame to the SEED epoch —
+// the drawn loop is the orbit's rotating-frame shape (which closes to the
+// corrected 345.6 km), rendered in inertial Moon axes frozen at t=0. The raw
+// inertial trace would show the ~27,000 km frame-rotation gap as a broken
+// ring; frame-aware live rendering is N3's job (per-sample-epoch transform).
 function refOrbitSamplePropagated(id, nSamples) {
   const res = refOrbitResolve(id);
   if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return [];
   if (typeof physPropagateSegment !== 'function') return [];
   const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
   const state0 = { r: res.seedState.r.slice(), v: res.seedState.v.slice() };
-  const out = physPropagateSegment(state0, 0, res.period_s, ctx, { maxSamples: nSamples || 200 });
+  // singleFrame (N1): the true 9:2 apolune (71,203 km) crosses the Moon-SOI
+  // bookkeeping boundary — without it, handoff re-centers samples to Earth
+  // mid-loop and every consumer would have to re-patch them back. Same
+  // dynamics (N1 gate-proof), one frame for all samples.
+  const out = physPropagateSegment(state0, 0, res.period_s, ctx, { maxSamples: nSamples || 200, singleFrame: true });
   if (!out || !out.samples) return [];
-  return out.samples.map(s => ({ t: s.t, r: s.r, frame: s.frame }));
+  if (!_refRotCapable(res)) return out.samples.map(s => ({ t: s.t, r: s.r, frame: s.frame }));
+  return out.samples.map(s => {
+    const rot = _refToRot({ r: s.r, v: [0, 0, 0] }, s.t);   // position-only re-base
+    const back = _refFromRot(rot.r, [0, 0, 0], 0);
+    return { t: s.t, r: back.r, frame: s.frame };
+  });
 }
 
 // Phase 4 U3: sample a seeded propagated ref AT a given mission-time offset
 // (used by the DEPLOY anchor to place the vehicle at the right phase within
 // the period rather than always at the seed epoch). `metOffset` is seconds
 // since the deploy event; phase-wraps into [0, period_s).
+// N2: the wrap happens in the ROTATING frame — propagate to the wrapped
+// phase, take rotating coordinates at that epoch, reconstruct inertial at
+// the TRUE epoch. This makes the returned state physically sensible for
+// epochs beyond one period, and doubles as idealized station-keeping for the
+// unstable halo entries (no consumer ever propagates a seed past one period).
 function refOrbitPropagatedStateAt(id, metOffset) {
   const res = refOrbitResolve(id);
   if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return null;
   if (typeof physPropagateSegment !== 'function') return null;
   const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
-  const phase = ((metOffset || 0) % res.period_s + res.period_s) % res.period_s;
+  const t = metOffset || 0;
+  const phase = (t % res.period_s + res.period_s) % res.period_s;
   const state0 = { r: res.seedState.r.slice(), v: res.seedState.v.slice() };
-  if (phase < 1) return { r: state0.r, v: state0.v, frame: res.frame };
-  const out = physPropagateSegment(state0, 0, phase, ctx, { maxSamples: 4 });
-  if (!out || !out.stateF) return null;
-  return { r: out.stateF.r, v: out.stateF.v, frame: out.frame };
+  const canRot = _refRotCapable(res);
+  let stPhase;
+  if (phase < 1) stPhase = state0;
+  else {
+    // singleFrame: same rationale as refOrbitSamplePropagated — stay in the
+    // seed's frame even where the loop crosses the SOI bookkeeping boundary.
+    const out = physPropagateSegment(state0, 0, phase, ctx, { maxSamples: 4, singleFrame: true });
+    if (!out || !out.stateF) return null;
+    stPhase = out.stateF;
+  }
+  // same rev (t == phase): no re-basing needed
+  if (!canRot || Math.abs(t - phase) < 1) return { r: stPhase.r, v: stPhase.v, frame: res.frame };
+  const rot = _refToRot(stPhase, phase);
+  const back = _refFromRot(rot.r, rot.v, t);
+  return { r: back.r, v: back.v, frame: res.frame };
 }
 
 function refOrbitCatalogList() {
@@ -14164,8 +14312,8 @@ const PROG_NM_NODES = [
   // orbitRefId marker (absent on every other builtin node) is what routes
   // the leg builder (565's nrhoRefAfter) to physSolveNrhoTransfer instead of
   // the generic Keplerian moon-leg shooter.
-  { id:'nrho',          label:'NRHO',    sub:'Gateway (9:2-class)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
-    orbit:{ type:'circular', body:'Moon',  perigee:3000, apogee:60000, inclination:58 },
+  { id:'nrho',          label:'NRHO',    sub:'Gateway (true 9:2)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
+    orbit:{ type:'circular', body:'Moon',  perigee:5544, apogee:71203, inclination:58 },
     orbitRefId:'nrho-nominal' },
   // Surface node at Moon body center — disc is the node.
   { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:192, r:12,

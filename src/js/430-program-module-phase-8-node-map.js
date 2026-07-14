@@ -61,8 +61,8 @@ const PROG_NM_NODES = [
   // orbitRefId marker (absent on every other builtin node) is what routes
   // the leg builder (565's nrhoRefAfter) to physSolveNrhoTransfer instead of
   // the generic Keplerian moon-leg shooter.
-  { id:'nrho',          label:'NRHO',    sub:'Gateway (9:2-class)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
-    orbit:{ type:'circular', body:'Moon',  perigee:3000, apogee:60000, inclination:58 },
+  { id:'nrho',          label:'NRHO',    sub:'Gateway (true 9:2)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
+    orbit:{ type:'circular', body:'Moon',  perigee:5544, apogee:71203, inclination:58 },
     orbitRefId:'nrho-nominal' },
   // Surface node at Moon body center — disc is the node.
   { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:192, r:12,
