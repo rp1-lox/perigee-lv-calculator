@@ -343,6 +343,25 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-hint-chip{position:absolute;top:8px;right:8px;z-index:2;font-family:var(--mono);font-size:9px;color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);padding:4px 9px;border-radius:3px;cursor:pointer;user-select:none;}
 .traj-hint-chip:hover{background:var(--accent-tint-strongest);}
 
+/* Timeline dock (MISSION_MODEL_V2 §12) — Band lanes merged onto the scrubber's
+   shared MET axis, docked below the trajectory canvas. Lanes and the scrub
+   track below them share the exact same %-left mapping over [0,maxMet], so a
+   burn tick lines up with its lane marker at any collapsed/expanded height. */
+.traj-timeline-dock{display:flex;align-items:stretch;gap:4px;flex-shrink:0;padding:6px 2px 0;}
+.ttd-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.ttd-lanes{display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
+.ttd-lanes.expanded{max-height:220px;}
+.ttd-lane-row{display:flex;align-items:center;gap:6px;}
+.ttd-lane-label{flex-shrink:0;width:8.5em;font-family:var(--mono);font-size:8px;color:var(--text-dim);border-left:3px solid var(--border);padding-left:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ttd-lane-track{position:relative;flex:1;background:var(--input);border:1px solid var(--border);border-radius:2px;overflow:visible;}
+.ttd-seg{position:absolute;top:0;bottom:0;border-top:2px solid transparent;cursor:pointer;}
+.ttd-seg:hover{filter:brightness(1.25);}
+.ttd-burn{position:absolute;top:-7px;transform:translateX(-50%);font-size:7px;line-height:1;color:var(--accent2);cursor:pointer;user-select:none;}
+.ttd-burn:hover{color:var(--accent);}
+.ttd-more-row .ttd-more-track{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:7.5px;color:var(--text-dim);background:transparent;border-style:dashed;cursor:default;}
+.ttd-expand-btn{flex-shrink:0;align-self:center;width:16px;height:16px;line-height:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-dim);background:var(--input);border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:0;}
+.ttd-expand-btn:hover{color:var(--text-bright);border-color:var(--border-bright);}
+
 /* R3.4 gizmo node menu (+1/-1 orbit, delete, close) — plain HTML div positioned
    canvas-relative (canvas is position:relative; _trajWorldToScreen returns
    canvas-relative px already), NOT inside the SVG overlay so buttons can use
