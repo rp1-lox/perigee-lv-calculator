@@ -25,6 +25,12 @@ function devSeedApolloMission(opts) {
   const lm  = _scEdSC.find(s => /lunar module|(^|\s)lm(\s|$)/i.test(s.name));
   m.payloadScIds = [csm, lm].filter(Boolean).map(s => s.spacecraftId);
   missionExecLaunch(m.missionId, { silent: true });
+  // MISSION_MODEL_V2 §13 T3 item 3: the seed's LEO parking orbit (185x185 @28.5) matches
+  // the builtin 'leo-185' catalog entry exactly — bind it so the seed exercises T2's
+  // ref-binding path end to end (this also lets refOrbitUpdate/recompute verification
+  // move a real seeded launch, not just a synthetic one).
+  const launchEv = m.log.find(e => e.type === 'LAUNCH');
+  if (launchEv) { launchEv.orbitRefId = 'leo-185'; missionRecompute(m); }
   if (opts.maneuvers !== false) {
     missionExecManeuver(m.missionId, 'leo', 'tlc');   // trans-lunar injection
     missionExecManeuver(m.missionId, 'tlc', 'llo');   // lunar orbit insertion

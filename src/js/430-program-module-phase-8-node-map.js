@@ -590,4 +590,21 @@ function _nmClassifySettledOrbit(elements, frameBody, nodes, tol) {
   return _nmMatchOrbitToNode(frameBody, periKm, apoKm, incDeg, nodes, tol);
 }
 
+// ── MISSION_MODEL_V2 Phase 3 T3 — dwell/transit terminology ─────────────────
+// §4.4/§13 T3: "dwell = node, transit = edge." TLI/TMI/LOI/MOI etc. name BURNS
+// on a transfer edge, never nodes. Pure lookup, no DOM — canon table for the
+// bodies the app models transfers to/from; generic fallback for anything else.
+const _NM_BURN_NAME_TABLE = {
+  'Earth>Moon':   { dep: 'TLI', arr: 'LOI' },
+  'Moon>Earth':   { dep: 'TEI', arr: 'reentry' },
+  'Earth>Mars':   { dep: 'TMI', arr: 'MOI' },
+  'Mars>Earth':   { dep: 'TEI', arr: 'reentry' },
+  'Earth>Venus':  { dep: 'TVI', arr: 'VOI' },
+  'Venus>Earth':  { dep: 'TEI', arr: 'reentry' },
+};
+function _nmBurnNames(fromBody, toBody) {
+  const key = (fromBody || '') + '>' + (toBody || '');
+  return _NM_BURN_NAME_TABLE[key] || { dep: 'injection', arr: 'insertion' };
+}
+
 // ── Phase 8 tests (pure JS, no DOM) ──────────────────────────────────────────

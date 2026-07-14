@@ -2747,6 +2747,60 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 Phase 3 T2/T3 — orbitRefId binding + dwell/transit burn names
+// ═══════════════════════════════════════════════════════════════════════════
+// T2 gate (§13): two events bound to one user ref; a ref edit moves BOTH inline
+// orbits on the next recompute; detaching one (orbitRefId=null) isolates it; a
+// deleted ref keeps the cached inline values and stamps _refNote (never throws).
+// The DEPLOY events use a bogus spacecraftId on purpose — the replay marks them
+// FAILED, but the T2 ref-resolution block runs BEFORE the type dispatch, which
+// is exactly the seam under test (no DOM, no runtime vehicles needed).
+{
+  vm.runInContext(
+    "if (typeof PROG_ACTIVE_PROGRAM==='undefined') globalThis.PROG_ACTIVE_PROGRAM={vehicles:{}};" +
+    "if (typeof _scEdSC==='undefined') globalThis._scEdSC=[];", sandbox);
+  const t2 = vm.runInContext(`(function(){
+    const ref = refOrbitAdd({ name:'t2 gate ref', body:'Earth', kind:'keplerian', peri:250, apo:250, inc:45 });
+    const mk = () => ({ type:'DEPLOY', spacecraftId:'nope', orbit:{ body:'Earth', alt_km:1, apo_km:1, inc_deg:1 }, orbitRefId: ref.id });
+    const m = { missionId:'t2gate', name:'t', log:[mk(), mk()], groups:{}, vehicleIds:[], vehicleId:null,
+                launchOrbit:{ body:'Earth', alt_km:185, apo_km:185, inc_deg:28.5, lan_deg:0 }, modelVersion:2 };
+    missionRecompute(m);
+    const boundBoth = m.log[0].orbit.alt_km === 250 && m.log[0].orbit.inc_deg === 45 && m.log[1].orbit.alt_km === 250;
+    refOrbitUpdate(ref.id, { inc:60, peri:300, apo:300 });
+    m.log[1].orbitRefId = null;                       // detach the second binder
+    missionRecompute(m);
+    const editMovesBound = m.log[0].orbit.inc_deg === 60 && m.log[0].orbit.alt_km === 300;
+    const detachIsolates = m.log[1].orbit.inc_deg === 45 && m.log[1].orbit.alt_km === 250;
+    refOrbitDelete(ref.id);
+    m.log[0].orbitRefId = ref.id;                     // now dangling
+    missionRecompute(m);
+    const deletedKeepsCache = m.log[0]._refNote != null && m.log[0].orbit.alt_km === 300;
+    return { boundBoth, editMovesBound, detachIsolates, deletedKeepsCache };
+  })()`, sandbox);
+  ok('T2: two events bound to one user ref resolve to its elements', t2.boundBoth);
+  ok('T2: refOrbitUpdate + recompute moves the still-bound event', t2.editMovesBound);
+  ok('T2: detached event keeps its cached inline orbit', t2.detachIsolates);
+  ok('T2: deleted ref keeps cached values + stamps _refNote (no throw)', t2.deletedKeepsCache);
+}
+
+// T3 gate (§13): _nmBurnNames canon table + fallback, and the terminology helper —
+// transit nodes never label as orbits you park in.
+{
+  const bn = pair => vm.runInContext(`_nmBurnNames('${pair.split('>')[0]}','${pair.split('>')[1]}')`, sandbox);
+  ok('T3: Earth→Moon = {TLI, LOI}', (() => { const r = bn('Earth>Moon'); return r.dep === 'TLI' && r.arr === 'LOI'; })());
+  ok('T3: Moon→Earth = {TEI, reentry}', (() => { const r = bn('Moon>Earth'); return r.dep === 'TEI' && r.arr === 'reentry'; })());
+  ok('T3: Earth→Mars = {TMI, MOI}', (() => { const r = bn('Earth>Mars'); return r.dep === 'TMI' && r.arr === 'MOI'; })());
+  ok('T3: Earth→Venus = {TVI, VOI}', (() => { const r = bn('Earth>Venus'); return r.dep === 'TVI' && r.arr === 'VOI'; })());
+  ok('T3: unknown pair falls back to {injection, insertion}', (() => { const r = bn('Earth>Jupiter'); return r.dep === 'injection' && r.arr === 'insertion'; })());
+  const lblTo = vm.runInContext("_missionManeuverNodeLabel('tlc','to')", sandbox);
+  const lblFrom = vm.runInContext("_missionManeuverNodeLabel('tlc','from')", sandbox);
+  ok('T3: transit destination label is the burn name ("TLI (trans-lunar)")', lblTo === 'TLI (trans-lunar)');
+  ok('T3: transit origin label is the corridor coast ("trans-lunar coast")', lblFrom === 'trans-lunar coast');
+  const lblDwell = vm.runInContext("_missionManeuverNodeLabel('llo','to')", sandbox);
+  ok('T3: dwell node label unchanged (LLO …)', /^LLO/.test(lblDwell));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

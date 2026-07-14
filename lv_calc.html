@@ -14510,6 +14510,23 @@ function _nmClassifySettledOrbit(elements, frameBody, nodes, tol) {
   return _nmMatchOrbitToNode(frameBody, periKm, apoKm, incDeg, nodes, tol);
 }
 
+// ── MISSION_MODEL_V2 Phase 3 T3 — dwell/transit terminology ─────────────────
+// §4.4/§13 T3: "dwell = node, transit = edge." TLI/TMI/LOI/MOI etc. name BURNS
+// on a transfer edge, never nodes. Pure lookup, no DOM — canon table for the
+// bodies the app models transfers to/from; generic fallback for anything else.
+const _NM_BURN_NAME_TABLE = {
+  'Earth>Moon':   { dep: 'TLI', arr: 'LOI' },
+  'Moon>Earth':   { dep: 'TEI', arr: 'reentry' },
+  'Earth>Mars':   { dep: 'TMI', arr: 'MOI' },
+  'Mars>Earth':   { dep: 'TEI', arr: 'reentry' },
+  'Earth>Venus':  { dep: 'TVI', arr: 'VOI' },
+  'Venus>Earth':  { dep: 'TEI', arr: 'reentry' },
+};
+function _nmBurnNames(fromBody, toBody) {
+  const key = (fromBody || '') + '>' + (toBody || '');
+  return _NM_BURN_NAME_TABLE[key] || { dep: 'injection', arr: 'insertion' };
+}
+
 // ── Phase 8 tests (pure JS, no DOM) ──────────────────────────────────────────
 // ─── PROGRAM MODULE — Phase 9: Spacecraft Definition Editor ─────────────────
 //
@@ -18374,6 +18391,17 @@ function _missionEventEditFieldsHTML(m, idx) {
     }).join('') || '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">No spacecraft defined</div>';
     const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
     const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
+    // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
+    // sets orbitRefId + fills the fields; hand-editing a bound field clears orbitRefId
+    // (see missionApplyLaunchEdit / missionLaunchOrbitDetach) and shows '(custom)'.
+    const refOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList() : [];
+    const refSelectHTML = `
+        <div class="cfg-item"><label class="cfg-label">Ref Orbit</label>
+          <select id="edit-launch-ref-${id}" style="${_es}" onchange="missionLaunchRefPick('${id}',${idx},this.value)">
+            <option value="">— custom —</option>
+            ${refOpts.map(r => `<option value="${r.id}"${r.id === e.orbitRefId ? ' selected' : ''}>${_mrEsc(r.name)}${r.builtin ? '' : ' (user)'}</option>`).join('')}
+          </select>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:6px;">${e.orbitRefId ? '' : '(custom)'}${e._refNote ? ' // ' + _mrEsc(e._refNote) : ''}</span></div>`;
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <label class="cfg-label">Launch Vehicle</label>
@@ -18381,10 +18409,11 @@ function _missionEventEditFieldsHTML(m, idx) {
         <label class="cfg-label">Payloads</label>
         <div style="margin:4px 0 8px;">${payChecks}</div>
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
+          ${refSelectHTML}
           <div class="cfg-item"><label class="cfg-label">Body</label><select id="edit-launch-body-${id}" style="${_es}">${bodies.map(b => `<option${b === (o.body || 'Earth') ? ' selected' : ''}>${b}</option>`).join('')}</select></div>
-          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;"></div>
-          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;"></div>
-          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;"></div>
+          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
         </div>
         ${_missionLaunchPlanHTML(m, idx, e)}
         ${_missionLaunchGeoHTML(m, idx, e)}
@@ -19151,6 +19180,25 @@ function missionRecompute(m) {
     const e = expanded[evIdx];
     const kid = e._authIdx + (e._rep ? ':' + e._rep : '');   // stable per authored-event + repetition
     const authEntry = (e._authIdx != null && m.log[e._authIdx]) ? m.log[e._authIdx] : null;
+    // T2 (§13): if this event is bound to a reference orbit, overwrite its inline orbit
+    // fields with the ref's CURRENT resolution before replay consumes them — a catalog
+    // edit propagates to every binder on next recompute (cached-resolution semantics).
+    // Missing/deleted/stub ref: keep the cached inline values, stamp a transient note,
+    // never throw.
+    if ((e.type === 'LAUNCH' || e.type === 'DEPLOY') && e.orbitRefId) {
+      const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(e.orbitRefId) : null;
+      if (res && res.peri != null) {
+        const o = e.orbit || (e.orbit = {});
+        o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
+        if (res.lan != null) o.lan_deg = res.lan;
+        if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
+        delete e._refNote;
+        if (authEntry) { authEntry.orbit = { ...o }; if (e.type === 'LAUNCH') authEntry.launchOrbit = { ...o }; delete authEntry._refNote; }
+      } else {
+        e._refNote = 'orbit ref unresolved — using cached values';
+        if (authEntry) authEntry._refNote = e._refNote;
+      }
+    }
     let durationAuto = 0;
     if (e.type === 'LAUNCH') {
       const r = _missionApplyLaunch(m, e);
@@ -19214,6 +19262,12 @@ function missionRecompute(m) {
       // sync), so every read below is unchanged from the legacy MANEUVER path.
       active = resolveActive(e);
       if (active) e.vehicleId = active.vehicleId;
+      // §13 T3: labels are display-only mirrors — refresh them from the current
+      // terminology helper each replay so cached logs pick up the dwell/transit
+      // phrasing ("TLI (trans-lunar)" not "TLC (trans-lunar)") without migration.
+      if (e.fromNode) e.fromLabel = _missionManeuverNodeLabel(e.fromNode, 'from');
+      if (e.toNode)   e.toLabel   = _missionManeuverNodeLabel(e.toNode, 'to');
+      if (authEntry && authEntry !== e) { authEntry.fromLabel = e.fromLabel; authEntry.toLabel = e.toLabel; }
       // T2 ordering devil: this MANEUVER's duration is the COAST that PRECEDES it
       // (transit-corridor convention, critique 16e — the coast is charged on the leg
       // EXITING a corridor, and the maneuver's burn is the arrival burn at the END of
@@ -19553,8 +19607,8 @@ function missionApplyManeuverEdit(id, idx) {
   const e = m.log[idx]; if(!e || !_evIsSolvedManeuver(e)) return;
   const from = document.getElementById('edit-mv-from-'+id)?.value || e.fromNode;
   const to   = document.getElementById('edit-mv-to-'+id)?.value || e.toNode;
-  const lbl = nid => { const n = _missionNmNodeById(nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
-  e.fromNode = from; e.toNode = to; e.fromLabel = lbl(from); e.toLabel = lbl(to);
+  e.fromNode = from; e.toNode = to;
+  e.fromLabel = _missionManeuverNodeLabel(from, 'from'); e.toLabel = _missionManeuverNodeLabel(to, 'to');
   e.target = { fromNode: from, toNode: to };
   missionRecompute(m);   // recompute refreshes ΔV/prop from the new node pair (steps unchanged)
   missionRenderDetail();
@@ -19813,6 +19867,32 @@ function missionLaunchGeoManualLan(id, idx) {
   const lanField = document.getElementById('edit-launch-lan-' + id);
   const out = document.getElementById('launch-geo-readout-' + id);
   if (out) out.innerHTML = _missionLaunchGeoReadoutHTML(site, incDeg, null, lanField ? lanField.value : null);
+}
+
+// T2: picking a catalog entry binds orbitRefId + fills the inline fields (which become
+// its cached resolution). Re-renders the card so the fields reflect the pick immediately.
+function missionLaunchRefPick(id, idx, refId) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  if (!refId) { e.orbitRefId = null; missionRenderDetail(); return; }
+  const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
+  e.orbitRefId = refId;
+  if (res && res.peri != null) {
+    const o = e.orbit || (e.orbit = {});
+    o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
+    if (res.lan != null) o.lan_deg = res.lan;
+    e.launchOrbit = { ...o };
+    delete e._refNote;
+  }
+  missionRecompute(m);
+  missionRenderDetail();
+}
+// Hand-editing a bound field detaches it to a one-off (explicit, per §13 T2 spec).
+function missionLaunchOrbitDetach(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH' || !e.orbitRefId) return;
+  e.orbitRefId = null;
+  delete e._refNote;
 }
 
 function missionApplyLaunchEdit(id, idx) {
@@ -20751,7 +20831,7 @@ function missionExecManeuver(id, fromId, toId) {
   const m = _missionGet(id);
   if (!m || !fromId || !toId || fromId === toId) return;
   const res = progNmComputeEdgeDv(fromId, toId);
-  const lbl = nid => { const n = _missionNmNodeById(nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
+  const lbl = (nid, dir) => _missionManeuverNodeLabel(nid, dir);
   const actFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   // copy the draft step program (if any) onto the new maneuver; empty → legacy single burn
   const steps = (_missionAddMv && Array.isArray(_missionAddMv.steps) && _missionAddMv.steps.length)
@@ -20768,7 +20848,7 @@ function missionExecManeuver(id, fromId, toId) {
     target: { fromNode: fromId, toNode: toId },
     at: { kind: 'met', value_s: 0 },
     dvPro_ms: 0, dvRad_ms: 0, dvNrm_ms: 0,
-    fromNode: fromId, toNode: toId, fromLabel: lbl(fromId), toLabel: lbl(toId),
+    fromNode: fromId, toNode: toId, fromLabel: lbl(fromId, 'from'), toLabel: lbl(toId, 'to'),
     steps,
     activeKey: actFv ? actFv._originKey : null,
     activeName: actFv ? _missionVehicleDisplayName(actFv) : null,
@@ -21735,6 +21815,23 @@ function _missionNmNodeById(id) {
   return _missionNmNodes().find(n => n.id === id) || null;
 }
 
+// §13 T3 terminology: a maneuver endpoint label. Dwell orbits keep "LABEL (sub)".
+// Transit-corridor nodes stop reading as orbits you park in: as a DESTINATION the
+// label is the departure BURN name ("TLI (trans-lunar)"); as an ORIGIN it's the
+// corridor itself ("trans-lunar coast"). dir: 'to' | 'from'.
+function _missionManeuverNodeLabel(nid, dir) {
+  const n = _missionNmNodeById(nid);
+  if (!n) return nid;
+  if (n.orbit && n.orbit.type === 'transit') {
+    const corridor = n.sub || 'transit';
+    if (dir === 'from') return corridor + ' coast';
+    const names = (typeof _nmBurnNames === 'function')
+      ? _nmBurnNames(n.orbit.departure_body || n.orbit.body, n.orbit.destination) : null;
+    return names ? names.dep + ' (' + corridor + ')' : corridor;
+  }
+  return n.sub ? n.label + ' (' + n.sub + ')' : n.label;
+}
+
 // Convert an ORBIT_CATEGORIES entry to a node-map orbit spec (for ΔV physics).
 function _missionOrbitToNodeOrbit(o, planet) {
   if (o.mode === 'escape') {
@@ -21997,15 +22094,48 @@ function _missionNodeMapHTML(m) {
   const radiusOf = n => surfR[n.id] || n.r || 16;
   let edgesHTML = '';
   {
+    // §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
+    // (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
+    // between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
+    // the transit node itself is never drawn (see the nodes loop below). Minimal-
+    // log-change: m.log keeps its two MANEUVER entries; only this extraction merges
+    // them for display. A maneuver into/out of a transit node that does NOT chain to
+    // a dwell on both ends (e.g. authored but not yet continued) is simply not drawn
+    // as a stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
+    const isTransitId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type === 'transit'); };
+    const isDwellId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type !== 'transit' && n.orbit.type !== 'escape' && n.orbit.type !== 'surface'); };
+    const bodyOf = nid => { const n = byId[nid]; return n && n.orbit && (n.orbit.destination || n.orbit.body); };
+    const legs = [];
+    m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.fromNode && e.toNode && e.fromNode !== e.toNode) legs.push({ e, i }); });
+
     const pairs = {};
-    m.log.forEach((e, i) => {
-      if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode || e.fromNode === e.toNode) return;
+    const chipsByKey = {};
+    const usedLegs = new Set();
+    for (let li = 0; li < legs.length; li++) {
+      if (usedLegs.has(li)) continue;
+      const { e, i } = legs[li];
+      if (isDwellId(e.fromNode) && isTransitId(e.toNode)) {
+        const arrival = legs.slice(li + 1).find((l, off) => !usedLegs.has(li + 1 + off) && l.e.fromNode === e.toNode && isDwellId(l.e.toNode));
+        if (arrival) {
+          usedLegs.add(li); usedLegs.add(legs.indexOf(arrival));
+          const lo = e.fromNode, hi = arrival.e.toNode;
+          const k = lo + '::' + hi + '::t';
+          const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
+          pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
+          chipsByKey[k] = [
+            { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
+            { name: names.arr, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
+          ];
+          continue;
+        }
+      }
+      if (isTransitId(e.fromNode) || isTransitId(e.toNode)) continue;   // unpaired transit leg — no stop-to-stop line
       const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
       const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
       const k = lo + '::' + hi;
       if (!pairs[k]) pairs[k] = { lo, hi, loToHi: null, hiToLo: null };
       if (e.fromNode === lo) pairs[k].loToHi = i; else pairs[k].hiToLo = i;
-    });
+    }
     for (const k in pairs) {
       const p = pairs[k];
       const A = byId[p.lo], B = byId[p.hi];
@@ -22015,7 +22145,7 @@ function _missionNodeMapHTML(m) {
       const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
       const Ax = ax + ux * rA, Ay = ay + uy * rA, Bx = bx - ux * rB, By = by - uy * rB;   // clipped to node edges
       const bothWays = p.loToHi != null && p.hiToLo != null;
-      const latestIdx = Math.max(p.loToHi == null ? -1 : p.loToHi, p.hiToLo == null ? -1 : p.hiToLo);
+      const latestIdx = p.latestIdx != null ? p.latestIdx : Math.max(p.loToHi == null ? -1 : p.loToHi, p.hiToLo == null ? -1 : p.hiToLo);
       const col = 'var(--accent)';
       // R5 item 2: annotate from the physics side-table (_physTrajByMission via
       // _nmEdgePhysicsAnnotation, 430) — display only, NEVER touches ΔV (that
@@ -22023,9 +22153,11 @@ function _missionNodeMapHTML(m) {
       const ann = (typeof _nmEdgePhysicsAnnotation === 'function')
         ? _nmEdgePhysicsAnnotation(id, latestIdx) : { flown: false, label: 'estimated' };
       const annTitle = ann.flown ? ` — ${_tsEsc(ann.label)}` : ' — estimated (schematic)';
-      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}maneuver (click to open)${annTitle}</title>`;
+      const chips = chipsByKey[k];
+      const chipTitle = chips ? ' — ' + chips.map(c => `${c.name} ${Math.round(c.dv).toLocaleString()} m/s`).join(', ') : '';
+      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}</title>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
-      edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="${col}" stroke-width="2.5" opacity="0.85"/>`;
+      edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="${col}" stroke-width="2.5" opacity="0.85"${chips ? ' stroke-dasharray="6 3"' : ''}/>`;
       if (p.loToHi != null || bothWays) edgesHTML += _nmArrowHead(Ax, Ay, Bx, By, col, 2);   // arrow at hi edge
       if (p.hiToLo != null || bothWays) edgesHTML += _nmArrowHead(Bx, By, Ax, Ay, col, 2);   // arrow at lo edge
       if (ann.flown) {
@@ -22033,6 +22165,17 @@ function _missionNodeMapHTML(m) {
         const mx = (Ax + Bx) / 2, my = (Ay + By) / 2;
         edgesHTML += `<circle cx="${mx}" cy="${my}" r="4.5" fill="var(--bg)" stroke="var(--accent)" stroke-width="1.4"/>`;
         edgesHTML += `<text x="${mx}" y="${my + 2.5}" text-anchor="middle" font-family="var(--mono)" font-size="6.5px" fill="var(--accent)">✓</text>`;
+      }
+      // burn-name chips (TLI/LOI-style) at the 1/3 and 2/3 points of a merged transit edge.
+      if (chips) {
+        const at = t => [Ax + (Bx - Ax) * t, Ay + (By - Ay) * t];
+        chips.forEach((c, ci) => {
+          const [cx, cy] = at(ci === 0 ? 0.33 : 0.67);
+          const label = c.name.toUpperCase();
+          const tw = Math.max(30, label.length * 6 + 8);
+          edgesHTML += `<rect x="${cx - tw / 2}" y="${cy - 8}" width="${tw}" height="16" rx="8" fill="var(--bg)" stroke="var(--accent)" stroke-width="1.2" opacity="0.95"/>`;
+          edgesHTML += `<text x="${cx}" y="${cy + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="var(--accent)">${_tsEsc(label)}</text>`;
+        });
       }
       edgesHTML += `</g>`;
     }
@@ -22092,10 +22235,14 @@ function _missionNodeMapHTML(m) {
     });
   }
 
-  // ── nodes (skip surface — drawn as the body disc above) ──
+  // ── nodes (skip surface — drawn as the body disc above; skip transit — §13 T3:
+  //    "dwell = node, transit = edge." transit-type entries (TLC etc.) stop being
+  //    drawn as stops; their hop renders as part of the merged dwell-to-dwell edge
+  //    above, with named burn chips. The SOI-ring injection affordance (canInject,
+  //    above) remains the way to start a departure without a visible transit node.) ──
   let nodesHTML = '';
   for (const n of PROG_NM_NODES) {
-    if (n.orbit && n.orbit.type === 'surface') continue;
+    if (n.orbit && (n.orbit.type === 'surface' || n.orbit.type === 'transit')) continue;
     const [x, y] = posOf(n);
     const inPath    = path.includes(n.id);
     const isCurrent = path.length > 0 && path[path.length - 1] === n.id;
@@ -22743,6 +22890,12 @@ function devSeedApolloMission(opts) {
   const lm  = _scEdSC.find(s => /lunar module|(^|\s)lm(\s|$)/i.test(s.name));
   m.payloadScIds = [csm, lm].filter(Boolean).map(s => s.spacecraftId);
   missionExecLaunch(m.missionId, { silent: true });
+  // MISSION_MODEL_V2 §13 T3 item 3: the seed's LEO parking orbit (185x185 @28.5) matches
+  // the builtin 'leo-185' catalog entry exactly — bind it so the seed exercises T2's
+  // ref-binding path end to end (this also lets refOrbitUpdate/recompute verification
+  // move a real seeded launch, not just a synthetic one).
+  const launchEv = m.log.find(e => e.type === 'LAUNCH');
+  if (launchEv) { launchEv.orbitRefId = 'leo-185'; missionRecompute(m); }
   if (opts.maneuvers !== false) {
     missionExecManeuver(m.missionId, 'leo', 'tlc');   // trans-lunar injection
     missionExecManeuver(m.missionId, 'tlc', 'llo');   // lunar orbit insertion
