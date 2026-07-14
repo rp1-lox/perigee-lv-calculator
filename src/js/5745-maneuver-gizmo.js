@@ -1687,9 +1687,15 @@ function _trajGizmoRunScratch(mode) {
     physScale(node.rHat, (g.dv.rad || 0) / 1000)),
     physScale(node.hHat, (g.dv.nrm || 0) / 1000));
   const state = { r: node.r, v: physAdd(node.v, dvVec) };
-  const parent = typeof physParentOf === 'function' ? physParentOf(node.body) : null;
-  const fullBodies = [...new Set([node.body, parent || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
+  // N1b: full-fidelity tier through the one body-set resolver (contextual =
+  // the old ad-hoc list verbatim; 'full' setting unions the whole system).
+  const fullBodies = (typeof physBodySetFor === 'function')
+    ? physBodySetFor({ center: node.body, kind: 'local' })
+    : [...new Set([node.body, (typeof physParentOf === 'function' && physParentOf(node.body)) || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
   const cheap = mode !== 'full';
+  // N1: the cheap drag tier's one-body list IS the explicit truncation opt-in
+  // (MISSION_MODEL_V2 §17 N1) — near-two-body scan quality while dragging;
+  // solvers and committed legs never truncate.
   const bodies = cheap ? [node.body] : fullBodies;
   const maxSamples = cheap ? 64 : 128;
   let horizon = 30 * 86400;

@@ -24,6 +24,78 @@
 
 const PHYS_ENABLED = true;
 
+// ── N1b (MISSION_MODEL_V2 §17) — physics fidelity + the ONE body-set builder ─
+// Every propagation body list is constructed here, so "contextual" has a
+// single auditable definition and "full" is one switch. The recipes below
+// reproduce the pre-N1b ad-hoc lists BYTE-IDENTICALLY (including array order —
+// physAccel sums in list order, so order changes would move float rounding).
+const PHYS_FIDELITY_FULL_BODIES = ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars',
+  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'];
+let _physFidelity = 'contextual';   // 'contextual' | 'full' — session-persisted (455)
+function physFidelity() { return _physFidelity; }
+/** Set the fidelity mode. Returns true if it CHANGED (callers recompute).
+ *  A change invalidates the shooter caches — cached solves flew a different
+ *  force model. */
+function physSetFidelity(mode) {
+  const next = mode === 'full' ? 'full' : 'contextual';
+  if (next === _physFidelity) return false;
+  _physFidelity = next;
+  try {
+    for (const k of Object.keys(_physShootCache)) delete _physShootCache[k];
+    for (const k of Object.keys(_physNrhoShootCache)) delete _physNrhoShootCache[k];
+  } catch (err) { /* caches not yet defined during load — nothing to clear */ }
+  return true;
+}
+/**
+ * The one body-set resolver. ctx = { center, dest?, kind } with kind:
+ *   'interplanetary' — Earth-departure cruise to a planet: ['Sun', center, dest]
+ *   'moon'           — transfer to a moon: [parent(dest), dest, 'Sun']
+ *   'cislunar'       — Earth-Moon problem (free return, NRHO): ['Earth','Moon','Sun']
+ *   'local'          — settle/burn around one body (MNODE, gizmo full pass):
+ *                      [center, parent(center)||'Sun', 'Sun', +Moon if Earth]
+ * fidelity (optional) overrides the module mode. 'full' = the contextual set
+ * unioned with Sun + all 8 planets + Moon + Titan (order: contextual first,
+ * so the contextual rounding-order prefix is preserved).
+ * Deliberate NON-consumers (audited, N1): the samebody Kepler leg and 566's
+ * gap-coast hold ([center] — the model there IS two-body); 5745's cheap drag
+ * tier ([node.body] — the explicit truncation opt-in of the fidelity ladder);
+ * 425's catalog seeds (offline-corrected against their own pinned body list).
+ */
+function physBodySetFor(ctx, fidelity) {
+  ctx = ctx || {};
+  const center = ctx.center || 'Earth';
+  let list;
+  switch (ctx.kind) {
+    case 'interplanetary': list = ['Sun', center, ctx.dest]; break;
+    case 'moon': list = [physParentOf(ctx.dest) || 'Sun', ctx.dest, 'Sun']; break;
+    case 'cislunar': list = ['Earth', 'Moon', 'Sun']; break;
+    case 'local':
+    default:
+      list = [center, physParentOf(center) || 'Sun', 'Sun', center === 'Earth' ? 'Moon' : null];
+      break;
+  }
+  list = [...new Set(list.filter(Boolean))];
+  const mode = fidelity || _physFidelity;
+  if (mode === 'full') list = [...new Set([...list, ...PHYS_FIDELITY_FULL_BODIES])];
+  return list;
+}
+
+// ── N1 (§17) — explicit encounter-scale constants (km) ───────────────────────
+// The OLD SOI-termed solver acceptance values with honest units. These are
+// numerically the classical SOI radii (a·(mu/mu_parent)^(2/5)) at the current
+// 360/385 constants, written out as literals: physSoiRadius itself is demoted
+// to bookkeeping (rendering/LOD seam markers, frame-CENTER selection, and
+// display-horizon classification) and no longer appears in solver acceptance
+// terms. Gate-pinned against physSoiRadius (tests/math.test.js) so a body-
+// constant change can't silently detach the two.
+const PHYS_ENCOUNTER_SCALE_KM = {
+  Moon: 66182.92233068068, Titan: 43322.31349190931,
+  Mercury: 112411.16264977797, Venus: 616277.3296226036,
+  Earth: 924646.795104645, Mars: 577227.4885111795,
+  Jupiter: 48215441.1894899, Saturn: 54806443.0343865,
+  Uranus: 51794655.77859839, Neptune: 86598220.57602063,
+};
+
 // side-tables: current legs (written by the latest rebuild) and the previous
 // rebuild's legs (consulted DURING replay for physics-TOF duration precedence —
 // durations are consumed while replaying but legs are built after, so the
@@ -158,8 +230,11 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // just needs to honor the same authored raan for consistency.
   const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
   const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0, raanFixed);
-  const bodies = destPlanet ? ['Sun', 'Earth', destPlanet]
-    : (destMoon ? [PROG_MOON_ORBITS[destMoon].parent, destMoon, 'Sun'] : [fromBody]);
+  // N1b: body set through the one resolver (contextual = the old ad-hoc lists
+  // verbatim; 'full' unions the whole system). Samebody keeps [fromBody] —
+  // its leg model is analytic Kepler (documented exemption, physBodySetFor).
+  const bodies = destPlanet ? physBodySetFor({ center: fromBody, dest: destPlanet, kind: 'interplanetary' })
+    : (destMoon ? physBodySetFor({ center: fromBody, dest: destMoon, kind: 'moon' }) : [fromBody]);
   return {
     state: { r: bs.r, v: bs.v }, center: fromBody, bodies, dvVec: bs.dvVec,
     // R6.2' Phase B step 5: the PRE-burn state (dv NOT applied) — the exact
@@ -401,7 +476,10 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
   // in-plane anomaly of the analytic seed (physSolveNodeBurn placed it at ν=theta)
   let theta0 = physPhaseBurnAngle(progBodyAngleAt(dest, tDepart_s + burn0.coastTof_s));
-  const soi = physSoiRadius(dest);
+  // N1: encounter length scale — explicit km constant (numerically the old
+  // physSoiRadius(dest); see PHYS_ENCOUNTER_SCALE_KM). Pure acceptance/
+  // conditioning scale, not a dynamical boundary.
+  const soi = PHYS_ENCOUNTER_SCALE_KM[dest];
   const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
   // R3 acceptance: the yaw DOF lets the burn leave the departure plane, so
   // plane-mismatched encounters can now close for real — moon legs tighten
@@ -666,7 +744,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // as physShootLegAim.
   const raanAuthored = fromOrbit.lan_deg != null;
   const raanAuthoredRad = raanAuthored ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
-  const propCtx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'], overrides };
+  const propCtx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const toMoonFrame = (st, frame, t) => frame === 'Moon' ? st : physPatchState(st, frame, 'Moon', t, overrides);
   const targetAtAbs = tArr => refOrbitPropagatedStateAt(nrhoRefId, tArr);
   const targetEarthDirAt = tArr => {
@@ -882,7 +960,7 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   const nMean = Math.sqrt(muE / (rp * rp * rp));
   const t0 = tDepart_s || 0;
   const twoPi = 2 * Math.PI;
-  const ctx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'], overrides };
+  const ctx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const mkState = x => {
     const bs = physAimBurnState('Earth', rp, (x[0] * nMean) % twoPi, 0, x[1], incRad, 0);
     return { r: bs.r, v: bs.v, met: x[0] };
@@ -977,7 +1055,10 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   }
   const metSeed = phiToMet(bestPhi), dvSeed = dvForApo(bestApo);
   const seedM = measure(propagate(mkState([metSeed, dvSeed])));
-  const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < physSoiRadius('Moon')) ? seedM.dMoonKm : physSoiRadius('Moon') * 0.15;
+  // N1: lunar-encounter scale as an explicit constant (was physSoiRadius('Moon')
+  // / ×0.15) — a target-selection heuristic, not a dynamical boundary.
+  const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < PHYS_ENCOUNTER_SCALE_KM.Moon)
+    ? seedM.dMoonKm : PHYS_ENCOUNTER_SCALE_KM.Moon * 0.15;
   const pTgt = (seedM.periAlt != null && seedM.periAlt >= 30 && seedM.periAlt <= 500) ? seedM.periAlt : 265;
   const sol = physShootToTarget(mkState,
     res => { const mm = measure(res); return [mm.dMoonKm - dTgt, mm.periAlt == null ? 1e9 : mm.periAlt - pTgt]; },
@@ -1208,18 +1289,22 @@ function physRebuildMissionTrajectories(m) {
         physScale(rHat, (e.dvRad_ms || 0) / 1000)),
         physScale(hHat, (e.dvNrm_ms || 0) / 1000));
       const state = { r: rBase, v: physAdd(vBase, dvVec) };
-      const parent = physParentOf(bodyForBurn);
-      const bodies = [...new Set([bodyForBurn, parent || 'Sun', 'Sun', bodyForBurn === 'Earth' ? 'Moon' : null].filter(Boolean))];
+      // N1b: local n-body set through the one resolver (same recipe as before).
+      const bodies = physBodySetFor({ center: bodyForBurn, kind: 'local' });
       // horizon: 30 days, or 3 post-burn periods when the new orbit stays
       // comfortably inside this body's SOI (shows the settled orbit without
       // integrating 500 LEO revs)
       let horizon = 30 * 86400;
       const el = physStateToElements(state.r, state.v, mu);
-      if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(bodyForBurn) * 0.8)
+      // N1 audit note: this ×0.8 encounter-scale comparison selects a DISPLAY
+      // horizon (3 periods vs 90 days), not a solver acceptance or a dynamics
+      // change — explicit-constant phrasing, bookkeeping only.
+      const boundLimitKm = (PHYS_ENCOUNTER_SCALE_KM[bodyForBurn] || Infinity) * 0.8;
+      if (el && el.a > 0 && isFinite(el.period) && el.ra < boundLimitKm)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
       // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
       // what the gizmo's full-fidelity preview showed before commit.
-      else if (el && (el.a < 0 || el.ra >= physSoiRadius(bodyForBurn) * 0.8)) horizon = 90 * 86400;
+      else if (el && (el.a < 0 || el.ra >= boundLimitKm)) horizon = 90 * 86400;
       // R6.2″ (round-3 item 5): cap the horizon at the NEXT authored MNODE's
       // MET so a covering leg's rendered polyline stops at a mid-leg node
       // instead of drawing a phantom continuation past the new burn.

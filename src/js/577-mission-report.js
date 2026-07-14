@@ -172,6 +172,7 @@ function missionReportHTML(m) {
     <div class="mr-header-right">
       <div class="mr-tool">Rocket Playground${ver ? ' v' + _mrEsc(ver) : ''}</div>
       <div>Generated ${_mrEsc(genDate)}</div>
+      <div>Physics fidelity: ${_mrEsc((typeof physFidelity === 'function') ? physFidelity() : 'contextual')}</div>
     </div>
   </div>
 

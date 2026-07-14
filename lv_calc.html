@@ -1110,6 +1110,7 @@ button,input,select,textarea{font-family:inherit;}
         <option value="default">Default (Dark)</option>
       </select>
       <button class="th-btn" onclick="openThemesModal()">Themes&#x2026;</button>
+      <button class="th-btn" onclick="openSettingsModal()" title="Application settings">&#x2699; Settings</button>
     </div>
     <a class="perigee-plug" href="https://perigeeaero.shop" target="_blank" rel="noopener">Enjoying Rocket Playground? Support it — buy a model at perigeeaero.shop &#x2197;</a>
   </div>
@@ -1643,6 +1644,32 @@ button,input,select,textarea{font-family:inherit;}
     <div class="modal-footer">
       <button class="modal-btn" onclick="closeModal('modal-json')">Cancel</button>
       <button class="modal-btn primary" onclick="applyJSON()">Apply to Calculator</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Settings (N1b) ── -->
+<div class="modal-overlay" id="modal-settings" style="display:none">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeModal('modal-settings')">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--text-dim);margin-bottom:8px;">PHYSICS FIDELITY</div>
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:10px;">
+        <input type="radio" name="set-fidelity" id="set-fid-contextual" checked onchange="settingsSetFidelity('contextual')" style="margin-top:2px;">
+        <span><b>Contextual</b> <span style="color:var(--text-dim);">(recommended)</span><br>
+          <span style="font-size:11px;color:var(--text-dim);">Each trajectory is propagated with the Sun plus the bodies relevant to its leg (frame chain + mission targets). Fast; today's behavior.</span></span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+        <input type="radio" name="set-fidelity" id="set-fid-full" onchange="settingsSetFidelity('full')" style="margin-top:2px;">
+        <span><b>Full system</b> <span style="color:var(--text-dim);">(slower, maximum honesty)</span><br>
+          <span style="font-size:11px;color:var(--text-dim);">Every propagation includes the Sun, all 8 planets, the Moon and Titan. Roughly 2&#x2013;3&#xD7; the propagation cost.</span></span>
+      </label>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:12px;border-top:1px solid var(--border);padding-top:8px;">
+        Changing this recomputes every mission &#x2014; trajectory and &#x394;V numbers may legitimately shift (the setting is a physics input). It is saved with your session and stamped into mission reports.
+      </div>
     </div>
   </div>
 </div>
@@ -5788,6 +5815,42 @@ function themeFromSeeds(core){
     '--nm-label':nmLabel,'--nm-pill-bg':nmPillBg,'--nm-pill-bd':nmPillBd,'--nm-pill-text':nmPillText,
     '--nm-pal-bg':nmPalBg,'--nm-pal-hdr':nmPalHdr,'--nm-pal-item':nmPalItem,'--nm-pal-item-act':nmPalItemAct,'--nm-ghost':nmGhost,
   };
+}
+
+// ─── SETTINGS MODAL (N1b, MISSION_MODEL_V2 §17) ──────────────────────────────
+// The app's first (and deliberately tiny) Settings surface: one control —
+// Physics fidelity. State lives in 565 (physFidelity/physSetFidelity) and is
+// session-persisted through _buildSessionObject/_applySessionObject (455).
+// UI markup: #modal-settings in index.html. Theming: seeds/derived vars only.
+
+function openSettingsModal() {
+  settingsSyncUI();
+  openModal('modal-settings');
+}
+
+/** Reflect the current fidelity mode into the modal's radios (called on open
+ *  and after a session restore so the UI can never lie about the live mode). */
+function settingsSyncUI() {
+  const mode = (typeof physFidelity === 'function') ? physFidelity() : 'contextual';
+  const rc = document.getElementById('set-fid-contextual');
+  const rf = document.getElementById('set-fid-full');
+  if (rc) rc.checked = mode !== 'full';
+  if (rf) rf.checked = mode === 'full';
+}
+
+/** Radio onchange: switch fidelity. The setting is a PHYSICS INPUT — every
+ *  mission recomputes (numbers may legitimately move; D6 discipline) and the
+ *  session autosaves. */
+function settingsSetFidelity(mode) {
+  if (typeof physSetFidelity !== 'function') return;
+  const changed = physSetFidelity(mode);
+  if (!changed) return;
+  try {
+    if (typeof _missions !== 'undefined' && typeof missionRecompute === 'function')
+      (_missions || []).forEach(m => missionRecompute(m));
+    if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  } catch (err) { console.warn('fidelity recompute failed:', err); }
+  if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
 }
 
 // ─── THEMES MODAL (gallery + customize + preview) ──────────────
@@ -12570,6 +12633,14 @@ function physFindEventTime(f, tLo, tHi, tol) {
  *   stopAtSoi:  false,      // end the segment at the first SOI transition
  *   handoff:    true,       // patch frames + continue on SOI transitions
  *   maxSteps:   2e6,        // hard runaway backstop
+ *   singleFrame:false,      // N1 (MISSION_MODEL_V2 §17): never change frame —
+ *                           // integrate in ctx.center the whole segment (full
+ *                           // ctx.bodies force model unchanged; no soi
+ *                           // events). Diagnostic/gate use: proves the frame
+ *                           // handoff is pure coordinate bookkeeping (the
+ *                           // residual vs the handoff path is dt-ladder
+ *                           // discretization only — measured ~81 km / 0.22 m/s
+ *                           // over a 6-day lunar flyby, MATH.md §7u).
  * }
  *
  * Returns {
@@ -12614,7 +12685,11 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     if (prevRdotV > 0 && rdotV <= 0) events.push({ type: 'apoapsis',  t: tNext, rMag: physMag(next.r), frame: ctxNow.center });
     prevRdotV = rdotV;
 
-    // SOI transition: frame of the new heliocentric position differs
+    // SOI transition: frame of the new heliocentric position differs.
+    // N1 (§17): this is COORDINATE bookkeeping only — ctx.bodies (the force
+    // model) is fixed for the whole segment and never truncated at a handoff;
+    // opts.singleFrame skips even the re-centering (gate/diagnostic path).
+    if (opts.singleFrame) { state = next; t = tNext; raw.push({ t, r: state.r.slice(), frame: ctxNow.center }); continue; }
     const helio = helioOf(next, tNext, ctxNow.center);
     const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {
@@ -14876,6 +14951,8 @@ function _buildSessionObject() {
     activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
     // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog.
     orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
+    // N1b (§17): physics fidelity setting ('contextual' | 'full').
+    physicsFidelity: (typeof physFidelity === 'function') ? physFidelity() : null,
   };
 }
 
@@ -14924,6 +15001,13 @@ function _applySessionObject(blob) {
     // legacy blobs predate this field).
     if (typeof _refOrbitSessionRestore === 'function') {
       _refOrbitSessionRestore(blob.orbitCatalogUser);
+    }
+    // N1b (§17): physics fidelity — set BEFORE the program apply below so the
+    // restored missions' first recompute already runs in the saved mode
+    // (guarded — legacy blobs predate this field).
+    if (blob.physicsFidelity && typeof physSetFidelity === 'function') {
+      physSetFidelity(blob.physicsFidelity);
+      if (typeof settingsSyncUI === 'function') settingsSyncUI();
     }
     if (blob.activeThemeKey && typeof applyTheme === 'function') {
       applyTheme(blob.activeThemeKey);
@@ -15697,6 +15781,78 @@ function fleetRenderDetail() {
 
 const PHYS_ENABLED = true;
 
+// ── N1b (MISSION_MODEL_V2 §17) — physics fidelity + the ONE body-set builder ─
+// Every propagation body list is constructed here, so "contextual" has a
+// single auditable definition and "full" is one switch. The recipes below
+// reproduce the pre-N1b ad-hoc lists BYTE-IDENTICALLY (including array order —
+// physAccel sums in list order, so order changes would move float rounding).
+const PHYS_FIDELITY_FULL_BODIES = ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars',
+  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'];
+let _physFidelity = 'contextual';   // 'contextual' | 'full' — session-persisted (455)
+function physFidelity() { return _physFidelity; }
+/** Set the fidelity mode. Returns true if it CHANGED (callers recompute).
+ *  A change invalidates the shooter caches — cached solves flew a different
+ *  force model. */
+function physSetFidelity(mode) {
+  const next = mode === 'full' ? 'full' : 'contextual';
+  if (next === _physFidelity) return false;
+  _physFidelity = next;
+  try {
+    for (const k of Object.keys(_physShootCache)) delete _physShootCache[k];
+    for (const k of Object.keys(_physNrhoShootCache)) delete _physNrhoShootCache[k];
+  } catch (err) { /* caches not yet defined during load — nothing to clear */ }
+  return true;
+}
+/**
+ * The one body-set resolver. ctx = { center, dest?, kind } with kind:
+ *   'interplanetary' — Earth-departure cruise to a planet: ['Sun', center, dest]
+ *   'moon'           — transfer to a moon: [parent(dest), dest, 'Sun']
+ *   'cislunar'       — Earth-Moon problem (free return, NRHO): ['Earth','Moon','Sun']
+ *   'local'          — settle/burn around one body (MNODE, gizmo full pass):
+ *                      [center, parent(center)||'Sun', 'Sun', +Moon if Earth]
+ * fidelity (optional) overrides the module mode. 'full' = the contextual set
+ * unioned with Sun + all 8 planets + Moon + Titan (order: contextual first,
+ * so the contextual rounding-order prefix is preserved).
+ * Deliberate NON-consumers (audited, N1): the samebody Kepler leg and 566's
+ * gap-coast hold ([center] — the model there IS two-body); 5745's cheap drag
+ * tier ([node.body] — the explicit truncation opt-in of the fidelity ladder);
+ * 425's catalog seeds (offline-corrected against their own pinned body list).
+ */
+function physBodySetFor(ctx, fidelity) {
+  ctx = ctx || {};
+  const center = ctx.center || 'Earth';
+  let list;
+  switch (ctx.kind) {
+    case 'interplanetary': list = ['Sun', center, ctx.dest]; break;
+    case 'moon': list = [physParentOf(ctx.dest) || 'Sun', ctx.dest, 'Sun']; break;
+    case 'cislunar': list = ['Earth', 'Moon', 'Sun']; break;
+    case 'local':
+    default:
+      list = [center, physParentOf(center) || 'Sun', 'Sun', center === 'Earth' ? 'Moon' : null];
+      break;
+  }
+  list = [...new Set(list.filter(Boolean))];
+  const mode = fidelity || _physFidelity;
+  if (mode === 'full') list = [...new Set([...list, ...PHYS_FIDELITY_FULL_BODIES])];
+  return list;
+}
+
+// ── N1 (§17) — explicit encounter-scale constants (km) ───────────────────────
+// The OLD SOI-termed solver acceptance values with honest units. These are
+// numerically the classical SOI radii (a·(mu/mu_parent)^(2/5)) at the current
+// 360/385 constants, written out as literals: physSoiRadius itself is demoted
+// to bookkeeping (rendering/LOD seam markers, frame-CENTER selection, and
+// display-horizon classification) and no longer appears in solver acceptance
+// terms. Gate-pinned against physSoiRadius (tests/math.test.js) so a body-
+// constant change can't silently detach the two.
+const PHYS_ENCOUNTER_SCALE_KM = {
+  Moon: 66182.92233068068, Titan: 43322.31349190931,
+  Mercury: 112411.16264977797, Venus: 616277.3296226036,
+  Earth: 924646.795104645, Mars: 577227.4885111795,
+  Jupiter: 48215441.1894899, Saturn: 54806443.0343865,
+  Uranus: 51794655.77859839, Neptune: 86598220.57602063,
+};
+
 // side-tables: current legs (written by the latest rebuild) and the previous
 // rebuild's legs (consulted DURING replay for physics-TOF duration precedence —
 // durations are consumed while replaying but legs are built after, so the
@@ -15831,8 +15987,11 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // just needs to honor the same authored raan for consistency.
   const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
   const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0, raanFixed);
-  const bodies = destPlanet ? ['Sun', 'Earth', destPlanet]
-    : (destMoon ? [PROG_MOON_ORBITS[destMoon].parent, destMoon, 'Sun'] : [fromBody]);
+  // N1b: body set through the one resolver (contextual = the old ad-hoc lists
+  // verbatim; 'full' unions the whole system). Samebody keeps [fromBody] —
+  // its leg model is analytic Kepler (documented exemption, physBodySetFor).
+  const bodies = destPlanet ? physBodySetFor({ center: fromBody, dest: destPlanet, kind: 'interplanetary' })
+    : (destMoon ? physBodySetFor({ center: fromBody, dest: destMoon, kind: 'moon' }) : [fromBody]);
   return {
     state: { r: bs.r, v: bs.v }, center: fromBody, bodies, dvVec: bs.dvVec,
     // R6.2' Phase B step 5: the PRE-burn state (dv NOT applied) — the exact
@@ -16074,7 +16233,10 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
   // in-plane anomaly of the analytic seed (physSolveNodeBurn placed it at ν=theta)
   let theta0 = physPhaseBurnAngle(progBodyAngleAt(dest, tDepart_s + burn0.coastTof_s));
-  const soi = physSoiRadius(dest);
+  // N1: encounter length scale — explicit km constant (numerically the old
+  // physSoiRadius(dest); see PHYS_ENCOUNTER_SCALE_KM). Pure acceptance/
+  // conditioning scale, not a dynamical boundary.
+  const soi = PHYS_ENCOUNTER_SCALE_KM[dest];
   const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
   // R3 acceptance: the yaw DOF lets the burn leave the departure plane, so
   // plane-mismatched encounters can now close for real — moon legs tighten
@@ -16339,7 +16501,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // as physShootLegAim.
   const raanAuthored = fromOrbit.lan_deg != null;
   const raanAuthoredRad = raanAuthored ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
-  const propCtx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'], overrides };
+  const propCtx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const toMoonFrame = (st, frame, t) => frame === 'Moon' ? st : physPatchState(st, frame, 'Moon', t, overrides);
   const targetAtAbs = tArr => refOrbitPropagatedStateAt(nrhoRefId, tArr);
   const targetEarthDirAt = tArr => {
@@ -16555,7 +16717,7 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   const nMean = Math.sqrt(muE / (rp * rp * rp));
   const t0 = tDepart_s || 0;
   const twoPi = 2 * Math.PI;
-  const ctx = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'], overrides };
+  const ctx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const mkState = x => {
     const bs = physAimBurnState('Earth', rp, (x[0] * nMean) % twoPi, 0, x[1], incRad, 0);
     return { r: bs.r, v: bs.v, met: x[0] };
@@ -16650,7 +16812,10 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   }
   const metSeed = phiToMet(bestPhi), dvSeed = dvForApo(bestApo);
   const seedM = measure(propagate(mkState([metSeed, dvSeed])));
-  const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < physSoiRadius('Moon')) ? seedM.dMoonKm : physSoiRadius('Moon') * 0.15;
+  // N1: lunar-encounter scale as an explicit constant (was physSoiRadius('Moon')
+  // / ×0.15) — a target-selection heuristic, not a dynamical boundary.
+  const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < PHYS_ENCOUNTER_SCALE_KM.Moon)
+    ? seedM.dMoonKm : PHYS_ENCOUNTER_SCALE_KM.Moon * 0.15;
   const pTgt = (seedM.periAlt != null && seedM.periAlt >= 30 && seedM.periAlt <= 500) ? seedM.periAlt : 265;
   const sol = physShootToTarget(mkState,
     res => { const mm = measure(res); return [mm.dMoonKm - dTgt, mm.periAlt == null ? 1e9 : mm.periAlt - pTgt]; },
@@ -16881,18 +17046,22 @@ function physRebuildMissionTrajectories(m) {
         physScale(rHat, (e.dvRad_ms || 0) / 1000)),
         physScale(hHat, (e.dvNrm_ms || 0) / 1000));
       const state = { r: rBase, v: physAdd(vBase, dvVec) };
-      const parent = physParentOf(bodyForBurn);
-      const bodies = [...new Set([bodyForBurn, parent || 'Sun', 'Sun', bodyForBurn === 'Earth' ? 'Moon' : null].filter(Boolean))];
+      // N1b: local n-body set through the one resolver (same recipe as before).
+      const bodies = physBodySetFor({ center: bodyForBurn, kind: 'local' });
       // horizon: 30 days, or 3 post-burn periods when the new orbit stays
       // comfortably inside this body's SOI (shows the settled orbit without
       // integrating 500 LEO revs)
       let horizon = 30 * 86400;
       const el = physStateToElements(state.r, state.v, mu);
-      if (el && el.a > 0 && isFinite(el.period) && el.ra < physSoiRadius(bodyForBurn) * 0.8)
+      // N1 audit note: this ×0.8 encounter-scale comparison selects a DISPLAY
+      // horizon (3 periods vs 90 days), not a solver acceptance or a dynamics
+      // change — explicit-constant phrasing, bookkeeping only.
+      const boundLimitKm = (PHYS_ENCOUNTER_SCALE_KM[bodyForBurn] || Infinity) * 0.8;
+      if (el && el.a > 0 && isFinite(el.period) && el.ra < boundLimitKm)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
       // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
       // what the gizmo's full-fidelity preview showed before commit.
-      else if (el && (el.a < 0 || el.ra >= physSoiRadius(bodyForBurn) * 0.8)) horizon = 90 * 86400;
+      else if (el && (el.a < 0 || el.ra >= boundLimitKm)) horizon = 90 * 86400;
       // R6.2″ (round-3 item 5): cap the horizon at the NEXT authored MNODE's
       // MET so a covering leg's rendered polyline stops at a mid-leg node
       // instead of drawing a phantom continuation past the new burn.
@@ -28905,9 +29074,15 @@ function _trajGizmoRunScratch(mode) {
     physScale(node.rHat, (g.dv.rad || 0) / 1000)),
     physScale(node.hHat, (g.dv.nrm || 0) / 1000));
   const state = { r: node.r, v: physAdd(node.v, dvVec) };
-  const parent = typeof physParentOf === 'function' ? physParentOf(node.body) : null;
-  const fullBodies = [...new Set([node.body, parent || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
+  // N1b: full-fidelity tier through the one body-set resolver (contextual =
+  // the old ad-hoc list verbatim; 'full' setting unions the whole system).
+  const fullBodies = (typeof physBodySetFor === 'function')
+    ? physBodySetFor({ center: node.body, kind: 'local' })
+    : [...new Set([node.body, (typeof physParentOf === 'function' && physParentOf(node.body)) || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
   const cheap = mode !== 'full';
+  // N1: the cheap drag tier's one-body list IS the explicit truncation opt-in
+  // (MISSION_MODEL_V2 §17 N1) — near-two-body scan quality while dragging;
+  // solvers and committed legs never truncate.
   const bodies = cheap ? [node.body] : fullBodies;
   const maxSamples = cheap ? 64 : 128;
   let horizon = 30 * 86400;
@@ -29782,6 +29957,7 @@ function missionReportHTML(m) {
     <div class="mr-header-right">
       <div class="mr-tool">Rocket Playground${ver ? ' v' + _mrEsc(ver) : ''}</div>
       <div>Generated ${_mrEsc(genDate)}</div>
+      <div>Physics fidelity: ${_mrEsc((typeof physFidelity === 'function') ? physFidelity() : 'contextual')}</div>
     </div>
   </div>
 

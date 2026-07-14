@@ -204,6 +204,14 @@ function physFindEventTime(f, tLo, tHi, tol) {
  *   stopAtSoi:  false,      // end the segment at the first SOI transition
  *   handoff:    true,       // patch frames + continue on SOI transitions
  *   maxSteps:   2e6,        // hard runaway backstop
+ *   singleFrame:false,      // N1 (MISSION_MODEL_V2 §17): never change frame —
+ *                           // integrate in ctx.center the whole segment (full
+ *                           // ctx.bodies force model unchanged; no soi
+ *                           // events). Diagnostic/gate use: proves the frame
+ *                           // handoff is pure coordinate bookkeeping (the
+ *                           // residual vs the handoff path is dt-ladder
+ *                           // discretization only — measured ~81 km / 0.22 m/s
+ *                           // over a 6-day lunar flyby, MATH.md §7u).
  * }
  *
  * Returns {
@@ -248,7 +256,11 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     if (prevRdotV > 0 && rdotV <= 0) events.push({ type: 'apoapsis',  t: tNext, rMag: physMag(next.r), frame: ctxNow.center });
     prevRdotV = rdotV;
 
-    // SOI transition: frame of the new heliocentric position differs
+    // SOI transition: frame of the new heliocentric position differs.
+    // N1 (§17): this is COORDINATE bookkeeping only — ctx.bodies (the force
+    // model) is fixed for the whole segment and never truncated at a handoff;
+    // opts.singleFrame skips even the re-centering (gate/diagnostic path).
+    if (opts.singleFrame) { state = next; t = tNext; raw.push({ t, r: state.r.slice(), frame: ctxNow.center }); continue; }
     const helio = helioOf(next, tNext, ctxNow.center);
     const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {

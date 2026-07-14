@@ -32,6 +32,7 @@
         <option value="default">Default (Dark)</option>
       </select>
       <button class="th-btn" onclick="openThemesModal()">Themes&#x2026;</button>
+      <button class="th-btn" onclick="openSettingsModal()" title="Application settings">&#x2699; Settings</button>
     </div>
     <a class="perigee-plug" href="https://perigeeaero.shop" target="_blank" rel="noopener">Enjoying Rocket Playground? Support it — buy a model at perigeeaero.shop &#x2197;</a>
   </div>
@@ -565,6 +566,32 @@
     <div class="modal-footer">
       <button class="modal-btn" onclick="closeModal('modal-json')">Cancel</button>
       <button class="modal-btn primary" onclick="applyJSON()">Apply to Calculator</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: Settings (N1b) ── -->
+<div class="modal-overlay" id="modal-settings" style="display:none">
+  <div class="modal" style="max-width:520px;">
+    <div class="modal-header">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeModal('modal-settings')">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--text-dim);margin-bottom:8px;">PHYSICS FIDELITY</div>
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:10px;">
+        <input type="radio" name="set-fidelity" id="set-fid-contextual" checked onchange="settingsSetFidelity('contextual')" style="margin-top:2px;">
+        <span><b>Contextual</b> <span style="color:var(--text-dim);">(recommended)</span><br>
+          <span style="font-size:11px;color:var(--text-dim);">Each trajectory is propagated with the Sun plus the bodies relevant to its leg (frame chain + mission targets). Fast; today's behavior.</span></span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+        <input type="radio" name="set-fidelity" id="set-fid-full" onchange="settingsSetFidelity('full')" style="margin-top:2px;">
+        <span><b>Full system</b> <span style="color:var(--text-dim);">(slower, maximum honesty)</span><br>
+          <span style="font-size:11px;color:var(--text-dim);">Every propagation includes the Sun, all 8 planets, the Moon and Titan. Roughly 2&#x2013;3&#xD7; the propagation cost.</span></span>
+      </label>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:12px;border-top:1px solid var(--border);padding-top:8px;">
+        Changing this recomputes every mission &#x2014; trajectory and &#x394;V numbers may legitimately shift (the setting is a physics input). It is saved with your session and stamped into mission reports.
+      </div>
     </div>
   </div>
 </div>

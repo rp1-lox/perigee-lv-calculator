@@ -45,6 +45,8 @@ function _buildSessionObject() {
     activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
     // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog.
     orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
+    // N1b (§17): physics fidelity setting ('contextual' | 'full').
+    physicsFidelity: (typeof physFidelity === 'function') ? physFidelity() : null,
   };
 }
 
@@ -93,6 +95,13 @@ function _applySessionObject(blob) {
     // legacy blobs predate this field).
     if (typeof _refOrbitSessionRestore === 'function') {
       _refOrbitSessionRestore(blob.orbitCatalogUser);
+    }
+    // N1b (§17): physics fidelity — set BEFORE the program apply below so the
+    // restored missions' first recompute already runs in the saved mode
+    // (guarded — legacy blobs predate this field).
+    if (blob.physicsFidelity && typeof physSetFidelity === 'function') {
+      physSetFidelity(blob.physicsFidelity);
+      if (typeof settingsSyncUI === 'function') settingsSyncUI();
     }
     if (blob.activeThemeKey && typeof applyTheme === 'function') {
       applyTheme(blob.activeThemeKey);

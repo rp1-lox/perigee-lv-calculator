@@ -2951,6 +2951,91 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// N1 (MISSION_MODEL_V2 §17) — SOI demoted to bookkeeping: continuity gate-proof
+// + N1b fidelity body-set pins + encounter-scale constants pinned to physSoiRadius
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // ── continuity: a 6-day TLC with a lunar flyby, propagated (a) with normal
+  // frame handoffs and (b) forced single-frame (Earth-centered throughout,
+  // SAME full body list, opts.singleFrame). The states must agree at the
+  // shared final epoch — the SOI boundary means nothing dynamically. The
+  // tolerance is honest MEASURED discretization noise, not float noise: the
+  // dt ladder measures r from a different center in each path (Moon inside
+  // the flyby vs Earth), so the residual is km-scale. Measured on the pre-N1
+  // code: 80.7 km / 0.22 m/s — which was ALREADY continuity (386 never
+  // truncated the force model at a handoff; N1 pins that as a contract).
+  const cont = vm.runInContext(`(function(){
+    const RE_ = PROG_BODIES.Earth.R, muE = PROG_BODIES.Earth.mu;
+    const rp = RE_ + 185;
+    const aS = (rp + 445000) / 2;
+    const dv = Math.sqrt(muE * (2/rp - 1/aS)) - Math.sqrt(muE/rp);
+    const th = 4.319689898685966; // deterministic Moon-SOI-crossing anomaly (measured scan)
+    const st = physElementsToState({ a: rp, e: 0, i: 0, raan: 0, argp: 0, nu: th }, muE);
+    const vHat = physScale(st.v, 1/physMag(st.v));
+    const s0 = { r: st.r, v: physAdd(st.v, physScale(vHat, dv)) };
+    const tEnd = 6*86400;
+    const bodies = physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }, 'contextual');
+    const a = physPropagateSegment({r:s0.r.slice(),v:s0.v.slice()}, 0, tEnd, { center:'Earth', bodies, overrides:{} }, { maxSamples: 512 });
+    const b = physPropagateSegment({r:s0.r.slice(),v:s0.v.slice()}, 0, tEnd, { center:'Earth', bodies, overrides:{} }, { maxSamples: 512, singleFrame: true });
+    const bIn = physPatchState(b.stateF, 'Earth', a.frame, tEnd, {});
+    return { dPosKm: physMag(physSub(bIn.r, a.stateF.r)),
+             dVelKms: physMag(physSub(bIn.v, a.stateF.v)),
+             crossedSoi: a.events.some(e=>e.type==='soi'&&e.to==='Moon'),
+             bNoSoi: !b.events.some(e=>e.type==='soi'),
+             frameA: a.frame };
+  })()`, sandbox);
+  ok('N1 continuity: reference trajectory actually crosses the Moon SOI', cont.crossedSoi);
+  ok('N1 continuity: singleFrame path records no soi events', cont.bNoSoi);
+  ok(`N1 continuity: handoff vs single-frame position residual ${cont.dPosKm.toFixed(1)} km < 500 km (measured dt-ladder noise; pre-N1 baseline 80.7 km)`,
+    cont.dPosKm < 500);
+  ok(`N1 continuity: velocity residual ${(cont.dVelKms * 1000).toFixed(3)} m/s < 5 m/s (baseline 0.22 m/s)`,
+    cont.dVelKms < 0.005);
+  console.log(`  N1 continuity (handoff vs single-frame, 6-day lunar flyby): dPos=${cont.dPosKm.toFixed(2)} km, dVel=${(cont.dVelKms * 1000).toFixed(4)} m/s, final frame=${cont.frameA}`);
+
+  // ── physBodySetFor pinned for BOTH modes (N1b) ──
+  const bs = vm.runInContext(`(function(){
+    const before = physFidelity();
+    const ip  = physBodySetFor({ center:'Earth', dest:'Mars', kind:'interplanetary' }, 'contextual');
+    const mo  = physBodySetFor({ center:'Earth', dest:'Moon', kind:'moon' }, 'contextual');
+    const cl  = physBodySetFor({ center:'Earth', kind:'cislunar' }, 'contextual');
+    const lcE = physBodySetFor({ center:'Earth', kind:'local' }, 'contextual');
+    const lcM = physBodySetFor({ center:'Moon', kind:'local' }, 'contextual');
+    const fu  = physBodySetFor({ center:'Earth', dest:'Moon', kind:'moon' }, 'full');
+    const chg1 = physSetFidelity('full');
+    const modeFull = physFidelity();
+    const fuDefault = physBodySetFor({ center:'Earth', dest:'Mars', kind:'interplanetary' });
+    const chg2 = physSetFidelity('full');
+    const chg3 = physSetFidelity('contextual');
+    return { before, ip, mo, cl, lcE, lcM, fu, fuDefault, chg1, chg2, chg3, modeFull, after: physFidelity() };
+  })()`, sandbox);
+  ok('N1b: default fidelity is contextual (round-trips back)', bs.before === 'contextual' && bs.after === 'contextual');
+  ok('N1b: contextual interplanetary = [Sun,Earth,dest] (pre-N1b list verbatim)',
+    JSON.stringify(bs.ip) === JSON.stringify(['Sun', 'Earth', 'Mars']));
+  ok('N1b: contextual moon = [parent,dest,Sun] (pre-N1b list verbatim)',
+    JSON.stringify(bs.mo) === JSON.stringify(['Earth', 'Moon', 'Sun']));
+  ok('N1b: contextual cislunar = [Earth,Moon,Sun]',
+    JSON.stringify(bs.cl) === JSON.stringify(['Earth', 'Moon', 'Sun']));
+  ok('N1b: contextual local(Earth) = [Earth,Sun,Moon] (pre-N1b MNODE list verbatim)',
+    JSON.stringify(bs.lcE) === JSON.stringify(['Earth', 'Sun', 'Moon']));
+  ok('N1b: contextual local(Moon) = [Moon,Earth,Sun]',
+    JSON.stringify(bs.lcM) === JSON.stringify(['Moon', 'Earth', 'Sun']));
+  ok('N1b: full mode = contextual prefix + Sun + all 8 planets + Moon + Titan (11 bodies)',
+    bs.fu.length === 11 && ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'].every(b => bs.fu.includes(b))
+    && bs.fu[0] === 'Earth' && bs.fu[1] === 'Moon' && bs.fu[2] === 'Sun');
+  ok('N1b: physSetFidelity reports change correctly and module mode drives the default',
+    bs.chg1 === true && bs.modeFull === 'full' && bs.chg2 === false && bs.chg3 === true && bs.fuDefault.length === 11);
+
+  // ── encounter-scale constants pinned to the classical SOI radii (N1: the
+  // solver acceptance values are explicit literals now; this pin stops a
+  // 360/385 body-constant change from silently detaching them) ──
+  const encPin = vm.runInContext(`(function(){
+    const t = PHYS_ENCOUNTER_SCALE_KM;
+    return Object.keys(t).length >= 10 && Object.keys(t).map(b => Math.abs(t[b] - physSoiRadius(b))).every(d => d < 1e-6);
+  })()`, sandbox);
+  ok('N1: PHYS_ENCOUNTER_SCALE_KM literals match physSoiRadius to <1e-6 km (all 10 bodies)', encPin);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 
