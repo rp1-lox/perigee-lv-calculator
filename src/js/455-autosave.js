@@ -43,6 +43,8 @@ function _buildSessionObject() {
     userOrbitsByCategory: (typeof userOrbitsByCategory !== 'undefined') ? safeCopy(userOrbitsByCategory) : null,
     customThemes: (typeof customThemes !== 'undefined') ? safeCopy(customThemes) : null,
     activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
+    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog.
+    orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
   };
 }
 
@@ -87,6 +89,11 @@ function _applySessionObject(blob) {
       customThemes = blob.customThemes;
     }
     if (typeof rebuildThemeSelect === 'function') rebuildThemeSelect();
+    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog (guarded —
+    // legacy blobs predate this field).
+    if (typeof _refOrbitSessionRestore === 'function') {
+      _refOrbitSessionRestore(blob.orbitCatalogUser);
+    }
     if (blob.activeThemeKey && typeof applyTheme === 'function') {
       applyTheme(blob.activeThemeKey);
     } else if (typeof rebuildThemeSelect === 'function' && typeof applyTheme === 'function' && typeof activeThemeKey !== 'undefined') {

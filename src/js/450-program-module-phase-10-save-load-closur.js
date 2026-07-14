@@ -16,6 +16,11 @@ function buildProgramObject() {
     fleet: _fleetEntries,
     missions: _missions,
     scStageLib: _scStageLib,
+    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog + any
+    // program one-offs (both live in PROG_ORBIT_CATALOG_USER; there is no
+    // separate per-program tier — a program's one-offs simply ARE user-tier
+    // entries created while that program was active).
+    orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
     activeProgram: PROG_ACTIVE_PROGRAM,
     sel: { fleet: _fleetSel, mission: _missionSel },
   };
@@ -86,6 +91,7 @@ function applyProgramObject(obj) {
   _fleetEntries = Array.isArray(obj.fleet)      ? obj.fleet      : [];
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
+  if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
   // R1: programs saved before the epoch feature get the default epoch
   if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
