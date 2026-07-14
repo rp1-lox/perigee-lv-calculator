@@ -40,6 +40,7 @@ const FILES = [
   'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
   'src/js/5745-maneuver-gizmo.js',
+  'src/js/450-program-module-phase-10-save-load-closur.js',
 ];
 
 const src = FILES.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
@@ -2238,50 +2239,36 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // R6.2' Phase B — maneuver-unification predicates (570-mission-manager.js):
-// _evIsSolvedManeuver / _evManeuverTarget / _evIsManualBurn /
-// _missionMigrateManeuverEntry. Dated 2026-07-10.
+// _evIsSolvedManeuver / _evManeuverTarget / _evIsManualBurn. MISSION_MODEL_V2
+// Phase 2 S5 (D3): the legacy MANEUVER type and _missionMigrateManeuverEntry
+// (the lazy-migration shim, plus detachedFrom-fallback reads) are DELETED —
+// the version gate (450) refuses any blob that could carry one, so these
+// predicates only need to understand the unified MNODE form. Dated
+// 2026-07-14 (was 2026-07-10, pre-flip).
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const legacyMv = { type: 'MANEUVER', fromNode: 'A', toNode: 'B', metStart: 100 };
   const unifiedSolved = { type: 'MNODE', mode: 'solved', target: { fromNode: 'A', toNode: 'B' }, fromNode: 'A', toNode: 'B' };
   const manualMnode = { type: 'MNODE', dvPro_ms: 10 };
   const detachedManual = { type: 'MNODE', mode: 'manual', target: { fromNode: 'A', toNode: 'B' } };
   const halfUnified = { type: 'MNODE', mode: 'solved', target: { fromNode: 'A' } }; // missing toNode -> not solved
+  const legacyMv = { type: 'MANEUVER', fromNode: 'A', toNode: 'B', metStart: 100 }; // can no longer occur post-gate; predicates must simply not recognize it
 
-  ok('_evIsSolvedManeuver: legacy MANEUVER is solved', _evIsSolvedManeuver(legacyMv) === true);
   ok('_evIsSolvedManeuver: unified mode:solved+target is solved', _evIsSolvedManeuver(unifiedSolved) === true);
   ok('_evIsSolvedManeuver: manual MNODE is not solved', _evIsSolvedManeuver(manualMnode) === false);
   ok('_evIsSolvedManeuver: incomplete target is not solved', _evIsSolvedManeuver(halfUnified) === false);
   ok('_evIsSolvedManeuver: null-safe', _evIsSolvedManeuver(null) === false);
+  ok('_evIsSolvedManeuver: legacy MANEUVER type is no longer recognized (shim retired, D3)', _evIsSolvedManeuver(legacyMv) === false);
 
-  const t1 = _evManeuverTarget(legacyMv), t2 = _evManeuverTarget(unifiedSolved);
-  ok('_evManeuverTarget: legacy MANEUVER target', t1 && t1.fromNode === 'A' && t1.toNode === 'B');
+  const t2 = _evManeuverTarget(unifiedSolved);
   ok('_evManeuverTarget: unified MNODE target', t2 && t2.fromNode === 'A' && t2.toNode === 'B');
   ok('_evManeuverTarget: manual MNODE has no target', _evManeuverTarget(manualMnode) === null);
+  ok('_evManeuverTarget: legacy MANEUVER type returns null (shim retired, D3)', _evManeuverTarget(legacyMv) === null);
 
   ok('_evIsManualBurn: manual MNODE is a manual burn', _evIsManualBurn(manualMnode) === true);
   ok('_evIsManualBurn: detached (mode:manual, has target) is a manual burn', _evIsManualBurn(detachedManual) === true);
   ok('_evIsManualBurn: solved MNODE is not a manual burn', _evIsManualBurn(unifiedSolved) === false);
-  ok('_evIsManualBurn: legacy MANEUVER is not a manual burn', _evIsManualBurn(legacyMv) === false);
 
-  // lazy migration: legacy MANEUVER -> unified solved, in place, fields mirrored
-  const mig = { type: 'MANEUVER', fromNode: 'X', toNode: 'Y', fromLabel: 'X node', toLabel: 'Y node', metStart: 50, dvOverride: 3000 };
-  const mutated = _missionMigrateManeuverEntry(mig);
-  ok('_missionMigrateManeuverEntry: reports a mutation', mutated === true);
-  ok('_missionMigrateManeuverEntry: type flips to MNODE', mig.type === 'MNODE');
-  ok('_missionMigrateManeuverEntry: mode becomes solved', mig.mode === 'solved');
-  ok('_missionMigrateManeuverEntry: target mirrors fromNode/toNode', mig.target.fromNode === 'X' && mig.target.toNode === 'Y');
-  ok('_missionMigrateManeuverEntry: legacy top-level fields survive (mirrored)', mig.fromNode === 'X' && mig.toNode === 'Y' && mig.fromLabel === 'X node' && mig.dvOverride === 3000);
-  ok('_missionMigrateManeuverEntry: post-migration predicate agrees', _evIsSolvedManeuver(mig) === true);
-  ok('_missionMigrateManeuverEntry: idempotent (already-unified entry -> no mutation)', _missionMigrateManeuverEntry(mig) === false);
-
-  // lazy migration: old Phase-A detachedFrom MNODE -> target populated, still manual
-  const oldDetached = { type: 'MNODE', dvPro_ms: 42, detachedFrom: { fromNode: 'P', toNode: 'Q' } };
-  const mutated2 = _missionMigrateManeuverEntry(oldDetached);
-  ok('_missionMigrateManeuverEntry: detachedFrom save reports a mutation', mutated2 === true);
-  ok('_missionMigrateManeuverEntry: detachedFrom -> target populated', oldDetached.target.fromNode === 'P' && oldDetached.target.toNode === 'Q');
-  ok('_missionMigrateManeuverEntry: detachedFrom save stays manual (mode set)', oldDetached.mode === 'manual');
-  ok('_missionMigrateManeuverEntry: migrated detachedFrom save is a manual burn', _evIsManualBurn(oldDetached) === true);
+  ok('_missionMigrateManeuverEntry: deleted (D3 — no longer exported)', typeof _missionMigrateManeuverEntry === 'undefined');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2642,6 +2629,43 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('S4: both post-separation owners inherit the SAME pre-separation r,v (state carried through, mass forked)',
       lowerState.r[0] === upperState.r[0] && lowerState.v[1] === upperState.v[1]);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 Phase 2 — the flip (S4 stamp-from-V2/budget delegation,
+// S5 deletions + version gate)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { missionBudget, _missionsPassV2Gate } = vm.runInContext(
+    '({ missionBudget, _missionsPassV2Gate })', sandbox
+  );
+
+  // ── S4: missionBudget(m) delegates to v2DeriveBudget — reusing synM2 from
+  // the Phase 1 block above (already shadow-built: LAUNCH + two burns, 250 +
+  // 100 m/s). No ascent line (no stagingResult on that synthetic LAUNCH), so
+  // missionBudget's total should equal v2DeriveBudget's dvTotal exactly. ──
+  const m2ForBudget = { missionId: 'synM2', log: [
+    { type: 'LAUNCH', vehicleId: 'v2', metStart: 0, result: 'SUCCESS' },
+    { type: 'MNODE', vehicleId: 'v2', metStart: 100 },
+    { type: 'MNODE', vehicleId: 'v2', metStart: 200 },
+  ] };
+  const budgetViaMissionBudget = missionBudget(m2ForBudget);
+  approx('S4: missionBudget(m).dvExpended delegates to v2DeriveBudget (250+100=350 m/s, no ascent)',
+    budgetViaMissionBudget.dvExpended, 350, 1e-6);
+
+  // ── S5: version gate — a synthetic pre-Phase-2 ("V1-shaped") missions array
+  // (no modelVersion field, as every mission this build's predecessor ever
+  // produced) is refused; a V2-stamped array passes. ──
+  ok('S5: version gate refuses a mission blob with no modelVersion field',
+    _missionsPassV2Gate([{ missionId: 'old1', log: [] }]) === false);
+  ok('S5: version gate refuses a mission blob stamped modelVersion:1',
+    _missionsPassV2Gate([{ missionId: 'old2', log: [], modelVersion: 1 }]) === false);
+  ok('S5: version gate accepts a mission blob stamped modelVersion:2',
+    _missionsPassV2Gate([{ missionId: 'new1', log: [], modelVersion: 2 }]) === true);
+  ok('S5: version gate accepts an empty/absent missions array (nothing to gate)',
+    _missionsPassV2Gate([]) === true && _missionsPassV2Gate(undefined) === true);
+  ok('S5: version gate refuses if ANY mission in a multi-mission blob is pre-V2',
+    _missionsPassV2Gate([{ missionId: 'a', log: [], modelVersion: 2 }, { missionId: 'b', log: [] }]) === false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

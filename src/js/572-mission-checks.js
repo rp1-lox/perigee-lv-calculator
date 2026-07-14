@@ -150,14 +150,13 @@ function missionRunChecks(m) {
 
     // R6.2' Phase B: soft info note for a manual burn that still carries a
     // target — i.e. a solved maneuver detached (mode-flipped) into a manual
-    // vector burn via the gizmo's handle-drag detach (5745), OR a legacy
-    // Phase-A detachedFrom save not yet touched. Not a failure — just a
-    // heads-up that ΔV accounting for this leg switched from the solved edge
-    // (progNmComputeEdgeDv) to the authored vector's own magnitude, which
-    // won't auto-track a later change to the original from/to nodes the way
-    // a still-solved maneuver would.
-    if (_evIsManualBurn(e) && (e.target || e.detachedFrom)) {
-      const tgt = e.target || e.detachedFrom;
+    // vector burn via the gizmo's handle-drag detach (5745). Not a failure —
+    // just a heads-up that ΔV accounting for this leg switched from the
+    // solved edge (progNmComputeEdgeDv) to the authored vector's own
+    // magnitude, which won't auto-track a later change to the original
+    // from/to nodes the way a still-solved maneuver would.
+    if (_evIsManualBurn(e) && e.target) {
+      const tgt = e.target;
       const fromLbl = _mcEscape(e.fromLabel || tgt.fromLabel || tgt.fromNode || '?');
       const toLbl = _mcEscape(e.toLabel || tgt.toLabel || tgt.toNode || '?');
       push('mnode-detached', 'info', 'Vector-authored burn replaces a solved maneuver',

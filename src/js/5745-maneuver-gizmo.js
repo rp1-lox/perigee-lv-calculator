@@ -474,14 +474,6 @@ function _trajGizmoOpenExisting(id, authIdx) {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
   if (!m || !m.log[authIdx]) return;
   let e = m.log[authIdx];
-  // R6.2' Phase B (3b): touching (opening) a legacy MANEUVER — or an old
-  // Phase-A detachedFrom-carrying MNODE — lazy-migrates it to the unified
-  // schema in place before the gizmo reads it. A migration that only ADDS
-  // fields (type/mode/target on a MANEUVER; target on a detachedFrom MNODE)
-  // doesn't change accounting, so it's not itself an undo-worthy edit — no
-  // recompute/undo capture here, just like opening an untouched MNODE is a
-  // no-op today.
-  if (typeof _missionMigrateManeuverEntry === 'function') _missionMigrateManeuverEntry(e);
   if (_evIsSolvedManeuver(e)) {
     // dblclicking a solved maneuver (legacy MANEUVER shim, or unified
     // MNODE mode:'solved') opens the SAME gizmo, showing the leg's solved Δv
@@ -1181,12 +1173,12 @@ function _trajGizmoRenderMenu(va, rect) {
   const geo = _trajGizmoScreenGeo(g.missionId, rect);
   if (!geo) { if (existing) existing.remove(); return; }
   const canDelete = g.authIdx != null;
-  // R6.2' Phase A item 4: a detached MNODE (has detachedFrom on the log
-  // entry) gets a re-solve action right in the gizmo flyout, mirroring the
-  // MNODE card's button (570).
+  // R6.2' Phase A item 4: a detached MNODE (has a retained `target`) gets a
+  // re-solve action right in the gizmo flyout, mirroring the MNODE card's
+  // button (570).
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   const le = m && g.authIdx != null ? m.log[g.authIdx] : null;
-  const resolveBtn = (le && _evIsManualBurn(le) && (le.target || le.detachedFrom))
+  const resolveBtn = (le && _evIsManualBurn(le) && le.target)
     ? `<button onclick="missionMnodeResolveToTarget('${g.missionId}',${g.authIdx})">↺ Re-solve to target</button>` : '';
   const html = `
     <button onclick="_trajGizmoOrbitStep(1)">+1 orbit</button>
@@ -1279,7 +1271,6 @@ function _trajGizmoDetachManeuverIfNeeded() {
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
   if (!m || !m.log[g.authIdx] || !_evIsSolvedManeuver(m.log[g.authIdx])) return;
   const e = m.log[g.authIdx];
-  if (typeof _missionMigrateManeuverEntry === 'function') _missionMigrateManeuverEntry(e); // no-op if already unified
   e.mode = 'manual';
   e.at = { kind: 'met', value_s: g.met };
   e.dvPro_ms = g.dv.pro; e.dvRad_ms = g.dv.rad; e.dvNrm_ms = g.dv.nrm;

@@ -28,25 +28,18 @@ function _missionNaturalDurationUnit(sec) {
 function _missionSecondsToUnitValue(sec, unit) { return sec == null ? 0 : +(sec / (_MISSION_DURATION_UNITS[unit] || 1)).toFixed(4); }
 
 // ── R6.2' Phase B — maneuver unification predicates ──────────────────────────
-// Unified target schema going forward: MNODE{mode:'solved', target:{fromNode,toNode}}
-// behaves EXACTLY like a legacy MANEUVER{fromNode,toNode} entry for accounting
-// purposes (same progNmComputeEdgeDv path, same node-map edge). These three
-// predicates are the ONE place every consumer (replay, cards, node-map dedup,
-// checks, report, gizmo) tests "is this a solved/targeted maneuver" so the
-// legacy MANEUVER type keeps working as a shim without every call site
-// special-casing it. Pure, no mutation.
+// MISSION_MODEL_V2 Phase 2 S5 (D3): the legacy MANEUVER type is retired
+// outright — the version gate (see applyProgramObject/_applySessionObject)
+// refuses any mission blob that could carry one, so no live m.log entry can
+// ever have type 'MANEUVER' again. These predicates are simplified to the
+// unified MNODE form only (no more type-'MANEUVER' branch). Pure, no mutation.
 function _evIsSolvedManeuver(e) {
-  if (!e) return false;
-  if (e.type === 'MANEUVER') return true;
-  return e.type === 'MNODE' && e.mode === 'solved' && !!e.target && !!e.target.fromNode && !!e.target.toNode;
+  return !!e && e.type === 'MNODE' && e.mode === 'solved' && !!e.target && !!e.target.fromNode && !!e.target.toNode;
 }
-// {fromNode,toNode} for a solved/targeted event, from whichever field it's
-// stored in (legacy top-level fields vs. unified e.target); null otherwise.
+// {fromNode,toNode} for a solved/targeted event; null otherwise.
 function _evManeuverTarget(e) {
-  if (!e) return null;
-  if (e.type === 'MANEUVER') return { fromNode: e.fromNode, toNode: e.toNode };
-  if (e.type === 'MNODE' && e.target && e.target.fromNode && e.target.toNode) return { fromNode: e.target.fromNode, toNode: e.target.toNode };
-  return null;
+  if (!e || e.type !== 'MNODE' || !e.target || !e.target.fromNode || !e.target.toNode) return null;
+  return { fromNode: e.target.fromNode, toNode: e.target.toNode };
 }
 // A vector-authored burn whose magnitude is the |dv| itself, not a solved edge
 // — today's classic MNODE, or a unified MNODE that's been detached (mode:'manual').
@@ -82,35 +75,6 @@ function _missionMnodeSettleLabel(missionId, idx) {
   return null;
 }
 
-// Lazy-migrate a legacy MANEUVER (or an old Phase-A detachedFrom-carrying
-// MNODE) to the unified schema, in place, on first touch (gizmo open / card
-// edit). Idempotent — a no-op for an entry that's already unified or already
-// a plain manual MNODE with no detachedFrom baggage. dv components are left
-// at 0 for a freshly-migrated solved node; missionRecompute's leg-decompose
-// step (565/570) refreshes them from the physics leg immediately after, so
-// they're display-only from the very next repaint. Returns true if it
-// mutated the entry (caller decides whether that's an undo-worthy edit).
-function _missionMigrateManeuverEntry(e) {
-  if (!e) return false;
-  if (e.type === 'MANEUVER') {
-    const target = { fromNode: e.fromNode, toNode: e.toNode };
-    e.type = 'MNODE';
-    e.mode = 'solved';
-    e.target = target;
-    e.at = { kind: 'met', value_s: e.metStart != null ? e.metStart : 0 };
-    if (e.dvPro_ms == null) e.dvPro_ms = 0;
-    if (e.dvRad_ms == null) e.dvRad_ms = 0;
-    if (e.dvNrm_ms == null) e.dvNrm_ms = 0;
-    return true;
-  }
-  if (e.type === 'MNODE' && e.detachedFrom && !e.target) {
-    e.target = { fromNode: e.detachedFrom.fromNode, toNode: e.detachedFrom.toNode };
-    if (e.mode == null) e.mode = 'manual';   // detachedFrom always meant "currently manual"
-    return true;
-  }
-  return false;
-}
-
 // Apply a duration override typed in the event card's inline edit section (BURN/MANEUVER only).
 function missionApplyDurationOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
@@ -129,10 +93,10 @@ function missionResetDurationOverride(id, idx) {
   missionRecompute(m);
   missionRenderDetail();
 }
-// Apply a ΔV override typed in the event card's inline edit section (MANEUVER only).
+// Apply a ΔV override typed in the event card's inline edit section (solved MNODE only).
 function missionApplyDvOverride(id, idx) {
   const m = _missionGet(id); if (!m) return;
-  const e = m.log[idx]; if (!e || e.type !== 'MANEUVER') return;
+  const e = m.log[idx]; if (!e || !_evIsSolvedManeuver(e)) return;
   const val = document.getElementById('edit-dv-override-' + id)?.value;
   if (val === '' || val == null) delete e.dvOverride;
   else e.dvOverride = parseFloat(val) || 0;

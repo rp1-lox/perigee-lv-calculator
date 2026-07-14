@@ -114,7 +114,7 @@ function v2BuildShadow(m) {
         timelineFor(k).anchors.push(anchor);
       });
 
-    } else if (e.type === 'BURN' || e.type === 'MNODE' || e.type === 'MANEUVER') {
+    } else if (e.type === 'BURN' || e.type === 'MNODE') {
       const leg = (typeof physMissionLeg === 'function') ? physMissionLeg(missionId, authIdx) : null;
       const fv = e.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId] : null;
       let r = null, v = null, frame = null, dvApplied = null, note = null, legRef = null;

@@ -371,9 +371,9 @@ function _missionLogCardHTML(entry, id, idx) {
   </div>`;
   if (entry.type === 'MNODE') {
     // Manual burn (mode:'manual', or classic vector MNODE with no target at
-    // all). A retained `target`/legacy `detachedFrom` means this was once
-    // (or can again be) a solved maneuver — offer the mode-flip back.
-    const tgt = entry.target || entry.detachedFrom;
+    // all). A retained `target` means this was once (or can again be) a
+    // solved maneuver — offer the mode-flip back.
+    const tgt = entry.target;
     return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">MANEUVER NODE (vector)</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">Δv ${(entry.dvRequired||0).toLocaleString()} m/s <span style="color:var(--text-dim);">(pro ${Math.round(entry.dvPro_ms||0)} / rad ${Math.round(entry.dvRad_ms||0)} / nrm ${Math.round(entry.dvNrm_ms||0)})</span></div>
@@ -860,17 +860,40 @@ function _missionVehicleRemainingDv(fv) {
   return total;
 }
 
+// MISSION_MODEL_V2 Phase 2 S4 (§11.2 step 3): missionBudget delegates to
+// v2DeriveBudget (the simulated-state readout) + the ascent line it already
+// carries (F2). The old per-entry summation over m.log is DELETED — this is
+// also what retires the 2026-07-11 aggregate-undercount anomaly (a manual
+// 200 m/s burn moving the total by +3), since the path that produced it no
+// longer exists. Payload mass and ascent propellant are read straight off
+// the LAUNCH entry's stagingResult (unchanged source, §11.1 F2) since
+// v2DeriveBudget's propTotal only covers burns, not the ascent stage.
 function missionBudget(m) {
+  const vb = (typeof v2DeriveBudget === 'function' && m && m.missionId) ? v2DeriveBudget(m.missionId) : null;
   let dvExpended = 0, propConsumed = 0, payloadMass = 0;
-  for (const e of (m.log || [])) {
-    if (e.type === 'LAUNCH') {
+  if (vb) {
+    dvExpended = vb.dvTotal;
+    propConsumed = vb.propTotal;
+    for (const e of (m.log || [])) {
+      if (e.type !== 'LAUNCH') continue;
       const sr = e.stagingResult || {};
-      dvExpended  += sr.dvDelivered || 0;
       propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
-      payloadMass  = e.payloadMass || payloadMass;
-    } else if (e.type === 'BURN' || e.type === 'MANEUVER' || e.type === 'MNODE') {
-      dvExpended  += e.dv_actual || 0;
-      propConsumed += e.prop_consumed || 0;
+      payloadMass = e.payloadMass || payloadMass;
+    }
+  } else {
+    // Fallback for a mission with no v2 side-table yet (e.g. missionBudget
+    // called before the first recompute) — same summation V1 used to do
+    // unconditionally.
+    for (const e of (m.log || [])) {
+      if (e.type === 'LAUNCH') {
+        const sr = e.stagingResult || {};
+        dvExpended  += sr.dvDelivered || 0;
+        propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
+        payloadMass  = e.payloadMass || payloadMass;
+      } else if (e.type === 'BURN' || e.type === 'MNODE') {
+        dvExpended  += e.dv_actual || 0;
+        propConsumed += e.prop_consumed || 0;
+      }
     }
   }
   const fv = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && m.vehicleId)
@@ -1689,6 +1712,43 @@ function missionRecompute(m) {
   if (typeof v2BuildShadow === 'function') {
     try { v2BuildShadow(m); } catch (err) { console.warn('v2 shadow build failed:', err); }
   }
+  // MISSION_MODEL_V2 Phase 2 S4 (§11.2 step 2, "stamp-from-V2"): overwrite the
+  // consumer-read fields (e.dv_actual, e.prop_consumed) on every burn-family
+  // expanded entry FROM the just-built V2 timeline, so band/checks/report/
+  // node-map/state-panel — none of which change in this phase (§11.0's
+  // blast-radius trick) — start reading physics-derived delivered ΔV instead
+  // of V1's bookkeeping. e.dvRequired/e.dvTarget for solved edges are left
+  // untouched (still progNmComputeEdgeDv, unchanged authority, §2/§11.2.2). A
+  // burn with no promotable V2 dv (dv_ms: null — an unconverged/un-anchored
+  // corridor edge, §10.3 "never silently skip") keeps its V1-computed value
+  // rather than being blanked.
+  if (typeof v2DeriveBudget === 'function' && m.missionId) {
+    const vb = v2DeriveBudget(m.missionId);
+    const byAuth = {};
+    vb.perBurn.forEach(function (b) { if (!(b.authIdx in byAuth)) byAuth[b.authIdx] = b; });
+    expanded.forEach(function (e) {
+      if (e.type !== 'BURN' && e.type !== 'MNODE') return;
+      const authIdx = e._authIdx != null ? e._authIdx : null;
+      const b = authIdx != null ? byAuth[authIdx] : null;
+      if (b && b.dv_ms != null) {
+        e.dv_actual = Math.round(b.dv_ms);
+        e.dvDelivered = Math.round(b.dv_ms);
+        e.dv = Math.round(b.dv_ms);
+        e.prop_consumed = Math.round(b.prop_kg || 0);
+        // e.result (SUCCESS/MARGINAL) was set by the V1 replay against V1's
+        // OWN prop-limited delivered ΔV, before the stamp above overwrote
+        // dv_actual with the simulated value — re-derive it against the
+        // stamped number so readiness checks (572) see a consistent
+        // required-vs-delivered pair instead of a stale verdict (F1, §11.1:
+        // "reason about it, don't suppress it" — the arrival-burn flip can
+        // legitimately turn a V1 shortfall into an over-delivery or vice
+        // versa; this keeps the SUCCESS/MARGINAL badge honest either way).
+        if (e.dvRequired != null) {
+          e.result = (b.dv_ms + 1 >= e.dvRequired) ? 'SUCCESS' : 'MARGINAL';
+        }
+      }
+    });
+  }
   if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
   if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
   // Flight Readiness checks are derived state — computed LAST, after autosave has
@@ -1753,11 +1813,6 @@ function missionApplyBurnEdit(id, idx) {
 function missionApplyManeuverEdit(id, idx) {
   const m = _missionGet(id); if(!m) return;
   const e = m.log[idx]; if(!e || !_evIsSolvedManeuver(e)) return;
-  // R6.2' Phase B (3b): touching a legacy MANEUVER's card lazy-migrates it to
-  // the unified MNODE(mode:'solved') schema in place, one undo step (the
-  // migration mutation + the field edit below land in the SAME recompute's
-  // undo capture, matching the drag-commit discipline elsewhere).
-  _missionMigrateManeuverEntry(e);
   const from = document.getElementById('edit-mv-from-'+id)?.value || e.fromNode;
   const to   = document.getElementById('edit-mv-to-'+id)?.value || e.toNode;
   const lbl = nid => { const n = _missionNmNodeById(nid); return n ? (n.sub ? n.label + ' (' + n.sub + ')' : n.label) : nid; };
@@ -2557,7 +2612,7 @@ function _missionMultiVehicleHTML(m) {
         dvExpended += sr.dvDelivered || 0;
         propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
         payloadMass = e.payloadMass || payloadMass;
-      } else if (e.type === 'BURN' || e.type === 'MANEUVER' || e.type === 'MNODE') {
+      } else if (e.type === 'BURN' || e.type === 'MNODE') {
         dvExpended += e.dv_actual || 0;
         propConsumed += e.prop_consumed || 0;
       }
@@ -3607,22 +3662,17 @@ function missionMnodeNudge(id, idx, field, sign, ev) {
   missionRenderDetail();
 }
 
-// R6.2' Phase B: re-solve a detached (manual) MNODE back to its target —
-// now a pure MODE-FLIP ('manual' -> 'solved') instead of Phase A's object
-// swap-back, since the unified schema keeps `target` around on a manual node
-// specifically so this doesn't need a stashed copy of anything. ΔV
-// accounting flips back to progNmComputeEdgeDv via _evIsSolvedManeuver on
-// the very next recompute — dvPro/rad/nrm_ms are left as-is (display-only
-// once solved; refreshed from the leg's dvVec by the same recompute) and
-// dvOverride (if the user had one) is untouched, matching legacy MANEUVER
-// semantics exactly. Falls back to reading a legacy Phase-A `detachedFrom`
-// object for any old save that hasn't been touched since (lazy-migrated in
-// place first, so it never needs a second read of this field again).
+// R6.2' Phase B: re-solve a detached (manual) MNODE back to its target — a
+// pure MODE-FLIP ('manual' -> 'solved'), since the unified schema keeps
+// `target` around on a manual node specifically so this doesn't need a
+// stashed copy of anything. ΔV accounting flips back to progNmComputeEdgeDv
+// via _evIsSolvedManeuver on the very next recompute — dvPro/rad/nrm_ms are
+// left as-is (display-only once solved; refreshed from the leg's dvVec by
+// the same recompute) and dvOverride (if the user had one) is untouched.
 function missionMnodeResolveToTarget(id, idx) {
   const m = _missionGet(id); if (!m || !m.log[idx]) return;
   const e = m.log[idx];
   if (e.type !== 'MNODE') return;
-  _missionMigrateManeuverEntry(e);   // detachedFrom-only saves -> target populated
   if (!e.target || !e.target.fromNode || !e.target.toNode) return;
   e.mode = 'solved';
   // R6.2' Phase B step 5: re-solving hands the departure state back to the

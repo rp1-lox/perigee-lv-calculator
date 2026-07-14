@@ -8,6 +8,10 @@ function _missionMake(name) {
     log:           [],
     vehicleId:     null,
     vehicleIds:    [],
+    // MISSION_MODEL_V2 D3/Phase 2 S5: the persistence version gate. Every
+    // mission this build creates is pure-V2 (no legacy MANEUVER entries, no
+    // detachedFrom baggage) — see applyProgramObject/_applySessionObject.
+    modelVersion:  2,
   };
 }
 

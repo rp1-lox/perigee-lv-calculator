@@ -51,7 +51,24 @@ function loadProgramFile(input) {
   reader.readAsText(file);
 }
 
+// MISSION_MODEL_V2 D3/Phase 2 S5: the version gate. A mission blob without
+// modelVersion:2 predates the physics-primary flip (V1 accounting, possibly
+// legacy MANEUVER entries / detachedFrom fallbacks the replay no longer
+// understands) — refused outright rather than migrated (old files keep
+// working in the released v2.0.0 build). An empty/missing missions array
+// passes trivially (nothing to gate).
+function _missionsPassV2Gate(missions) {
+  if (!Array.isArray(missions) || !missions.length) return true;
+  return missions.every(m => m && m.modelVersion === 2);
+}
+
 function applyProgramObject(obj) {
+  if (obj && !_missionsPassV2Gate(obj.missions)) {
+    if (typeof showAlert === 'function') {
+      showAlert('This program file was saved by an older version of Rocket Playground (pre-v3.0 mission model) and can\'t be opened here — its missions use the retired ΔV-accounting model. Old files remain readable in the published v2.0.0 "Integral" build. Nothing was changed.', 'Older Mission Format');
+    }
+    return;
+  }
   _scEdSC       = Array.isArray(obj.spacecraft) ? obj.spacecraft : [];
   // Builtin presets are seeded with fresh UUIDs each session, so a restored blob
   // that predates them (or was saved with them deleted) silently wipes them.
