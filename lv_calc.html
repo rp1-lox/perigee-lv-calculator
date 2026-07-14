@@ -5850,6 +5850,7 @@ function settingsSetFidelity(mode) {
       (_missions || []).forEach(m => missionRecompute(m));
     if (typeof missionRenderDetail === 'function') missionRenderDetail();
   } catch (err) { console.warn('fidelity recompute failed:', err); }
+  settingsSyncUI(); // keep the radios honest for programmatic callers too
   if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
 }
 
