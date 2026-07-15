@@ -1590,9 +1590,15 @@ function missionRecompute(m) {
       const altKm = active.orbitState.perigee ?? active.orbitState.apogee ?? 0;
       const vCirc = (typeof progVcirc === 'function') ? progVcirc(body, altKm) : 0;
       const bodyDef = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+      // metStart_s = metClock (this event's start MET, before this event's own
+      // duration advances the clock) — E4 (MATH.md §7ab, closes critique 86):
+      // folded into the signature so an upstream timeline shift (an earlier
+      // event's duration edit sliding this leg's metStart) flips STALE even
+      // when the leg's own r/v/thrust/duration are byte-identical.
       const sig = ltSignature({
         r: [(bodyDef ? bodyDef.R : 0) + altKm, 0, 0], v: [0, vCirc, 0],
         m0_kg: m0, thrust_N: ep.thrust_N, isp_s: ep.isp_s, throttle, law, duration_s: dur, fidelity: 'default',
+        metStart_s: metClock,
       });
       e._ltSig = sig;
       const cached = ltComputedLeg(m.missionId, e._authIdx);
@@ -2737,6 +2743,13 @@ function _missionLowThrustLogCardHTML(entry, id, idx) {
     ${state === 'stale' ? `<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:4px;">STALE — inputs changed since the last computed run; budget/orbit fall back to est. Click Compute to rebuild.</div>` : ''}
     ${readyMsg}
     ${progressHTML}
+    <div id="ltg-card-readout-${id}-${idx}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:4px;min-height:11px;"></div>
+    <div style="margin-top:6px;display:flex;gap:4px;align-items:center;">
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">Target altitude&hellip;</span>
+      <input id="ltg-alt-${id}-${idx}" type="number" min="0" step="1" placeholder="km" style="width:70px;font-family:var(--mono);font-size:9px;" />
+      <button class="act-btn" style="padding:2px 8px;font-size:9px;" onclick="ltgSetTargetAltitude('${id}',${idx})">Solve duration</button>
+    </div>
+    <div id="ltg-badge-${id}-${idx}" style="font-family:var(--mono);font-size:9px;margin-top:2px;"></div>
     ${!entry._ltComputing ? `<div style="margin-top:8px;display:flex;gap:6px;">
       <button class="act-btn" style="flex:1;" ${entry._ltReady === false ? 'disabled' : ''} onclick="ltComputeTrajectory('${id}',${idx})">▶ Compute Trajectory</button>
     </div>` : ''}

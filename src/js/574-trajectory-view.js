@@ -1986,6 +1986,10 @@ function _trajSelectEventFromView(id, authIdx) {
     const m2 = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
     _oiOnEventSelected(id, authIdx, m2 && m2.log && m2.log[authIdx]);
   }
+  // E4 (5748): a duration-drag in progress against a DIFFERENT event is
+  // stale the moment selection moves — cancel it rather than leave a
+  // dangling drag targeting an event no longer shown as selected.
+  if (typeof _ltgCancelDrag === 'function') _ltgCancelDrag();
 }
 
 // Compute the min zoom-worthy extent (max body-centered radius, km) of a
@@ -2169,6 +2173,20 @@ function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, se
         out += `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${emphasized ? 1.1 : 0.7}"${dashAttr} opacity="${op}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title} &middot; ${si === 0 ? 'first' : 'last'} revs</title></path>`;
         out += `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
       });
+      // ── E4 duration-drag handle (MATH.md §7ab): at the LOD tail's endpoint,
+      // only when this event is the selected/expanded one. Direction (tx,ty)
+      // is the tail's second-to-last sample, projected the SAME way as the
+      // endpoint — the gizmo module (5748) reads both as data attrs to derive
+      // a screen-space drag axis, no re-projection needed client-side.
+      if (emphasized && lod.tail && lod.tail.length >= 2 && typeof _ltgHandleDown === 'function') {
+        const s2 = lod.tail[lod.tail.length - 1], s1 = lod.tail[lod.tail.length - 2];
+        const a = anchorOf(body);
+        const q2 = _trajProj3(s2.r[0], s2.r[1], s2.r[2] || 0, met0 + s2.t);
+        const q1 = _trajProj3(s1.r[0], s1.r[1], s1.r[2] || 0, met0 + s1.t);
+        const hx = a.x + q2.x * zoom, hy = a.y + q2.y * zoom;
+        const tx = a.x + q1.x * zoom, ty = a.y + q1.y * zoom;
+        out += `<circle class="ltg-handle" cx="${hx.toFixed(2)}" cy="${hy.toFixed(2)}" r="7" data-tx="${tx.toFixed(2)}" data-ty="${ty.toFixed(2)}" fill="var(--accent)" stroke="var(--bg)" stroke-width="1.5" style="pointer-events:auto;cursor:ew-resize" onmousedown="event.stopPropagation();_ltgHandleDown(event,'${id}',${i})"><title>Drag to scale duration (live est. — release to author)</title></circle>`;
+      }
       return;
     }
 
@@ -2182,17 +2200,28 @@ function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, se
     if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return;
     const REVS = 4, STEPS = 160;                       // stylized, NOT the est. rev count — a glyph, not physics
     const thMax = REVS * 2 * Math.PI;
-    let d = '';
+    let d = '', lastPx = null, prevPx = null;
     for (let k = 0; k <= STEPS; k++) {
       const th = k / STEPS * thMax;
       const r = r0 * Math.pow(r1 / r0, th / thMax);    // log spiral: exponential radius vs angle
       const q = _trajProj3(r * Math.cos(th), r * Math.sin(th), 0);
-      d += (k ? ' L ' : 'M ') + (ox + q.x * zoom).toFixed(2) + ' ' + (oy + q.y * zoom).toFixed(2);
+      const px = ox + q.x * zoom, py = oy + q.y * zoom;
+      d += (k ? ' L ' : 'M ') + px.toFixed(2) + ' ' + py.toFixed(2);
+      prevPx = lastPx; lastPx = { x: px, y: py };
     }
     const stateTxt = e._ltState === 'stale' ? 'STALE — recompute' : 'est. — not computed';
     const title = `Low-thrust spiral (schematic, ${stateTxt}) &middot; ${_trajDvText(Math.round(e.dv_est || 0))} est. &middot; ${_metFmt(met0)}`;
-    out += `<path d="${d}" fill="none" stroke="var(--text-dim)" stroke-width="0.7" stroke-dasharray="4,3" opacity="${(0.7 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title}</title></path>`;
+    // E4: schematic arc gets an id so the duration-drag gizmo (5748) can
+    // rewrite its `d` attribute directly during a drag (est.-lane-only, no
+    // recompute) without a full DOM re-render on every mouse-move frame.
+    const schemId = `lt-schem-${id}-${i}`;
+    out += `<path id="${schemId}" d="${d}" fill="none" stroke="var(--text-dim)" stroke-width="0.7" stroke-dasharray="4,3" opacity="${(0.7 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title}</title></path>`;
     out += `<path d="${d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
+    // E4 duration-drag handle at the schematic arc's endpoint (only for the
+    // selected/expanded event) — see MATH.md §7ab.
+    if (emphasized && lastPx && prevPx && typeof _ltgHandleDown === 'function') {
+      out += `<circle class="ltg-handle" cx="${lastPx.x.toFixed(2)}" cy="${lastPx.y.toFixed(2)}" r="7" data-tx="${prevPx.x.toFixed(2)}" data-ty="${prevPx.y.toFixed(2)}" data-schem="${schemId}" data-r0="${r0.toFixed(3)}" data-body="${body}" fill="var(--accent)" stroke="var(--bg)" stroke-width="1.5" style="pointer-events:auto;cursor:ew-resize" onmousedown="event.stopPropagation();_ltgHandleDown(event,'${id}',${i})"><title>Drag to scale duration (live est. — release to author)</title></circle>`;
+    }
   });
   return out;
 }

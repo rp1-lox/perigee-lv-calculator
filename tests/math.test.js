@@ -3516,11 +3516,13 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache,
     _ltComputedByMission, progVcirc, progMakeSpacecraftStageDef,
     ltEdelbaumFullDv, ltEdelbaumTofEst, ltResampleSpiralRevs,
+    ltInverseEdelbaumDuration, ltMaxAchievableAlt,
   } = vm.runInContext(
     '({ PROG_PROPELLANT_TYPES, PHYS_G0_MS2, ltEstimateLeg, ltEdelbaumPlanarDv, ltApplyDvToCircularAlt, ' +
     'ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache, ' +
     '_ltComputedByMission, progVcirc, progMakeSpacecraftStageDef, ' +
-    'ltEdelbaumFullDv, ltEdelbaumTofEst, ltResampleSpiralRevs })',
+    'ltEdelbaumFullDv, ltEdelbaumTofEst, ltResampleSpiralRevs, ' +
+    'ltInverseEdelbaumDuration, ltMaxAchievableAlt })',
     sandbox
   );
 
@@ -3586,9 +3588,10 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('LT: a non-physical dv leaves altitude unchanged rather than lying', nonPhysical === alt0);
   }
 
-  // ── ltSignature: stability + sensitivity ──
+  // ── ltSignature: stability + sensitivity (8 fields as of E4, MATH.md §7ab,
+  //    closes critique 86: metStart_s joins the signature) ──
   {
-    const base = { r: [6678, 0, 0], v: [0, 7.7, 0], m0_kg: 700, thrust_N: 0.29, isp_s: 3100, throttle: 1, law: 'prograde', duration_s: 2592000, fidelity: 'default' };
+    const base = { r: [6678, 0, 0], v: [0, 7.7, 0], m0_kg: 700, thrust_N: 0.29, isp_s: 3100, throttle: 1, law: 'prograde', duration_s: 2592000, fidelity: 'default', metStart_s: 86400 };
     const sig1 = ltSignature(base);
     const sig2 = ltSignature(JSON.parse(JSON.stringify(base)));
     ok('LT: signature is a deterministic hash string', typeof sig1 === 'string' && sig1.length > 0);
@@ -3601,9 +3604,14 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
       { ...base, isp_s: base.isp_s + 1 },
       { ...base, m0_kg: base.m0_kg + 1 },
       { ...base, v: [0, 7.701, 0] },
+      { ...base, metStart_s: base.metStart_s + 3600 },   // E4 critique-86 closure: a pure timeline shift now flips STALE
     ];
-    ok('LT: any single field change flips the signature (all 7 variants differ from base)',
+    ok('LT: any single field change flips the signature (all 8 variants differ from base, incl. metStart)',
       variants.every(v => ltSignature(v) !== sig1));
+    // Sub-60s float noise in accumulated MET must NOT cause a spurious STALE
+    // (the field is intentionally rounded to 60s buckets, per §7ab).
+    const jitter = ltSignature({ ...base, metStart_s: base.metStart_s + 12.3 });
+    ok('LT: sub-60s metStart jitter does not flip the signature (60s rounding)', jitter === sig1);
   }
 
   // ── ltReadinessCheck: EP-stage requirement (the LOWTHRUST readiness gate, 572) ──
@@ -3774,6 +3782,73 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
       short.mid.length === 0 && short.tail.length === 0 && short.head.length === 5);
     const empty = ltResampleSpiralRevs([], 8, 8);
     ok('LT E3: resampler handles an empty sample array without throwing', empty.head.length === 0 && empty.revCount === 0);
+  }
+
+  // ── LT E4: inverse-Edelbaum target-orbit mode + max-achievable altitude
+  //    (MATH.md §7ab; drag mechanics themselves are browser-verified) ──
+  {
+    const RE = vm.runInContext('PROG_BODIES.Earth.R', sandbox);
+    const muE = vm.runInContext('PROG_BODIES.Earth.mu', sandbox);
+    const ep = { thrust_N: 0.29, isp_s: 3100, m0_kg: 700, mDry_kg: 300 };
+    const alt0 = 400, alt1 = 1000; // raise
+
+    // round-trip: altitude -> dv -> duration -> back to a re-solved altitude
+    // via the SAME est-orbit approximation (ltApplyDvToCircularAlt) the
+    // duration-drag gizmo itself uses to repaint the schematic live.
+    const inv = ltInverseEdelbaumDuration('Earth', alt0, alt1, ep);
+    ok('LT E4: inverse-Edelbaum returns a finite positive duration for a reachable raise', !!inv && inv.duration_s > 0 && isFinite(inv.duration_s));
+    ok('LT E4: inverse-Edelbaum picks prograde for a raise', inv.law === 'prograde');
+    // dv is the EXACT inverse of ltApplyDvToCircularAlt's own forward vis-viva
+    // relation (v1 = sqrt(2*mu/r0 - mu/r1), NOT sqrt(mu/r1) — see the
+    // function's doc comment for why those differ), independently re-derived
+    // here rather than re-imported from the module under test.
+    const r0 = RE + alt0, r1 = RE + alt1;
+    const v0 = Math.sqrt(muE / r0), v1exact = Math.sqrt(2 * muE / r0 - muE / r1);
+    approx('LT E4: inverse-Edelbaum dv matches the exact vis-viva inverse of ltApplyDvToCircularAlt', inv.dv_kms, Math.abs(v1exact - v0), 1e-9);
+    const backAlt = ltApplyDvToCircularAlt('Earth', alt0, inv.dv_kms);
+    approx('LT E4: round-trip (alt -> dv -> duration -> re-applied dv -> alt) recovers the target altitude exactly', backAlt, alt1, 1e-6);
+    // re-derive duration independently via ltEdelbaumTofEst on the SAME dv and
+    // check internal consistency with the inverse function's own duration.
+    const tofCheck = ltEdelbaumTofEst(inv.dv_kms, ep);
+    approx('LT E4: inverse-Edelbaum duration matches ltEdelbaumTofEst on the same dv (internal consistency)', inv.duration_s, tofCheck.tof_s, 1e-6);
+
+    // lower case picks retrograde
+    const invLower = ltInverseEdelbaumDuration('Earth', alt1, alt0, ep);
+    ok('LT E4: inverse-Edelbaum picks retrograde for a lower', invLower.law === 'retrograde');
+
+    // ── reachability honesty: a TIGHT-margin stage (small usable prop
+    // fraction) whose full-tank dv stays well inside Earth's escape regime,
+    // so the max-achievable-altitude math below stays in the physical
+    // (elliptical/circular) domain ltApplyDvToCircularAlt actually models —
+    // a wide-margin xenon stage's full dv (~tens of km/s) would drive the
+    // "raise" case hyperbolic long before running out of prop, which is a
+    // real and separate honesty gap (documented, MATH.md §7ab) but not what
+    // THIS test is targeting. ──
+    const epTight = { thrust_N: 0.29, isp_s: 1500, m0_kg: 700, mDry_kg: 695 };
+
+    // unreachable: a target far enough out that epTight's small dv_max can't get there
+    const invFar = ltInverseEdelbaumDuration('Earth', alt0, 5000, epTight);
+    ok('LT E4: inverse-Edelbaum returns null when the target exceeds tank capacity (honest failure, no NaN)', invFar === null);
+
+    // max-achievable altitude (prop-capped): dv_max from the FULL-tank rocket
+    // equation, independently cross-checked against ltEstimateLeg's own
+    // capped-duration dv for an arbitrarily long burn (same physics, two
+    // different entry points -> must agree).
+    const maxA = ltMaxAchievableAlt('Earth', alt0, epTight, true);
+    ok('LT E4: max-achievable altitude is finite and above the starting altitude (raise direction)', !!maxA && isFinite(maxA.altMax_km) && maxA.altMax_km > alt0);
+    const longBurn = ltEstimateLeg(epTight, 365 * 86400 * 50, 1); // deliberately excessive duration -> fully capped
+    ok('LT E4: the cross-check burn is indeed fully prop-capped', longBurn.capped === true);
+    approx('LT E4: max-achievable dv matches the fully-capped rocket-equation dv from ltEstimateLeg', maxA.dv_max_kms, longBurn.dv_est_kms, 1e-6);
+    // and the resulting altitude matches applying that same capped dv directly
+    const altFromCappedDv = ltApplyDvToCircularAlt('Earth', alt0, longBurn.dv_est_kms);
+    approx('LT E4: max-achievable altitude matches applying the capped dv directly (ltApplyDvToCircularAlt)', maxA.altMax_km, altFromCappedDv, 1e-6);
+
+    const maxALower = ltMaxAchievableAlt('Earth', alt1, epTight, false);
+    ok('LT E4: max-achievable altitude in the lower direction is below the starting altitude', !!maxALower && maxALower.altMax_km < alt1);
+
+    // honest failure on a dead/absent stage
+    ok('LT E4: max-achievable returns null for a stage with no usable prop (m0<=mDry)', ltMaxAchievableAlt('Earth', alt0, { thrust_N: 1, isp_s: 3000, m0_kg: 300, mDry_kg: 300 }, true) === null);
+    ok('LT E4: inverse-Edelbaum returns null for an unknown body (no throw)', ltInverseEdelbaumDuration('Nonexistentia', alt0, alt1, ep) === null);
   }
 }
 

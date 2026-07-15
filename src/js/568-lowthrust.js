@@ -158,6 +158,70 @@ function ltApplyDvToCircularAlt(body, altKm, dv_kms) {
   return aNew - R;
 }
 
+// ── E4: target-orbit mode — inverse Edelbaum + max-achievable altitude ──────
+//
+// MATH.md §7ab. "Target altitude…" affordance on the LOWTHRUST card: given a
+// target circular altitude, solve duration_s from the est. lane's own
+// closed-form relations (no search/iteration — everything below composes
+// exactly-invertible pieces already pinned elsewhere in this module).
+//
+// body: PROG_BODIES key. alt0Km: current mean altitude. alt1Km: target
+// circular altitude. ep: {thrust_N, isp_s, m0_kg, mDry_kg}.
+// Returns { dv_kms, duration_s, law, propUsed_kg, mF_kg } or null if the
+// body/altitudes are non-physical (mirrors ltApplyDvToCircularAlt's honesty
+// convention — never returns NaN/negative silently).
+//
+// EXACT inverse of ltApplyDvToCircularAlt, not the naive |v_circ(r0)-v_circ(r1)|
+// planar-Edelbaum triangle (documented departure, MATH.md §7ab): the est.
+// lane's own forward function treats a dv as a single tangential impulse
+// delivered AT r0 whose resulting vis-viva SMA is reported as the new
+// "altitude" (aNew = -mu/(v1^2-2mu/r0)) — that is NOT the same v1 as
+// sqrt(mu/r1) (circular speed AT r1), because a v1-at-r0 impulse does not
+// generally land you in a circular orbit of radius r1. Solving aNew=r1 for
+// v1 gives v1 = sqrt(2*mu/r0 - mu/r1) exactly (the vis-viva equation itself,
+// solved for velocity at r0 given target SMA r1) — using THIS v1 (not
+// sqrt(mu/r1)) makes ltInverseEdelbaumDuration a bit-exact round-trip
+// through ltApplyDvToCircularAlt, which is what the duration-drag gizmo's
+// live schematic redraw and the target-altitude affordance both depend on
+// for consistency. The domain requires r1 >= r0/2 (else v1^2<0 — an
+// unphysical "lower to below half the current radius via a single tangential
+// impulse" case, handled below by the guard the sqrt would otherwise NaN on).
+function ltInverseEdelbaumDuration(body, alt0Km, alt1Km, ep) {
+  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  if (!b || !(alt0Km >= 0) || !(alt1Km >= 0)) return null;
+  const r0 = b.R + alt0Km, r1 = b.R + alt1Km;
+  const v0 = Math.sqrt(b.mu / r0);
+  const v1sq = 2 * b.mu / r0 - b.mu / r1;
+  if (!(v1sq >= 0)) return null; // r1 < r0/2 — no single tangential impulse at r0 reaches this SMA
+  const v1 = Math.sqrt(v1sq);
+  const dv_kms = Math.abs(v1 - v0);
+  const law = alt1Km >= alt0Km ? 'prograde' : 'retrograde';
+  const tof = ltEdelbaumTofEst(dv_kms, ep);
+  if (tof.tof_s == null) return null; // exceeds tank capacity — caller checks ltMaxAchievableAlt for the honest badge
+  return { dv_kms, duration_s: tof.tof_s, law, propUsed_kg: tof.propUsed_kg, mF_kg: tof.mF_kg };
+}
+
+// Reachability honesty (spec requirement): the MAX altitude this stage's
+// available prop can reach from alt0Km, in the requested direction. dv_max
+// comes straight from the rocket equation on the FULL usable prop
+// (m0 -> mDry, same relation ltEstimateLeg/E1 pin exactly); the resulting
+// circular altitude re-uses ltApplyDvToCircularAlt's vis-viva back-solve
+// (the SAME est-orbit approximation the rest of the est. lane already
+// commits to, MATH.md §7z critique 75) rather than a second orbit model.
+// raiseDirection: true = prograde (raise), false = retrograde (lower).
+// Returns { dv_max_kms, altMax_km } or null if the stage can't produce any dv.
+function ltMaxAchievableAlt(body, alt0Km, ep, raiseDirection) {
+  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  if (!b || !(alt0Km >= 0)) return null;
+  const Isp = (ep && ep.isp_s) || 0, m0 = Math.max(0, (ep && ep.m0_kg) || 0), mDry = Math.max(0, (ep && ep.mDry_kg) || 0);
+  if (!(Isp > 0) || !(m0 > mDry)) return null;
+  const dv_max_ms = Isp * PHYS_G0_MS2 * Math.log(m0 / mDry); // full-tank rocket-eq dv, exact (§7y telescoping)
+  const dv_max_kms = dv_max_ms / 1000;
+  const signedDv = raiseDirection ? dv_max_kms : -dv_max_kms;
+  const altMax_km = ltApplyDvToCircularAlt(body, alt0Km, signedDv);
+  return { dv_max_kms, altMax_km };
+}
+
 // ── signature (stale-detection) ──────────────────────────────────────────────
 //
 // Deterministic string hash (FNV-1a, 32-bit) over the JSON of the rounded
@@ -173,7 +237,17 @@ function _ltFnv1a(str) {
 }
 
 // fields: { r:[x,y,z], v:[vx,vy,vz], m0_kg, thrust_N, isp_s, throttle, law,
-//           duration_s, fidelity }
+//           duration_s, fidelity, metStart_s }
+//
+// E4 (MATH.md §7ab, closes critique 86): metStart_s joins the signature,
+// rounded to whole 60s buckets — a computed leg's per-sample epochs are
+// rebased onto e.metStart at render time (574's `toLeg`), so a time-SHIFT
+// of an otherwise-identical leg (an earlier event's duration edit sliding
+// this leg's metStart) is genuinely a different N3-frame-relative picture
+// and must flip STALE, not just a geometry-identical no-op. Coarse (60s)
+// rounding avoids spurious STALEs from float noise in MET accumulation
+// while still catching any real upstream timeline edit (which moves
+// metStart by seconds-to-days, never sub-minute).
 function ltSignature(fields) {
   const f = fields || {};
   const round = (x, n) => Number.isFinite(x) ? +x.toFixed(n) : 0;
@@ -188,6 +262,7 @@ function ltSignature(fields) {
     law: f.law || '',
     dur: round(f.duration_s, 3),
     fidelity: f.fidelity || 'default',
+    metStart: Math.round((f.metStart_s || 0) / 60) * 60,
   };
   return _ltFnv1a(JSON.stringify(canon));
 }
