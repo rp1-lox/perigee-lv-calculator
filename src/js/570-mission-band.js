@@ -51,6 +51,36 @@ function missionSetLaneColor(missionId, label, hex) {
   missionRenderDetail();
 }
 
+// WORKFLOW PASS 1 deliverable C: single color-source entry point. The band
+// view's actual override storage (m.laneColors) is keyed by owner display
+// LABEL (a band "owner" = one LV/spacecraft stage-track — see _missionLaneColor
+// above); the HUD strip and snapshot data instead only have a runtime VEHICLE
+// id/originKey handy (a vehicle can host >1 owner, e.g. a docked LV stage +
+// payload). `vehicleKey` accepts either: an owner key found directly in
+// m._ownerLabels (the label-lookup path other callers like 5741's scene
+// extraction already use via _missionLaneColor), or a vehicle id/originKey,
+// in which case this falls back to asking the band model which owner lane(s)
+// live on that vehicle and returns the first one with a custom color. Returns
+// `fallback` (default null) when nothing custom is assigned, so callers keep
+// their own existing default derivation unchanged — missions with no custom
+// laneColors see zero visual change (regression guard).
+function _missionVehicleColor(m, vehicleKey, fallback) {
+  if (!m || !vehicleKey) return fallback == null ? null : fallback;
+  const directLabel = m._ownerLabels && m._ownerLabels[vehicleKey];
+  if (directLabel && m.laneColors && m.laneColors[directLabel]) return m.laneColors[directLabel];
+  if (typeof _missionBandModel === 'function') {
+    try {
+      const band = _missionBandModel(m);
+      for (const L of band.lanes) {
+        if (L.points.some(p => p.vehicleId === vehicleKey) && m.laneColors && m.laneColors[L.name]) {
+          return m.laneColors[L.name];
+        }
+      }
+    } catch (e) { /* best-effort only — never block the HUD render */ }
+  }
+  return fallback == null ? null : fallback;
+}
+
 function _missionBandModel(m) {
   const palette = _MISSION_BAND_PALETTE;
   const log = (m._expanded && m._expanded.length) ? m._expanded : m.log;

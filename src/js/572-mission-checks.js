@@ -403,14 +403,74 @@ function _missionChecksToolbarChipHTML(m) {
   return `<button class="act-btn mcc-check-chip" style="color:${color};border-color:${color};" title="${_mcEscape(title)}" onclick="missionChecksOpenFromToolbar('${m.missionId}')">${icon} ${label}</button>`;
 }
 
+// WORKFLOW PASS 1 deliverable A: the standalone FLIGHT READINESS panel
+// (_missionChecksBoxHTML above) is retired from the layout — findings now
+// re-home onto the things they criticize (event card badges/inline text,
+// timeline-dock markers, plan-rail node chips) plus this toolbar/HUD chip.
+// _missionChecksBoxHTML itself is left defined (harmless, unused) rather than
+// deleted, in case a future surface wants the full list rendering again.
+
+// Worst finding across a mission (red beats amber beats info) — drives the
+// toolbar/HUD chip's click-to-select behavior.
+function _missionChecksWorstFinding(m) {
+  const findings = missionGetChecks(m);
+  const rank = { red: 2, amber: 1, info: 0 };
+  let worst = null;
+  findings.forEach(f => {
+    if (f.authIdx == null) return;   // nothing to select — end-state findings have no anchor event
+    if (!worst || (rank[f.severity] || 0) > (rank[worst.severity] || 0)) worst = f;
+  });
+  return worst;
+}
+
+// authIdx -> findings anchored there (for event-card badges/inline text).
+function _missionChecksByAuthIdx(m) {
+  const map = new Map();
+  missionGetChecks(m).forEach(f => {
+    if (f.authIdx == null) return;
+    if (!map.has(f.authIdx)) map.set(f.authIdx, []);
+    map.get(f.authIdx).push(f);
+  });
+  return map;
+}
+
+// Small ● dot badge(s) for an event card header row — one dot per distinct
+// severity present at this authIdx (red/amber only; info findings don't badge
+// the event, they're not actionable failures).
+function _missionChecksEventBadgeHTML(m, authIdx) {
+  const findings = (_missionChecksByAuthIdx(m).get(authIdx) || []).filter(f => f.severity === 'red' || f.severity === 'amber');
+  if (!findings.length) return '';
+  const hasRed = findings.some(f => f.severity === 'red');
+  const hasAmber = findings.some(f => f.severity === 'amber');
+  let out = '';
+  if (hasRed) out += `<span class="mcc-check-dot" style="color:var(--danger);" title="Flight readiness: red finding on this event">&#9679;</span>`;
+  if (hasAmber) out += `<span class="mcc-check-dot" style="color:var(--warn,var(--accent2));" title="Flight readiness: amber finding on this event">&#9679;</span>`;
+  return out;
+}
+
+// Full finding text, inline in the event card body when that event is selected —
+// the information moves onto the thing it criticizes instead of a separate panel.
+function _missionChecksInlineHTML(m, authIdx) {
+  const findings = _missionChecksByAuthIdx(m).get(authIdx) || [];
+  if (!findings.length) return '';
+  return findings.map(f => {
+    const red = f.severity === 'red';
+    const amber = f.severity === 'amber';
+    const border = red ? 'var(--danger)' : amber ? 'var(--warn,var(--accent2))' : 'var(--border-bright)';
+    const bg = red ? 'var(--danger-tint)' : amber ? 'color-mix(in srgb, var(--warn,var(--accent2)) 12%, transparent)' : 'transparent';
+    const color = red ? 'var(--danger-bright,var(--danger))' : amber ? 'var(--warn,var(--accent2))' : 'var(--text-dim)';
+    const countBadge = f.count > 1 ? ` &times;${f.count}` : '';
+    return `<div style="margin-top:6px;padding:6px 8px;border:1px solid ${border};background:${bg};font-family:var(--mono);font-size:9px;">
+      <div style="color:${color};font-weight:600;">${_missionChecksSeverityIcon(f.severity)} ${_mcEscape(f.title)}${countBadge}</div>
+      <div style="color:var(--text-dim);margin-top:2px;">${f.detail}</div>
+    </div>`;
+  }).join('');
+}
+
 function missionChecksOpenFromToolbar(missionId) {
-  missionSetView(missionId, 'band');
-  setTimeout(() => {
-    const box = document.querySelector('.mcc-box .mcc-box-hdr');
-    // find the specific FLIGHT READINESS box (first mcc-box in the left column matches)
-    const boxes = document.querySelectorAll('.mcc-left-col .mcc-box');
-    let target = null;
-    boxes.forEach(b => { const h = b.querySelector('.mcc-box-hdr'); if (h && h.textContent.includes('FLIGHT READINESS')) target = b; });
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 60);
+  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const worst = m ? _missionChecksWorstFinding(m) : null;
+  // Route through the SAME shared selection path the event list itself uses —
+  // no new selection machinery (deliverable A spec).
+  if (worst && worst.authIdx != null) missionChecksGoTo(missionId, worst.authIdx);
 }

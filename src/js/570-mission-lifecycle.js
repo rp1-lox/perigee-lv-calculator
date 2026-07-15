@@ -130,15 +130,22 @@ function missionRenderDetail() {
     const grpMark = grpSel ? (_missionGroupStart === i ? '◉ ' : '○ ') : '';
     const onclick = grpSel ? `missionGroupPick('${id}',${i})` : `missionSelectEvent('${id}',${i})`;
     const dragAttrs = grpSel ? '' : ` draggable="true" ondragstart="missionEvtDragStart(event,${i})" ondragover="missionEvtDragOver(event)" ondragleave="missionEvtDragLeave(event)" ondrop="missionEvtDrop(event,'${id}',${i})"`;
+    // Deliverable A: flight-readiness findings anchored to this authored index
+    // render as a small dot badge in the header row and — only while the card
+    // is expanded — their full text inline in the body (re-homed off the
+    // retired standalone FLIGHT READINESS panel).
+    const checkBadge = (typeof _missionChecksEventBadgeHTML === 'function') ? _missionChecksEventBadgeHTML(m, i) : '';
+    const checkInline = (expanded && typeof _missionChecksInlineHTML === 'function') ? _missionChecksInlineHTML(m, i) : '';
     return `<div id="mlog-${id}-${i}" class="mcc-evt-row${expanded?' sel':''}${grpSel&&_missionGroupStart===i?' grpstart':''}"${dragAttrs}>
       <div class="mevt-head" onclick="${onclick}">
         <span class="mevt-caret">${grpSel ? grpMark : (expanded ? '▾' : '▸')}</span>
         <span class="mission-log-type">${e.type}</span>
+        ${checkBadge}
         ${e.metStart!=null?`<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${_metFmt(e.metStart)}</span>`:''}
         <span class="mevt-sub">${sub}</span>
         ${grpSel ? '' : ctl}
       </div>
-      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}</div>` : ''}
+      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}${checkInline}</div>` : ''}
     </div>`;
   };
   let logHTML = '';
@@ -209,7 +216,9 @@ function missionRenderDetail() {
     stageHTML = worldFullHTML;
     leftSlotHTML = planRailSlotHTML;
   }
-  const stateCardHTML = _missionStateCardHTML(m);
+  // WORKFLOW PASS 1 deliverable B: the corner .mcc-state-card is retired in
+  // favor of a thin HUD strip docked across the top of the stage (570-mission-panel.js).
+  const hudStripHTML = (typeof _missionHudStripHTML === 'function') ? _missionHudStripHTML(m) : '';
 
   // ── mission/program name now live in the File ▾ menu (topbar removed — its row's
   // vertical space goes to the body; undo/redo + File menu are in one floating
@@ -229,8 +238,11 @@ function missionRenderDetail() {
           : `${m.vehicleId ? '' : `<div class="mcc-section-header">Setup</div>
             <div class="mcc-panel-pad"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
               Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) on the right to bring a vehicle into the mission.
-            </div></div>`}
-            ${(m.log.length && typeof _missionChecksBoxHTML === 'function') ? _missionChecksBoxHTML(m) : ''}`}
+            </div></div>`}`}
+          <!-- WORKFLOW PASS 1 deliverable A: the standalone FLIGHT READINESS box
+               that used to render here is retired — findings now live as badges
+               on event cards/dock markers/plan-rail chips plus the toolbar/HUD
+               chip (see 572-mission-checks.js). -->
       </div>
 
       <!-- CENTER COLUMN — stage + rails (§12 U2) -->
@@ -270,7 +282,7 @@ function missionRenderDetail() {
         <div class="mcc-view-row">
           ${leftSlotHTML}
           <div class="mcc-view-area">
-            ${stateCardHTML}
+            ${hudStripHTML}
             <div class="mcc-stage-col">
               <div class="mcc-stage-fill">${stageHTML}</div>
               ${bottomSlotHTML ? `<div class="mcc-dock-slot">${bottomSlotHTML}</div>` : ''}

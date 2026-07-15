@@ -203,7 +203,7 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-left-col{width:260px;min-width:260px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;}
 .mcc-left-budget{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);margin-top:auto;}
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
-.mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;}
+.mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}
 /* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
    compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
 .mcc-view-row{flex:1;min-height:0;min-width:0;display:flex;flex-direction:row;}
@@ -272,6 +272,28 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-check-detail{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.4;word-break:break-word;}
 .mcc-check-more{font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;padding:6px 0 2px;border-top:1px solid var(--border);}
 .mcc-check-more:hover{color:var(--text-bright);}
+/* WORKFLOW PASS 1 deliverable A: badge dots re-homed onto event cards / the
+   timeline dock / the plan rail (the standalone panel above is retired). */
+.mcc-check-dot{font-size:8px;line-height:1;margin-left:2px;}
+.ttd-burn-dot{position:absolute;top:-2px;right:-4px;width:5px;height:5px;border-radius:50%;display:block;}
+.pr-check-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block;}
+
+/* WORKFLOW PASS 1 deliverable B: HUD strip (replaces .mcc-state-card). One
+   thin row docked across the top of the stage — chips are data (per-vehicle
+   accent may be a user-picked lane color, see _missionVehicleColor), the
+   strip chrome itself is all var(--). */
+.mcc-hud-strip{display:flex;align-items:center;gap:8px;flex-shrink:0;min-height:30px;margin:0 -10px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--border-bright);overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
+.mcc-hud-strip.collapsed{min-height:16px;padding:0 4px;}
+.mcc-hud-toggle{flex-shrink:0;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:2px 4px;}
+.mcc-hud-toggle:hover{color:var(--text-bright);}
+.mcc-hud-label{flex-shrink:0;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);}
+.mcc-hud-ctx{color:var(--accent3);text-transform:none;letter-spacing:normal;margin-left:2px;}
+.mcc-hud-chips{display:flex;align-items:center;gap:6px;overflow-x:auto;min-width:0;}
+.mcc-hud-chip{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:3px 8px;border:1px solid var(--border);border-left:3px solid var(--border-bright);background:var(--input);font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;}
+.mcc-hud-chip.active{border-color:var(--accent);color:var(--text-bright);}
+.mcc-hud-chip-name{color:var(--text-bright);font-weight:600;}
+.mcc-hud-totals{cursor:default;border-left-color:var(--accent3);}
+.mcc-hud-right{margin-left:auto;flex-shrink:0;display:flex;align-items:center;}
 .mcc-check-chip{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:4px 9px;border:1px solid var(--border-bright);background:transparent;white-space:nowrap;}
 /* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
    none ever opens with a white option list / invisible text — anywhere in the app. */
@@ -411,8 +433,8 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    The state-inspector card is pinned to the stage's top-left corner
    regardless of which surface is staged (.mcc-view-area is already
    position:relative, so it anchors there for free). */
-.mcc-stage-col{display:flex;flex-direction:column;height:100%;min-height:0;}
-.mcc-stage-fill{flex:1;min-height:0;overflow:auto;}
+.mcc-stage-col{display:flex;flex-direction:column;flex:1;min-height:0;}
+.mcc-stage-fill{flex:1;min-height:0;overflow:auto;position:relative;}
 .mcc-dock-slot{flex-shrink:0;}
 .mcc-world-thumb{position:relative;overflow:hidden;cursor:pointer;background:var(--panel);}
 .mcc-world-thumb:hover{outline:1px solid var(--accent);}

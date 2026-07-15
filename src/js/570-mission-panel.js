@@ -145,6 +145,96 @@ function _missionMultiVehicleHTML(m) {
     </div>`;
 }
 
+// WORKFLOW PASS 1 deliverable B: thin horizontal HUD strip docked across the
+// top of the stage, replacing the old corner .mcc-state-card. Reuses the SAME
+// data path _missionMultiVehicleHTML uses (event-aware: as-of-selected-event
+// vs. live) — this function only changes the PRESENTATION (compact chips
+// instead of stacked cards), so the numbers are byte-identical to what the
+// old panel showed for the same selection. No camera fly-to on chip click
+// (explicitly deferred by the user) — clicking a vehicle chip just sets it
+// active via the existing missionSetActiveVehicle selection semantics.
+function _missionHudStripHTML(m) {
+  const id = m.missionId;
+  const collapsed = !!_missionStateCardCollapsed[id];
+  const chevron = `<button class="mcc-hud-toggle" onclick="_missionStateCardToggle('${id}')" title="${collapsed ? 'Expand' : 'Collapse'} Vehicles &amp; Mission State">${collapsed ? '&#9656;' : '&#9662;'}</button>`;
+  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}</div>`;
+
+  const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
+  const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
+  const orbitTxt = os => os
+    ? (os.propagated ? (os.body || 'Moon') + ' NRHO' : os.surface ? (os.body || 'Earth') + ' surface'
+        : `${os.body || 'Earth'} ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()}km`)
+    : '—';
+
+  let contextLabel = '', vehChips = '', totalsChip = '';
+
+  if (sel) {
+    const entry = sel.entry;
+    const snap = entry.snapshot || [];
+    if (!snap.length) return '';
+    const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
+    contextLabel = `<span class="mcc-hud-ctx">— at ${_mcEscape ? _mcEscape(evLabel) : evLabel}</span>`;
+    vehChips = snap.map(v => {
+      const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
+      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
+      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" title="${v.name}">
+        <span class="mcc-hud-chip-name">${v.name}</span>
+        <span class="mcc-hud-chip-orbit">${orbitTxt(v.orbit)}</span>
+        <span class="mcc-hud-chip-dv">${Math.round(v.remDv).toLocaleString()} m/s</span>
+        <span class="mcc-hud-chip-prop">${Math.round(v.remProp).toLocaleString()} kg</span>
+      </div>`;
+    }).join('');
+    const authIdx = entry._authIdx != null ? entry._authIdx : sel.index;
+    let dvExpended = 0, propConsumed = 0, payloadMass = 0;
+    for (let i = 0; i <= authIdx && i < m.log.length; i++) {
+      const e = m.log[i];
+      if (e.type === 'LAUNCH') {
+        const sr = e.stagingResult || {};
+        dvExpended += sr.dvDelivered || 0;
+        propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
+        payloadMass = e.payloadMass || payloadMass;
+      } else if (e.type === 'BURN' || e.type === 'MNODE') {
+        dvExpended += e.dv_actual || 0;
+        propConsumed += e.prop_consumed || 0;
+      }
+    }
+    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
+      <span>&Delta;V exp ${Math.round(dvExpended).toLocaleString()}</span>
+      <span>prop ${Math.round(propConsumed).toLocaleString()}kg</span>
+      <span>pay ${Math.round(payloadMass).toLocaleString()}kg</span>
+    </div>`;
+  } else {
+    const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+    if (!live.length) return '';
+    contextLabel = `<span class="mcc-hud-ctx">— current</span>`;
+    vehChips = live.map(({ id: vid, fv }) => {
+      const isActive = vid === m.vehicleId;
+      const remDv = Math.round(_missionVehicleRemainingDv(fv));
+      const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
+      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
+      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active">
+        <span class="mcc-hud-chip-name">${_missionVehicleDisplayName(fv)}</span>
+        <span class="mcc-hud-chip-orbit">${orbitTxt(fv.orbitState)}</span>
+        <span class="mcc-hud-chip-dv">${remDv.toLocaleString()} m/s</span>
+        <span class="mcc-hud-chip-prop">${remProp.toLocaleString()} kg</span>
+      </div>`;
+    }).join('');
+    const b = missionBudget(m);
+    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
+      <span>&Delta;V exp ${b.dvExpended.toLocaleString()}</span>
+      <span>pay ${b.payloadMass.toLocaleString()}kg</span>
+      <span>dur ${_metFmt(m._metTotal)}</span>
+    </div>`;
+  }
+
+  return `<div class="mcc-hud-strip">
+    ${chevron}
+    <span class="mcc-hud-label">Vehicles &amp; Mission State ${contextLabel}</span>
+    <div class="mcc-hud-chips">${vehChips}${totalsChip}</div>
+    <div class="mcc-hud-right">${readinessChip}</div>
+  </div>`;
+}
+
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
 // MISSION_MODEL_V2 §12 U2: the Band|Orbit Map|Trajectory toggle is RETIRED —

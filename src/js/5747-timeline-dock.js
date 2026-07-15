@@ -99,9 +99,15 @@ function _ttdLanesHTML(m, id) {
       const title = `${_tsEsc(L.name)} low-thrust burn · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
       return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:var(--accent2);border-top-color:var(--accent2);opacity:0.35" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
     }).join('');
+    // Deliverable A: a colored dot adjacent to the ▲ marker when a
+    // flight-readiness finding is anchored to this burn's authored index.
+    const checkMap = (typeof _missionChecksByAuthIdx === 'function') ? _missionChecksByAuthIdx(m) : null;
     const burnsHTML = L.burns.map(b => {
       const l = Math.max(0, Math.min(100, (b.met / model.maxMet) * 100));
-      return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲</div>`;
+      const findings = checkMap ? (checkMap.get(b.authIdx) || []).filter(f => f.severity === 'red' || f.severity === 'amber') : [];
+      const dotColor = findings.some(f => f.severity === 'red') ? 'var(--danger)' : findings.length ? 'var(--warn,var(--accent2))' : null;
+      const dot = dotColor ? `<span class="ttd-burn-dot" style="background:${dotColor}"></span>` : '';
+      return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲${dot}</div>`;
     }).join('');
     const label = L.name.length > 14 ? L.name.slice(0, 13) + '…' : L.name;
     return `<div class="ttd-lane-row" style="height:${laneH + 4}px">

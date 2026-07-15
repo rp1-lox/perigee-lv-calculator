@@ -41,7 +41,23 @@ function _planRailZoneOf(n) {
 
 const _PLAN_RAIL_ZONES = [['earth', 'Earth System'], ['lunar', 'Lunar'], ['interp', 'Interplanetary']];
 
-function _planRailNodeChipHTML(id, n, path) {
+// Deliverable A: best-effort finding->node mapping via the anchored event's
+// from/to node (skip cleanly when no node applies — most findings aren't
+// maneuvers and have no from/to node at all).
+function _planRailNodeCheckColor(m, n) {
+  if (!m || !n) return null;
+  const checkMap = (typeof _missionChecksByAuthIdx === 'function') ? _missionChecksByAuthIdx(m) : null;
+  if (!checkMap || !checkMap.size) return null;
+  let hasRed = false, hasAmber = false;
+  checkMap.forEach((findings, authIdx) => {
+    const e = m.log[authIdx];
+    if (!e || (e.fromNode !== n.id && e.toNode !== n.id)) return;
+    findings.forEach(f => { if (f.severity === 'red') hasRed = true; else if (f.severity === 'amber') hasAmber = true; });
+  });
+  return hasRed ? 'var(--danger)' : hasAmber ? 'var(--warn,var(--accent2))' : null;
+}
+
+function _planRailNodeChipHTML(id, n, path, m) {
   const inPath    = path.includes(n.id);
   const isCurrent = path.length > 0 && path[path.length - 1] === n.id;
   const isFrom    = (typeof _missionBridgeFrom !== 'undefined') && _missionBridgeFrom === n.id;
@@ -53,8 +69,10 @@ function _planRailNodeChipHTML(id, n, path) {
   const refMark = n.orbitRefId ? ' <span class="pr-ref-marker" title="Bound to a reference orbit">&#9670;</span>' : '';
   const cur = isCurrent ? ' &#9679;' : '';
   const title = `${n.label}${n.sub ? ' — ' + n.sub : ''}${typeof _missionOrientationBadge === 'function' ? _missionOrientationBadge(n, id) : ''}`;
+  const checkColor = _planRailNodeCheckColor(m, n);
+  const checkDot = checkColor ? `<span class="pr-check-dot" style="background:${checkColor}"></span>` : '';
   return `<div class="${cls.join(' ')}" title="${title.replace(/"/g, '&quot;')}" onclick="missionNodeClick('${id}','${n.id}')">
-    <div class="pr-node-label">${n.label}${refMark}${cur}</div>
+    <div class="pr-node-label">${checkDot}${n.label}${refMark}${cur}</div>
     ${n.sub ? `<div class="pr-node-sub">${n.sub}</div>` : ''}
   </div>`;
 }
@@ -101,7 +119,7 @@ function _planRailHTML(m) {
       .filter(n => _planRailZoneOf(n) === zk);
     if (!nodes.length) continue;
     zonesHTML += `<div class="pr-zone-hdr">${zlabel}</div>`;
-    zonesHTML += nodes.map(n => _planRailNodeChipHTML(id, n, path)).join('');
+    zonesHTML += nodes.map(n => _planRailNodeChipHTML(id, n, path, m)).join('');
   }
 
   let edgesHTML = '';

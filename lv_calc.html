@@ -210,7 +210,7 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-left-col{width:260px;min-width:260px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;}
 .mcc-left-budget{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);margin-top:auto;}
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
-.mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;}
+.mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}
 /* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
    compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
 .mcc-view-row{flex:1;min-height:0;min-width:0;display:flex;flex-direction:row;}
@@ -279,6 +279,28 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-check-detail{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.4;word-break:break-word;}
 .mcc-check-more{font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;padding:6px 0 2px;border-top:1px solid var(--border);}
 .mcc-check-more:hover{color:var(--text-bright);}
+/* WORKFLOW PASS 1 deliverable A: badge dots re-homed onto event cards / the
+   timeline dock / the plan rail (the standalone panel above is retired). */
+.mcc-check-dot{font-size:8px;line-height:1;margin-left:2px;}
+.ttd-burn-dot{position:absolute;top:-2px;right:-4px;width:5px;height:5px;border-radius:50%;display:block;}
+.pr-check-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block;}
+
+/* WORKFLOW PASS 1 deliverable B: HUD strip (replaces .mcc-state-card). One
+   thin row docked across the top of the stage — chips are data (per-vehicle
+   accent may be a user-picked lane color, see _missionVehicleColor), the
+   strip chrome itself is all var(--). */
+.mcc-hud-strip{display:flex;align-items:center;gap:8px;flex-shrink:0;min-height:30px;margin:0 -10px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--border-bright);overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
+.mcc-hud-strip.collapsed{min-height:16px;padding:0 4px;}
+.mcc-hud-toggle{flex-shrink:0;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:2px 4px;}
+.mcc-hud-toggle:hover{color:var(--text-bright);}
+.mcc-hud-label{flex-shrink:0;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);}
+.mcc-hud-ctx{color:var(--accent3);text-transform:none;letter-spacing:normal;margin-left:2px;}
+.mcc-hud-chips{display:flex;align-items:center;gap:6px;overflow-x:auto;min-width:0;}
+.mcc-hud-chip{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:3px 8px;border:1px solid var(--border);border-left:3px solid var(--border-bright);background:var(--input);font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;}
+.mcc-hud-chip.active{border-color:var(--accent);color:var(--text-bright);}
+.mcc-hud-chip-name{color:var(--text-bright);font-weight:600;}
+.mcc-hud-totals{cursor:default;border-left-color:var(--accent3);}
+.mcc-hud-right{margin-left:auto;flex-shrink:0;display:flex;align-items:center;}
 .mcc-check-chip{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:4px 9px;border:1px solid var(--border-bright);background:transparent;white-space:nowrap;}
 /* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
    none ever opens with a white option list / invisible text — anywhere in the app. */
@@ -418,8 +440,8 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    The state-inspector card is pinned to the stage's top-left corner
    regardless of which surface is staged (.mcc-view-area is already
    position:relative, so it anchors there for free). */
-.mcc-stage-col{display:flex;flex-direction:column;height:100%;min-height:0;}
-.mcc-stage-fill{flex:1;min-height:0;overflow:auto;}
+.mcc-stage-col{display:flex;flex-direction:column;flex:1;min-height:0;}
+.mcc-stage-fill{flex:1;min-height:0;overflow:auto;position:relative;}
 .mcc-dock-slot{flex-shrink:0;}
 .mcc-world-thumb{position:relative;overflow:hidden;cursor:pointer;background:var(--panel);}
 .mcc-world-thumb:hover{outline:1px solid var(--accent);}
@@ -18743,6 +18765,36 @@ function missionSetLaneColor(missionId, label, hex) {
   missionRenderDetail();
 }
 
+// WORKFLOW PASS 1 deliverable C: single color-source entry point. The band
+// view's actual override storage (m.laneColors) is keyed by owner display
+// LABEL (a band "owner" = one LV/spacecraft stage-track — see _missionLaneColor
+// above); the HUD strip and snapshot data instead only have a runtime VEHICLE
+// id/originKey handy (a vehicle can host >1 owner, e.g. a docked LV stage +
+// payload). `vehicleKey` accepts either: an owner key found directly in
+// m._ownerLabels (the label-lookup path other callers like 5741's scene
+// extraction already use via _missionLaneColor), or a vehicle id/originKey,
+// in which case this falls back to asking the band model which owner lane(s)
+// live on that vehicle and returns the first one with a custom color. Returns
+// `fallback` (default null) when nothing custom is assigned, so callers keep
+// their own existing default derivation unchanged — missions with no custom
+// laneColors see zero visual change (regression guard).
+function _missionVehicleColor(m, vehicleKey, fallback) {
+  if (!m || !vehicleKey) return fallback == null ? null : fallback;
+  const directLabel = m._ownerLabels && m._ownerLabels[vehicleKey];
+  if (directLabel && m.laneColors && m.laneColors[directLabel]) return m.laneColors[directLabel];
+  if (typeof _missionBandModel === 'function') {
+    try {
+      const band = _missionBandModel(m);
+      for (const L of band.lanes) {
+        if (L.points.some(p => p.vehicleId === vehicleKey) && m.laneColors && m.laneColors[L.name]) {
+          return m.laneColors[L.name];
+        }
+      }
+    } catch (e) { /* best-effort only — never block the HUD render */ }
+  }
+  return fallback == null ? null : fallback;
+}
+
 function _missionBandModel(m) {
   const palette = _MISSION_BAND_PALETTE;
   const log = (m._expanded && m._expanded.length) ? m._expanded : m.log;
@@ -21722,15 +21774,22 @@ function missionRenderDetail() {
     const grpMark = grpSel ? (_missionGroupStart === i ? '◉ ' : '○ ') : '';
     const onclick = grpSel ? `missionGroupPick('${id}',${i})` : `missionSelectEvent('${id}',${i})`;
     const dragAttrs = grpSel ? '' : ` draggable="true" ondragstart="missionEvtDragStart(event,${i})" ondragover="missionEvtDragOver(event)" ondragleave="missionEvtDragLeave(event)" ondrop="missionEvtDrop(event,'${id}',${i})"`;
+    // Deliverable A: flight-readiness findings anchored to this authored index
+    // render as a small dot badge in the header row and — only while the card
+    // is expanded — their full text inline in the body (re-homed off the
+    // retired standalone FLIGHT READINESS panel).
+    const checkBadge = (typeof _missionChecksEventBadgeHTML === 'function') ? _missionChecksEventBadgeHTML(m, i) : '';
+    const checkInline = (expanded && typeof _missionChecksInlineHTML === 'function') ? _missionChecksInlineHTML(m, i) : '';
     return `<div id="mlog-${id}-${i}" class="mcc-evt-row${expanded?' sel':''}${grpSel&&_missionGroupStart===i?' grpstart':''}"${dragAttrs}>
       <div class="mevt-head" onclick="${onclick}">
         <span class="mevt-caret">${grpSel ? grpMark : (expanded ? '▾' : '▸')}</span>
         <span class="mission-log-type">${e.type}</span>
+        ${checkBadge}
         ${e.metStart!=null?`<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${_metFmt(e.metStart)}</span>`:''}
         <span class="mevt-sub">${sub}</span>
         ${grpSel ? '' : ctl}
       </div>
-      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}</div>` : ''}
+      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}${checkInline}</div>` : ''}
     </div>`;
   };
   let logHTML = '';
@@ -21801,7 +21860,9 @@ function missionRenderDetail() {
     stageHTML = worldFullHTML;
     leftSlotHTML = planRailSlotHTML;
   }
-  const stateCardHTML = _missionStateCardHTML(m);
+  // WORKFLOW PASS 1 deliverable B: the corner .mcc-state-card is retired in
+  // favor of a thin HUD strip docked across the top of the stage (570-mission-panel.js).
+  const hudStripHTML = (typeof _missionHudStripHTML === 'function') ? _missionHudStripHTML(m) : '';
 
   // ── mission/program name now live in the File ▾ menu (topbar removed — its row's
   // vertical space goes to the body; undo/redo + File menu are in one floating
@@ -21821,8 +21882,11 @@ function missionRenderDetail() {
           : `${m.vehicleId ? '' : `<div class="mcc-section-header">Setup</div>
             <div class="mcc-panel-pad"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
               Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) on the right to bring a vehicle into the mission.
-            </div></div>`}
-            ${(m.log.length && typeof _missionChecksBoxHTML === 'function') ? _missionChecksBoxHTML(m) : ''}`}
+            </div></div>`}`}
+          <!-- WORKFLOW PASS 1 deliverable A: the standalone FLIGHT READINESS box
+               that used to render here is retired — findings now live as badges
+               on event cards/dock markers/plan-rail chips plus the toolbar/HUD
+               chip (see 572-mission-checks.js). -->
       </div>
 
       <!-- CENTER COLUMN — stage + rails (§12 U2) -->
@@ -21862,7 +21926,7 @@ function missionRenderDetail() {
         <div class="mcc-view-row">
           ${leftSlotHTML}
           <div class="mcc-view-area">
-            ${stateCardHTML}
+            ${hudStripHTML}
             <div class="mcc-stage-col">
               <div class="mcc-stage-fill">${stageHTML}</div>
               ${bottomSlotHTML ? `<div class="mcc-dock-slot">${bottomSlotHTML}</div>` : ''}
@@ -23569,6 +23633,96 @@ function _missionMultiVehicleHTML(m) {
     </div>`;
 }
 
+// WORKFLOW PASS 1 deliverable B: thin horizontal HUD strip docked across the
+// top of the stage, replacing the old corner .mcc-state-card. Reuses the SAME
+// data path _missionMultiVehicleHTML uses (event-aware: as-of-selected-event
+// vs. live) — this function only changes the PRESENTATION (compact chips
+// instead of stacked cards), so the numbers are byte-identical to what the
+// old panel showed for the same selection. No camera fly-to on chip click
+// (explicitly deferred by the user) — clicking a vehicle chip just sets it
+// active via the existing missionSetActiveVehicle selection semantics.
+function _missionHudStripHTML(m) {
+  const id = m.missionId;
+  const collapsed = !!_missionStateCardCollapsed[id];
+  const chevron = `<button class="mcc-hud-toggle" onclick="_missionStateCardToggle('${id}')" title="${collapsed ? 'Expand' : 'Collapse'} Vehicles &amp; Mission State">${collapsed ? '&#9656;' : '&#9662;'}</button>`;
+  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}</div>`;
+
+  const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
+  const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
+  const orbitTxt = os => os
+    ? (os.propagated ? (os.body || 'Moon') + ' NRHO' : os.surface ? (os.body || 'Earth') + ' surface'
+        : `${os.body || 'Earth'} ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()}km`)
+    : '—';
+
+  let contextLabel = '', vehChips = '', totalsChip = '';
+
+  if (sel) {
+    const entry = sel.entry;
+    const snap = entry.snapshot || [];
+    if (!snap.length) return '';
+    const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
+    contextLabel = `<span class="mcc-hud-ctx">— at ${_mcEscape ? _mcEscape(evLabel) : evLabel}</span>`;
+    vehChips = snap.map(v => {
+      const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
+      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
+      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" title="${v.name}">
+        <span class="mcc-hud-chip-name">${v.name}</span>
+        <span class="mcc-hud-chip-orbit">${orbitTxt(v.orbit)}</span>
+        <span class="mcc-hud-chip-dv">${Math.round(v.remDv).toLocaleString()} m/s</span>
+        <span class="mcc-hud-chip-prop">${Math.round(v.remProp).toLocaleString()} kg</span>
+      </div>`;
+    }).join('');
+    const authIdx = entry._authIdx != null ? entry._authIdx : sel.index;
+    let dvExpended = 0, propConsumed = 0, payloadMass = 0;
+    for (let i = 0; i <= authIdx && i < m.log.length; i++) {
+      const e = m.log[i];
+      if (e.type === 'LAUNCH') {
+        const sr = e.stagingResult || {};
+        dvExpended += sr.dvDelivered || 0;
+        propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
+        payloadMass = e.payloadMass || payloadMass;
+      } else if (e.type === 'BURN' || e.type === 'MNODE') {
+        dvExpended += e.dv_actual || 0;
+        propConsumed += e.prop_consumed || 0;
+      }
+    }
+    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
+      <span>&Delta;V exp ${Math.round(dvExpended).toLocaleString()}</span>
+      <span>prop ${Math.round(propConsumed).toLocaleString()}kg</span>
+      <span>pay ${Math.round(payloadMass).toLocaleString()}kg</span>
+    </div>`;
+  } else {
+    const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+    if (!live.length) return '';
+    contextLabel = `<span class="mcc-hud-ctx">— current</span>`;
+    vehChips = live.map(({ id: vid, fv }) => {
+      const isActive = vid === m.vehicleId;
+      const remDv = Math.round(_missionVehicleRemainingDv(fv));
+      const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
+      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
+      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active">
+        <span class="mcc-hud-chip-name">${_missionVehicleDisplayName(fv)}</span>
+        <span class="mcc-hud-chip-orbit">${orbitTxt(fv.orbitState)}</span>
+        <span class="mcc-hud-chip-dv">${remDv.toLocaleString()} m/s</span>
+        <span class="mcc-hud-chip-prop">${remProp.toLocaleString()} kg</span>
+      </div>`;
+    }).join('');
+    const b = missionBudget(m);
+    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
+      <span>&Delta;V exp ${b.dvExpended.toLocaleString()}</span>
+      <span>pay ${b.payloadMass.toLocaleString()}kg</span>
+      <span>dur ${_metFmt(m._metTotal)}</span>
+    </div>`;
+  }
+
+  return `<div class="mcc-hud-strip">
+    ${chevron}
+    <span class="mcc-hud-label">Vehicles &amp; Mission State ${contextLabel}</span>
+    <div class="mcc-hud-chips">${vehChips}${totalsChip}</div>
+    <div class="mcc-hud-right">${readinessChip}</div>
+  </div>`;
+}
+
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
 // MISSION_MODEL_V2 §12 U2: the Band|Orbit Map|Trajectory toggle is RETIRED —
@@ -25229,16 +25383,76 @@ function _missionChecksToolbarChipHTML(m) {
   return `<button class="act-btn mcc-check-chip" style="color:${color};border-color:${color};" title="${_mcEscape(title)}" onclick="missionChecksOpenFromToolbar('${m.missionId}')">${icon} ${label}</button>`;
 }
 
+// WORKFLOW PASS 1 deliverable A: the standalone FLIGHT READINESS panel
+// (_missionChecksBoxHTML above) is retired from the layout — findings now
+// re-home onto the things they criticize (event card badges/inline text,
+// timeline-dock markers, plan-rail node chips) plus this toolbar/HUD chip.
+// _missionChecksBoxHTML itself is left defined (harmless, unused) rather than
+// deleted, in case a future surface wants the full list rendering again.
+
+// Worst finding across a mission (red beats amber beats info) — drives the
+// toolbar/HUD chip's click-to-select behavior.
+function _missionChecksWorstFinding(m) {
+  const findings = missionGetChecks(m);
+  const rank = { red: 2, amber: 1, info: 0 };
+  let worst = null;
+  findings.forEach(f => {
+    if (f.authIdx == null) return;   // nothing to select — end-state findings have no anchor event
+    if (!worst || (rank[f.severity] || 0) > (rank[worst.severity] || 0)) worst = f;
+  });
+  return worst;
+}
+
+// authIdx -> findings anchored there (for event-card badges/inline text).
+function _missionChecksByAuthIdx(m) {
+  const map = new Map();
+  missionGetChecks(m).forEach(f => {
+    if (f.authIdx == null) return;
+    if (!map.has(f.authIdx)) map.set(f.authIdx, []);
+    map.get(f.authIdx).push(f);
+  });
+  return map;
+}
+
+// Small ● dot badge(s) for an event card header row — one dot per distinct
+// severity present at this authIdx (red/amber only; info findings don't badge
+// the event, they're not actionable failures).
+function _missionChecksEventBadgeHTML(m, authIdx) {
+  const findings = (_missionChecksByAuthIdx(m).get(authIdx) || []).filter(f => f.severity === 'red' || f.severity === 'amber');
+  if (!findings.length) return '';
+  const hasRed = findings.some(f => f.severity === 'red');
+  const hasAmber = findings.some(f => f.severity === 'amber');
+  let out = '';
+  if (hasRed) out += `<span class="mcc-check-dot" style="color:var(--danger);" title="Flight readiness: red finding on this event">&#9679;</span>`;
+  if (hasAmber) out += `<span class="mcc-check-dot" style="color:var(--warn,var(--accent2));" title="Flight readiness: amber finding on this event">&#9679;</span>`;
+  return out;
+}
+
+// Full finding text, inline in the event card body when that event is selected —
+// the information moves onto the thing it criticizes instead of a separate panel.
+function _missionChecksInlineHTML(m, authIdx) {
+  const findings = _missionChecksByAuthIdx(m).get(authIdx) || [];
+  if (!findings.length) return '';
+  return findings.map(f => {
+    const red = f.severity === 'red';
+    const amber = f.severity === 'amber';
+    const border = red ? 'var(--danger)' : amber ? 'var(--warn,var(--accent2))' : 'var(--border-bright)';
+    const bg = red ? 'var(--danger-tint)' : amber ? 'color-mix(in srgb, var(--warn,var(--accent2)) 12%, transparent)' : 'transparent';
+    const color = red ? 'var(--danger-bright,var(--danger))' : amber ? 'var(--warn,var(--accent2))' : 'var(--text-dim)';
+    const countBadge = f.count > 1 ? ` &times;${f.count}` : '';
+    return `<div style="margin-top:6px;padding:6px 8px;border:1px solid ${border};background:${bg};font-family:var(--mono);font-size:9px;">
+      <div style="color:${color};font-weight:600;">${_missionChecksSeverityIcon(f.severity)} ${_mcEscape(f.title)}${countBadge}</div>
+      <div style="color:var(--text-dim);margin-top:2px;">${f.detail}</div>
+    </div>`;
+  }).join('');
+}
+
 function missionChecksOpenFromToolbar(missionId) {
-  missionSetView(missionId, 'band');
-  setTimeout(() => {
-    const box = document.querySelector('.mcc-box .mcc-box-hdr');
-    // find the specific FLIGHT READINESS box (first mcc-box in the left column matches)
-    const boxes = document.querySelectorAll('.mcc-left-col .mcc-box');
-    let target = null;
-    boxes.forEach(b => { const h = b.querySelector('.mcc-box-hdr'); if (h && h.textContent.includes('FLIGHT READINESS')) target = b; });
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 60);
+  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const worst = m ? _missionChecksWorstFinding(m) : null;
+  // Route through the SAME shared selection path the event list itself uses —
+  // no new selection machinery (deliverable A spec).
+  if (worst && worst.authIdx != null) missionChecksGoTo(missionId, worst.authIdx);
 }
 
 // ─── DEV SEED — Apollo reference mission ─────────
@@ -32186,9 +32400,15 @@ function _ttdLanesHTML(m, id) {
       const title = `${_tsEsc(L.name)} low-thrust burn · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
       return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:var(--accent2);border-top-color:var(--accent2);opacity:0.35" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
     }).join('');
+    // Deliverable A: a colored dot adjacent to the ▲ marker when a
+    // flight-readiness finding is anchored to this burn's authored index.
+    const checkMap = (typeof _missionChecksByAuthIdx === 'function') ? _missionChecksByAuthIdx(m) : null;
     const burnsHTML = L.burns.map(b => {
       const l = Math.max(0, Math.min(100, (b.met / model.maxMet) * 100));
-      return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲</div>`;
+      const findings = checkMap ? (checkMap.get(b.authIdx) || []).filter(f => f.severity === 'red' || f.severity === 'amber') : [];
+      const dotColor = findings.some(f => f.severity === 'red') ? 'var(--danger)' : findings.length ? 'var(--warn,var(--accent2))' : null;
+      const dot = dotColor ? `<span class="ttd-burn-dot" style="background:${dotColor}"></span>` : '';
+      return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲${dot}</div>`;
     }).join('');
     const label = L.name.length > 14 ? L.name.slice(0, 13) + '…' : L.name;
     return `<div class="ttd-lane-row" style="height:${laneH + 4}px">
@@ -32618,7 +32838,23 @@ function _planRailZoneOf(n) {
 
 const _PLAN_RAIL_ZONES = [['earth', 'Earth System'], ['lunar', 'Lunar'], ['interp', 'Interplanetary']];
 
-function _planRailNodeChipHTML(id, n, path) {
+// Deliverable A: best-effort finding->node mapping via the anchored event's
+// from/to node (skip cleanly when no node applies — most findings aren't
+// maneuvers and have no from/to node at all).
+function _planRailNodeCheckColor(m, n) {
+  if (!m || !n) return null;
+  const checkMap = (typeof _missionChecksByAuthIdx === 'function') ? _missionChecksByAuthIdx(m) : null;
+  if (!checkMap || !checkMap.size) return null;
+  let hasRed = false, hasAmber = false;
+  checkMap.forEach((findings, authIdx) => {
+    const e = m.log[authIdx];
+    if (!e || (e.fromNode !== n.id && e.toNode !== n.id)) return;
+    findings.forEach(f => { if (f.severity === 'red') hasRed = true; else if (f.severity === 'amber') hasAmber = true; });
+  });
+  return hasRed ? 'var(--danger)' : hasAmber ? 'var(--warn,var(--accent2))' : null;
+}
+
+function _planRailNodeChipHTML(id, n, path, m) {
   const inPath    = path.includes(n.id);
   const isCurrent = path.length > 0 && path[path.length - 1] === n.id;
   const isFrom    = (typeof _missionBridgeFrom !== 'undefined') && _missionBridgeFrom === n.id;
@@ -32630,8 +32866,10 @@ function _planRailNodeChipHTML(id, n, path) {
   const refMark = n.orbitRefId ? ' <span class="pr-ref-marker" title="Bound to a reference orbit">&#9670;</span>' : '';
   const cur = isCurrent ? ' &#9679;' : '';
   const title = `${n.label}${n.sub ? ' — ' + n.sub : ''}${typeof _missionOrientationBadge === 'function' ? _missionOrientationBadge(n, id) : ''}`;
+  const checkColor = _planRailNodeCheckColor(m, n);
+  const checkDot = checkColor ? `<span class="pr-check-dot" style="background:${checkColor}"></span>` : '';
   return `<div class="${cls.join(' ')}" title="${title.replace(/"/g, '&quot;')}" onclick="missionNodeClick('${id}','${n.id}')">
-    <div class="pr-node-label">${n.label}${refMark}${cur}</div>
+    <div class="pr-node-label">${checkDot}${n.label}${refMark}${cur}</div>
     ${n.sub ? `<div class="pr-node-sub">${n.sub}</div>` : ''}
   </div>`;
 }
@@ -32678,7 +32916,7 @@ function _planRailHTML(m) {
       .filter(n => _planRailZoneOf(n) === zk);
     if (!nodes.length) continue;
     zonesHTML += `<div class="pr-zone-hdr">${zlabel}</div>`;
-    zonesHTML += nodes.map(n => _planRailNodeChipHTML(id, n, path)).join('');
+    zonesHTML += nodes.map(n => _planRailNodeChipHTML(id, n, path, m)).join('');
   }
 
   let edgesHTML = '';
