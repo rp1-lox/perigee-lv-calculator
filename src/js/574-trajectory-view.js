@@ -3662,7 +3662,28 @@ function _trajReconcileGlobeLayer(svgEl) {
     img.setAttribute('y', g.y.toFixed(2));
     img.setAttribute('width', g.size.toFixed(2));
     img.setAttribute('height', g.size.toFixed(2));
-    if (img.getAttribute('href') !== g.url) img.setAttribute('href', g.url);
+    if (img.getAttribute('href') !== g.url && img.dataset.pendingHref !== g.url) {
+      // Decode-BEFORE-swap (close-zoom rotation flicker fix, 2026-07-14):
+      // setting href directly blanks the SVG <image> until the new data-URL
+      // decodes — invisible for small discs, a visible flash every az/el
+      // cache bucket when zoomed close (large PNG, multi-ms decode). Decode
+      // offscreen first and only then swap; the OLD bitmap stays on screen
+      // the whole time. pendingHref stale-guards rapid rotation: only the
+      // latest requested URL wins, intermediates are dropped.
+      const pre = new Image();
+      img.dataset.pendingHref = g.url;
+      pre.onload = () => {
+        if (img.dataset.pendingHref === g.url) {
+          img.setAttribute('href', g.url);
+          delete img.dataset.pendingHref;
+        }
+      };
+      pre.onerror = () => { if (img.dataset.pendingHref === g.url) delete img.dataset.pendingHref; };
+      pre.src = g.url;
+      // First-ever bitmap for this body: nothing old to keep showing — set
+      // href immediately so the globe appears without waiting a frame.
+      if (!img.getAttribute('href')) img.setAttribute('href', g.url);
+    }
     if (img.style.display === 'none') img.style.display = '';
     if (ringG.style.display === 'none') ringG.style.display = '';
   }
