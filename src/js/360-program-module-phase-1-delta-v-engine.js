@@ -14,6 +14,7 @@ const PROG_BODIES = {
   Uranus:  { mu:   5793939.0,  R: 25362.0 },
   Neptune: { mu:   6836529.0,  R: 24622.0 },
   Titan:   { mu:      8978.14, R: 2574.7  },
+  Pluto:   { mu:       871.0,  R: 1188.3  }, // Pluto-only GM (not Pluto+Charon system)
 };
 const PROG_MU_SUN       = 1.32712440018e11; // km³/s² — heliocentric
 const PROG_HELIO_R      = {                  // km — mean orbital radii
@@ -25,6 +26,7 @@ const PROG_HELIO_R      = {                  // km — mean orbital radii
   Saturn:  1.4335e9,
   Uranus:  2.8725e9,
   Neptune: 4.4951e9,
+  Pluto:   5.9064e9,
 };
 const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centre
 
@@ -103,6 +105,11 @@ const PROG_BODY_ELEMENTS = {
   Saturn:  { a0: 9.53667594, aDot: -0.00125060, e0: 0.05386179, eDot: -0.00050991, I0: 2.48599187,  IDot: 0.00193609,  L0: 49.95424423,   LDot: 1222.49362201,   wbar0: 92.59887831,  wbarDot: -0.41897216, Om0: 113.66242448, OmDot: -0.28867794 },
   Uranus:  { a0: 19.18916464,aDot: -0.00196176, e0: 0.04725744, eDot: -0.00004397, I0: 0.77263783,  IDot: -0.00242939, L0: 313.23810451,  LDot: 428.48202785,    wbar0: 170.95427630, wbarDot: 0.40805281,  Om0: 74.01692503,  OmDot: 0.04240589 },
   Neptune: { a0: 30.06992276,aDot:  0.00026291, e0: 0.00859048, eDot:  0.00005105, I0: 1.77004347,  IDot: 0.00035372,  L0: -55.12002969,  LDot: 218.45945325,    wbar0: 44.96476227,  wbarDot: -0.32241464, Om0: 131.78422574, OmDot: -0.00508664 },
+  // Pluto — JPL "Keplerian Elements for Approximate Positions of the Major
+  // Planets", 1800 AD-2050 AD table (Standish 2006, no extra centennial
+  // terms needed for this validity window — those only apply to the
+  // 3000 BC-3000 AD table). Outside 1800-2050 use the extended table instead.
+  Pluto:   { a0: 39.48211675,aDot: -0.00031596, e0: 0.24882730, eDot:  0.00005170, I0: 17.14001206, IDot: 0.00004818,  L0: 238.92903833,  LDot: 145.20780515,    wbar0: 224.06891629, wbarDot: -0.04062942, Om0: 110.30393684, OmDot: -0.01183482 },
 };
 
 // Moons: elements about the parent. a in km; angles deg AT J2000; rates per DAY.

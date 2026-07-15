@@ -4026,15 +4026,28 @@ function _trajMulberry32(seed) {
 }
 const _TRAJ_STARFIELD_SEED = 133742;
 let _trajStarfieldSize = {}; // id -> "WxH" of the last drawn size (resize-only regen gate)
+// R6.5 fix: a 0x0 (or missing) measurement must NOT be cached as "done" —
+// otherwise a canvas measured before layout flush (fresh reload straight
+// into traj view, or a synchronous Band->Trajectory toggle) never gets a
+// retry once real dimensions arrive, and the starfield silently stays
+// blank. Only cache a key once it reflects a real, positive size; a
+// transition FROM zero/uncached TO a real size always redraws.
 function _trajStarfieldSync(id) {
   const canvas = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] canvas.traj-starfield`);
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
-  if (!(w > 0 && h > 0)) return;
+  if (!(w > 0 && h > 0)) return; // nothing to draw into yet — leave cache alone so a later real size still draws
   const key = `${w}x${h}`;
-  if (_trajStarfieldSize[id] === key) return; // unchanged size — never redraw (no twinkle)
-  _trajStarfieldSize[id] = key;
+  // The done-marker lives ON THE ELEMENT, not in a module map keyed by
+  // mission id: view re-renders REPLACE the canvas element, and an id-keyed
+  // cache outlives it — the fresh blank canvas then matches "already drawn"
+  // and stays empty forever (reproduced: cache said 760x601 while the live
+  // canvas sat at the 300x150 default with 0 stars). Same-size redraws are
+  // pixel-identical anyway (seeded PRNG), so this can never twinkle.
+  if (canvas.dataset.starSize === key) return;
+  canvas.dataset.starSize = key;
+  _trajStarfieldSize[id] = key; // kept for the unmount/resize-observer bookkeeping
   const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
@@ -4106,10 +4119,26 @@ function _missionTrajAfterRender(m) {
     }
   };
   sync();
+  // R6.5 fix: the first sync() can land before the browser has flushed
+  // layout for freshly-mounted DOM (0x0 rect) — e.g. a fresh reload straight
+  // into traj view, or switching Band->Trajectory in the same synchronous
+  // render pass. A double-rAF retry re-runs sync() once layout is
+  // guaranteed settled, so the starfield still gets drawn even if the
+  // ResizeObserver never fires (size unchanged from 0 isn't a "resize").
+  requestAnimationFrame(() => requestAnimationFrame(() => sync()));
   if (_trajResizeObservers[id]) { try { _trajResizeObservers[id].disconnect(); } catch (e) {} }
   if (typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => sync());
     ro.observe(svgEl);
     _trajResizeObservers[id] = ro;
   }
+}
+
+// R6.5 fix: clear the starfield's cached size when leaving the trajectory
+// view (Trajectory->Band toggle, or navigating away) so a later return
+// re-measures from scratch instead of trusting a stale cache from a
+// panel that may have been resized while hidden.
+function _trajStarfieldUnmount(id) {
+  delete _trajStarfieldSize[id];
+  if (_trajResizeObservers[id]) { try { _trajResizeObservers[id].disconnect(); } catch (e) {} delete _trajResizeObservers[id]; }
 }

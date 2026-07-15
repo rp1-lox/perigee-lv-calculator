@@ -101,8 +101,8 @@ const {
   progJDToDate, progDateToJD, progMissionTimeToDate, progDateToMissionTime, progDateToLocalInputValue,
   progDvTLI,
 } = sandbox;
-const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD } =
-  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD })', sandbox);
+const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM } =
+  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM })', sandbox);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // parseMathExpression
@@ -525,6 +525,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 
   ok('R1: all 8 planets have JPL elements', ['Mercury','Venus','Earth','Mars','Jupiter','Saturn','Uranus','Neptune'].every(b => !!PROG_BODY_ELEMENTS[b]));
   ok('R1: Moon + Titan have moon elements', !!PROG_MOON_ELEMENTS.Moon && !!PROG_MOON_ELEMENTS.Titan);
+  ok('N-Pluto: Pluto has JPL 1800-2050 elements', !!PROG_BODY_ELEMENTS.Pluto);
   approx('R1: default epoch JD = 2461230.5 (2026-07-09)', PROG_DEFAULT_EPOCH_JD, 2461230.5, 1e-9);
   approx('R1: progEpochJD() falls back to default with no program', progEpochJD(), 2461230.5, 1e-9);
 
@@ -547,6 +548,17 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   let rMmin = Infinity, rMmax = 0;
   for (let d = 0; d < 88; d++) { const r = mag3(progBodyEphemState('Mercury', d * 86400).r); rMmin = Math.min(rMmin, r); rMmax = Math.max(rMmax, r); }
   approx('R1: Mercury implied e = (rmax-rmin)/(rmax+rmin) ~ 0.2056', (rMmax - rMmin) / (rMmax + rMmin), 0.2056, 0.005);
+
+  // N-Pluto: heliocentric distance at J2000 itself (not the app's default
+  // 2026 epoch) must land in [29, 32] AU — Pluto was inside Neptune's orbit
+  // until 1999, so this is a real discriminating sanity check, not a
+  // tautology. t_s is seconds from PROG_DEFAULT_EPOCH_JD to PROG_J2000_JD.
+  {
+    const tsAtJ2000 = (PROG_J2000_JD - PROG_DEFAULT_EPOCH_JD) * 86400;
+    const rPlutoJ2000_AU = mag3(progBodyEphemState('Pluto', tsAtJ2000).r) / PROG_AU_KM;
+    ok(`N-Pluto: heliocentric r at J2000 in [29,32] AU (got ${rPlutoJ2000_AU.toFixed(3)} AU)`,
+      rPlutoJ2000_AU >= 29 && rPlutoJ2000_AU <= 32);
+  }
 
   // Moon: real 5.145° inclination shows as out-of-ecliptic z over a month
   // (sin(5.145°)·384,400 ≈ 34,480 km amplitude; measured max 36,210 km with
@@ -1958,8 +1970,10 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('R5 layout: Jupiter (huge SOI) derives a larger radius than Mercury (tiny SOI)', rJupiter > rMercury);
 
   // Guard: unavailable physSoiRadius (or an unknown body) falls back verbatim.
+  // (Pluto is a real body now — item 2 of the Pluto addition — so this guard
+  // uses a genuinely unknown name instead.)
   ok('R5 layout: unknown body falls back to the literal constant',
-    _nmSoiLayoutRadius('Pluto', 42) === 42);
+    _nmSoiLayoutRadius('Xyzzy9000', 42) === 42);
   {
     const savedFn = sandbox.physSoiRadius;
     sandbox.physSoiRadius = undefined;
@@ -3146,11 +3160,11 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     JSON.stringify(bs.lcE) === JSON.stringify(['Earth', 'Sun', 'Moon']));
   ok('N1b: contextual local(Moon) = [Moon,Earth,Sun]',
     JSON.stringify(bs.lcM) === JSON.stringify(['Moon', 'Earth', 'Sun']));
-  ok('N1b: full mode = contextual prefix + Sun + all 8 planets + Moon + Titan (11 bodies)',
-    bs.fu.length === 11 && ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'].every(b => bs.fu.includes(b))
+  ok('N1b: full mode = contextual prefix + Sun + all 8 planets + Pluto + Moon + Titan (12 bodies)',
+    bs.fu.length === 12 && ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto', 'Moon', 'Titan'].every(b => bs.fu.includes(b))
     && bs.fu[0] === 'Earth' && bs.fu[1] === 'Moon' && bs.fu[2] === 'Sun');
   ok('N1b: physSetFidelity reports change correctly and module mode drives the default',
-    bs.chg1 === true && bs.modeFull === 'full' && bs.chg2 === false && bs.chg3 === true && bs.fuDefault.length === 11);
+    bs.chg1 === true && bs.modeFull === 'full' && bs.chg2 === false && bs.chg3 === true && bs.fuDefault.length === 12);
 
   // ── encounter-scale constants pinned to the classical SOI radii (N1: the
   // solver acceptance values are explicit literals now; this pin stops a

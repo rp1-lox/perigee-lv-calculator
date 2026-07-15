@@ -116,6 +116,12 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:135.9, departure_body:'Earth', destination:'Neptune' } },
   { id:'neptune-orbit',   label:'NEPTUNE', sub:'orbit 1,000 km',  zone:'interp', r:20,
     orbit:{ type:'circular', body:'Neptune', perigee:1000, apogee:1000, inclination:0 } },
+
+  // ── Pluto ───────────────────────────────────────────────────────────────────
+  { id:'pluto-transit',   label:'TRANSIT', sub:'Earth → Pluto',   zone:'interp', r:17, dashed:true,
+    orbit:{ type:'transit',  body:'Sun', c3:139.6, departure_body:'Earth', destination:'Pluto' } },
+  { id:'pluto-orbit',     label:'PLUTO',   sub:'orbit 1,000 km',  zone:'interp', r:18,
+    orbit:{ type:'circular', body:'Pluto', perigee:1000, apogee:1000, inclination:0 } },
 ];
 
 // No pre-spawned edges — users draw their own via right-click → Add Edge From Here.

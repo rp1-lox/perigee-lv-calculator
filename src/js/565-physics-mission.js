@@ -30,7 +30,7 @@ const PHYS_ENABLED = true;
 // reproduce the pre-N1b ad-hoc lists BYTE-IDENTICALLY (including array order —
 // physAccel sums in list order, so order changes would move float rounding).
 const PHYS_FIDELITY_FULL_BODIES = ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars',
-  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'];
+  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto', 'Moon', 'Titan'];
 let _physFidelity = 'contextual';   // 'contextual' | 'full' — session-persisted (455)
 function physFidelity() { return _physFidelity; }
 /** Set the fidelity mode. Returns true if it CHANGED (callers recompute).
@@ -94,6 +94,7 @@ const PHYS_ENCOUNTER_SCALE_KM = {
   Earth: 924646.795104645, Mars: 577227.4885111795,
   Jupiter: 48215441.1894899, Saturn: 54806443.0343865,
   Uranus: 51794655.77859839, Neptune: 86598220.57602063,
+  Pluto: 3148947.8172211857,
 };
 
 // side-tables: current legs (written by the latest rebuild) and the previous

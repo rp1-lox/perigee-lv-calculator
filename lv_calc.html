@@ -2774,6 +2774,9 @@ const ORBIT_CATEGORIES=[
   {planet:'Neptune', icon:'♆', color:'#4455cc', orbits:[
     {name:'Neptune (direct)', mode:'escape',c3:135.9,decl:28.5,perigee:185,note:'Direct to Neptune. C3≈135.9 km²/s².'},
   ]},
+  {planet:'Pluto', icon:'♇', color:'#d9a86c', orbits:[
+    {name:'Pluto (direct)',   mode:'escape',c3:139.6,decl:28.5,perigee:185,note:'Direct Hohmann to Pluto (39.48 AU). C3≈139.6 km²/s². Real missions (New Horizons) used a Jupiter gravity assist instead.'},
+  ]},
   {planet:'Beyond', icon:'✦', color:'#9944cc', orbits:[
     {name:'Solar Escape',     mode:'escape',c3:152.0,decl:28.5,perigee:185,note:'Solar system escape velocity. C3≈152 km²/s².'},
     {name:'Earth Escape',     mode:'escape',c3:0.1,  decl:28.5,perigee:185,note:'Minimum Earth escape. C3≈0 km²/s². ~3.23 km/s.'},
@@ -9541,6 +9544,13 @@ const PROG_GEO_STYLE = {
 //     trajectory-view footer.
 //   Saturn — procedurally synthesized band gradient (Cassini-like palette);
 //     no license restrictions.
+//   Titan — procedurally synthesized orange-tan haze-band gradient (Titan is
+//     genuinely a featureless photochemical haze ball at visible wavelengths,
+//     so a synthesized band gradient is an honest depiction, same precedent
+//     as Saturn); no license restrictions. 256x128 JPEG q50, ~0.9KB.
+//   Pluto — procedurally synthesized mottled pale-tan gradient (schematic
+//     New Horizons palette, no literal surface features claimed); no license
+//     restrictions. 256x128 JPEG q48, ~1.1KB.
 //   Earth clouds (PROG_CLOUD_TEXTURE) — NASA Visible Earth Blue Marble
 //     "Cloud Combined" (cloud_combined_2048), public domain.
 // Regenerate: scratchpad/pack_textures.py (one-time preprocessing, 2026-07-11).
@@ -9555,6 +9565,8 @@ const PROG_TEXTURES = {
   Uranus: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAEAAgADASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAECAwb/xAAVEAEBAAAAAAAAAAAAAAAAAAAAEf/EABcBAQEBAQAAAAAAAAAAAAAAAAABAwT/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwD2AqN3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoIKgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKCCgIKAgAAAAAAAAAAAAAAAAAAAAAAAAoCCgIKAgoCAAAAAAAAAAAAAAAAAAAAAAAACgIKADUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMqsICI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAyNQgMjUIDI1CAooCCgIKAgoCCgIKAgoCCgIKAgoCCgIKAgoCCgIKAgoCCgIKAhFAQigIKAgoCCgIKAgoCCgIKAgoCCgIKAgoCCgIM0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKDQzSg0M0oNDNKCUqALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAyIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCiAKIAogCACgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgtKlKC0qUoLSpSgxSsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDdKxSg3SsUoN0rFKDFK50orpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDpSudKDFKggtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgC0qALSoAtKgCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgNUrIDVKyA1SsgIAAAAVAFEUUEAUAARQAAAAAQFAAEAUEBaIAoAAAgAAAAVAFEUUEAUAARQAAAAAQFAAEAUEBaIAoAAAgAKAACAKIAACAAAAKIAqAAAAAAACiAqiAKAAAAAAAAIAogAAIAAAAogCoAAAAAAAKICqIAoAAAP/Z',
   Neptune: 'data:image/jpeg;base64,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',
   Saturn: 'data:image/jpeg;base64,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JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBXwfCaUFfB8JpQV8HwmlBFKm8LwRVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAVSpvC8BVKm8LwFUqbwvAZ6NJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoFaNJvovoE3pes6VRpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UGl6XrOlBpel6zpQaXpes6UEUqNd8mu+VRdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QXSo13ya75BdKjXfJrvkF0qNd8mu+QTSs6VUaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UGlKzpQaUrOlBpSs6UEUrPRppK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FaUrPRoK0pWejQVpSs9GgrSlZ6NBWlKz0aCtKVno0FRo0ilaZXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUF6NIpQXo0ilBejSKUH//2Q==',
+  Titan: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCACAAQADASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAAMBAgT/xAAaEAEBAQEBAQEAAAAAAAAAAAAAEhEBYQIh/8QAGAEBAQEBAQAAAAAAAAAAAAAAAAECBAX/xAAVEQEBAAAAAAAAAAAAAAAAAAAAEf/aAAwDAQACEQMRAD8A6gh6IIedXc88NheGQURhkeLwQURhkrw2CiEMheGwUeeCF4IKIwyF5IKIQQvLYKIQyF4bBR54bC8ElHng58PRDIKIwQtBBRCCHolkFEYIXhkFEIIXggohBC8EFF4IWkxlUoIVwkEoZC0kgjLYVkkEoIVwwEoJVwkEYbCs4SCUEKySCMELSSCUEKySCUMhaTASghWSQSghWSQRhsKySCM/rZVwkEoIVkkFMJUkkE5JUkkE5JVxkgnJKkkgnJKmEgnJKskglJKsskE8JUlsglJKktz9BKSVJJBOSVMJBOSVMbIJSSrjJBOSVJJBPDFZJBKTvFZJB3hjrG4I4wx1hgOcMdYYDnDHWGA5MdY3AcYY6wwHOGOsMBzhjrDAc4Y6xuA4wx1hgOcMd4zAc4Y6wwHOGOsbgOMMdYYDnDHWGA5wx1hgGmudNB3rNc6aDrTXOmg601zpoOtNc6aDrTXOmg601zpoOtNc6aDrTXOmg601zpoOtbrjTfwHWmudNB1prnTQdaa500HWt1xpoO+9ZrnTQTopOihVKKTooFKNTooFKNTooFa9KSooFKKTo0FKKTooFKK9T79FArRqVGgrTKTo0FNKTo0FaZSelArTKTooFKbqVFArpSVGgpTaS0oE6NStlgtRSNlgtpqNlAtRSVMsFqKSssFaKSs79grRSVlArpSVsoFtNStlgtpSVlgrRSNtsFaKSsoFdKStlgtRSVssFqKRssFqKStlAjTLQtttRFrbbz2WQeiy3nttkF7LQtlEF7LQosgvZSFlkHostC2WQXstG2WQei2WhZRBey0LbZBam289+lkF7baFssg9FstG2WQei2WhZZBem289togtZaN6yyD/2Q==',
+  Pluto: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABELDA8MChEPDg8TEhEUGSobGRcXGTMkJh4qPDU/Pjs1OjlDS2BRQ0daSDk6U3FUWmNma2xrQFB2fnRofWBpa2f/2wBDARITExkWGTEbGzFnRTpFZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2f/wAARCACAAQADASIAAhEBAxEB/8QAGAABAQEBAQAAAAAAAAAAAAAAAgADAQT/xAAeEAEBAQEBAQEBAQEBAAAAAAAAEQECEiEDMVFhQf/EABcBAQEBAQAAAAAAAAAAAAAAAAABAgT/xAAWEQEBAQAAAAAAAAAAAAAAAAAAARH/2gAMAwEAAhEDEQA/AKKHPijndARQ4oARQ4oARQ4oARQ/NdzgGcUa+HN4BnFDn1QAihx3OboBnLvhrnBeMTR5/Dknx6N4+B1yoyihxQAihxQAn1RpnB5wDDytxv4c3gGMUPeYoAT/ABbhxQGmca7nDXOS8oPPvDkejefgdcgxjsOf65AGKFFufAc/juOT67zgHmVby7ycQYbyMb9cs95+qBD55cjTnAWcl5LMdnxFZ7yPXLXR6wR59ya5GnWfVFAizCjvOA7zz8LOS5wsz6gG8uby18ubgrz9cjG3WM59VBih5jkB6s5KFnJedZVlvIdc/wBbbgdYqMNz65I03MrkUCLc+HFmAzmu5jTy7nIOcYc+O5zMd1BnuM9z616CAELl2KfVCwhzYqg7o6t6DdByKFiigx3CigO8nn/Az5p5qDsc13R3QDoI03K5ACf8UOKKPbxkw4PPwqwrL9MY9Nu9+fxluLECKH5UUCKHFADPh5rkdgKuf+FzzdPPzBhuVRvv5s+uZoBHIcdgBHNz40gdYDPR0txnvX1UI+WOdfxrz9A47HecdiKMRxQAUPMUBnHYcUAI5GkUA+e3d/R56vRg167o+gqoHVQqoH6VoVegO/Hb8Z1egb8a0zXl57jTO0G26y71b2y66ugdcoelVGma51y5xtaf3Aef9MmPN11Nj2fpz8eT9efqxKGdN/z6YZjb8sWj0878doWKsqdVCqgdXoKqB1UPSoHVQqoBXPQVVQ6qHpUDrvpn6VA/TtZ1UGlV/wBZ+lQP0773MZ1UGm9brlCqg0sVD05QbcdNs6eTOoefog363Nx5/wBOc13f0+BvVAc/M+fg1VRpVWdVA913NZ1UGlcoVUDqoX4s0D9fFQv+qgFVZ12qH6VZ12gfr4vTOr0DSqhVQOr19Z1UGl+KhXKDSr0FVA/SoVegOr0FrlBpVQrlBpVWddoHmqhVQOqs6qDSqs67QOqs6vQNL/1VnVQCqh6V+AfpUKvQH6XoPS9KHVQqqB2KhV6A6t0PS9CHVQvxWCnVQqoHVQ9KgfpUKqB1evn9D0qB+lQ9OehGlVCqgdXoPSoHV6D19XoU6vQVUH//2Q==',
 };
 
 // Earth cloud layer (independent longitude drift in the trajectory-view raster pass).
@@ -11082,6 +11094,7 @@ const PROG_BODIES = {
   Uranus:  { mu:   5793939.0,  R: 25362.0 },
   Neptune: { mu:   6836529.0,  R: 24622.0 },
   Titan:   { mu:      8978.14, R: 2574.7  },
+  Pluto:   { mu:       871.0,  R: 1188.3  }, // Pluto-only GM (not Pluto+Charon system)
 };
 const PROG_MU_SUN       = 1.32712440018e11; // km³/s² — heliocentric
 const PROG_HELIO_R      = {                  // km — mean orbital radii
@@ -11093,6 +11106,7 @@ const PROG_HELIO_R      = {                  // km — mean orbital radii
   Saturn:  1.4335e9,
   Uranus:  2.8725e9,
   Neptune: 4.4951e9,
+  Pluto:   5.9064e9,
 };
 const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centre
 
@@ -11171,6 +11185,11 @@ const PROG_BODY_ELEMENTS = {
   Saturn:  { a0: 9.53667594, aDot: -0.00125060, e0: 0.05386179, eDot: -0.00050991, I0: 2.48599187,  IDot: 0.00193609,  L0: 49.95424423,   LDot: 1222.49362201,   wbar0: 92.59887831,  wbarDot: -0.41897216, Om0: 113.66242448, OmDot: -0.28867794 },
   Uranus:  { a0: 19.18916464,aDot: -0.00196176, e0: 0.04725744, eDot: -0.00004397, I0: 0.77263783,  IDot: -0.00242939, L0: 313.23810451,  LDot: 428.48202785,    wbar0: 170.95427630, wbarDot: 0.40805281,  Om0: 74.01692503,  OmDot: 0.04240589 },
   Neptune: { a0: 30.06992276,aDot:  0.00026291, e0: 0.00859048, eDot:  0.00005105, I0: 1.77004347,  IDot: 0.00035372,  L0: -55.12002969,  LDot: 218.45945325,    wbar0: 44.96476227,  wbarDot: -0.32241464, Om0: 131.78422574, OmDot: -0.00508664 },
+  // Pluto — JPL "Keplerian Elements for Approximate Positions of the Major
+  // Planets", 1800 AD-2050 AD table (Standish 2006, no extra centennial
+  // terms needed for this validity window — those only apply to the
+  // 3000 BC-3000 AD table). Outside 1800-2050 use the extended table instead.
+  Pluto:   { a0: 39.48211675,aDot: -0.00031596, e0: 0.24882730, eDot:  0.00005170, I0: 17.14001206, IDot: 0.00004818,  L0: 238.92903833,  LDot: 145.20780515,    wbar0: 224.06891629, wbarDot: -0.04062942, Om0: 110.30393684, OmDot: -0.01183482 },
 };
 
 // Moons: elements about the parent. a in km; angles deg AT J2000; rates per DAY.
@@ -14484,6 +14503,12 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:135.9, departure_body:'Earth', destination:'Neptune' } },
   { id:'neptune-orbit',   label:'NEPTUNE', sub:'orbit 1,000 km',  zone:'interp', r:20,
     orbit:{ type:'circular', body:'Neptune', perigee:1000, apogee:1000, inclination:0 } },
+
+  // ── Pluto ───────────────────────────────────────────────────────────────────
+  { id:'pluto-transit',   label:'TRANSIT', sub:'Earth → Pluto',   zone:'interp', r:17, dashed:true,
+    orbit:{ type:'transit',  body:'Sun', c3:139.6, departure_body:'Earth', destination:'Pluto' } },
+  { id:'pluto-orbit',     label:'PLUTO',   sub:'orbit 1,000 km',  zone:'interp', r:18,
+    orbit:{ type:'circular', body:'Pluto', perigee:1000, apogee:1000, inclination:0 } },
 ];
 
 // No pre-spawned edges — users draw their own via right-click → Add Edge From Here.
@@ -16053,7 +16078,7 @@ const PHYS_ENABLED = true;
 // reproduce the pre-N1b ad-hoc lists BYTE-IDENTICALLY (including array order —
 // physAccel sums in list order, so order changes would move float rounding).
 const PHYS_FIDELITY_FULL_BODIES = ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars',
-  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Moon', 'Titan'];
+  'Jupiter', 'Saturn', 'Uranus', 'Neptune', 'Pluto', 'Moon', 'Titan'];
 let _physFidelity = 'contextual';   // 'contextual' | 'full' — session-persisted (455)
 function physFidelity() { return _physFidelity; }
 /** Set the fidelity mode. Returns true if it CHANGED (callers recompute).
@@ -16117,6 +16142,7 @@ const PHYS_ENCOUNTER_SCALE_KM = {
   Earth: 924646.795104645, Mars: 577227.4885111795,
   Jupiter: 48215441.1894899, Saturn: 54806443.0343865,
   Uranus: 51794655.77859839, Neptune: 86598220.57602063,
+  Pluto: 3148947.8172211857,
 };
 
 // side-tables: current legs (written by the latest rebuild) and the previous
@@ -21613,6 +21639,10 @@ function _missionMultiVehicleHTML(m) {
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
 function missionSetView(id, mode) {
+  // R6.5 fix: leaving the trajectory view drops its cached starfield size
+  // (see _trajStarfieldUnmount, 574) so a later return re-measures instead
+  // of trusting a size cached while the panel was hidden/resized.
+  if (_missionViewMode === 'traj' && mode !== 'traj' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
   _missionViewMode  = mode;
   _missionBridgeMode = false;
   _missionBridgeFrom = null;
@@ -23422,6 +23452,8 @@ function _missionNodeMapHTML(m) {
 const PROG_BODY_COLORS = {
   Sun:'#c6a057', Earth:'#5db877', Moon:'#8890bc', Venus:'#d8a657', Mercury:'#aa8866',
   Mars:'#b85848', Jupiter:'#cc8844', Saturn:'#ccbb88', Uranus:'#5fd0d0', Neptune:'#5566dd',
+  Titan:'#d69a4e', // hazy orange-tan (not the Moon's bluish hue) — keep in sync with PROG_TEXTURES.Titan + PROG_BODY_ATMOSPHERE.Titan
+  Pluto:'#d9a86c', // pale tan/ochre, New Horizons look — keep in sync with ORBIT_CATEGORIES' Pluto color
 };
 
 // Per-body atmosphere rim-glow tints (MISSION_MODEL_V2 §18 V1) — same DATA
@@ -23474,15 +23506,16 @@ function _missionNmLayout() {
     Saturn:  { col:PROG_BODY_COLORS.Saturn,  bodyR:38, soiR:_nmSoiLayoutRadius('Saturn',  160) },
     Uranus:  { col:PROG_BODY_COLORS.Uranus,  bodyR:28, soiR:_nmSoiLayoutRadius('Uranus',  120) },
     Neptune: { col:PROG_BODY_COLORS.Neptune, bodyR:28, soiR:_nmSoiLayoutRadius('Neptune', 120) },
+    Pluto:   { col:PROG_BODY_COLORS.Pluto,   bodyR:14, soiR:_nmSoiLayoutRadius('Pluto',   90)  },
   };
-  const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune'];
+  const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune','Pluto'];
   const bodyCol = { Sun: PROG_BODY_COLORS.Sun };
   ORDER.forEach(b => bodyCol[b] = META[b].col);
 
   const SLOT = 320, PADX = 200, BASE_Y = 470, WORLD_H = 1040;
   // vertical scatter so the bodies aren't in one straight line; each body's node
   // fan + SOI move with it. Earth sits lower since it carries the most orbits.
-  const CY = { Earth:600, Moon:340, Venus:680, Mercury:420, Mars:740, Jupiter:380, Saturn:700, Uranus:450, Neptune:620 };
+  const CY = { Earth:600, Moon:340, Venus:680, Mercury:420, Mars:740, Jupiter:380, Saturn:700, Uranus:450, Neptune:620, Pluto:400 };
   const cxOf = si => PADX + si * SLOT;
   const worldW = cxOf(ORDER.length - 1) + PADX;
 
@@ -28152,15 +28185,28 @@ function _trajMulberry32(seed) {
 }
 const _TRAJ_STARFIELD_SEED = 133742;
 let _trajStarfieldSize = {}; // id -> "WxH" of the last drawn size (resize-only regen gate)
+// R6.5 fix: a 0x0 (or missing) measurement must NOT be cached as "done" —
+// otherwise a canvas measured before layout flush (fresh reload straight
+// into traj view, or a synchronous Band->Trajectory toggle) never gets a
+// retry once real dimensions arrive, and the starfield silently stays
+// blank. Only cache a key once it reflects a real, positive size; a
+// transition FROM zero/uncached TO a real size always redraws.
 function _trajStarfieldSync(id) {
   const canvas = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] canvas.traj-starfield`);
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
-  if (!(w > 0 && h > 0)) return;
+  if (!(w > 0 && h > 0)) return; // nothing to draw into yet — leave cache alone so a later real size still draws
   const key = `${w}x${h}`;
-  if (_trajStarfieldSize[id] === key) return; // unchanged size — never redraw (no twinkle)
-  _trajStarfieldSize[id] = key;
+  // The done-marker lives ON THE ELEMENT, not in a module map keyed by
+  // mission id: view re-renders REPLACE the canvas element, and an id-keyed
+  // cache outlives it — the fresh blank canvas then matches "already drawn"
+  // and stays empty forever (reproduced: cache said 760x601 while the live
+  // canvas sat at the 300x150 default with 0 stars). Same-size redraws are
+  // pixel-identical anyway (seeded PRNG), so this can never twinkle.
+  if (canvas.dataset.starSize === key) return;
+  canvas.dataset.starSize = key;
+  _trajStarfieldSize[id] = key; // kept for the unmount/resize-observer bookkeeping
   const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
@@ -28232,12 +28278,28 @@ function _missionTrajAfterRender(m) {
     }
   };
   sync();
+  // R6.5 fix: the first sync() can land before the browser has flushed
+  // layout for freshly-mounted DOM (0x0 rect) — e.g. a fresh reload straight
+  // into traj view, or switching Band->Trajectory in the same synchronous
+  // render pass. A double-rAF retry re-runs sync() once layout is
+  // guaranteed settled, so the starfield still gets drawn even if the
+  // ResizeObserver never fires (size unchanged from 0 isn't a "resize").
+  requestAnimationFrame(() => requestAnimationFrame(() => sync()));
   if (_trajResizeObservers[id]) { try { _trajResizeObservers[id].disconnect(); } catch (e) {} }
   if (typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => sync());
     ro.observe(svgEl);
     _trajResizeObservers[id] = ro;
   }
+}
+
+// R6.5 fix: clear the starfield's cached size when leaving the trajectory
+// view (Trajectory->Band toggle, or navigating away) so a later return
+// re-measures from scratch instead of trusting a stale cache from a
+// panel that may have been resized while hidden.
+function _trajStarfieldUnmount(id) {
+  delete _trajStarfieldSize[id];
+  if (_trajResizeObservers[id]) { try { _trajResizeObservers[id].disconnect(); } catch (e) {} delete _trajResizeObservers[id]; }
 }
 // ─── R3.3/R3.4 — KSP-style maneuver gizmo for MNODE authoring (574 overlay + 565/386 physics) ───
 // See PHYSICS_PLAN.md COHERENCE SERIES R3.3 + R3.4 and MATH.md §7k.

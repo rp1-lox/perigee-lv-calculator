@@ -2925,6 +2925,10 @@ function _missionMultiVehicleHTML(m) {
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
 function missionSetView(id, mode) {
+  // R6.5 fix: leaving the trajectory view drops its cached starfield size
+  // (see _trajStarfieldUnmount, 574) so a later return re-measures instead
+  // of trusting a size cached while the panel was hidden/resized.
+  if (_missionViewMode === 'traj' && mode !== 'traj' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
   _missionViewMode  = mode;
   _missionBridgeMode = false;
   _missionBridgeFrom = null;
@@ -4734,6 +4738,8 @@ function _missionNodeMapHTML(m) {
 const PROG_BODY_COLORS = {
   Sun:'#c6a057', Earth:'#5db877', Moon:'#8890bc', Venus:'#d8a657', Mercury:'#aa8866',
   Mars:'#b85848', Jupiter:'#cc8844', Saturn:'#ccbb88', Uranus:'#5fd0d0', Neptune:'#5566dd',
+  Titan:'#d69a4e', // hazy orange-tan (not the Moon's bluish hue) — keep in sync with PROG_TEXTURES.Titan + PROG_BODY_ATMOSPHERE.Titan
+  Pluto:'#d9a86c', // pale tan/ochre, New Horizons look — keep in sync with ORBIT_CATEGORIES' Pluto color
 };
 
 // Per-body atmosphere rim-glow tints (MISSION_MODEL_V2 §18 V1) — same DATA
@@ -4786,15 +4792,16 @@ function _missionNmLayout() {
     Saturn:  { col:PROG_BODY_COLORS.Saturn,  bodyR:38, soiR:_nmSoiLayoutRadius('Saturn',  160) },
     Uranus:  { col:PROG_BODY_COLORS.Uranus,  bodyR:28, soiR:_nmSoiLayoutRadius('Uranus',  120) },
     Neptune: { col:PROG_BODY_COLORS.Neptune, bodyR:28, soiR:_nmSoiLayoutRadius('Neptune', 120) },
+    Pluto:   { col:PROG_BODY_COLORS.Pluto,   bodyR:14, soiR:_nmSoiLayoutRadius('Pluto',   90)  },
   };
-  const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune'];
+  const ORDER = ['Earth','Moon','Venus','Mercury','Mars','Jupiter','Saturn','Uranus','Neptune','Pluto'];
   const bodyCol = { Sun: PROG_BODY_COLORS.Sun };
   ORDER.forEach(b => bodyCol[b] = META[b].col);
 
   const SLOT = 320, PADX = 200, BASE_Y = 470, WORLD_H = 1040;
   // vertical scatter so the bodies aren't in one straight line; each body's node
   // fan + SOI move with it. Earth sits lower since it carries the most orbits.
-  const CY = { Earth:600, Moon:340, Venus:680, Mercury:420, Mars:740, Jupiter:380, Saturn:700, Uranus:450, Neptune:620 };
+  const CY = { Earth:600, Moon:340, Venus:680, Mercury:420, Mars:740, Jupiter:380, Saturn:700, Uranus:450, Neptune:620, Pluto:400 };
   const cxOf = si => PADX + si * SLOT;
   const worldW = cxOf(ORDER.length - 1) + PADX;
 

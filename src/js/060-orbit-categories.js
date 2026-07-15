@@ -46,6 +46,9 @@ const ORBIT_CATEGORIES=[
   {planet:'Neptune', icon:'♆', color:'#4455cc', orbits:[
     {name:'Neptune (direct)', mode:'escape',c3:135.9,decl:28.5,perigee:185,note:'Direct to Neptune. C3≈135.9 km²/s².'},
   ]},
+  {planet:'Pluto', icon:'♇', color:'#d9a86c', orbits:[
+    {name:'Pluto (direct)',   mode:'escape',c3:139.6,decl:28.5,perigee:185,note:'Direct Hohmann to Pluto (39.48 AU). C3≈139.6 km²/s². Real missions (New Horizons) used a Jupiter gravity assist instead.'},
+  ]},
   {planet:'Beyond', icon:'✦', color:'#9944cc', orbits:[
     {name:'Solar Escape',     mode:'escape',c3:152.0,decl:28.5,perigee:185,note:'Solar system escape velocity. C3≈152 km²/s².'},
     {name:'Earth Escape',     mode:'escape',c3:0.1,  decl:28.5,perigee:185,note:'Minimum Earth escape. C3≈0 km²/s². ~3.23 km/s.'},
