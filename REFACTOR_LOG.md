@@ -165,3 +165,14 @@ Residual `574-trajectory-view.js` keeps the file header, the world-assembly orch
 **Deleted**: none.
 **Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
 **Risk notes**: the two-layer contract is now split across files (overlay symbology in 5742, world geometry in 5743) but both are def-only and load before any render; no cross-file load-time dependency. No frozen functions, persisted fields, or physics numerics touched.
+
+## [15] 574 split C — extract event-nodes + globe/raster subsystem — 2026-07-15
+**Intent**: Final 574 extraction: the event-node/burn-glyph/low-thrust markers and the entire body-globe/surface/texture/raster/3D-ring subsystem, landing the 574 core near ~1,200 lines.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/574-trajectory-view.js` (2,786 → 1,273 lines) → new `src/js/5744-trajectory-eventnodes.js` (546 lines: _trajBurnMarker.._trajLowThrustSVG incl. event-node symbology, ghost markers, extraction cache, low-thrust spiral) and new `src/js/5744-trajectory-globe.js` (1,007 lines: _TRAJ_MIN_BODY_PX.._trajBodyDiscTiered incl. reference frames, surface/hemisphere clipping, atmosphere/terminator, texture+raster globe pipeline, globe-layer reconciliation, 3D rings). Header, _trajBodyFrameContent, _trajGlyph/trajGlyphClick, _trajMissionLaunchEvent confirmed remaining in core. `tests/math.test.js` FILES list gained both (before 5745-maneuver-gizmo.js).
+**Subagent**: one Sonnet subagent, both extractions, gate green. 0 U+FFFD; each moved fn unique across src/js.
+**Behavior delta**: none. Fingerprint AFTER == fixed 574 baseline: normalized world hashes [3983026606, 3110351937, 1308996569, 1089556814] (all 4 cams MATCH), projection seam identical. Additionally drove the FULL DOM render pipeline (missionSetView traj -> afterRender -> globe reconcile): 2 globe raster images, 27 paths, 19 circles, 28 texts, _trajPrewarmStats populated (11 bodies) — the moved async raster/globe subsystem functions. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
+**Result**: `574-trajectory-view.js` decomposed from 4,408 lines into a 1,273-line core (file header, _trajBodyFrameContent per-body orchestrator, time/tick helpers, world-assembly _trajWorldSVG, glyph/neighborhood, view UI shell/scrubber/footer/flyout/starfield/afterRender) + 6 concern modules (camera 376, scene-extract 312, overlay-lod 302, rings-legs 697, eventnodes 546, globe 1007).
+**Risk notes**: _TRAJ_SVG_NS and the raster/repaint/prewarm scheduling helpers moved to 5744-trajectory-globe.js; called at runtime from core's afterRender/starfield (forward refs, def-only, resolve after load). No frozen functions, persisted fields, or physics numerics touched.

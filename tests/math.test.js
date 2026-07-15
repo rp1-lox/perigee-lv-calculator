@@ -52,6 +52,8 @@ const FILES = [
   'src/js/5741-trajectory-scene-extract.js',
   'src/js/5742-trajectory-overlay-lod.js',
   'src/js/5743-trajectory-rings-legs.js',
+  'src/js/5744-trajectory-eventnodes.js',
+  'src/js/5744-trajectory-globe.js',
   'src/js/5745-maneuver-gizmo.js',
   'src/js/450-program-module-phase-10-save-load-closur.js',
 ];
