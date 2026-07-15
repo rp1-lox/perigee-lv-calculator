@@ -564,3 +564,30 @@ E1 first (pure physics + gate, no UI); E2 (event kind + accounting rules — the
 
 ### Sequencing & risk
 O1 first (the seam + Earth only — fixes the reported bug), O2 with it or immediately after (visual tilt is cosmetic once the table exists). RISK: the equator<->world seam is exactly one transform, but it must be applied at EVERY program-side authored-elements boundary and NOWHERE twice — audit the physElementsToState/physStateToElements call sites first and list them in MATH.md s7ac before editing. Launch-window/RAAN math (360/415) is the subtle consumer (LAN is node-on-equator now).
+
+---
+
+## 21. B-SERIES — ballistic lunar transfer solver (paper-based; user-supplied reference 2026-07-15)
+
+**Reference:** Griesemer, Ocampo, Cooley, "Targeting Ballistic Lunar Capture Trajectories Using Periodic Orbits in the Sun-Earth CRTBP," NASA NTRS 20090016184. Read in full; method distilled here. This turns N2's "the dynamics no longer forbid BLTs" into an actual solver. Their example: dv 3.050 km/s / TOF ~99 d / captured (KEm = -0.105 km2/s2 at perilune) from a 7,200 km parking radius - roughly 1.3 km/s cheaper than our direct 5a transfer.
+
+### B1 - STM substrate (the derivatives lesson)
+- The paper rejects finite differences for chaotic arcs (OUR N2 Newton failure mode, independently confirmed) and integrates the state transition matrix alongside the trajectory. Implement opt-in `ctx.stm` on physPropagateSegment (E1s opt-in pattern): propagate Phi via Phi-dot = F(t)Phi, F = [[0,I],[dA/dr,0]], dA/dr = sum over bodies of mu(3 rr^T/r^5 - I/r^3) (paper Eq. 15) - the Jacobian of the exact physAccel sum. Ballistic byte-identity when absent (gate-pinned, as E1). Gate: Phi vs central-difference on a SHORT smooth arc (where FD is still valid), symplectic-ish sanity (det ~ 1).
+- This also retro-upgrades existing solvers (5a, corrector) if we ever want Newton back - note, do not refactor them in B-series.
+
+### B2 - f16/f-prime-16 reference family (corrector harness)
+- Generate the Markellos f16 family member in the Sun-(Earth+Moon) CRTBP whose nearest perigee = the parking radius: perpendicular-crossing differential correction (the harness ALREADY does perpendicular-crossing pattern search - a 5-crossing variant; STM Newton from B1 if pattern search grinds). One-parameter family: cache/pin the family curve (initial x vs Jacobi c) offline in the harness, seed provenance like every 425 seed.
+- Family selection per the paper: Moon in Sun-far quadrants at epoch -> f-prime-16, Sun-near -> f16. Arrival tf = Moons rotating-frame y-z plane crossing nearest 100 d (p1) or ~180 d (p2) from t0.
+
+### B3 - incremental targeting (the paper staging, on our ephemeris)
+- Step 1 (RTBP, Earth+Moon combined at barycenter, our mean-element ephemeris): 1 DOF |dv| prograde from the parking orbit, constraint = y-z plane crossing at tf. Seed dv = |v_ref_perigee - v_circ| from the scaled family member.
+- Step 2: parking-orbit orientation (alpha,beta,gamma - ECLIPTIC-referenced; the S20 obliquity seam converts to/from user equator-referenced elements when authoring): 4 params target the y-axis point at r = EM-L2 distance.
+- Step 3 (full four-body): same 4 params, inequality constraint r_sc-Moon <= r_L2-Moon.
+- Step 4: minimize Keplerian energy wrt Moon (free: dv, angles, tf; constraint: end at perilune). SQP substitute: our pattern search with the perilune constraint folded in (penalty or lattice), or STM-gradient descent - decide by measurement, document.
+- Success metrics (paper, adopt verbatim): KEm < 0 at final perilune; a SECOND perilune with KEm < 0 on forward propagation; perilune radii above the lunar surface. Gate-pin all three on one canonical epoch + the dv/TOF bands (~3.0-3.2 km/s, 90-180 d).
+
+### B4 - authoring surface
+- The node map/launch planner offers "Ballistic (WSB)" alongside the direct transfer where the target is lunar (NRHO/LLO/DRO): compute-button contract (E2s lane - this is a seconds-scale solve), honest est. before compute (paper dv/TOF bands), STALE on upstream edits. Arrival is co-orbital; phase-matching composes with 5b R2/R3 (the tf lattice here is per-month, coarser - document).
+
+### Sequencing
+After 5b (user-approved order). B1 standalone-committable; B2 offline harness; B3 the solver; B4 UI. Risks: our mean-element ephemeris vs DE405 (expect band-level agreement, not their exact numbers - pin OUR numbers); step-4 minimization method choice (measure first).
