@@ -345,6 +345,51 @@ function _missionExportMenuOutsideClick(e) {
   if (wrap && !wrap.contains(e.target)) _missionCloseExportMenu();
 }
 
+// ── WORKFLOW PASS 2 deliverable B2: File ▾ menu moved to the GLOBAL header
+// (it's program-level, not mission-level) — was previously emitted inline by
+// missionRenderDetail (570-mission-lifecycle.js). Reuses the exact same
+// classes/ids (mcc-export-wrap / #mcc-export-menu) and the SAME toggle/close
+// handlers above unmodified, so behavior is identical; only its DOM location
+// changed. Rendered into the static #global-file-menu-slot in src/index.html
+// (see _globalFileMenuRender), refreshed on every missionRenderDetail() pass
+// (program/mission name + Reset visibility can change on any mutation) and
+// once at startup. ──
+function _globalFileMenuHTML() {
+  const progName = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && PROG_ACTIVE_PROGRAM.name) || '';
+  const m = (typeof _missions !== 'undefined' && _missions) ? _missions[0] : null;
+  const id = m ? m.missionId : '';
+  const missionName = m ? m.name : '';
+  return `<div class="mcc-export-wrap">
+    <button class="th-btn" onclick="_missionToggleExportMenu(event)" title="File options">File &#x25BE;</button>
+    <div class="mcc-export-menu" id="mcc-export-menu">
+      <div class="mcc-export-progrow" onclick="event.stopPropagation();">
+        <input class="mcc-program-name-input" value="${progName.replace(/"/g,'&quot;')}"
+          onclick="event.stopPropagation();" oninput="event.stopPropagation();_missionProgramRename(this.value)" title="Program name" placeholder="Program name">
+      </div>
+      ${m ? `<div class="mcc-export-progrow" onclick="event.stopPropagation();">
+        <input class="mcc-program-name-input" value="${missionName.replace(/"/g,'&quot;')}"
+          onclick="event.stopPropagation();" oninput="event.stopPropagation();missionRename('${id}',this.value)" title="Mission name" placeholder="Mission name">
+      </div>` : ''}
+      <button class="mcc-export-item" onclick="_missionCloseExportMenu();saveProgramFile()">&#x1F4BE; Save Program</button>
+      <label class="mcc-export-item" style="cursor:pointer;" title="Load a .program file" onclick="_missionCloseExportMenu();">&#x1F4C2; Load Program
+        <input type="file" accept=".program,.json" style="display:none" onchange="loadProgramFile(this)">
+      </label>
+      ${m ? `<div class="mcc-export-sep"></div>
+      <button class="mcc-export-item" onclick="_missionCloseExportMenu();missionExportReport('${id}')">&#x2398; Report</button>
+      <button class="mcc-export-item" onclick="_missionCloseExportMenu();missionExportPNG('${id}')">&#x2B07; PNG</button>
+      ${m.log.length ? `<div class="mcc-export-sep"></div><button class="mcc-export-item mcc-export-danger" onclick="_missionCloseExportMenu();_missionConfirmReset('${id}')">&#x232B; Reset</button>` : ''}` : ''}
+    </div>
+  </div>`;
+}
+function _globalFileMenuRender() {
+  const slot = document.getElementById('global-file-menu-slot');
+  if (slot) slot.innerHTML = _globalFileMenuHTML();
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('DOMContentLoaded', _globalFileMenuRender);
+  if (document.readyState === 'interactive' || document.readyState === 'complete') _globalFileMenuRender();
+}
+
 
 function _missionDvToOrbit(body, alt_km) {
   const b = PROG_BODIES[body];

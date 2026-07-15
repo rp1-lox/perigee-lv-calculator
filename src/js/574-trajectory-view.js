@@ -965,28 +965,21 @@ function _missionTrajViewHTML(m) {
   const zoom = _trajZoomFromCam(cam);
   const focus = cam.anchorBody;
 
-  // Grouped focus bar: moonless bodies (+Sun) render as plain buttons; bodies
-  // with moons render as a button + a small flyout dropdown listing the
-  // parent and its moons, so Moon/Titan scenes get first-class navigation.
+  // WORKFLOW PASS 2 deliverable B1: the planetary-body row (formerly a
+  // button+flyout bar, _trajToggleFlyout/_trajFlyoutOpenFor/traj-flyout-* CSS
+  // left in place but no longer wired here) is now a single compact anchor
+  // dropdown, sibling to the reference-frame select — same camera-context
+  // pairing, both live on the WORLD stage surface itself (camera control, not
+  // toolbar chrome). Reuses the EXACT same handler (trajSetFocus) the old
+  // tabs called, so anchoring behavior is unchanged.
   const groups = _trajFocusGroups();
-  const focusSeg = groups.map(g => {
+  const focusOptsHTML = groups.map(g => {
     const sceneId = g.scene.id, label = g.scene.label;
-    if (!g.moons.length) {
-      return `<button class="${focus === sceneId ? 'active' : ''}" onclick="trajSetFocus('${id}','${sceneId}')">${label}</button>`;
-    }
-    const memberIds = [sceneId, ...g.moons.map(mo => mo.name)];
-    const groupActive = memberIds.includes(focus);
-    const isOpen = _trajFlyoutOpenFor === (id + '|' + sceneId);
-    const items = memberIds.map(mid => {
-      const mLabel = mid === sceneId ? label : mid;
-      const active = focus === mid;
-      return `<button class="traj-flyout-item${active ? ' active' : ''}" onclick="event.stopPropagation();trajSetFocus('${id}','${mid}');_trajCloseFlyout();">${mLabel}</button>`;
-    }).join('');
-    return `<div class="traj-flyout-wrap">
-      <button class="${groupActive ? 'active' : ''}" onclick="event.stopPropagation();_trajToggleFlyout('${id}','${sceneId}')">${label} &#x25BE;</button>
-      <div class="traj-flyout${isOpen ? ' open' : ''}">${items}</div>
-    </div>`;
+    const opts = [`<option value="${sceneId}"${focus === sceneId ? ' selected' : ''}>${label}</option>`];
+    g.moons.forEach(mo => opts.push(`<option value="${mo.name}"${focus === mo.name ? ' selected' : ''}>&nbsp;&nbsp;${mo.name}</option>`));
+    return opts.join('');
   }).join('');
+  const anchorSelectHTML = `<select class="traj-anchor-select" title="Camera anchor body" onchange="trajSetFocus('${id}',this.value)">${focusOptsHTML}</select>`;
 
   // WORLD-layer geometry (resets + fills the label registry as a side effect;
   // overlay resolution happens after mount in _missionTrajAfterRender, once
@@ -1014,10 +1007,12 @@ function _missionTrajViewHTML(m) {
   return `
     <div class="traj-wrap" data-mid="${id}">
       <div class="traj-toolbar">
-        <div class="seg traj-focus-seg">${focusSeg}</div>
-        <select class="traj-frame-select" title="Reference frame (MISSION_MODEL_V2 §17 N3)" onchange="trajSetFrame('${id}',this.value)">
-          ${_TRAJ_FRAME_KINDS.map(f => `<option value="${f.id}"${_trajFrame(id) === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
-        </select>
+        <div class="traj-cam-context">
+          ${anchorSelectHTML}
+          <select class="traj-frame-select" title="Reference frame (MISSION_MODEL_V2 §17 N3)" onchange="trajSetFrame('${id}',this.value)">
+            ${_TRAJ_FRAME_KINDS.map(f => `<option value="${f.id}"${_trajFrame(id) === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
+          </select>
+        </div>
         <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan/orientation (top-down)">&#x21BA; Reset</button>
       </div>
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"

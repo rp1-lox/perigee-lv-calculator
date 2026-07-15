@@ -201,10 +201,16 @@ function missionRenderDetail() {
   const planRailSlotHTML = (typeof _planRailHTML === 'function') ? _planRailHTML(m) : '';
   const timelineDockSlotHTML = (typeof _ttdDockHTML === 'function') ? _ttdDockHTML(m, id) : '';
 
+  // WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (previously host
+  // to the retired Vehicles & Mission State / Flight Readiness panels) is gone.
+  // Its one still-live occupant — the ORBITS catalog shown while Plan is staged
+  // — is re-homed into the rail slot, stacked above the demoted World thumbnail,
+  // so it stays reachable in the same rail-width column adjacent to the stage.
   let stageHTML, leftSlotHTML, bottomSlotHTML = '';
   if (stageSurf === 'plan') {
     stageHTML = planFullHTML;
-    leftSlotHTML = (typeof _missionWorldThumbHTML === 'function') ? _missionWorldThumbHTML(m, { slot: 'rail' }) : '';
+    const worldThumb = (typeof _missionWorldThumbHTML === 'function') ? _missionWorldThumbHTML(m, { slot: 'rail' }) : '';
+    leftSlotHTML = `<div class="mcc-plan-orbit-rail"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div>${worldThumb}</div>`;
     bottomSlotHTML = timelineDockSlotHTML;
   } else if (stageSurf === 'timeline') {
     stageHTML = timelineFullHTML;
@@ -220,64 +226,50 @@ function missionRenderDetail() {
   // favor of a thin HUD strip docked across the top of the stage (570-mission-panel.js).
   const hudStripHTML = (typeof _missionHudStripHTML === 'function') ? _missionHudStripHTML(m) : '';
 
-  // ── mission/program name now live in the File ▾ menu (topbar removed — its row's
-  // vertical space goes to the body; undo/redo + File menu are in one floating
-  // toolbar over the view area, see mcc-view-toggle-float; the Band|Orbit Map|
-  // Trajectory toggle that used to live here is RETIRED per §12 U2 — promotion
-  // (⤢ on each rail/dock/thumb) replaces it; missionSetView(id,mode) survives
-  // as a thin alias, see 570-mission-panel.js) ──
-  const progName = (PROG_ACTIVE_PROGRAM && PROG_ACTIVE_PROGRAM.name) || '';
+  // ── mission/program name now live in the File ▾ menu, moved to the GLOBAL
+  // header in WORKFLOW PASS 2 deliverable B2 (see _globalFileMenuHTML in
+  // 570-mission-manager.js) — it's program-level, not mission-level. The
+  // Band|Orbit Map|Trajectory toggle that used to live here is RETIRED per
+  // §12 U2 — promotion (⤢ on each rail/dock/thumb, plus the World/Timeline/Plan
+  // selector buttons, pass 2 deliverable B3) replaces it; missionSetView(id,mode)
+  // survives as a thin alias, see 570-mission-panel.js) ──
+
+  // WORKFLOW PASS 2 deliverable A: the setup hint that used to live in the
+  // retired far-left column (shown before any vehicle has been launched) is
+  // re-homed above the events list, in the right column it's guiding the user
+  // toward.
+  const setupHintHTML = (!m.vehicleId && stageSurf !== 'plan')
+    ? `<div class="mcc-panel-pad" style="border-bottom:1px solid var(--border);"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
+        Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) below to bring a vehicle into the mission.
+      </div></div>`
+    : '';
+
+  // WORKFLOW PASS 2 deliverable B3: the primary stage-switching affordance —
+  // three labeled buttons, active-state styled like the old Band|Orbit-Map
+  // toggle. Wired straight to _missionPromote (⤢ promote controls on the
+  // rails stay as the secondary path, unchanged).
+  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
+  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world','World')}${stageBtn('timeline','Timeline')}${stageBtn('plan','Plan')}</div>`;
 
   cc.innerHTML = `
     <!-- BODY -->
     <div class="mcc-body">
-      <!-- LEFT COLUMN — Plan staged: the ORBITS catalog fills it; otherwise: setup prompt + checks (Vehicles & Mission State moved to the state card, U2) -->
-      <div class="mcc-left-col">
-        ${stageSurf === 'plan'
-          ? `<div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div>`
-          : `${m.vehicleId ? '' : `<div class="mcc-section-header">Setup</div>
-            <div class="mcc-panel-pad"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
-              Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) on the right to bring a vehicle into the mission.
-            </div></div>`}`}
-          <!-- WORKFLOW PASS 1 deliverable A: the standalone FLIGHT READINESS box
-               that used to render here is retired — findings now live as badges
-               on event cards/dock markers/plan-rail chips plus the toolbar/HUD
-               chip (see 572-mission-checks.js). -->
-      </div>
-
-      <!-- CENTER COLUMN — stage + rails (§12 U2) -->
+      <!-- CENTER COLUMN — stage + rails (§12 U2). WORKFLOW PASS 2 deliverable A:
+           the old far-left .mcc-left-col is gone; this column now claims the
+           freed width. -->
       <div class="mcc-center-col">
-        <!-- toolbar is a sibling of the scrolling view area (not inside it) so its
-             File menu can never be clipped by .mcc-view-area's overflow -->
+        <!-- toolbar is a sibling of the scrolling view area (not inside it) so it
+             can never be clipped by .mcc-view-area's overflow -->
         <div class="mcc-view-toggle-float">
+          ${stageSelHTML}
+          <div class="mcc-toolbar-sep"></div>
           <div class="mcc-topbar-undoredo">
             <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo==='function'&&_missionUndoCanUndo())?'':' disabled'}>&#x21B6;</button>
             <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo==='function'&&_missionUndoCanRedo())?'':' disabled'}>&#x21B7;</button>
           </div>
-          ${(m.log.length && typeof _missionChecksToolbarChipHTML === 'function') ? `<div class="mcc-toolbar-sep"></div>${_missionChecksToolbarChipHTML(m)}` : ''}
-          <div class="mcc-toolbar-sep"></div>
-          <div class="mcc-export-wrap">
-            <button class="act-btn" onclick="_missionToggleExportMenu(event)" title="File options">File &#x25BE;</button>
-            <div class="mcc-export-menu" id="mcc-export-menu">
-              <div class="mcc-export-progrow" onclick="event.stopPropagation();">
-                <input class="mcc-program-name-input" value="${progName.replace(/"/g,'&quot;')}"
-                  onclick="event.stopPropagation();" oninput="event.stopPropagation();_missionProgramRename(this.value)" title="Program name" placeholder="Program name">
-              </div>
-              <div class="mcc-export-progrow" onclick="event.stopPropagation();">
-                <input class="mcc-program-name-input" value="${m.name.replace(/"/g,'&quot;')}"
-                  onclick="event.stopPropagation();" oninput="event.stopPropagation();missionRename('${id}',this.value)" title="Mission name" placeholder="Mission name">
-              </div>
-              <button class="mcc-export-item" onclick="_missionCloseExportMenu();saveProgramFile()">&#x1F4BE; Save Program</button>
-              <label class="mcc-export-item" style="cursor:pointer;" title="Load a .program file" onclick="_missionCloseExportMenu();">&#x1F4C2; Load Program
-                <input type="file" accept=".program,.json" style="display:none" onchange="loadProgramFile(this)">
-              </label>
-              <div class="mcc-export-sep"></div>
-              <button class="mcc-export-item" onclick="_missionCloseExportMenu();missionExportReport('${id}')">&#x2398; Report</button>
-              <button class="mcc-export-item" onclick="_missionCloseExportMenu();missionExportPNG('${id}')">&#x2B07; PNG</button>
-              <div class="mcc-export-sep"></div>
-              ${m.log.length ? `<button class="mcc-export-item mcc-export-danger" onclick="_missionCloseExportMenu();_missionConfirmReset('${id}')">&#x232B; Reset</button>` : ''}
-            </div>
-          </div>
+          <!-- readiness chip lives in the HUD strip (workflow pass 1) — NOT
+               duplicated here; a pass-2 agent re-added it to the toolbar and
+               the orchestrator removed the duplicate (2026-07-15). -->
         </div>
         <div class="mcc-view-row">
           ${leftSlotHTML}
@@ -293,6 +285,7 @@ function missionRenderDetail() {
 
       <!-- RIGHT COLUMN — events (list on top, Add Event docked at the bottom) -->
       <div class="mcc-right-col">
+        ${setupHintHTML}
         <div class="mcc-events-header" style="display:flex;align-items:center;gap:8px;">
           <span style="color:var(--accent3);">EVENTS</span>
           ${m.log.length ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${m.log.length}</span>` : ''}
@@ -307,6 +300,9 @@ function missionRenderDetail() {
   if (m.vehicleId) setTimeout(() => missionBurnPreview(m.missionId), 0);
   if (stageSurf === 'plan') _missionCenterNmEarth();
   if (stageSurf === 'world' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
+  // WORKFLOW PASS 2 deliverable B2: keep the header's File menu (program/mission
+  // name fields, Reset visibility) in sync with every mission mutation.
+  if (typeof _globalFileMenuRender === 'function') _globalFileMenuRender();
 }
 
 // Position the node-map scroll on Earth's system (Earth + its orbits), leaving the

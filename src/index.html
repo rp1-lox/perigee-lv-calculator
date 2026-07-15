@@ -26,6 +26,11 @@
       <button class="th-btn" onclick="openTutorials()" title="How to use Rocket Playground">? Tutorials</button>
       <button class="th-btn" onclick="sessionExport()" title="Download your whole session (program, vehicles, stages, orbits) as a file">&#x21E3; Session</button>
       <label class="th-btn" style="cursor:pointer;" title="Restore a session file downloaded earlier">&#x21E1; Session<input type="file" accept=".json" style="display:none" onchange="sessionImport(this)"></label>
+      <!-- WORKFLOW PASS 2 deliverable B2: mission File ▾ menu (save/load program,
+           report, PNG, reset) — program-level, so it lives here beside Session,
+           not in the mission toolbar. Populated by _globalFileMenuRender
+           (570-mission-manager.js). -->
+      <span id="global-file-menu-slot"></span>
       <label>Theme</label>
       <select id="theme-select" onchange="applyTheme(this.value)">
         <option value="perigee" selected>Perigee</option>

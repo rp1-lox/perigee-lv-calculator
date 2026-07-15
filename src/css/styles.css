@@ -200,9 +200,18 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-body{display:flex;flex:1;min-height:0;overflow:hidden;}
 .mcc-view-toggle-float{position:absolute;top:8px;right:8px;z-index:20;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);display:flex;align-items:center;gap:6px;padding:4px 6px;}
 .mcc-toolbar-sep{width:1px;height:16px;background:var(--border);flex-shrink:0;}
-.mcc-left-col{width:260px;min-width:260px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;}
-.mcc-left-budget{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);margin-top:auto;}
+/* WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (Vehicles &
+   Mission State / Flight Readiness, both retired pass 1) and its unused
+   .mcc-left-budget sticky footer are removed — .mcc-center-col now claims
+   the freed width directly. */
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
+/* Plan-staged rail slot: ORBITS catalog stacked above the demoted World
+   thumbnail, same rail width/border as .mcc-plan-rail (pass 2 deliverable A). */
+.mcc-plan-orbit-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;}
+/* Primary stage-switching affordance (pass 2 deliverable B3), first in the
+   floating toolbar; active state matches the old Band|Orbit-Map toggle. */
+.mcc-stagesel-seg{display:flex;gap:2px;}
+.mcc-stagesel-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}
 /* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
    compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
@@ -369,7 +378,18 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 
 /* TRAJECTORY VIEW — restrained blueprint style: thin strokes, mono labels, theme colors */
 .traj-wrap{display:flex;flex-direction:column;height:100%;min-height:0;}
-.traj-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;flex-shrink:0;}
+/* WORKFLOW PASS 2 deliverable B1: toolbar is now a compact camera-context
+   cluster pinned to the top-left of the WORLD stage (anchor + frame selects
+   are siblings, camera control lives on the stage surface itself) instead of
+   spanning the full width; Reset sits at the far right via margin-left:auto. */
+.traj-toolbar{display:flex;align-items:center;justify-content:flex-start;gap:8px;padding:6px 0;flex-shrink:0;}
+.traj-toolbar .act-btn{margin-left:auto;}
+.traj-cam-context{display:flex;align-items:center;gap:6px;}
+.traj-anchor-select{background:var(--input);border:1px solid var(--border-bright);color:var(--text-dim);font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:6px 6px;cursor:pointer;box-sizing:border-box;line-height:1;}
+.traj-anchor-select:hover,.traj-anchor-select:focus{border-color:var(--accent);color:var(--text);}
+/* dead: .traj-focus-seg / .traj-flyout* styled the retired button+flyout body
+   tabs (_trajToggleFlyout et al., 574-trajectory-view.js) — left in place per
+   the pass-1 retirement convention; no longer referenced by any emitter. */
 .traj-focus-seg{flex-wrap:wrap;}
 .traj-frame-select{background:var(--input);border:1px solid var(--border-bright);color:var(--text-dim);font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:6px 6px;cursor:pointer;box-sizing:border-box;line-height:1;}
 .traj-frame-select:hover,.traj-frame-select:focus{border-color:var(--accent);color:var(--text);}
