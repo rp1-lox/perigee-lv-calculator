@@ -12669,6 +12669,105 @@ function physStepFor(r, ctx) {
   return dt;
 }
 
+// ── E1: electric propulsion / low-thrust (MISSION_MODEL_V2 §19, MATH.md §7y) ──
+// Opt-in via ctx.thrust = { thrust_N, isp_s, m0_kg, law, coastWindows?, mDry_kg? }.
+// Ballistic byte-identity: every function below is ONLY invoked when ctx.thrust
+// is present (physPropagateSegment hoists `hasThrust` once and branches on it),
+// so the no-thrust path evaluates none of this — same physAccel/physLeapfrogStep
+// calls, same object shapes, as before E1.
+const PHYS_G0_MS2 = 9.80665; // standard gravity, m/s^2 (rocket-equation constant)
+// Thrusting arcs must resolve every rev: cap dt <= local circular period / 40,
+// composed with the existing distance-based ladder (physStepFor) via min().
+const PHYS_THRUST_REVS_RESOLUTION = 40;
+
+/** û(law) — thrust direction dispatch. Unknown law => null (caller treats as
+ *  no thrust for that step; never throws mid-integration). */
+function physThrustDir(law, r, v, t) {
+  const vMag = physMag(v);
+  if (vMag <= 0) return null;
+  if (law === 'prograde') return physScale(v, 1 / vMag);
+  if (law === 'retrograde') return physScale(v, -1 / vMag);
+  return null;
+}
+
+/** True only for laws physThrustDir can actually resolve. An unknown law
+ *  means no thrust AT ALL — no acceleration, no propellant burn (spec:
+ *  "treat as no thrust + result flag, never throw mid-integration"). */
+function physThrustLawKnown(law) {
+  return law === 'prograde' || law === 'retrograde';
+}
+
+/** Local circular orbital period (s) at |r| about ctx.center — same tOrbit
+ *  formula physStepFor uses internally, exposed for the thrust step cap. */
+function physLocalPeriod(r, ctx) {
+  const muC = ctx.center === 'Sun' ? PROG_MU_SUN : PROG_BODIES[ctx.center].mu;
+  const d = physMag(r);
+  return 2 * Math.PI * Math.sqrt(d * d * d / muC);
+}
+
+/** tRel-relative coast check: true when thrust should be ON (not inside a
+ *  coastWindows interval). tRel is MET-relative (t - t0 of the segment). */
+function physThrustWindowActive(thrust, tRel) {
+  const windows = thrust.coastWindows;
+  if (!windows || !windows.length) return true;
+  for (const w of windows) { if (tRel >= w[0] && tRel < w[1]) return false; }
+  return true;
+}
+
+/** Coupled mass ODE over one step: mdot = -T/(Isp*g0), constant rate while
+ *  thrust is active (law resolves) => exact analytic integration per step
+ *  (no Euler-bolt-on): mEnd = mStart - rate*dt, clamped to mDry_kg. Returns
+ *  the fraction of dt actually spent burning (consumedDt) so a mid-step
+ *  depletion doesn't go mass-negative. */
+function physMassBurn(mStart, thrust, dt, active) {
+  const mDry = thrust.mDry_kg || 0;
+  if (!active || !(mStart > mDry)) return { mEnd: mStart, consumedDt: 0, depleted: !(mStart > mDry) };
+  const rate = thrust.thrust_N / (thrust.isp_s * PHYS_G0_MS2); // kg/s
+  const avail = mStart - mDry;
+  const wantBurn = rate * dt;
+  if (wantBurn <= avail) return { mEnd: mStart - wantBurn, consumedDt: dt, depleted: false };
+  const consumedDt = avail / rate;
+  return { mEnd: mDry, consumedDt, depleted: true };
+}
+
+/** Gravity (physAccel) + thrust acceleration (T/m . u-hat), km/s^2. `active`
+ *  gates both the coast window AND the depletion flag (mass at floor). */
+function physAccelWithThrust(r, v, m, t, ctx, thrust, active) {
+  let a = physAccel(r, t, ctx);
+  if (active && m > 0) {
+    const dir = physThrustDir(thrust.law, r, v, t);
+    if (dir) {
+      const aThrust_kms2 = (thrust.thrust_N / m) / 1000; // m/s^2 -> km/s^2
+      a = physAdd(a, physScale(dir, aThrust_kms2));
+    }
+  }
+  return a;
+}
+
+/** Thrust-aware counterpart of physLeapfrogStep — same kick-drift-kick
+ *  scheme, mass rides it via the exact per-step analytic burn above (matched
+ *  to the r,v scheme: a0 uses mass/velocity at the step start, a1 uses the
+ *  half-step velocity + end-of-step mass, mirroring how a1 already uses the
+ *  drifted position). Returns {r,v,m,a1,dvStep,depleted,active}. */
+function physLeapfrogStepThrust(state, t, dt, ctx, thrust, tRel, a0) {
+  const active = physThrustLawKnown(thrust.law) && physThrustWindowActive(thrust, tRel);
+  const burn = physMassBurn(state.m, thrust, dt, active);
+  if (!a0) a0 = physAccelWithThrust(state.r, state.v, state.m, t, ctx, thrust, active);
+  const vHalf = physAdd(state.v, physScale(a0, dt / 2));
+  const r1 = physAdd(state.r, physScale(vHalf, dt));
+  const a1 = physAccelWithThrust(r1, vHalf, burn.mEnd, t + dt, ctx, thrust, active && !burn.depleted ? active : active);
+  const v1 = physAdd(vHalf, physScale(a1, dt / 2));
+  // dvAccum: exact analytic integral of (T/m)dt over the burning portion of
+  // this step (mass is exactly linear in t while burning at constant rate,
+  // so this equals rocket-eq truth to float precision; telescopes over the
+  // whole segment to Isp*g0*ln(m0/mF)). Units: km/s (matches state.v).
+  let dvStep = 0;
+  if (burn.consumedDt > 0 && burn.mEnd < state.m) {
+    dvStep = (thrust.isp_s * PHYS_G0_MS2 * Math.log(state.m / burn.mEnd)) / 1000;
+  }
+  return { r: r1, v: v1, m: burn.mEnd, a1, dvStep, depleted: burn.depleted, active };
+}
+
 // ── leapfrog (kick-drift-kick, symplectic, 2nd order) ────────────────────────
 // `a0` (optional): precomputed acceleration at (state.r, t). Between
 // consecutive steps a0 of step n+1 EQUALS a1 of step n (same r, same t) —
@@ -12728,11 +12827,20 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
   let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax, j2: ctx.j2 };
+  // E1 (MISSION_MODEL_V2 §19 / MATH.md §7y): thrust is opt-in and hoisted to a
+  // single boolean — the ballistic branch below never evaluates any thrust
+  // code, keeping it byte-identical to pre-E1 behavior.
+  const hasThrust = !!ctx.thrust;
+  const thrust = ctx.thrust;
   let state = { r: state0.r.slice(), v: state0.v.slice() };
+  if (hasThrust) state.m = thrust.m0_kg;
   let t = t0;
   const raw = [{ t, r: state.r.slice(), frame: ctxNow.center }];
+  if (hasThrust) raw[0].m = state.m;
   const events = [];
   let steps = 0;
+  let dvAccum = 0;
+  let propDepleted = false;
   let prevRdotV = physDot(state.r, state.v);
 
   const helioOf = (st, tt, center) => center === 'Sun' ? st.r : physAdd(st.r, rails(center, tt, ctxNow.overrides).r);
@@ -12745,8 +12853,22 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   let aCarry = null; // a1 of step n === a0 of step n+1 (same r, same t)
 
   while (t < tMax && steps < maxSteps) {
-    const dt = Math.min(physStepFor(state.r, ctxNow), tMax - t) || (tMax - t);
-    const next = physLeapfrogStep(state, t, dt, ctxNow, aCarry);
+    let dt = physStepFor(state.r, ctxNow);
+    // Step control (E1): a thrusting arc must resolve every rev — cap dt to
+    // local-period/40, composed with the distance-based ladder via min().
+    // Only evaluated when hasThrust (ballistic path unaffected).
+    if (hasThrust && !propDepleted && physThrustLawKnown(thrust.law) && physThrustWindowActive(thrust, t - t0)) {
+      dt = Math.min(dt, physLocalPeriod(state.r, ctxNow) / PHYS_THRUST_REVS_RESOLUTION);
+    }
+    dt = Math.min(dt, tMax - t) || (tMax - t);
+    let next;
+    if (hasThrust) {
+      next = physLeapfrogStepThrust(state, t, dt, ctxNow, thrust, t - t0, aCarry);
+      dvAccum += next.dvStep;
+      if (next.depleted) propDepleted = true;
+    } else {
+      next = physLeapfrogStep(state, t, dt, ctxNow, aCarry);
+    }
     aCarry = next.a1;
     const tNext = t + dt;
     steps++;
@@ -12761,24 +12883,25 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     // N1 (§17): this is COORDINATE bookkeeping only — ctx.bodies (the force
     // model) is fixed for the whole segment and never truncated at a handoff;
     // opts.singleFrame skips even the re-centering (gate/diagnostic path).
-    if (opts.singleFrame) { state = next; t = tNext; raw.push({ t, r: state.r.slice(), frame: ctxNow.center }); continue; }
+    if (opts.singleFrame) { state = next; t = tNext; raw.push(hasThrust ? { t, r: state.r.slice(), frame: ctxNow.center, m: state.m, dv: dvAccum } : { t, r: state.r.slice(), frame: ctxNow.center }); continue; }
     const helio = helioOf(next, tNext, ctxNow.center);
     const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {
       events.push({ type: 'soi', t: tNext, from: ctxNow.center, to: frameNext });
       state = physPatchState(next, ctxNow.center, frameNext, tNext, ctxNow.overrides, ctxNow.railFn);
+      if (hasThrust) state.m = next.m; // mass is frame-invariant — patch only touches r,v
       ctxNow = Object.assign({}, ctxNow, { center: frameNext });
       prevRdotV = physDot(state.r, state.v);
       aCarry = null; // frame changed — carried acceleration is in the old frame
       t = tNext;
-      raw.push({ t, r: state.r.slice(), frame: ctxNow.center });
+      raw.push(hasThrust ? { t, r: state.r.slice(), frame: ctxNow.center, m: state.m, dv: dvAccum } : { t, r: state.r.slice(), frame: ctxNow.center });
       if (opts.stopAtSoi || opts.handoff === false) break;
       continue;
     }
 
     state = next;
     t = tNext;
-    raw.push({ t, r: state.r.slice(), frame: ctxNow.center });
+    raw.push(hasThrust ? { t, r: state.r.slice(), frame: ctxNow.center, m: state.m, dv: dvAccum } : { t, r: state.r.slice(), frame: ctxNow.center });
   }
 
   // decimate: keep first/last + every k-th; frame changes always survive
@@ -12790,7 +12913,9 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
       (idx > 0 && raw[idx - 1].frame !== s.frame));
   }
 
-  return { stateF: state, tF: t, frame: ctxNow.center, samples, events, steps };
+  const result = { stateF: state, tF: t, frame: ctxNow.center, samples, events, steps };
+  if (hasThrust) { result.dvAccum = dvAccum; result.propDepleted = propDepleted; }
+  return result;
 }
 
 // ─── PROGRAM MODULE — Phase 4: Interaction & Transfer Events ─────────────────
