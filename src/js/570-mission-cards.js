@@ -181,6 +181,30 @@ function missionSelectEvent(id, idx) {
   // view-time authority back to "state as of this event" — clear any
   // lingering manual scrub override so it doesn't silently out-rank this pick.
   if (typeof _trajViewTimeOverride !== 'undefined') delete _trajViewTimeOverride[id];
+  // Selection stickiness fix (user-reported 2026-07-15): an event belongs to
+  // a vehicle — selecting it should set/keep the active vehicle (m.vehicleId,
+  // the R5 one-selection state that drives the "Vehicles & Mission State"
+  // panel highlight AND the ring/leg emphasis in the trajectory view) as that
+  // event's vehicle. Before this fix, clicking an event card left m.vehicleId
+  // untouched at whatever it was — fine on its own, but combined with the
+  // ring/leg emitters keying "emphasized" purely off the selected event's
+  // authIdx (not vehicle identity), any UI that treated "no ring emphasized"
+  // as "no vehicle selected" read this as the vehicle de-selecting. Resolve
+  // the event's owning vehicle from its replay-time snapshot
+  // (e.activeOriginKey, stamped in missionRecompute/570-mission-replay.js) to
+  // the CURRENT live vehicle with that origin key, and adopt it. Never clears
+  // m.vehicleId to null as a side effect — if the owner can't be resolved
+  // (older data, non-vehicle event types), the previous selection is left in
+  // place rather than dropped.
+  const selEv = m.log[idx];
+  const ownerKey = selEv && selEv.activeOriginKey;
+  if (ownerKey && typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM) {
+    const vid = (m.vehicleIds || []).find(v => {
+      const fv = PROG_ACTIVE_PROGRAM.vehicles[v];
+      return fv && fv._originKey === ownerKey;
+    });
+    if (vid) m.vehicleId = vid;
+  }
   missionRenderDetail();
 }
 

@@ -21,14 +21,19 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const emphasized = !!opts.emphasized;
-  // V1 line restyle (MISSION_MODEL_V2 §18): the ACTIVE/selected ring keeps its
-  // vehicle/zone color at full weight; every other ring drops to a thin
-  // desaturated near-white low-alpha line (neutral scrim, exempt from theme
-  // chroma per CLAUDE.md) so the reference reads as "space with lit objects"
-  // rather than a wall of colored rings.
-  const strokeColor = emphasized ? (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)')) : 'rgba(255,255,255,0.42)';
-  const strokeW = emphasized ? 1.4 : 0.6;
-  const baseOpacity = emphasized ? 1 : 0.5;
+  // V1 line restyle (MISSION_MODEL_V2 §18), retoned (user report 2026-07-15,
+  // round 2 — the flat near-white unselected line AND the selected ring's
+  // direction-fade floor both still read poorly over a bright day-side globe
+  // at close zoom): SELECTED keeps its vehicle color at increased weight and
+  // a raised fade floor (see the _trajRingDirSegments floor below); UNSELECTED
+  // desaturates the vehicle's OWN color toward grey (color-mix, data-layer —
+  // not a chrome literal) instead of a fixed white, so it still reads as
+  // "this vehicle, backgrounded" rather than a generic scrim line.
+  const baseColorForMix = color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent2)');
+  const strokeColor = emphasized ? baseColorForMix : `color-mix(in srgb, ${baseColorForMix} 65%, grey 35%)`;
+  const strokeW = emphasized ? 1.75 : 0.6;
+  const baseOpacity = emphasized ? 1 : 0.4;
+  const fadeFloor = emphasized ? 0.45 : 0.25;
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
@@ -132,26 +137,31 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // opacity path per run (`opacity`, the ring's baseOpacity*lodAlpha*historyMul)
   // while the light stroke above it is split into faint->bright direction-fade
   // SEGMENTS whose own opacity (`seg.opacity`, down to a small fraction on the
-  // trailing side) further multiplies that same baseline. In every segment
-  // dimmer than the ring's flat baseline — i.e. most of the ring, by design,
-  // since the fade exists precisely to make most of it dim — the opaque black
-  // casing outshone the faded-out color, so the trailing 3/4 of a close-zoomed
-  // ring read as solid black instead of a dim vehicle-colored line (the "near-
-  // black against the globe" report). Fix: build the casing from the SAME
-  // per-segment geometry/opacity as the light pass (segOpacity), so the
-  // casing fades in lockstep and never outweighs the color drawn on top of it.
+  // trailing side) further multiplies that same baseline. Fix: build the
+  // casing from the SAME per-segment geometry/opacity as the light pass.
+  // ROUND 3 (still not visible enough / casing still reads as a separate
+  // black line beneath the color, user-reported 2026-07-15): (1) the
+  // direction-fade floor is now raised for the SELECTED ring (fadeFloor
+  // above, ~0.45 vs 0.25) so its trailing segments stay clearly visible
+  // instead of nearly vanishing; (2) the casing itself is narrower (1.8x the
+  // stroke width, was 2.5x) and capped at 0.45 opacity so it reads as a
+  // subtle dark EDGE rather than a competing black underline; (3) UNSELECTED
+  // rings drop the casing entirely — a desaturated grey line doesn't need an
+  // edge to separate it from a bright globe, and this halves the path count
+  // for every backgrounded orbit.
   const runSegs = visRuns.map(run => ({
-    run, segs: _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length))),
+    run, segs: _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length)), fadeFloor),
   }));
-  const casingPaths = runSegs.map(({ run, segs }) => {
+  const casingW = (strokeW * 1.8).toFixed(2);
+  const casingPaths = !emphasized ? '' : runSegs.map(({ run, segs }) => {
     if (!segs.length) {
       const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
-      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="${casingW}" opacity="${(opacity * 0.45).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
     }
     return segs.map(seg => {
       const segD = seg.pts.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
-      const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity).toFixed(3);
-      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
+      const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity * 0.45).toFixed(3);
+      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="${casingW}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
     }).join('');
   }).join('');
   const segPaths = runSegs.map(({ run, segs }) => {
@@ -185,14 +195,12 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   const zoom = opts.zoom || 1;
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const emphasized = !!opts.emphasized;
-  // V1 line restyle (MISSION_MODEL_V2 §18): the ACTIVE/selected ring keeps its
-  // vehicle/zone color at full weight; every other ring drops to a thin
-  // desaturated near-white low-alpha line (neutral scrim, exempt from theme
-  // chroma per CLAUDE.md) so the reference reads as "space with lit objects"
-  // rather than a wall of colored rings.
-  const strokeColor = emphasized ? (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)')) : 'rgba(255,255,255,0.42)';
-  const strokeW = emphasized ? 1.4 : 0.6;
-  const baseOpacity = emphasized ? 1 : 0.5;
+  // V1 line restyle (MISSION_MODEL_V2 §18), retoned per _trajRingSVG's round-2
+  // notes above — same SELECTED/UNSELECTED treatment, kept in sync.
+  const baseColorForMix = color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent2)');
+  const strokeColor = emphasized ? baseColorForMix : `color-mix(in srgb, ${baseColorForMix} 65%, grey 35%)`;
+  const strokeW = emphasized ? 1.75 : 0.6;
+  const baseOpacity = emphasized ? 1 : 0.4;
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label} (propagated)`;
@@ -250,10 +258,11 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
       'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
   }
   // Casing pass (MISSION_MODEL_V2 §12 addendum) — see _trajRingSVG for the
-  // rationale; same per-run dark underlay, kept in sync with that function.
-  const casingPaths = visRuns.map(run => {
+  // rationale/round-2-3 retoning; same per-run dark underlay, SELECTED-only,
+  // kept in sync with that function.
+  const casingPaths = !emphasized ? '' : visRuns.map(run => {
     const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
-    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="${(strokeW * 1.8).toFixed(2)}" opacity="${(opacity * 0.45).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
   }).join('');
   const segPaths = visRuns.map(run => {
     const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
@@ -578,10 +587,15 @@ function _trajPhysLegRender(ctx) {
   if (alpha <= 0) return '';
   const clickIdx = leg.authIdx;
   const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)"` : '';
-  const color = emphasized ? 'var(--accent)' : (leg.color || 'var(--accent2)');
-  const strokeW = emphasized ? 1.2 : 0.7;
+  // Same SELECTED/UNSELECTED retoning as the ring emitters above (kept in
+  // sync, round 2-3 user reports 2026-07-15): selected legs stay full vehicle
+  // color at a slightly heavier stroke; unselected legs desaturate their own
+  // color toward grey rather than swapping to the generic accent2 fallback.
+  const legBaseColor = leg.color || 'var(--accent2)';
+  const color = emphasized ? 'var(--accent)' : `color-mix(in srgb, ${legBaseColor} 65%, grey 35%)`;
+  const strokeW = emphasized ? 1.5 : 0.7;
   const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
-  const opacity = (alpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
+  const opacity = (alpha * (emphasized ? 1 : 0.55) * stateAlpha).toFixed(3);
   const hoverTitle = ctx.title || '';
   // R6.2.1 (round-3 item 5): the wide hit path also carries the hover-ball /
   // placement-menu affordance (5745 _trajLegHoverMove/_trajLegClick — the
@@ -595,8 +609,9 @@ function _trajPhysLegRender(ctx) {
   // occlusion-split runs case identically (poly.d already carries any 'M'
   // breaks from _trajPolylineSVG's run splitting). No dash pattern on the
   // casing itself — a solid underlay reads best regardless of the leg's
-  // planned/history dash state.
-  const casing = `<path d="${poly.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  // planned/history dash state. Narrower + capped opacity + SELECTED-only,
+  // same round-2/3 retoning as the ring casing (user-reported 2026-07-15).
+  const casing = !emphasized ? '' : `<path d="${poly.d}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="${(strokeW * 1.8).toFixed(2)}" opacity="${(alpha * 0.45 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
   let out = `${casing}<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
   // SOI handoff seams: small dashed circles where the trajectory leaves one
   // sphere of influence for another (the polyline BREAKS here by design —

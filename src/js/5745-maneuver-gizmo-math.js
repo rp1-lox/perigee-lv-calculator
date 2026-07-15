@@ -172,14 +172,20 @@ function _trajGizmoPullRate(pullPx, shiftHeld) {
 
 /** R3.5 (item 2): split a sampled ring polyline (array of {x,y} render/screen
  *  points, in DIRECTION-OF-MOTION order) into `nSeg` contiguous segments with
- *  opacity ramping from ~0.25 (trailing/behind) to 1.0 (leading edge) — KSP's
- *  "fade behind the direction of travel" cue. Returns
+ *  opacity ramping from `floor` (trailing/behind) to 1.0 (leading edge) — KSP's
+ *  "fade behind the direction of travel" cue. `floor` defaults to 0.25 (the
+ *  unselected-ring fade); the SELECTED ring passes a higher floor (~0.45, see
+ *  5743's _trajRingSVG) so the trailing 3/4 of a close-zoomed selected orbit
+ *  never fades to near-invisible over a bright day-side globe (user-reported
+ *  2026-07-15, round 2 — the previous 0.25 floor read as "color floating over
+ *  black" once the casing pass was also toned down). Returns
  *  [{pts:[{x,y},...], opacity}], oldest/faintest segment first. Empty/1-point
  *  input -> []. Pure — caller supplies already-projected points and does the
  *  actual SVG emission. */
-function _trajRingDirSegments(pts, nSeg) {
+function _trajRingDirSegments(pts, nSeg, floor) {
   if (!pts || pts.length < 2) return [];
   const n = Math.max(1, nSeg || 8);
+  const f = floor != null ? floor : 0.25;
   const totalEdges = pts.length - 1;
   const segLen = Math.max(1, Math.floor(totalEdges / n));
   const segs = [];
@@ -187,7 +193,7 @@ function _trajRingDirSegments(pts, nSeg) {
     const startIdx = s * segLen;
     const endIdx = (s === n - 1) ? totalEdges : Math.min(totalEdges, (s + 1) * segLen);
     if (endIdx <= startIdx) continue;
-    const opacity = 0.25 + (0.75 * s) / Math.max(1, n - 1);
+    const opacity = f + ((1 - f) * s) / Math.max(1, n - 1);
     segs.push({ pts: pts.slice(startIdx, endIdx + 1), opacity });
   }
   return segs;
