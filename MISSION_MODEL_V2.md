@@ -544,3 +544,23 @@ N1 (+N1b settings) first — smallest, everything stands on it; gate-proof of dy
 
 ### Sequencing & risk
 E1 first (pure physics + gate, no UI); E2 (event kind + accounting rules — the design-heavy step); E3 (pricing + rendering); E4 last (planning gizmo on top of the whole stack). Risks: perf (bounded by the compute-button contract), rendering aliasing (E3's whole job), accounting drift between Edelbaum est. and integrated truth (bounded + badged, never silent). Multi-rev step control is the one place the dt ladder gets a new rule — gate it hard.
+
+---
+
+## 20. OBLIQUITY — real spin axes (user-diagnosed 2026-07-15; spec for review)
+
+**The reported problem (user, verbatim intent):** "the Moon's plane is offset relative to its orbit, not to the equatorial" — plane-matching a KSC launch to the Moon reads UNREACHABLE (5.15 deg target vs 28.5 deg site latitude) when real KSC launches reach the Moon routinely. **Root cause:** the world frame is the ecliptic and no body has an axial tilt — Earth's equator coincides with the ecliptic in the model, so launch inclinations (equator-referenced by convention and by the site-latitude constraint) are being compared against ecliptic-frame planes. Reality: Earth's equator is tilted 23.44 deg, making the Moon's inclination TO THE EQUATOR oscillate ~18-28.6 deg — reachable from 28.5 N. Decision (user options weighed): tilt the bodies (honest), NOT inflate the Moon's ephemeris inclination (a ephemeris-corrupting hack).
+
+### O1 — spin-axis model + the launch-geometry seam
+- **Per-body spin axis** in the body table: obliquity to the ecliptic + node azimuth (v1: Earth 23.44/0 as the load-bearing entry; Mars 25.19, Saturn 26.73 — Saturn's RING tilt already hardcodes this value in the renderer, unify to the one table; Moon/others as data permits). One helper `physBodyPoleAt(body)` (static v1 — no precession; document).
+- **Authoring convention UNCHANGED (user-facing):** launch/orbit inclinations remain EQUATOR-referenced numbers (28.5 means 28.5-from-equator, as every user expects). NEW seam: one pair of transforms equator-frame <-> world(ecliptic)-frame elements (inc/LAN through the pole rotation), applied where authored elements become physics state (the physElementsToState call sites on the program side) and inverted where physics state becomes displayed elements.
+- **Plane-match/planner fixed by construction:** the Moon-plane target is computed in the EQUATOR frame (its inc-to-equator lands in the real 18-28.6 band depending on node phase) — reachable from 28.5 N most epochs; the unreachable warning stays for the epochs where it genuinely is not.
+- **FROZEN ZONES UNAFFECTED:** calculate()/evalAtPayload/destOnOrbitDV (145/160) are equator-self-consistent and never touch world frames — zero change, goldens must not move.
+- **D6 applies on the program side:** existing missions authored inc numbers keep their VALUES but the physics planes they map to rotate — mission-side numbers may legitimately move (transfer solves, plane penalties); re-verify the Gateway/Apollo seeds and re-pin with cause. modelVersion stays 2 (semantics refined, not a schema break).
+
+### O2 — rendering + frames follow the same table
+- Globe raster/spin (574) spins about the tilted pole (Earth visibly tilted — also a NASA-Eyes visual win); site markers/launch geometry ride it; N3 body-fixed frame basis = the real pole (its current z-axis spin assumption replaced); Saturn rings consume the table instead of their local constant.
+- Gate: transform round-trips (equator<->world elements), Moon inc-to-equator in [18, 28.6] across a saros-scale epoch sweep, plane-match-from-28.5N reachable at a majority of epochs, ring-tilt table consistency; goldens 145/160 byte-stable.
+
+### Sequencing & risk
+O1 first (the seam + Earth only — fixes the reported bug), O2 with it or immediately after (visual tilt is cosmetic once the table exists). RISK: the equator<->world seam is exactly one transform, but it must be applied at EVERY program-side authored-elements boundary and NOWHERE twice — audit the physElementsToState/physStateToElements call sites first and list them in MATH.md s7ac before editing. Launch-window/RAAN math (360/415) is the subtle consumer (LAN is node-on-equator now).
