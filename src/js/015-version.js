@@ -2,9 +2,14 @@
 // ─── VERSION & CHANGELOG ──────────────────────
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
-const APP_VERSION='2.0.0';
+const APP_VERSION='2.0.1';
 const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
 const APP_CHANGELOG=[
+  {v:'2.0.1', title:'Integral — analysis update', date:'2026-07-15', notes:[
+    'NEW Trade Studies sweep: Escape C3 — the classic payload-vs-C3 launch vehicle capability curve, with every metric, vehicle comparison, and CSV export. Pinned to exactly match the Orbits page escape math.',
+    'Trade-study line charts are analysis-grade now: hairline series strokes at any window size, finer gridlines, and wheel-zoom / drag-pan / double-click-reset with the y-axis auto-fitting to the zoomed window.',
+    'Vehicles page: you can finally OVERWRITE a previously saved vehicle — load it, edit, and Update in place (rename included, no duplicates), or overwrite any My-Vehicles card directly from the library. Builtins stay protected.',
+  ]},
   {v:'2.0.0', title:'Integral', date:'2026-07-03', notes:[
     'Version 2.0 of the Rocket Playground focuses primarily on integrating old elements together cohesively and fleshing out previous capabilities.',
     'One, flat, modeless menu: Go from one menu to the next, automatically taking your vehicles with you.',

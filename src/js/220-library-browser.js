@@ -72,6 +72,18 @@ function libMakeVehicleCard(p,key,isUser){
     // user LVs load directly (same as old preset list); built-ins open the detail modal
     if(isUser) loadPreset(p,key); else if(typeof openVehicleModal==='function') openVehicleModal(p); else loadPreset(p,key);
   });
+  // My-Vehicles-only: overwrite this saved entry with whatever's currently in the worksheet.
+  // Builtins never get this (isUser guards it here; libOverwriteVehicleCard refuses too).
+  if(isUser){
+    const ov=document.createElement('button');
+    ov.className='lib-vcard-overwrite';
+    ov.textContent='⟲';
+    ov.title='Overwrite "'+(p.name||'Unnamed LV')+'" with the current worksheet configuration (replaces its saved stages/config)';
+    ov.style.cssText='position:absolute;top:4px;right:4px;background:var(--panel);border:1px solid var(--border);color:var(--text-dim);font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;border-radius:2px;';
+    ov.onclick=e=>{e.stopPropagation();if(typeof libOverwriteVehicleCard==='function')libOverwriteVehicleCard(key);};
+    card.style.position='relative';
+    card.appendChild(ov);
+  }
   return card;
 }
 function libTagRow(item){
