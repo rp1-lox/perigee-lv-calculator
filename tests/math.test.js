@@ -4074,6 +4074,75 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §15 5b R3 — terminal phasing burns (567-phase-truth.js, MATH.md §7af)
+// ═══════════════════════════════════════════════════════════════════════════
+// (a) ΔP construction round-trips EXACTLY by construction: N*(P+ΔP) - N*P == dtPhase.
+// (b) dv math hand-checked against vis-viva for a Keplerian LEO case (independent
+//     re-derivation of the formula in this test, not a call into the module).
+// (c) feasibility boundary: |ΔP| just under/over PHASING_FEASIBLE_FRAC*P.
+// (d) NRHO perilune-approximation sanity: dv positive/finite, scales ~linearly
+//     with ΔP for small ΔP (first-order — vis-viva is smooth near aRef).
+{
+  const r3 = vm.runInContext(`(function(){
+    const out = {};
+    const Earth = { mu: 398600.4418, R: 6371.0 };
+    const alt = 400, rPeri_km = Earth.R + alt, rApo_km = Earth.R + alt; // circular
+    const aRef_km = (rPeri_km + rApo_km) / 2;
+    const P_s = 2 * Math.PI * Math.sqrt(Math.pow(aRef_km, 3) / Earth.mu);
+    const orbitState = { body: 'Earth', apogee: alt, perigee: alt };
+
+    // (a) round-trip identity, N=1..5
+    const dtPhase = 900; // s, a small residual offset
+    out.roundTrip = [];
+    for (let N = 1; N <= 5; N++) {
+      const plan = phasingPlanKeplerian(orbitState, dtPhase, N);
+      const identity = N * (P_s + plan.deltaP_s) - N * P_s;
+      out.roundTrip.push({ N, identity, dtPhase, feasible: plan.feasible, dv: plan.dvPerBurn_ms, wait: plan.waitTime_s });
+    }
+
+    // (b) hand vis-viva cross-check, N=1
+    const plan1 = phasingPlanKeplerian(orbitState, dtPhase, 1);
+    const deltaP = dtPhase / 1;
+    const aPhasing = Math.cbrt(Earth.mu * Math.pow(P_s + deltaP, 2) / (4 * Math.PI * Math.PI));
+    const vRef = Math.sqrt(Earth.mu * (2 / rPeri_km - 1 / aRef_km));
+    const vPhasing = Math.sqrt(Earth.mu * (2 / rPeri_km - 1 / aPhasing));
+    const dvHand_ms = Math.abs(vPhasing - vRef) * 1000;
+    out.dvHand = dvHand_ms; out.dvModule = plan1.dvPerBurn_ms;
+
+    // (c) feasibility boundary
+    const dtBig = 3 * P_s;   // even at N=5, deltaP = 0.6P > 0.5P threshold -> infeasible for every N in 1..5
+    const dtSmall = 0.1 * P_s; // N=1 -> deltaP = 0.1P < 0.5P -> feasible
+    out.infeasibleCase = phasingPlanKeplerian(orbitState, dtBig, 1).feasible;
+    out.feasibleCase = phasingPlanKeplerian(orbitState, dtSmall, 1).feasible;
+
+    // (d) NRHO perilune sanity — dv positive/finite, ~linear scaling for small dtPhase
+    const dtA = 500, dtB = 1000; // s
+    const planA = phasingPlanPropagated('nrho-nominal', dtA, 1);
+    const planB = phasingPlanPropagated('nrho-nominal', dtB, 1);
+    out.nrhoA = planA; out.nrhoB = planB;
+    out.nrhoRatio = (planA && planB && planA.dvPerBurn_ms > 0) ? (planB.dvPerBurn_ms / planA.dvPerBurn_ms) : null;
+
+    // options list — dropped when infeasible
+    out.optsFromBig = phasingOptionsFor(dtBig, null, orbitState);
+    out.optsFromSmall = phasingOptionsFor(dtPhase, null, orbitState);
+
+    return out;
+  })()`, sandbox);
+
+  for (const rt of r3.roundTrip) {
+    approx(`5b R3: ΔP construction round-trips exactly (N=${rt.N})`, rt.identity, rt.dtPhase, 1e-6);
+  }
+  approx('5b R3: Keplerian phasing dv matches hand vis-viva re-derivation', r3.dvModule, r3.dvHand, 1e-6);
+  ok('5b R3: |ΔP| well beyond half the period is flagged infeasible', r3.infeasibleCase === false);
+  ok('5b R3: |ΔP| well within half the period is flagged feasible', r3.feasibleCase === true);
+  ok('5b R3: infeasible dtPhase drops out of the N=1..5 option list entirely', r3.optsFromBig.length === 0);
+  ok('5b R3: feasible dtPhase yields at least one N option', r3.optsFromSmall.length >= 1);
+  ok('5b R3: NRHO perilune-approx dv is positive and finite', !!r3.nrhoA && r3.nrhoA.dvPerBurn_ms > 0 && isFinite(r3.nrhoA.dvPerBurn_ms));
+  ok('5b R3: NRHO perilune-approx dv scales ~linearly with ΔP for small ΔP (2x dtPhase -> ~2x dv, within 20%)',
+    r3.nrhoRatio != null && r3.nrhoRatio > 1.6 && r3.nrhoRatio < 2.4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 

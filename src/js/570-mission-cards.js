@@ -32,6 +32,7 @@ function _missionLogCardHTML(entry, id, idx) {
     <span class="mission-log-type">RENDEZVOUS</span>
     <div style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;">${entry.activeName||'?'} → matches ${entry.targetName||'?'}</div>
     ${entry.matched===false ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">// target not found on replay</div>` : ''}
+    ${_missionPhasingRowHTML(entry, id, idx)}
   </div>`;
   if (entry.type === 'TRANSFER_PROPELLANT') return `<div class="mission-log-card" style="padding:8px 14px;">
     <span class="mission-log-type">PROP XFER</span>
@@ -123,6 +124,32 @@ function _missionLogCardHTML(entry, id, idx) {
   </div>`;
 }
 
+// 5b R3 (MATH.md §7af): "+ PHASE" affordance, placed WITH the amber finding
+// it fixes (572's 'rendezvous-phase-error') rather than as a separate control
+// somewhere else. Only rendered when the RENDEZVOUS actually has an
+// out-of-window phase error (entry.matched && entry.phase.capture===false) —
+// a clean rendezvous renders '' here, same "unchanged card" discipline R2's
+// arrival-options row follows. Shows N=1..5 options as chips; picking one
+// authors the two-impulse burn pair via missionAddPhasingBurns (570-mission-
+// events.js) which inserts BEFORE this RENDEZVOUS event and recomputes.
+function _missionPhasingRowHTML(entry, id, idx) {
+  if (!(entry.matched && entry.phase && entry.phase.capture === false && id != null && idx != null)) return '';
+  if (typeof phasingPlanPropagated !== 'function') return '';
+  const tgt = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM.vehicles) ? PROG_ACTIVE_PROGRAM.vehicles[entry.targetVehId] : null;
+  const os = tgt ? tgt.orbitState : null;
+  const refId = (os && os.propagated) ? os.refId : null;
+  const opts = (typeof phasingOptionsFor === 'function') ? phasingOptionsFor(entry.phase.dt_s, refId, refId ? null : os) : [];
+  if (!opts.length) return '';
+  const chips = opts.map(o => {
+    const dvTxt = o.dvPerBurn_ms.toFixed(1);
+    const waitTxt = (o.waitTime_s / 86400).toFixed(1);
+    return `<button type="button" class="act-btn" style="font-size:9px;margin:0 4px 4px 0;" onclick="event.stopPropagation();missionAddPhasingBurns('${id}',${idx},${o.N})">N=${o.N} &middot; 2&times;${dvTxt} m/s &middot; wait ${waitTxt}d</button>`;
+  }).join('');
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="font-family:var(--mono);font-size:9px;color:var(--warn);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">+ Phase &mdash; two-impulse phasing burns (closes the amber above)</div>
+    <div>${chips}</div>
+  </div>`;
+}
 
 
 function missionDeleteEvent(id, idx) {

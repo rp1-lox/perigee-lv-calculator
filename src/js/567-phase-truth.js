@@ -101,7 +101,17 @@ function phaseTruthPropagated(osA, osB, metNow) {
   const nB = _phaseNearestT(osB.refId, pB.r, pB.t);
   if (!nA || !nB) return null;
   const P = nA.period_s;
-  const dt = _phaseWrapDt(nA.tPhase - nB.tPhase, P);
+  // 5b R3 (MATH.md §7af): os._phaseOffsetS is an OPTIONAL stamped clock
+  // correction — the recorded, guaranteed effect of an authored phasing-
+  // burn pair (missionAddPhasingBurns / 570-mission-replay.js's BURN
+  // branch), applied AFTER the geometric nearest-point search (never fed
+  // into the search itself — the vehicle's real position is unaffected;
+  // only its along-track CLOCK reading advances/retards by the burn pair's
+  // construction). Zero (the default, no phasing authored) reproduces R1's
+  // original math exactly.
+  const tA = nA.tPhase + (osA._phaseOffsetS || 0);
+  const tB = nB.tPhase + (osB._phaseOffsetS || 0);
+  const dt = _phaseWrapDt(tA - tB, P);
   // Distance equivalent: the ACTUAL chord between the two vehicles' real
   // current position vectors — exact (no linearization), since we already
   // have both real r's in hand for this path. (The Δt×local-speed framing is
@@ -171,4 +181,85 @@ function _phaseFmtDistKm(distKm) {
 function _phaseChipText(phase) {
   if (!phase) return '';
   return `&Delta;&phi; ${_phaseFmtDt(phase.dt_s)} &middot; ${_phaseFmtDistKm(phase.distKm)}`;
+}
+
+// ─── 5b R3 (MATH.md §7af) — terminal two-impulse phasing burns ─────────────
+// Classic phasing-orbit construction: given a residual along-track offset
+// Δt_phase (R1's own measurement) and a user-chosen rev count N (1-5), the
+// phasing orbit's period is offset by ΔP = Δt_phase / N so that after N revs
+// the phasing vehicle has drifted exactly Δt_phase relative to the ref —
+// closing the gap by construction (see MATH.md §7af for why this "the
+// target also moves" concern is a non-issue: Δt_phase is ALREADY the
+// relative offset between the two clocks, not an absolute position).
+// Burn happens at periapsis (perilune for the NRHO case) both ways: raise/
+// lower the OTHER apsis to retime the period, then undo it N revs later.
+const PHASING_MAX_N = 5;
+// |ΔP| must stay under this fraction of the reference period or the
+// "phasing orbit" is no longer a sane perturbation of the parked orbit
+// (e.g. an inverted or near-degenerate ellipse) — a documented, un-derived
+// round-number guard, same discipline as NRHO_PHASE_DV_BAND (§7ae critique 96).
+const PHASING_FEASIBLE_FRAC = 0.5;
+
+// Pure construction, shared by both the propagated (NRHO) and Keplerian
+// callers below: given the reference orbit's period P_s and periapsis
+// radius rPeri_km (both about a body of gravitational parameter mu,
+// km^3/s^2), retime by deltaP_s = dtPhase_s / N via a periapsis-tangent
+// burn that changes ONLY the period (vis-viva at the fixed periapsis
+// radius — the two-body approximation the spec calls for; honest even
+// when the reference orbit is itself a 3-body NRHO, see MATH.md §7af).
+function physPhasingSolve(P_s, dtPhase_s, N, mu, rPeri_km) {
+  if (!(P_s > 0) || !(N >= 1) || !(mu > 0) || !(rPeri_km > 0)) return null;
+  const aRef_km = Math.cbrt(mu * P_s * P_s / (4 * Math.PI * Math.PI));
+  const deltaP_s = dtPhase_s / N;
+  const feasible = Math.abs(deltaP_s) < PHASING_FEASIBLE_FRAC * P_s && (rPeri_km < 2 * aRef_km);
+  const aPhasing_km = Math.cbrt(mu * Math.pow(P_s + deltaP_s, 2) / (4 * Math.PI * Math.PI));
+  const vPeriRef_kms = Math.sqrt(mu * (2 / rPeri_km - 1 / aRef_km));
+  const vPeriPhasing_kms = Math.sqrt(mu * (2 / rPeri_km - 1 / aPhasing_km));
+  const dvPerBurn_ms = Math.abs(vPeriPhasing_kms - vPeriRef_kms) * 1000;
+  const waitTime_s = N * (P_s + deltaP_s);
+  return { N, deltaP_s, aRef_km, aPhasing_km, dvPerBurn_ms, dvTotal_ms: dvPerBurn_ms * 2, waitTime_s, feasible };
+}
+
+// Propagated-ref (NRHO) construction: rPeri_km comes straight off the
+// catalog's own MEASURED peri/apo fields (425's refOrbitResolve — the same
+// "approximate, not Keplerian truth" numbers R1/R2 already treat as ground
+// truth for this orbit; nothing new is measured here). aRef_km is derived
+// from the period via Kepler's third law rather than from (peri+apo)/2,
+// since the period is the one number this whole construction must hit
+// exactly (peri/apo are secondary, approximate labels on a 3-body orbit).
+function phasingPlanPropagated(refId, dtPhase_s, N, muBody) {
+  const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
+  if (!res || res.kind !== 'propagated' || !res.period_s || !(res.peri > 0)) return null;
+  const mu = muBody || (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[res.body] && PROG_BODIES[res.body].mu);
+  if (!mu) return null;
+  return physPhasingSolve(res.period_s, dtPhase_s, N, mu, res.peri);
+}
+
+// Keplerian construction: textbook, same physPhasingSolve, periapsis radius
+// and period derived from the classical orbitState's own peri/apo altitudes
+// (360's progMakeOrbitalState convention: apogee/perigee are ALTITUDES above
+// the body's surface).
+function phasingPlanKeplerian(orbitState, dtPhase_s, N) {
+  if (!orbitState || typeof PROG_BODIES === 'undefined') return null;
+  const b = PROG_BODIES[orbitState.body];
+  if (!b) return null;
+  const rPeri_km = b.R + (orbitState.perigee ?? 0);
+  const rApo_km = b.R + (orbitState.apogee ?? 0);
+  const aRef_km = (rPeri_km + rApo_km) / 2;
+  const P_s = 2 * Math.PI * Math.sqrt(Math.pow(aRef_km, 3) / b.mu);
+  return physPhasingSolve(P_s, dtPhase_s, N, b.mu, rPeri_km);
+}
+
+// UI-facing: the N=1..5 option list for a given residual phase error, either
+// against a propagated ref (refId given) or a Keplerian orbitState. Drops
+// infeasible (|ΔP| too large) options rather than showing a nonsense burn.
+function phasingOptionsFor(dtPhase_s, refId, orbitState, muBody) {
+  const out = [];
+  for (let N = 1; N <= PHASING_MAX_N; N++) {
+    const plan = refId
+      ? phasingPlanPropagated(refId, dtPhase_s, N, muBody)
+      : phasingPlanKeplerian(orbitState, dtPhase_s, N);
+    if (plan && plan.feasible) out.push(plan);
+  }
+  return out;
 }

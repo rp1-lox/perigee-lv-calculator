@@ -375,6 +375,18 @@ function missionRecompute(m) {
       const res = _missionApplyBurn(active, e.burnType, e.burnParam, e.stageId);
       e.dvTarget = res.dvTarget; e.dv_actual = res.dv_actual; e.prop_consumed = res.prop_consumed;
       e.burnLabel = res.burnLabel; e.result = res.result;
+      // 5b R3 (MATH.md §7af): a phasing burn (missionAddPhasingBurns, 570-
+      // mission-events.js) stamps _phaseOffsetDelta on its CLOSING burn — the
+      // construction's guaranteed effect (after N revs on the retimed
+      // period, the vehicle's along-track clock has shifted by exactly the
+      // residual it was built to cancel). CUSTOM burns don't otherwise touch
+      // orbitState/r (no re-propagation happens here, honestly — see §7af),
+      // so this is the one place that effect is recorded: a stamped clock
+      // correction 567's phase-truth machinery reads (_phaseVehiclePoint),
+      // not a hidden fudge on the measured phase itself.
+      if (e._phaseOffsetDelta != null && res.result !== 'FAILED' && active.orbitState && active.orbitState.propagated) {
+        active.orbitState = { ...active.orbitState, _phaseOffsetS: (active.orbitState._phaseOffsetS || 0) + e._phaseOffsetDelta };
+      }
       e.orbitAfter = active.orbitState ? { ...active.orbitState } : null;
       // TOF for the underlying transfer type — Hohmann/TLI/LOI legs have a coast;
       // CIRC (apoapsis burn, no leg of its own) / PLANE_CHANGE / CUSTOM are impulsive.

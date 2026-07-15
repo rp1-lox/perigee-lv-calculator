@@ -37,6 +37,48 @@ function missionExecBurn(id) {
   missionRenderDetail();
 }
 
+// 5b R3 (MATH.md §7af): author the classic two-impulse phasing burn PAIR
+// against a RENDEZVOUS event whose measured phase error (567's phaseTruth,
+// 572's amber finding) is out of the capture window. Decision (documented in
+// MATH.md §7af): authored as TWO plain BURN log entries (burnType:'CUSTOM',
+// the sanctioned manual-ΔV lane — same path a user picks from the burn-type
+// dropdown), inserted BEFORE the RENDEZVOUS entry, pushed together and
+// recomputed ONCE so they land as a single undo capture (575's dedupe keys
+// off the recompute call, not the log-push count) — not a new event TYPE,
+// since the two burns are ordinary budget-charged impulses with nothing
+// rendezvous-specific about their execution; only the AUTHORING affordance
+// (570-mission-cards.js's _missionPhasingRowHTML) is rendezvous-specific.
+// Timing: the rendezvous's own MET/duration is NOT auto-shifted (documented
+// choice — see §7af "Timing semantics"); the wait time is shown on the chip
+// and in the burn notes so the user can adjust the rendezvous timing/
+// duration themselves via the existing duration-override field if desired.
+function missionAddPhasingBurns(id, idx, N) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'RENDEZVOUS' || !e.phase) return;
+  const tgt = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM.vehicles) ? PROG_ACTIVE_PROGRAM.vehicles[e.targetVehId] : null;
+  const os = tgt ? tgt.orbitState : null;
+  const refId = (os && os.propagated) ? os.refId : null;
+  const plan = refId
+    ? (typeof phasingPlanPropagated === 'function' ? phasingPlanPropagated(refId, e.phase.dt_s, N) : null)
+    : (typeof phasingPlanKeplerian === 'function' ? phasingPlanKeplerian(os, e.phase.dt_s, N) : null);
+  if (!plan || !plan.feasible) return;
+  const waitLabel = `${Math.round(plan.waitTime_s).toLocaleString()}s`;
+  const burn1 = { type: 'BURN', burnType: 'CUSTOM', burnParam: plan.dvPerBurn_ms, stageId: null,
+    activeKey: e.activeKey, activeName: e.activeName,
+    note: `Phasing burn 1/2 (N=${N}, ${waitLabel} wait) — est. lane, two-body approx at periapsis (MATH.md §7af)` };
+  const burn2 = { type: 'BURN', burnType: 'CUSTOM', burnParam: plan.dvPerBurn_ms, stageId: null,
+    activeKey: e.activeKey, activeName: e.activeName,
+    // the closing burn is where the construction's guaranteed clock
+    // correction lands (see 570-mission-replay.js's BURN branch + 567's
+    // _phaseVehiclePoint, MATH.md §7af) — cancels exactly the residual this
+    // pair was built against, by construction.
+    _phaseOffsetDelta: -e.phase.dt_s,
+    note: `Phasing burn 2/2 (N=${N}) — closes the phasing orbit back onto the reference` };
+  m.log.splice(idx, 0, burn1, burn2);
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 function missionExecLowThrust(id) {
   const m = _missionGet(id);
   if (!m || !m.vehicleId) return;
