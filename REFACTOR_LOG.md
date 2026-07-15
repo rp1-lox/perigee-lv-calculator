@@ -77,3 +77,27 @@ Also noted: entry [1] is dated 2026-07-10; it was written 2026-07-11.
 **Deleted**: none.
 **Verified**: 86 JS modules total 1,517,472 source bytes / 25,650 lines; `lv_calc.html` is 1,652,778 bytes and gzip-compresses to 478,127 bytes (3.46×). Largest modules: `570-mission-manager.js` 272,573 bytes; `574-trajectory-view.js` 183,985; `220-launch-sites.js` 158,478; `5745-maneuver-gizmo.js` 96,978; `565-physics-mission.js` 70,030. Built-artifact exact-name counts: `progBodyWorldPosCalibrated` 11 (not dead); `_trajGizmoClampCross` 3 and `_trajGizmoDragComponentValue` 3 (candidate non-live-path helpers, but gate-pinned); `_missionEventDetailHTML` 0; removed plain-disc LOD identifiers have no executable occurrence. A singleton scan found 38 top-level function definitions whose exact name appears once in `lv_calc.html`; this is a candidate list only, not proof for frozen/test-facing functions. Source comments occupy 331,094 bytes and are explicitly retained for readability.
 **Risk notes**: Candidate removal requires an individual evidence review: a singleton can still be intentional/test-facing, and frozen physics zones remain out of scope. The calibrated-position alias is used by trajectory/gizmo rendering and cannot be removed as dead code. No profiling finding is logged yet; the required realistic scenario measurements precede any performance optimization proposal.
+
+## [8] Overnight orchestration — baseline fingerprint + 570 continued-split plan — 2026-07-15
+**Intent**: Resume the approved 570 split (siblings core-state/event-model/interaction-state/lifecycle already landed). Extract the remaining large concern-blocks from `570-mission-manager.js` (5,067 lines) as move-only contiguous cuts. Opus orchestrator; Sonnet subagents do the mechanical moves one at a time.
+**Type**: baseline record (no production code changed by this entry).
+**Behavior fingerprint (baseline, deterministic; every number must be reproduced post-refactor)**:
+- Apollo `devSeedApolloMission({force:true})`: logLen=3; budget dvCapacityRemaining=6044, dvExpended=12372, payloadMass=45078, propConsumed=2678494.
+- Gateway `devSeedGatewayMission({force:true})`: logLen=4; budget dvCapacityRemaining=6078, dvExpended=15064, payloadMass=45078, propConsumed=2714165; NRHO leg[0] missKm=30.1135.
+- Zero console errors. Gate: 772 passed / 0 failed. Built lv_calc.html = 2,410,170 chars / 33,227 lines.
+**Planned 570 extractions (contiguous, def-only; load-order among def-only modules is behavior-irrelevant, verified: no top-level load-time execution in 570 beyond declarations)**:
+- `570-mission-nodemap.js` <- _missionCustomNodes..missionNmDragEnd (incl. PROG_BODY_COLORS/ATMOSPHERE/RINGS consts; PROG_BODY_COLORS is cross-referenced by 574, which loads later — order safe).
+- `570-mission-band.js` <- _missionAltToYFrac.._missionBandViewHTML (band model/view, add-event dock, mnode editing, exportPNG).
+- `570-mission-replay.js` <- _missionResolveDisplayNames..missionRecompute (the replay engine the guide names).
+- `570-mission-cards.js` <- _missionLogCardHTML.._missionEventEditFieldsHTML (event cards + inline editing).
+Each move updates the `tests/math.test.js` FILES list in the same commit.
+
+## [9] 570 split A — extract node-map + band view — 2026-07-15
+**Intent**: First extraction phase of the continued 570 split: move the two largest self-contained view subsystems out of the manager remainder.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/570-mission-manager.js` (5,290 → 3,743 lines) → new `src/js/570-mission-nodemap.js` (699 lines: _missionCustomNodes..missionNmDragEnd incl. PROG_BODY_COLORS/ATMOSPHERE/RINGS) and new `src/js/570-mission-band.js` (874 lines: _missionAltToYFrac.._missionBandViewHTML incl. band palette/zone consts, Add-Event dock, MNODE authoring, PNG export). `tests/math.test.js` FILES list gained both new modules between lifecycle and manager.
+**Subagent**: one Sonnet subagent, single pass, both extractions. Outcome: clean; manager -1547 lines, new files +1547 content lines (matches); normalized 2 cosmetic double-blank-lines at the cut boundaries (whitespace only). 0 U+FFFD; box-drawing banner chars preserved.
+**Behavior delta**: none. Fingerprint AFTER == baseline: Apollo logLen=3 (LAUNCH,MNODE,MNODE), dvCapacityRemaining=6044/dvExpended=12372/payloadMass=45078/propConsumed=2678494; Gateway logLen=4, dvCapacityRemaining=6078/dvExpended=15064/payloadMass=45078/propConsumed=2714165, NRHO leg[0] missKm=30.1135. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` → 772 passed, 0 failed; node --check ok; U+FFFD guard ok. Each moved function present exactly once across src/js. Browser fingerprint on rebuilt artifact identical to baseline.
+**Risk notes**: PROG_BODY_COLORS/ATMOSPHERE/RINGS moved into 570-mission-nodemap.js; consumed at runtime by 574 (loads later) and the node map — safe (def-only, no load-time execution). No frozen functions, persisted fields, replay hooks, or physics numerics touched.
