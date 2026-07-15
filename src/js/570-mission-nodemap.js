@@ -239,6 +239,63 @@ function _missionOrientationBadge(n, missionId) {
   return ` — default (&Omega;=0)`;
 }
 
+// §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
+// (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
+// between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
+// the transit node itself is never drawn. Minimal-log-change: m.log keeps its
+// two MANEUVER entries; only this extraction merges them for display. A
+// maneuver into/out of a transit node that does NOT chain to a dwell on both
+// ends (e.g. authored but not yet continued) is simply not drawn as a
+// stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
+//
+// U1 (§12 Plan rail): factored OUT of _missionNodeMapHTML's edgesHTML block so
+// the Plan rail (5749-plan-rail.js) can reuse the SAME pair/chip data instead
+// of re-deriving it — data only, no SVG/DOM. Returns { pairs, chipsByKey }
+// exactly as the full node map consumed inline before this extraction.
+function _missionNmEdgePairs(m, byId) {
+  const isTransitId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type === 'transit'); };
+  const isDwellId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type !== 'transit' && n.orbit.type !== 'escape' && n.orbit.type !== 'surface'); };
+  const bodyOf = nid => { const n = byId[nid]; return n && n.orbit && (n.orbit.destination || n.orbit.body); };
+  const legs = [];
+  m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.fromNode && e.toNode && e.fromNode !== e.toNode) legs.push({ e, i }); });
+
+  const pairs = {};
+  const chipsByKey = {};
+  const usedLegs = new Set();
+  for (let li = 0; li < legs.length; li++) {
+    if (usedLegs.has(li)) continue;
+    const { e, i } = legs[li];
+    if (isDwellId(e.fromNode) && isTransitId(e.toNode)) {
+      const arrival = legs.slice(li + 1).find((l, off) => !usedLegs.has(li + 1 + off) && l.e.fromNode === e.toNode && isDwellId(l.e.toNode));
+      if (arrival) {
+        usedLegs.add(li); usedLegs.add(legs.indexOf(arrival));
+        const lo = e.fromNode, hi = arrival.e.toNode;
+        const k = lo + '::' + hi + '::t';
+        const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
+        // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
+        // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
+        // not the generic same-body arrival name (LOI) — it's a distinct
+        // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
+        const arrNode = byId[arrival.e.toNode];
+        const arrName = (arrNode && arrNode.orbitRefId) ? 'NRHO insertion' : names.arr;
+        pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
+        chipsByKey[k] = [
+          { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
+          { name: arrName, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
+        ];
+        continue;
+      }
+    }
+    if (isTransitId(e.fromNode) || isTransitId(e.toNode)) continue;   // unpaired transit leg — no stop-to-stop line
+    const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
+    const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
+    const k = lo + '::' + hi;
+    if (!pairs[k]) pairs[k] = { lo, hi, loToHi: null, hiToLo: null };
+    if (e.fromNode === lo) pairs[k].loToHi = i; else pairs[k].hiToLo = i;
+  }
+  return { pairs, chipsByKey };
+}
+
 function _missionNodeMapHTML(m) {
   const id = m.missionId;
   const path = _missionNodePath(m);
@@ -304,54 +361,7 @@ function _missionNodeMapHTML(m) {
   const radiusOf = n => surfR[n.id] || n.r || 16;
   let edgesHTML = '';
   {
-    // §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
-    // (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
-    // between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
-    // the transit node itself is never drawn (see the nodes loop below). Minimal-
-    // log-change: m.log keeps its two MANEUVER entries; only this extraction merges
-    // them for display. A maneuver into/out of a transit node that does NOT chain to
-    // a dwell on both ends (e.g. authored but not yet continued) is simply not drawn
-    // as a stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
-    const isTransitId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type === 'transit'); };
-    const isDwellId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type !== 'transit' && n.orbit.type !== 'escape' && n.orbit.type !== 'surface'); };
-    const bodyOf = nid => { const n = byId[nid]; return n && n.orbit && (n.orbit.destination || n.orbit.body); };
-    const legs = [];
-    m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.fromNode && e.toNode && e.fromNode !== e.toNode) legs.push({ e, i }); });
-
-    const pairs = {};
-    const chipsByKey = {};
-    const usedLegs = new Set();
-    for (let li = 0; li < legs.length; li++) {
-      if (usedLegs.has(li)) continue;
-      const { e, i } = legs[li];
-      if (isDwellId(e.fromNode) && isTransitId(e.toNode)) {
-        const arrival = legs.slice(li + 1).find((l, off) => !usedLegs.has(li + 1 + off) && l.e.fromNode === e.toNode && isDwellId(l.e.toNode));
-        if (arrival) {
-          usedLegs.add(li); usedLegs.add(legs.indexOf(arrival));
-          const lo = e.fromNode, hi = arrival.e.toNode;
-          const k = lo + '::' + hi + '::t';
-          const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
-          // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
-          // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
-          // not the generic same-body arrival name (LOI) — it's a distinct
-          // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
-          const arrNode = byId[arrival.e.toNode];
-          const arrName = (arrNode && arrNode.orbitRefId) ? 'NRHO insertion' : names.arr;
-          pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
-          chipsByKey[k] = [
-            { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
-            { name: arrName, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
-          ];
-          continue;
-        }
-      }
-      if (isTransitId(e.fromNode) || isTransitId(e.toNode)) continue;   // unpaired transit leg — no stop-to-stop line
-      const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
-      const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
-      const k = lo + '::' + hi;
-      if (!pairs[k]) pairs[k] = { lo, hi, loToHi: null, hiToLo: null };
-      if (e.fromNode === lo) pairs[k].loToHi = i; else pairs[k].hiToLo = i;
-    }
+    const { pairs, chipsByKey } = _missionNmEdgePairs(m, byId);
     for (const k in pairs) {
       const p = pairs[k];
       const A = byId[p.lo], B = byId[p.hi];

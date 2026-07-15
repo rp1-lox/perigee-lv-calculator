@@ -204,6 +204,30 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-left-budget{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);margin-top:auto;}
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;}
+/* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
+   compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
+.mcc-view-row{flex:1;min-height:0;min-width:0;display:flex;flex-direction:row;}
+.mcc-view-row .mcc-view-area{padding:0 10px;}
+.mcc-plan-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;transition:flex-basis .15s ease,width .15s ease;}
+.mcc-plan-rail.collapsed{flex:0 0 20px;width:20px;overflow:hidden;}
+.pr-toggle{flex-shrink:0;width:100%;background:var(--input);border:none;border-bottom:1px solid var(--border);color:var(--text-dim);cursor:pointer;font-family:var(--mono);font-size:11px;padding:4px 0;text-align:center;}
+.pr-toggle:hover{color:var(--text-bright);background:var(--accent-tint-faint);}
+.pr-body{flex:1;min-height:0;overflow-y:auto;padding:6px 6px 14px;}
+.pr-zone-hdr{font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--text-dim);margin:10px 0 4px;padding-left:2px;}
+.pr-zone-hdr:first-child{margin-top:2px;}
+.pr-node{border:1.5px solid var(--border-bright);border-radius:4px;padding:4px 7px;margin-bottom:5px;cursor:pointer;background:var(--input);}
+.pr-node:hover{border-color:var(--accent);background:var(--accent-tint-faint);}
+.pr-node.pr-active{border-color:var(--accent);background:var(--accent-tint-soft);}
+.pr-node.pr-from{border-color:var(--accent2);}
+.pr-node-label{font-family:var(--mono);font-size:10px;color:var(--text-bright);display:flex;align-items:center;gap:4px;}
+.pr-node-sub{font-family:var(--mono);font-size:8.5px;color:var(--text-dim);margin-top:1px;}
+.pr-ref-marker{color:var(--accent3);}
+.pr-edge{display:flex;flex-direction:column;align-items:center;gap:1px;margin:1px 0 5px;cursor:pointer;}
+.pr-edge-line{width:2px;height:14px;background:var(--accent);opacity:.7;}
+.pr-edge-chip{font-family:var(--mono);font-size:8px;color:var(--accent);border:1px solid var(--accent);border-radius:8px;padding:1px 6px;background:var(--bg);white-space:nowrap;}
+.pr-edge:hover .pr-edge-chip{background:var(--accent-tint-faint);}
+.pr-edge:hover .pr-edge-line{opacity:1;}
+.pr-empty{font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:8px 4px;}
 /* node map root is pinned to the view area so the (potentially huge) SVG can
    never grow the box — .nm-scroll always has a bounded size and scrolls. */
 .nm-root{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;min-width:0;}

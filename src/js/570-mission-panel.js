@@ -163,15 +163,18 @@ function missionSetView(id, mode) {
 function _missionSaveScroll() {
   const nm  = document.querySelector('.mcc-view-area .nm-scroll');
   const va  = document.querySelector('.mcc-view-area');
+  const pr  = document.querySelector('.mcc-plan-rail .pr-body');   // U1: Plan rail (5749)
   const doc = document.scrollingElement || document.documentElement;
   return { nmL: nm ? nm.scrollLeft : 0, nmT: nm ? nm.scrollTop : 0,
            vaL: va ? va.scrollLeft : 0, vaT: va ? va.scrollTop : 0,
+           prT: pr ? pr.scrollTop : 0,
            docT: doc ? doc.scrollTop : 0, docL: doc ? doc.scrollLeft : 0 };
 }
 function _missionRestoreScroll(s) {
   if (!s) return;
   const nm  = document.querySelector('.mcc-view-area .nm-scroll'); if (nm) { nm.scrollLeft = s.nmL; nm.scrollTop = s.nmT; }
   const va  = document.querySelector('.mcc-view-area'); if (va) { va.scrollLeft = s.vaL; va.scrollTop = s.vaT; }
+  const pr  = document.querySelector('.mcc-plan-rail .pr-body'); if (pr) pr.scrollTop = s.prT || 0;
   const doc = document.scrollingElement || document.documentElement; if (doc) { doc.scrollTop = s.docT; doc.scrollLeft = s.docL; }
 }
 

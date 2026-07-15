@@ -211,6 +211,30 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-left-budget{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--border);margin-top:auto;}
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;}
+/* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
+   compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
+.mcc-view-row{flex:1;min-height:0;min-width:0;display:flex;flex-direction:row;}
+.mcc-view-row .mcc-view-area{padding:0 10px;}
+.mcc-plan-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;transition:flex-basis .15s ease,width .15s ease;}
+.mcc-plan-rail.collapsed{flex:0 0 20px;width:20px;overflow:hidden;}
+.pr-toggle{flex-shrink:0;width:100%;background:var(--input);border:none;border-bottom:1px solid var(--border);color:var(--text-dim);cursor:pointer;font-family:var(--mono);font-size:11px;padding:4px 0;text-align:center;}
+.pr-toggle:hover{color:var(--text-bright);background:var(--accent-tint-faint);}
+.pr-body{flex:1;min-height:0;overflow-y:auto;padding:6px 6px 14px;}
+.pr-zone-hdr{font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--text-dim);margin:10px 0 4px;padding-left:2px;}
+.pr-zone-hdr:first-child{margin-top:2px;}
+.pr-node{border:1.5px solid var(--border-bright);border-radius:4px;padding:4px 7px;margin-bottom:5px;cursor:pointer;background:var(--input);}
+.pr-node:hover{border-color:var(--accent);background:var(--accent-tint-faint);}
+.pr-node.pr-active{border-color:var(--accent);background:var(--accent-tint-soft);}
+.pr-node.pr-from{border-color:var(--accent2);}
+.pr-node-label{font-family:var(--mono);font-size:10px;color:var(--text-bright);display:flex;align-items:center;gap:4px;}
+.pr-node-sub{font-family:var(--mono);font-size:8.5px;color:var(--text-dim);margin-top:1px;}
+.pr-ref-marker{color:var(--accent3);}
+.pr-edge{display:flex;flex-direction:column;align-items:center;gap:1px;margin:1px 0 5px;cursor:pointer;}
+.pr-edge-line{width:2px;height:14px;background:var(--accent);opacity:.7;}
+.pr-edge-chip{font-family:var(--mono);font-size:8px;color:var(--accent);border:1px solid var(--accent);border-radius:8px;padding:1px 6px;background:var(--bg);white-space:nowrap;}
+.pr-edge:hover .pr-edge-chip{background:var(--accent-tint-faint);}
+.pr-edge:hover .pr-edge-line{opacity:1;}
+.pr-empty{font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:8px 4px;}
 /* node map root is pinned to the view area so the (potentially huge) SVG can
    never grow the box — .nm-scroll always has a bounded size and scrolls. */
 .nm-root{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;min-width:0;}
@@ -21719,7 +21743,9 @@ function missionRenderDetail() {
             </div>
           </div>
         </div>
-        <div class="mcc-view-area">${view}</div>
+        ${_missionViewMode !== 'nodemap' && typeof _planRailHTML === 'function'
+          ? `<div class="mcc-view-row">${_planRailHTML(m)}<div class="mcc-view-area">${view}</div></div>`
+          : `<div class="mcc-view-area">${view}</div>`}
       </div>
 
       <!-- RIGHT COLUMN — events (list on top, Add Event docked at the bottom) -->
@@ -22805,6 +22831,63 @@ function _missionOrientationBadge(n, missionId) {
   return ` — default (&Omega;=0)`;
 }
 
+// §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
+// (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
+// between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
+// the transit node itself is never drawn. Minimal-log-change: m.log keeps its
+// two MANEUVER entries; only this extraction merges them for display. A
+// maneuver into/out of a transit node that does NOT chain to a dwell on both
+// ends (e.g. authored but not yet continued) is simply not drawn as a
+// stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
+//
+// U1 (§12 Plan rail): factored OUT of _missionNodeMapHTML's edgesHTML block so
+// the Plan rail (5749-plan-rail.js) can reuse the SAME pair/chip data instead
+// of re-deriving it — data only, no SVG/DOM. Returns { pairs, chipsByKey }
+// exactly as the full node map consumed inline before this extraction.
+function _missionNmEdgePairs(m, byId) {
+  const isTransitId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type === 'transit'); };
+  const isDwellId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type !== 'transit' && n.orbit.type !== 'escape' && n.orbit.type !== 'surface'); };
+  const bodyOf = nid => { const n = byId[nid]; return n && n.orbit && (n.orbit.destination || n.orbit.body); };
+  const legs = [];
+  m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.fromNode && e.toNode && e.fromNode !== e.toNode) legs.push({ e, i }); });
+
+  const pairs = {};
+  const chipsByKey = {};
+  const usedLegs = new Set();
+  for (let li = 0; li < legs.length; li++) {
+    if (usedLegs.has(li)) continue;
+    const { e, i } = legs[li];
+    if (isDwellId(e.fromNode) && isTransitId(e.toNode)) {
+      const arrival = legs.slice(li + 1).find((l, off) => !usedLegs.has(li + 1 + off) && l.e.fromNode === e.toNode && isDwellId(l.e.toNode));
+      if (arrival) {
+        usedLegs.add(li); usedLegs.add(legs.indexOf(arrival));
+        const lo = e.fromNode, hi = arrival.e.toNode;
+        const k = lo + '::' + hi + '::t';
+        const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
+        // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
+        // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
+        // not the generic same-body arrival name (LOI) — it's a distinct
+        // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
+        const arrNode = byId[arrival.e.toNode];
+        const arrName = (arrNode && arrNode.orbitRefId) ? 'NRHO insertion' : names.arr;
+        pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
+        chipsByKey[k] = [
+          { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
+          { name: arrName, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
+        ];
+        continue;
+      }
+    }
+    if (isTransitId(e.fromNode) || isTransitId(e.toNode)) continue;   // unpaired transit leg — no stop-to-stop line
+    const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
+    const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
+    const k = lo + '::' + hi;
+    if (!pairs[k]) pairs[k] = { lo, hi, loToHi: null, hiToLo: null };
+    if (e.fromNode === lo) pairs[k].loToHi = i; else pairs[k].hiToLo = i;
+  }
+  return { pairs, chipsByKey };
+}
+
 function _missionNodeMapHTML(m) {
   const id = m.missionId;
   const path = _missionNodePath(m);
@@ -22870,54 +22953,7 @@ function _missionNodeMapHTML(m) {
   const radiusOf = n => surfR[n.id] || n.r || 16;
   let edgesHTML = '';
   {
-    // §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
-    // (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
-    // between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
-    // the transit node itself is never drawn (see the nodes loop below). Minimal-
-    // log-change: m.log keeps its two MANEUVER entries; only this extraction merges
-    // them for display. A maneuver into/out of a transit node that does NOT chain to
-    // a dwell on both ends (e.g. authored but not yet continued) is simply not drawn
-    // as a stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
-    const isTransitId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type === 'transit'); };
-    const isDwellId = nid => { const n = byId[nid]; return !!(n && n.orbit && n.orbit.type !== 'transit' && n.orbit.type !== 'escape' && n.orbit.type !== 'surface'); };
-    const bodyOf = nid => { const n = byId[nid]; return n && n.orbit && (n.orbit.destination || n.orbit.body); };
-    const legs = [];
-    m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.fromNode && e.toNode && e.fromNode !== e.toNode) legs.push({ e, i }); });
-
-    const pairs = {};
-    const chipsByKey = {};
-    const usedLegs = new Set();
-    for (let li = 0; li < legs.length; li++) {
-      if (usedLegs.has(li)) continue;
-      const { e, i } = legs[li];
-      if (isDwellId(e.fromNode) && isTransitId(e.toNode)) {
-        const arrival = legs.slice(li + 1).find((l, off) => !usedLegs.has(li + 1 + off) && l.e.fromNode === e.toNode && isDwellId(l.e.toNode));
-        if (arrival) {
-          usedLegs.add(li); usedLegs.add(legs.indexOf(arrival));
-          const lo = e.fromNode, hi = arrival.e.toNode;
-          const k = lo + '::' + hi + '::t';
-          const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
-          // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
-          // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
-          // not the generic same-body arrival name (LOI) — it's a distinct
-          // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
-          const arrNode = byId[arrival.e.toNode];
-          const arrName = (arrNode && arrNode.orbitRefId) ? 'NRHO insertion' : names.arr;
-          pairs[k] = { lo, hi, loToHi: i, hiToLo: null, latestIdx: arrival.i };
-          chipsByKey[k] = [
-            { name: names.dep, dv: e.dvRequired || e.dv || 0, idx: i },
-            { name: arrName, dv: arrival.e.dvRequired || arrival.e.dv || 0, idx: arrival.i },
-          ];
-          continue;
-        }
-      }
-      if (isTransitId(e.fromNode) || isTransitId(e.toNode)) continue;   // unpaired transit leg — no stop-to-stop line
-      const lo = e.fromNode < e.toNode ? e.fromNode : e.toNode;
-      const hi = e.fromNode < e.toNode ? e.toNode : e.fromNode;
-      const k = lo + '::' + hi;
-      if (!pairs[k]) pairs[k] = { lo, hi, loToHi: null, hiToLo: null };
-      if (e.fromNode === lo) pairs[k].loToHi = i; else pairs[k].hiToLo = i;
-    }
+    const { pairs, chipsByKey } = _missionNmEdgePairs(m, byId);
     for (const k in pairs) {
       const p = pairs[k];
       const A = byId[p.lo], B = byId[p.hi];
@@ -23428,15 +23464,18 @@ function missionSetView(id, mode) {
 function _missionSaveScroll() {
   const nm  = document.querySelector('.mcc-view-area .nm-scroll');
   const va  = document.querySelector('.mcc-view-area');
+  const pr  = document.querySelector('.mcc-plan-rail .pr-body');   // U1: Plan rail (5749)
   const doc = document.scrollingElement || document.documentElement;
   return { nmL: nm ? nm.scrollLeft : 0, nmT: nm ? nm.scrollTop : 0,
            vaL: va ? va.scrollLeft : 0, vaT: va ? va.scrollTop : 0,
+           prT: pr ? pr.scrollTop : 0,
            docT: doc ? doc.scrollTop : 0, docL: doc ? doc.scrollLeft : 0 };
 }
 function _missionRestoreScroll(s) {
   if (!s) return;
   const nm  = document.querySelector('.mcc-view-area .nm-scroll'); if (nm) { nm.scrollLeft = s.nmL; nm.scrollTop = s.nmT; }
   const va  = document.querySelector('.mcc-view-area'); if (va) { va.scrollLeft = s.vaL; va.scrollTop = s.vaT; }
+  const pr  = document.querySelector('.mcc-plan-rail .pr-body'); if (pr) pr.scrollTop = s.prT || 0;
   const doc = document.scrollingElement || document.documentElement; if (doc) { doc.scrollTop = s.docT; doc.scrollLeft = s.docL; }
 }
 
@@ -32370,6 +32409,123 @@ function ltgSetTargetAltitude(id, idx) {
   e.law = result.law;
   if (typeof missionRecompute === 'function') missionRecompute(m);
   if (typeof missionRenderDetail === 'function') missionRenderDetail();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// 5749-plan-rail.js — MISSION_MODEL_V2 §12 U1: the Plan rail
+//
+// A vertical, compressed rendering of the node/edge skeleton (the Orbit Map's
+// data), docked as a left column beside the stage whenever the stage is
+// 'traj' or 'band' (never 'nodemap' — the stage IS the full map there, no
+// duplication). Reuses 570-mission-nodemap.js's data helpers rather than
+// re-deriving them: _missionNmNodes()/_missionNmNodeById (node list incl.
+// custom), _missionNmEdgePairs (leg → pair/chip extraction, factored out of
+// the full map's edgesHTML block for exactly this reuse), _missionNodePath
+// (active-path highlight, 570-mission-panel.js), _nmEdgePhysicsAnnotation
+// (430) and _missionLtEdgeEstimate (570-mission-events.js) for the SAME
+// tooltip pricing text the full map shows. Click handlers call the SAME
+// missionNodeClick/missionEdgeClick entry points — selection is shared (R5).
+//
+// Collapse state (_planRailCollapsed) and scroll offset (_planRailScroll) are
+// per-mission transient view state, same pattern as 574's _trajFrameByMission
+// — never persisted, never touches m.log or autosave.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _planRailCollapsed = {};   // missionId -> bool
+let _planRailScroll    = {};   // missionId -> scrollTop (pr-body)
+
+function _planRailToggle(id) {
+  _planRailCollapsed[id] = !_planRailCollapsed[id];
+  if (typeof _missionRenderPreserveNm === 'function') _missionRenderPreserveNm(id);
+  else if (typeof missionRenderDetail === 'function') missionRenderDetail();
+}
+
+// Which rail section a node belongs to. Built-in nodes already carry `zone`
+// ('earth'|'lunar'|'interp' — see 430's PROG_NM_NODES header comment: "Three
+// vertical zones: Earth | Lunar | Interplanetary"); custom nodes classify by
+// their orbit's body since they have no authored zone.
+function _planRailZoneOf(n) {
+  if (n.zone && n.zone !== 'custom') return n.zone;
+  const b = n.orbit && n.orbit.body;
+  if (b === 'Earth') return 'earth';
+  if (b === 'Moon') return 'lunar';
+  return 'interp';
+}
+
+const _PLAN_RAIL_ZONES = [['earth', 'Earth System'], ['lunar', 'Lunar'], ['interp', 'Interplanetary']];
+
+function _planRailNodeChipHTML(id, n, path) {
+  const inPath    = path.includes(n.id);
+  const isCurrent = path.length > 0 && path[path.length - 1] === n.id;
+  const isFrom    = (typeof _missionBridgeFrom !== 'undefined') && _missionBridgeFrom === n.id;
+  const cls = ['pr-node'];
+  if (inPath) cls.push('pr-active');
+  if (isFrom) cls.push('pr-from');
+  // Reference-orbit-bound nodes (orbitRefId — NRHO etc.) get the ◆ marker
+  // (§12: "the rail is the natural home for reference-orbit nodes").
+  const refMark = n.orbitRefId ? ' <span class="pr-ref-marker" title="Bound to a reference orbit">&#9670;</span>' : '';
+  const cur = isCurrent ? ' &#9679;' : '';
+  const title = `${n.label}${n.sub ? ' — ' + n.sub : ''}${typeof _missionOrientationBadge === 'function' ? _missionOrientationBadge(n, id) : ''}`;
+  return `<div class="${cls.join(' ')}" title="${title.replace(/"/g, '&quot;')}" onclick="missionNodeClick('${id}','${n.id}')">
+    <div class="pr-node-label">${n.label}${refMark}${cur}</div>
+    ${n.sub ? `<div class="pr-node-sub">${n.sub}</div>` : ''}
+  </div>`;
+}
+
+function _planRailEdgeTooltip(m, id, p, chips) {
+  const ann = (typeof _nmEdgePhysicsAnnotation === 'function')
+    ? _nmEdgePhysicsAnnotation(id, p.latestIdx != null ? p.latestIdx : Math.max(p.loToHi ?? -1, p.hiToLo ?? -1)) : { flown: false, label: 'estimated' };
+  const annTitle = ann.flown ? ` — ${ann.label}` : ' — estimated (schematic)';
+  const chipTitle = chips ? ' — ' + chips.map(c => `${c.name} ${Math.round(c.dv).toLocaleString()} m/s`).join(', ') : '';
+  const ltEst = (typeof _missionLtEdgeEstimate === 'function') ? _missionLtEdgeEstimate(m, p.lo, p.hi) : null;
+  const ltTitle = ltEst ? ` — low-thrust est.: ${Math.round(ltEst.dv_ms).toLocaleString()} m/s${ltEst.tof_s != null ? ' · TOF ' + (ltEst.tof_s / 86400).toFixed(1) + ' d' : ''}` : '';
+  return { annTitle, chipTitle, ltTitle };
+}
+
+function _planRailEdgeChipHTML(m, byId, k, p, chipsByKey) {
+  const A = byId[p.lo], B = byId[p.hi];
+  if (!A || !B) return '';
+  const idx = p.latestIdx != null ? p.latestIdx : Math.max(p.loToHi ?? -1, p.hiToLo ?? -1);
+  if (idx < 0) return '';
+  const chips = chipsByKey[k];
+  const { annTitle, chipTitle, ltTitle } = _planRailEdgeTooltip(m, m.missionId, p, chips);
+  const dv = chips ? chips.reduce((s, c) => s + (c.dv || 0), 0) : ((m.log[idx] && (m.log[idx].dvRequired || m.log[idx].dv)) || 0);
+  const label = chips ? chips.map(c => c.name).join(' → ') : (A.label + ' ↔ ' + B.label);
+  const title = `${A.label} → ${B.label}${annTitle}${chipTitle}${ltTitle}`.replace(/"/g, '&quot;');
+  return `<div class="pr-edge" title="${title}" onclick="missionEdgeClick('${m.missionId}',${idx})">
+    <div class="pr-edge-line"></div>
+    <div class="pr-edge-chip">${label} · ${Math.round(dv).toLocaleString()} m/s</div>
+  </div>`;
+}
+
+function _planRailHTML(m) {
+  const id = m.missionId;
+  if (_planRailCollapsed[id]) {
+    return `<div class="mcc-plan-rail collapsed"><button class="pr-toggle" onclick="_planRailToggle('${id}')" title="Expand Plan rail">⟩</button></div>`;
+  }
+  const byId = {}; (typeof _missionNmNodes === 'function' ? _missionNmNodes() : []).forEach(n => byId[n.id] = n);
+  const path = (typeof _missionNodePath === 'function') ? _missionNodePath(m) : [];
+  const { pairs, chipsByKey } = (typeof _missionNmEdgePairs === 'function') ? _missionNmEdgePairs(m, byId) : { pairs: {}, chipsByKey: {} };
+
+  let zonesHTML = '';
+  for (const [zk, zlabel] of _PLAN_RAIL_ZONES) {
+    const nodes = (typeof _missionNmNodes === 'function' ? _missionNmNodes() : [])
+      .filter(n => !(n.orbit && n.orbit.type === 'transit'))
+      .filter(n => _planRailZoneOf(n) === zk);
+    if (!nodes.length) continue;
+    zonesHTML += `<div class="pr-zone-hdr">${zlabel}</div>`;
+    zonesHTML += nodes.map(n => _planRailNodeChipHTML(id, n, path)).join('');
+  }
+
+  let edgesHTML = '';
+  for (const k in pairs) edgesHTML += _planRailEdgeChipHTML(m, byId, k, pairs[k], chipsByKey);
+  if (edgesHTML) zonesHTML += `<div class="pr-zone-hdr">Transfers</div>${edgesHTML}`;
+
+  if (!zonesHTML) zonesHTML = `<div class="pr-empty">No nodes yet.</div>`;
+
+  return `<div class="mcc-plan-rail">
+    <button class="pr-toggle" onclick="_planRailToggle('${id}')" title="Collapse Plan rail">⟨</button>
+    <div class="pr-body">${zonesHTML}</div>
+  </div>`;
 }
 // ─── MISSION UNDO/REDO ───
 // Per-mission undo/redo stacks over AUTHORED mission state (m.log, m.groups,

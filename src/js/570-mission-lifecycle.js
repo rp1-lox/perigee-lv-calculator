@@ -201,7 +201,9 @@ function missionRenderDetail() {
             </div>
           </div>
         </div>
-        <div class="mcc-view-area">${view}</div>
+        ${_missionViewMode !== 'nodemap' && typeof _planRailHTML === 'function'
+          ? `<div class="mcc-view-row">${_planRailHTML(m)}<div class="mcc-view-area">${view}</div></div>`
+          : `<div class="mcc-view-area">${view}</div>`}
       </div>
 
       <!-- RIGHT COLUMN — events (list on top, Add Event docked at the bottom) -->
