@@ -216,3 +216,33 @@ Residual `565-physics-mission.js` keeps: header/fidelity/body-set/encounter-cons
 **Deleted**: none.
 **Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
 **Risk notes**: runtime forward refs — core's physRebuildMissionTrajectories calls physSolveNrhoTransfer (nrho file, loads after core) which calls physShootLegAim (targeting file); all resolve at call time after all modules load; solved-burn magnitude accounting unchanged. No numbers/tolerances/formulas touched.
+
+## [20] OVERNIGHT SUMMARY — 2026-07-15
+**Scope**: Behavior-preserving readability refactor of the largest src/js modules. Opus orchestrator + one-at-a-time Sonnet subagents for the mechanical moves; orchestrator owned all planning, review, browser fingerprint verification, logging, and commits. Every module was verified by a deterministic behavior fingerprint (identical before/after) AND the 772-assertion gate staying green with ZERO golden movement.
+
+**Modules decomposed (5 committed, all verified, all pushed to `dev`)**:
+| Module | Before | Core after | New sibling modules | Commit |
+|---|---|---|---|---|
+| 570-mission-manager.js | 5,067 | 776 | +6 (nodemap 699, band 874, replay 756, events 1182, panel 635, cards 473) — 11-file family incl. the 4 pre-existing GPT-era siblings | b7d954b2c, 07421741b, 13d5ff004 |
+| 574-trajectory-view.js | 4,408 | 1,273 | +6 (camera 376, scene-extract 312, overlay-lod 302, rings-legs 697, eventnodes 546, globe 1007) | d0b19ce0e, 0310369c9, e229cf39d |
+| 5745-maneuver-gizmo.js | 1,796 | 669 | +3 (math 287, hover 332, drag 561) | 2e7317e25 |
+| 565-physics-mission.js | 1,705 | 881 | +2 (targeting 411, nrho 442) | 16f751879 |
+
+17 new files total; no file over ~1,270 lines remains in the four decomposed families (largest residual: 570-mission-events.js at 1,182 — a coherent, contiguous event-execution layer). Every new file opens with top-matter stating what it OWNS, what it does NOT own, and its split provenance.
+
+**Assessed but intentionally NOT split**:
+- `210-stage-library.js` (1,874): 88% (lines 3-1656) is the single STAGE_LIBRARY data literal; the ~220 lines of actual code are already small/coherent. Splitting a monolithic data catalog at an arbitrary category boundary yields no readability gain. Low benefit -> left in place.
+- `165-trade-study.js` (952) and all other modules are under the ~1,200-line threshold.
+- `565` was intentionally limited to its two cleanest solver blocks (targeting, nrho); the mission-rebuild core (physRebuildMissionTrajectories, ~490 lines) and all CLAUDE.md-named invariant functions stayed intact.
+
+**Verification methodology notes (for future sessions)**:
+- Mission/physics fingerprint: Apollo/Gateway seeds -> missionBudget fields + logLen + Gateway NRHO leg missKm (30.1135) + physFreeReturnSolve + physPhaseBurnAngle. The single missKm golden pins the entire NRHO shooter chain end-to-end.
+- 574 render fingerprint: `_trajWorldSVG` across 4 controlled cameras, hashed AFTER normalizing the random per-mission id (`split(missionId).join('MID')`) and using a FIXED COLD seed sequence — raw hashes vary per page load and warm/cold state; normalized-cold hashes are stable and were verified old==new by stash/rebuild.
+- 5745 fingerprint: gizmo overlay SVG hash on real MNODEs (normalized) + pure-helper outputs.
+
+**What the user should review first**: (1) the 570 event-execution split — `570-mission-events.js` is the largest residual and the most heterogeneous (exec handlers + inline-edit appliers + launch-window planning + separation + log cards); it reads coherently but is a candidate for a future finer split. (2) The one suspected pre-existing bug below.
+
+**Stop reason**: work queue exhausted to the ~1,200-line threshold; sole remaining >1,200 candidate (210) assessed as marginal (data literal). Clean stop; tree clean at 16f751879; final gate 772/772 green; zero console errors across all verifications.
+
+## Suspected bugs (not fixed — refactor was behavior-preserving)
+- **Pre-existing name collision `missionExecManeuver`**: defined in BOTH `src/js/565-physics-mission.js` and `src/js/570-mission-panel.js` (formerly 570-mission-manager.js). Present in both files since before tonight (commit 060b9d2e1). 570 loads after 565 so the 570 definition wins at runtime; behavior is unchanged by the splits. Worth a look: either the 565 copy is dead (shadowed) or the two were meant to differ and the collision is accidental. NOT a refactor regression.
