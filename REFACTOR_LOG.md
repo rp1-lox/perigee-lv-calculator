@@ -101,3 +101,14 @@ Each move updates the `tests/math.test.js` FILES list in the same commit.
 **Deleted**: none.
 **Verified**: `python build.py` → 772 passed, 0 failed; node --check ok; U+FFFD guard ok. Each moved function present exactly once across src/js. Browser fingerprint on rebuilt artifact identical to baseline.
 **Risk notes**: PROG_BODY_COLORS/ATMOSPHERE/RINGS moved into 570-mission-nodemap.js; consumed at runtime by 574 (loads later) and the node map — safe (def-only, no load-time execution). No frozen functions, persisted fields, replay hooks, or physics numerics touched.
+
+## [10] 570 split B — extract replay engine + event cards — 2026-07-15
+**Intent**: Second extraction phase: isolate the recompute/replay engine and the event-card + inline-editing UI out of the manager remainder.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/570-mission-manager.js` (3,743 → 2,550 lines) → new `src/js/570-mission-replay.js` (756 lines: _missionResolveDisplayNames.._missionRescopeOriginKey/_missionResolveXferStages/_missionResolveSepIndex..missionRecompute — the replay engine the guide names) and new `src/js/570-mission-cards.js` (473 lines: _missionLogCardHTML..event delete/move/reorder/select + drag handlers.._missionEventEditFieldsHTML). `tests/math.test.js` FILES list gained both between lifecycle and band.
+**Subagent**: one Sonnet subagent, single pass, both extractions, gate green first attempt. manager -1193 lines; new files +1229 content, +36 = 2 top-matter blocks. missionRenameVehicle and _missionDvToOrbit confirmed remaining in manager.
+**Behavior delta**: none. Fingerprint AFTER == baseline: Apollo logLen=3 (LAUNCH,MNODE,MNODE) 6044/12372/45078/2678494; Gateway logLen=4 6078/15064/45078/2714165, NRHO missKm=30.1135. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` → 772 passed, 0 failed; node --check ok; U+FFFD guard ok; each moved fn present exactly once in src/js; browser fingerprint on rebuilt artifact identical to baseline.
+**Risk notes**: recompute tail hooks (autosaveScheduleSave/missionUndoCapture) moved verbatim inside missionRecompute; forward references from cards to per-type renderers/appliers left in manager resolve at call time. No frozen functions, persisted fields, or physics numerics touched.
+**Commit note**: split A landed as b7d954b2c.

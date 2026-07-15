@@ -40,6 +40,8 @@ const FILES = [
   'src/js/570-mission-event-model.js',
   'src/js/570-mission-interaction-state.js',
   'src/js/570-mission-lifecycle.js',
+  'src/js/570-mission-replay.js',
+  'src/js/570-mission-cards.js',
   'src/js/570-mission-band.js',
   'src/js/570-mission-nodemap.js',
   'src/js/570-mission-manager.js',
