@@ -2088,6 +2088,115 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
 // body's neighborhood (independent of the camera zoom, same "local scene
 // scale" concept as before — it just gets recentered on ox,oy instead of on
 // the SVG origin).
+// ── MISSION_MODEL_V2 §19 E3 — low-thrust spiral rendering (MATH.md §7aa) ────
+// COMPUTED legs: the signature-matched cache record (568) carries a
+// rev-boundary-LOD sample split (head/mid/tail from ltResampleSpiralRevs) —
+// head+tail draw as REAL polylines through _trajPolylineSVG (per-sample
+// epochs -> the N3 frame transform applies automatically, same as physics
+// legs), and the dense middle draws as a translucent min/max-radius annulus
+// ("washer") in the spiral's plane. The washer is built here with _trajProj3
+// at t=viewT rather than reusing Saturn's ring-band machinery
+// (_trajRingBandRunPath): that path projects through raw az/el and
+// _trajRingPlaneBasis(body), which BYPASSES the N3 frame transform — the
+// washer must rotate with the frame like the polylines it bridges. v1
+// spirals are ecliptic-planar by construction (ltComputeTrajectory seeds
+// r=[R+alt,0,0], v=[0,v,0]), so a flat z=0 annulus is exact, not an
+// approximation, for every leg this pass can author; the "washer uses the
+// plane at viewT" caveat only matters if out-of-plane laws ever land
+// (documented, §7aa).
+// UN-COMPUTED / STALE legs: an honest SCHEMATIC — a dashed log-spiral arc
+// from the start orbit's radius to the est.-lane end radius, var(--text-dim),
+// clearly stylized (fixed 4 revs, not a physics claim), so an authored leg
+// always has SOME visual (§19's contract) without pretending integration ran.
+function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, selAuthIdx) {
+  if (!m || !m.log || typeof ltComputedLeg !== 'function') return '';
+  const id = m.missionId;
+  const bodyDef = PROG_BODIES[body];
+  if (!bodyDef) return '';
+  let out = '';
+  m.log.forEach((e, i) => {
+    if (!e || e.type !== 'LOWTHRUST') return;
+    const ob = e.orbitBefore;
+    if (!ob || ob.body !== body) return;
+    const emphasized = selAuthIdx != null && i === selAuthIdx;
+    const met0 = e.metStart || 0;
+    const dur = Math.max(0, e.duration_s || 0);
+    const legState = vt >= met0 + dur ? 'history' : (vt >= met0 ? 'current' : 'planned');
+    const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
+    const clickAttr = ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${i})"`;
+    const rec = (e._ltState === 'computed') ? ltComputedLeg(id, i) : null;
+    const lod = rec && rec.samplesLod;
+
+    if (lod && ((lod.head && lod.head.length > 1) || (lod.tail && lod.tail.length > 1))) {
+      // ── computed: LOD render ──
+      const color = emphasized ? 'var(--accent)' : 'var(--accent2)';
+      const anchorOf = f => f === body ? { x: ox, y: oy, depth: oDepth != null ? oDepth : Infinity } : null;
+      const toLeg = seg => ({ samples: seg.map(s => ({ t: met0 + s.t, frame: body, r: s.r })) });
+      const title = `Low-thrust spiral (computed) &middot; ${_trajDvText(Math.round((rec.dvAccum_kms || 0) * 1000))}${lod.revCount ? ' &middot; ' + Math.round(lod.revCount) + ' revs' : ''} &middot; ${_metFmt(met0)}`;
+      // envelope washer FIRST (under the polylines): min/max radius over the
+      // decimated middle (plus the adjacent head/tail endpoints for a seamless
+      // bridge). Skipped when the middle is empty (short spiral — pure polyline).
+      if (lod.mid && lod.mid.length) {
+        let rMin = Infinity, rMax = 0;
+        const scan = s => { const r = Math.hypot(s.r[0], s.r[1], s.r[2] || 0); if (r < rMin) rMin = r; if (r > rMax) rMax = r; };
+        lod.mid.forEach(scan);
+        if (lod.head && lod.head.length) scan(lod.head[lod.head.length - 1]);
+        if (lod.tail && lod.tail.length) scan(lod.tail[0]);
+        const extentPx = rMax * zoom;
+        if (isFinite(rMin) && rMax > rMin && !_trajCullByExtent(extentPx) && !_trajCullRingByDiagonal(extentPx, viewportDiagPx)) {
+          const N = 48;
+          const arc = r => {
+            let d = '';
+            for (let k = 0; k <= N; k++) {
+              const a = k / N * 2 * Math.PI;
+              const q = _trajProj3(r * Math.cos(a), r * Math.sin(a), 0);   // t=viewT: washer plane rides the frame at view time
+              d += (d ? ' L ' : 'M ') + (ox + q.x * zoom).toFixed(2) + ' ' + (oy + q.y * zoom).toFixed(2);
+            }
+            return d + ' Z';
+          };
+          // two closed subpaths + evenodd = a true annulus (hole at the inner radius)
+          const washerD = arc(rMax) + ' ' + arc(rMin);
+          out += `<path d="${washerD}" fill="${color}" fill-opacity="${(0.10 * stateAlpha).toFixed(3)}" fill-rule="evenodd" stroke="${color}" stroke-width="0.4" stroke-opacity="${(0.35 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title} &middot; envelope ${Math.round(rMin - bodyDef.R).toLocaleString()}&ndash;${Math.round(rMax - bodyDef.R).toLocaleString()} km alt (dense middle revs)</title></path>`;
+        }
+      }
+      // head + tail polylines (real per-rev geometry; per-sample epochs -> N3)
+      [lod.head, lod.tail].forEach((seg, si) => {
+        if (!seg || seg.length < 2) return;
+        const poly = _trajPolylineSVG(toLeg(seg), anchorOf, zoom, { viewportDiagPx });
+        if (!poly || poly.hidden) return;
+        const dashAttr = legState === 'planned' ? ' stroke-dasharray="2.5,2"' : '';
+        const op = ((emphasized ? 1 : 0.85) * stateAlpha).toFixed(3);
+        out += `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${emphasized ? 1.1 : 0.7}"${dashAttr} opacity="${op}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title} &middot; ${si === 0 ? 'first' : 'last'} revs</title></path>`;
+        out += `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
+      });
+      return;
+    }
+
+    // ── un-computed / STALE: schematic dashed log-spiral glyph ──
+    const oa = e.orbitAfter;
+    const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+    const r0 = bodyDef.R + meanAlt(ob);
+    const r1 = bodyDef.R + (oa ? meanAlt(oa) : meanAlt(ob));
+    if (!(r0 > 0) || !(r1 > 0)) return;
+    const extentPx = Math.max(r0, r1) * zoom;
+    if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return;
+    const REVS = 4, STEPS = 160;                       // stylized, NOT the est. rev count — a glyph, not physics
+    const thMax = REVS * 2 * Math.PI;
+    let d = '';
+    for (let k = 0; k <= STEPS; k++) {
+      const th = k / STEPS * thMax;
+      const r = r0 * Math.pow(r1 / r0, th / thMax);    // log spiral: exponential radius vs angle
+      const q = _trajProj3(r * Math.cos(th), r * Math.sin(th), 0);
+      d += (k ? ' L ' : 'M ') + (ox + q.x * zoom).toFixed(2) + ' ' + (oy + q.y * zoom).toFixed(2);
+    }
+    const stateTxt = e._ltState === 'stale' ? 'STALE — recompute' : 'est. — not computed';
+    const title = `Low-thrust spiral (schematic, ${stateTxt}) &middot; ${_trajDvText(Math.round(e.dv_est || 0))} est. &middot; ${_metFmt(met0)}`;
+    out += `<path d="${d}" fill="none" stroke="var(--text-dim)" stroke-width="0.7" stroke-dasharray="4,3" opacity="${(0.7 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title}</title></path>`;
+    out += `<path d="${d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
+  });
+  return out;
+}
+
 function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, viewT, overrides, calib, oDepth) {
   if (!m) return '';
   const frames = _trajGetExtraction(m);
@@ -2116,6 +2225,9 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
         ? _trajPropagatedRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts)
         : _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts);
     });
+    // MISSION_MODEL_V2 §19 E3 — low-thrust spiral legs (computed LOD render /
+    // schematic dashed glyph). See _trajLowThrustSVG below + MATH.md §7aa.
+    out += _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, viewT != null ? viewT : Infinity, oDepth, selAuthIdx);
   }
 
   // transfer legs — C2 mission-state trimming: a leg's relationship to

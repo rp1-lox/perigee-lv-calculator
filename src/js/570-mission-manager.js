@@ -1969,6 +1969,70 @@ function missionExecLowThrust(id) {
   missionRenderDetail();
 }
 
+// ── MISSION_MODEL_V2 §19 E3 — low-thrust dual pricing (node-map est. lane) ──
+// The mission's acting vehicle's ACTIVE (top) stage, if it is EP-capable
+// (XENON_EP + positive ep_thrust_N/ep_isp_s), else null. Same "active stage"
+// convention as the LOWTHRUST recompute case.
+function _missionActiveEpStage(m) {
+  const fv = m && m.vehicleId && typeof PROG_ACTIVE_PROGRAM !== 'undefined'
+    ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+  const stage = fv && fv.stages && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
+  if (!stage || typeof ltReadinessCheck !== 'function') return null;
+  return ltReadinessCheck(stage).ok ? stage : null;
+}
+
+// Full-form Edelbaum est. for a node-map edge (MATH.md §7aa): coplanar-ish
+// circular/elliptic orbits of the SAME body only (the regime Edelbaum's
+// circular-to-circular form covers — transit/escape/surface edges return
+// null, the impulsive lane is the only honest price there). PARALLEL readout
+// ONLY — progNmComputeEdgeDv's impulsive accounting is never touched (frozen
+// rule). Returns { dv_ms, tof_s, di_deg } or null.
+function _missionLtEdgeEstimate(m, fromId, toId) {
+  const stage = _missionActiveEpStage(m);
+  if (!stage || typeof ltEdelbaumFullDv !== 'function') return null;
+  const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
+  const oa = nA && nA.orbit, ob = nB && nB.orbit;
+  if (!oa || !ob || oa.body !== ob.body) return null;
+  const okType = t => t === 'circular' || t === 'elliptic';
+  if (!okType(oa.type) || !okType(ob.type)) return null;
+  const b = PROG_BODIES[oa.body]; if (!b) return null;
+  const meanR = o => b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2);
+  const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
+  const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
+  const dv_kms = ltEdelbaumFullDv(v0, v1, di);
+  const ep = { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: progStageMass(stage), mDry_kg: stage.dry_mass };
+  const tof = ltEdelbaumTofEst(dv_kms, ep);
+  return { dv_ms: dv_kms * 1000, tof_s: tof.tof_s, di_deg: di };
+}
+
+// One-line HTML fragment for the dual-pricing readout ('' when not applicable).
+function _missionLtEdgeEstHTML(m, fromId, toId) {
+  const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
+  if (!est) return '';
+  const tofTxt = est.tof_s != null ? ` &middot; TOF ${(est.tof_s / 86400).toFixed(1)} d` : ' &middot; exceeds tank capacity';
+  return `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:3px;">&#x26A1; low-thrust est.: <b style="color:var(--text-bright)">${Math.round(est.dv_ms).toLocaleString()} m/s</b>${tofTxt} <span style="color:var(--text-dim);">(Edelbaum, &Delta;i ${est.di_deg.toFixed(1)}&deg;)</span></div>`;
+}
+
+// Insert a LOWTHRUST event pre-filled from the node-map est. (the Add-Event
+// maneuver form's "Add as Low-Thrust instead" button) — follows
+// missionExecLowThrust's authoring shape exactly; duration comes from the
+// Edelbaum TOF est., law from the transfer direction (raise vs lower).
+function missionExecLowThrustFromEdge(id) {
+  const m = _missionGet(id); if (!m || !m.vehicleId) return;
+  const fromId = document.getElementById('addev-mvf-' + id)?.value;
+  const toId = document.getElementById('addev-mvt-' + id)?.value;
+  const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
+  if (!est || est.tof_s == null) return;
+  const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
+  const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  const law = meanAlt(nB.orbit) >= meanAlt(nA.orbit) ? 'prograde' : 'retrograde';
+  m.log.push({ type: 'LOWTHRUST', duration_s: Math.round(est.tof_s), law, throttle: 1 });
+  _missionAddEvt = null; _missionAddMv = { from: null, to: null, steps: [] };
+  _missionExpandLast(m);
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 // Re-author the duration/law/throttle on an existing LOWTHRUST entry (mirrors
 // missionApplyDurationOverride's pattern) — any edit changes the est-lane
 // signature inputs, so the next recompute will find the computed cache (if
@@ -2015,7 +2079,7 @@ function ltComputeTrajectory(id, idx) {
   const durTotal = Math.max(0, e.duration_s || 0);
   const CHUNK_S = 2 * 86400;   // 2-day slices per spec
 
-  const run = { id, authIdx: idx, cancelled: false, tSim: 0, r: r0, v: v0v, m: m0 };
+  const run = { id, authIdx: idx, cancelled: false, tSim: 0, r: r0, v: v0v, m: m0, samples: [] };
   _ltRunState = run;
   e._ltComputing = true; e._ltProgress = 0;
   missionRenderDetail();
@@ -2030,11 +2094,21 @@ function ltComputeTrajectory(id, idx) {
     // raise/lower, so the chunked compute pins ctx.center for the whole run
     // (opts.singleFrame, same knob E1's own gate uses) rather than handling a
     // mid-spiral SOI handoff — a genuine gap, noted in MATH.md §7z critiques.
-    const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true });
+    // E3: maxSamples 512/chunk (~16 samples/rev at LEO for a 2-day/~32-rev
+    // chunk) so the rev-boundary resampler below has real per-rev fidelity to
+    // keep for the head/tail revs — 256 was fine when nothing rendered (E2).
+    const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true, maxSamples: 512 });
     if (res && res.stateF) {
       run.r = res.stateF.r; run.v = res.stateF.v; run.m = res.stateF.m != null ? res.stateF.m : run.m;
       run.dvAccum = (run.dvAccum || 0) + (res.dvAccum || 0);
       run.depleted = run.depleted || !!res.propDepleted;
+      // E3 spiral rendering: accumulate the chunk's samples (t is burn-relative
+      // seconds — the run passes a continuous t axis chunk to chunk). The full
+      // array is resampled ONCE at completion (rev-boundary LOD, 568), never
+      // stored raw — a 30-day LEO spiral would otherwise hold ~8k samples.
+      if (res.samples && res.samples.length) {
+        for (const s of res.samples) run.samples.push({ t: s.t, r: s.r });
+      }
     }
     run.tSim = chunkEnd;
     e._ltProgress = durTotal > 0 ? run.tSim / durTotal : 1;
@@ -2042,7 +2116,14 @@ function ltComputeTrajectory(id, idx) {
     if (run.tSim >= durTotal || run.depleted) {
       const propUsed = Math.max(0, m0 - run.m);
       const sig = e._ltSig;   // signature computed by the est. lane this same recompute cycle
-      ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim });
+      // E3: rev-boundary LOD resample (568) — head/tail keep per-rev fidelity
+      // (first/last ~8 revs), the dense middle decimates to ~1 sample/rev for
+      // the envelope-band renderer (574). body rides along so the renderer
+      // knows which frame pass owns this spiral.
+      const lod = (typeof ltResampleSpiralRevs === 'function')
+        ? ltResampleSpiralRevs(run.samples, 8, 8) : { head: run.samples, mid: [], tail: [], revCount: 0 };
+      ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim,
+        body, samplesLod: lod });
       e._ltComputing = false; _ltRunState = null;
       missionRecompute(m);       // ONE recompute — downstream state now consumes the computed lane
       missionRenderDetail();
@@ -2323,11 +2404,11 @@ function missionLaunchPlanOptimize(id, idx) {
       }
     }
   }
-  setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site));
+  setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site, m));
 }
 // Formats the planner result into the readout caption. Handles the azimuth
 // object ({azNE,azSE,unreachable}) and the null dla (Earth-orbit target).
-function _missionLaunchPlanReadoutHTML(plan, dest, site) {
+function _missionLaunchPlanReadoutHTML(plan, dest, site, m) {
   const az = plan.azimuthDeg;
   const azTxt = (az && !az.unreachable && isFinite(az.azNE))
     ? ` &middot; az ${az.azNE.toFixed(0)}&deg;/${az.azSE.toFixed(0)}&deg; (NE/SE)`
@@ -2348,9 +2429,23 @@ function _missionLaunchPlanReadoutHTML(plan, dest, site) {
     : (dest === 'Moon' && plan.dvDepart != null)
       ? `TLI &Delta;V &asymp; ${Math.round(plan.dvDepart)} m/s (geocentric departure, not a heliocentric hyperbola)`
       : 'same-body transfer (no departure hyperbola)';
+  // E3: low-thrust departure line when the mission's acting vehicle carries an
+  // EP stage. "Spiral to escape est." uses the standard low-thrust escape
+  // limit: Δv ≈ v_circ(parking) — a many-rev Edelbaum spiral to escape spends
+  // (asymptotically) the full circular speed of the starting orbit (MATH.md
+  // §7aa). TOF from the same mass-averaged accel estimate the node-map uses.
+  let ltTxt = '';
+  const epStage = (m && typeof _missionActiveEpStage === 'function') ? _missionActiveEpStage(m) : null;
+  if (epStage && typeof ltEdelbaumTofEst === 'function' && typeof progVcirc === 'function') {
+    const vEsc_kms = progVcirc('Earth', plan.alt_km || 185);
+    const ep = { thrust_N: epStage.ep_thrust_N, isp_s: epStage.ep_isp_s, m0_kg: progStageMass(epStage), mDry_kg: epStage.dry_mass };
+    const tof = ltEdelbaumTofEst(vEsc_kms, ep);
+    ltTxt = `<br>&#x26A1; spiral to escape est.: ${Math.round(vEsc_kms * 1000).toLocaleString()} m/s (&asymp; v_circ at ${Math.round(plan.alt_km || 185)} km — low-thrust escape limit)`
+      + (tof.tof_s != null ? ` &middot; TOF ~${Math.round(tof.tof_s / 86400)} d` : ' &middot; <span style="color:var(--warn);">exceeds EP tank capacity</span>');
+  }
   return `<span style="color:var(--accent);">Ideal parking for ${_mrEsc(dest)}</span>: `
     + `${Math.round(plan.alt_km)} km &times; ${plan.inc_deg.toFixed(1)}&deg; incl, &Omega; ${plan.lan_deg.toFixed(1)}&deg;${dlaTxt}`
-    + `<br>${energyTxt}${azTxt}${winTxt}`
+    + `<br>${energyTxt}${azTxt}${winTxt}${ltTxt}`
     + `<br><span style="color:var(--text-dim);">ecliptic-frame approximation (no axial tilt) &middot; every field editable before Apply</span>`;
 }
 // Pure-ish readout builder — reads no DOM, just formats the three math
@@ -3460,13 +3555,22 @@ function _missionMvBuilderHTML(id, token) {
     status = `<div style="font-family:var(--mono);font-size:10px;margin-top:5px;color:${close ? 'var(--accent)' : 'var(--accent2,#e5c07b)'};">ΔV ${Math.round(delivered).toLocaleString()} / ${Math.round(fullDv).toLocaleString()} m/s — ${close ? '✓ closes' : 'short ' + Math.round(Math.max(0, fullDv - delivered)).toLocaleString()}</div>`;
   }
   const reqStr = fullDv > 0 ? Math.round(fullDv).toLocaleString() + ' m/s' : '—';
+  // E3 dual pricing: PARALLEL low-thrust est. line (Edelbaum full form, 568)
+  // when the acting vehicle's active stage is EP-capable — the impulsive
+  // "requires" number above is untouched (progNmComputeEdgeDv, frozen).
+  const ltFrom = isAdd ? document.getElementById('addev-mvf-' + id)?.value : (e && e.fromNode);
+  const ltTo   = isAdd ? document.getElementById('addev-mvt-' + id)?.value : (e && e.toNode);
+  const ltHTML = _missionLtEdgeEstHTML(ctx.m, ltFrom, ltTo);
+  const ltBtn  = (isAdd && ltHTML)
+    ? `<button class="act-btn" style="width:100%;margin-top:6px;font-size:10px;" title="Author a LOWTHRUST event pre-filled with the Edelbaum est. duration instead of an impulsive maneuver" onclick="missionExecLowThrustFromEdge('${id}')">⚡ Add as Low-Thrust instead</button>`
+    : '';
   return `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin:6px 0 3px;">// requires <b style="color:var(--text-bright)">${reqStr}</b> — steps:</div>
-    ${rows}${status}
+    ${ltHTML}${rows}${status}
     <div style="display:flex;gap:4px;margin-top:6px;">
       <button class="act-btn" style="flex:1;font-size:10px;" onclick="missionMvStep(${t},'add','burn')">＋ Burn</button>
       <button class="act-btn" style="flex:1;font-size:10px;" onclick="missionMvStep(${t},'add','separate')">＋ Separate</button>
       <button class="act-btn" style="flex:1;font-size:10px;" title="Auto-build a staged burn that closes the ΔV" onclick="missionMvStep(${t},'auto')">⚙ Auto</button>
-    </div>`;
+    </div>${ltBtn}`;
 }
 
 function missionExecManeuver(id, fromId, toId) {
@@ -4826,7 +4930,11 @@ function _missionNodeMapHTML(m) {
       const annTitle = ann.flown ? ` — ${_tsEsc(ann.label)}` : ' — estimated (schematic)';
       const chips = chipsByKey[k];
       const chipTitle = chips ? ' — ' + chips.map(c => `${c.name} ${Math.round(c.dv).toLocaleString()} m/s`).join(', ') : '';
-      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}</title>`;
+      // E3 dual pricing (tooltip): PARALLEL Edelbaum est. when the acting
+      // vehicle's active stage is EP-capable — impulsive numbers untouched.
+      const ltEst = (typeof _missionLtEdgeEstimate === 'function') ? _missionLtEdgeEstimate(m, p.lo, p.hi) : null;
+      const ltTitle = ltEst ? ` — low-thrust est.: ${Math.round(ltEst.dv_ms).toLocaleString()} m/s${ltEst.tof_s != null ? ' · TOF ' + (ltEst.tof_s / 86400).toFixed(1) + ' d' : ''}` : '';
+      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}${ltTitle}</title>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="${col}" stroke-width="2.5" opacity="0.85"${chips ? ' stroke-dasharray="6 3"' : ''}/>`;
       if (p.loToHi != null || bothWays) edgesHTML += _nmArrowHead(Ax, Ay, Bx, By, col, 2);   // arrow at hi edge

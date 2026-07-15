@@ -50,9 +50,18 @@ function _ttdLaneModel(m) {
       // BURN literals AND the modern unified MNODE maneuvers (solved or
       // manual) — real missions author MNODEs, so BURN-only left the marker
       // pass empty on every current mission (found in delivery review).
-      return ev && (ev.type === 'BURN' || ev.type === 'MNODE');
+      // E3: LOWTHRUST joins the ▲ pass too (the burn STARTS here; its
+      // duration renders as a span below, not as this point marker).
+      return ev && (ev.type === 'BURN' || ev.type === 'MNODE' || ev.type === 'LOWTHRUST');
     }).map(p => ({ met: p.met, authIdx: p.authIdx, zoneKey: p.zoneKey }));
-    return { name: L.name, color: L.color, expended: L.expended, segs, burns };
+    // E3 (MISSION_MODEL_V2 §19): a LOWTHRUST leg is a months-long BAND on the
+    // lane, not a tick — collect [met, met+duration] spans (durationUsed is
+    // stamped by the recompute loop alongside metStart).
+    const ltSpans = pts.filter(p => {
+      const ev = band.events[p.index];
+      return ev && ev.type === 'LOWTHRUST' && ev.durationUsed > 0;
+    }).map(p => ({ t0: p.met, t1: p.met + (band.events[p.index].durationUsed || 0), authIdx: p.authIdx }));
+    return { name: L.name, color: L.color, expended: L.expended, segs, burns, ltSpans };
   });
   return { lanes, maxMet };
 }
@@ -81,6 +90,15 @@ function _ttdLanesHTML(m, id) {
       const title = `${_tsEsc(L.name)} · ${_tsEsc(s.zoneKey || '')} · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
       return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:${zoneColor};border-top-color:${L.color};opacity:${op}" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
     }).join('');
+    // E3: LOWTHRUST spans — duration-wide thrust-colored low-alpha bands laid
+    // over the zone segments (the ▲ start marker comes from the burns pass).
+    const ltHTML = (L.ltSpans || []).map(s => {
+      const l = Math.max(0, Math.min(100, (s.t0 / model.maxMet) * 100));
+      const r = Math.max(0, Math.min(100, (s.t1 / model.maxMet) * 100));
+      const w = Math.max(0.4, r - l);
+      const title = `${_tsEsc(L.name)} low-thrust burn · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
+      return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:var(--accent2);border-top-color:var(--accent2);opacity:0.35" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
+    }).join('');
     const burnsHTML = L.burns.map(b => {
       const l = Math.max(0, Math.min(100, (b.met / model.maxMet) * 100));
       return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲</div>`;
@@ -88,7 +106,7 @@ function _ttdLanesHTML(m, id) {
     const label = L.name.length > 14 ? L.name.slice(0, 13) + '…' : L.name;
     return `<div class="ttd-lane-row" style="height:${laneH + 4}px">
       <div class="ttd-lane-label" style="border-left-color:${L.color}" title="${_tsEsc(L.name)}">${_tsEsc(label)}</div>
-      <div class="ttd-lane-track" style="height:${laneH}px">${segsHTML}${burnsHTML}</div>
+      <div class="ttd-lane-track" style="height:${laneH}px">${segsHTML}${ltHTML}${burnsHTML}</div>
     </div>`;
   }).join('');
 

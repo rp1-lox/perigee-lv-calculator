@@ -3515,10 +3515,12 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     PROG_PROPELLANT_TYPES, PHYS_G0_MS2, ltEstimateLeg, ltEdelbaumPlanarDv, ltApplyDvToCircularAlt,
     ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache,
     _ltComputedByMission, progVcirc, progMakeSpacecraftStageDef,
+    ltEdelbaumFullDv, ltEdelbaumTofEst, ltResampleSpiralRevs,
   } = vm.runInContext(
     '({ PROG_PROPELLANT_TYPES, PHYS_G0_MS2, ltEstimateLeg, ltEdelbaumPlanarDv, ltApplyDvToCircularAlt, ' +
     'ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache, ' +
-    '_ltComputedByMission, progVcirc, progMakeSpacecraftStageDef })',
+    '_ltComputedByMission, progVcirc, progMakeSpacecraftStageDef, ' +
+    'ltEdelbaumFullDv, ltEdelbaumTofEst, ltResampleSpiralRevs })',
     sandbox
   );
 
@@ -3664,6 +3666,114 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const tolFar = Math.max(5, 0.01 * est.dv_est_kms * 1000);
     ok('LT: a divergent computed/est pair exceeds max(1%,5 m/s) — correctly flaggable',
       deltaFar > tolFar);
+  }
+
+  // ── E3: ltEdelbaumFullDv — full-form Edelbaum, MATH.md §7aa ──
+  {
+    const v0 = 7.726, v1 = 7.350; // LEO 300km -> 1000km circular speeds (approx)
+    // di=0 must degenerate EXACTLY to the planar reduction already gate-pinned above
+    const full0 = ltEdelbaumFullDv(v0, v1, 0);
+    approx('LT E3: full-form Edelbaum at di=0 degenerates to |v0-v1|', full0, Math.abs(v0 - v1), 1e-9);
+
+    // monotonicity: cost strictly increases with di for fixed v0,v1
+    const full30 = ltEdelbaumFullDv(v0, v1, 30);
+    const full60 = ltEdelbaumFullDv(v0, v1, 60);
+    const full90 = ltEdelbaumFullDv(v0, v1, 90);
+    ok('LT E3: Edelbaum cost is monotonically increasing in di (0<30<60<90)',
+      full0 < full30 && full30 < full60 && full60 < full90);
+
+    // di=90 -> exact quadrature sum sqrt(v0^2+v1^2) (orthogonal planes)
+    approx('LT E3: di=90 reduces to sqrt(v0^2+v1^2) (orthogonal-plane quadrature)',
+      full90, Math.sqrt(v0 * v0 + v1 * v1), 1e-9);
+
+    // di=180 -> v0+v1 (opposite planes, full retrograde re-launch cost)
+    const full180 = ltEdelbaumFullDv(v0, v1, 180);
+    approx('LT E3: di=180 reduces to v0+v1 (opposite-plane closure)', full180, v0 + v1, 1e-9);
+
+    // symmetric orbits (v0==v1): di=0 -> 0 (same orbit, no burn needed)
+    ok('LT E3: identical circular orbits at di=0 need zero dv', ltEdelbaumFullDv(7.5, 7.5, 0) < 1e-9);
+
+    // out-of-range di clamps rather than throwing/going complex
+    ok('LT E3: di clamps to [0,180], no throw on out-of-range input',
+      isFinite(ltEdelbaumFullDv(v0, v1, -10)) && isFinite(ltEdelbaumFullDv(v0, v1, 400)));
+  }
+
+  // ── E3: ltEdelbaumTofEst — mass-averaged constant-accel TOF ──
+  {
+    const ep = { thrust_N: 0.29, isp_s: 3100, m0_kg: 700, mDry_kg: 300 };
+    const t1 = ltEdelbaumTofEst(0.376, ep); // ~300->1000km planar dv from §7y's table
+    ok('LT E3: TOF estimate is finite and positive for a reachable dv', t1.tof_s > 0 && isFinite(t1.tof_s));
+    ok('LT E3: TOF estimate reports mF between mDry and m0', t1.mF_kg > ep.mDry_kg && t1.mF_kg < ep.m0_kg);
+
+    // internal consistency: propUsed_kg matches m0-mF, and matches the SAME
+    // rocket-eq relation ltEstimateLeg uses (mF = m0*exp(-dv/(Isp*g0)))
+    const ve = ep.isp_s * PHYS_G0_MS2;
+    const mFExpected = ep.m0_kg * Math.exp(-0.376 * 1000 / ve);
+    approx('LT E3: TOF-estimate mF matches direct rocket-equation value', t1.mF_kg, mFExpected, 1e-6);
+    approx('LT E3: TOF-estimate propUsed = m0 - mF', t1.propUsed_kg, ep.m0_kg - t1.mF_kg, 1e-9);
+
+    // a dv that exceeds tank capacity fails cleanly (nulls, no throw/NaN)
+    const t2 = ltEdelbaumTofEst(50, ep); // 50 km/s, way beyond any Xenon tank here
+    ok('LT E3: TOF estimate returns nulls (not NaN/throw) when dv exceeds tank capacity',
+      t2.tof_s === null && t2.mF_kg === null);
+
+    // doubling thrust halves TOF for the same dv/prop (accel doubles, dv fixed)
+    const epDouble = Object.assign({}, ep, { thrust_N: ep.thrust_N * 2 });
+    const t3 = ltEdelbaumTofEst(0.376, epDouble);
+    approx('LT E3: doubling thrust halves TOF for the same dv', t3.tof_s, t1.tof_s / 2, 1e-3);
+  }
+
+  // ── E3: ltResampleSpiralRevs — rev-boundary resampler for LOD spiral render ──
+  {
+    // synthetic Archimedean-ish spiral: N complete revs, r grows linearly with
+    // angle, sampled densely and uniformly in angle (not time -- doesn't matter,
+    // the resampler works on winding angle alone)
+    function buildSpiralSamples(revs, samplesPerRev, r0, rGrowPerRev) {
+      const out = [];
+      const totalSamples = Math.round(revs * samplesPerRev);
+      for (let i = 0; i <= totalSamples; i++) {
+        const revFrac = i / samplesPerRev;
+        const theta = revFrac * 2 * Math.PI;
+        const r = r0 + rGrowPerRev * revFrac;
+        out.push({ t: i, r: [r * Math.cos(theta), r * Math.sin(theta), 0] });
+      }
+      return out;
+    }
+
+    const revs = 40, perRev = 20;
+    const samples = buildSpiralSamples(revs, perRev, 7000, 5);
+    const res = ltResampleSpiralRevs(samples, 8, 8);
+
+    // rev count preserved (within one sample's angular resolution)
+    approx('LT E3: resampler recovers the correct rev count from winding angle', res.revCount, revs, 0.05);
+
+    // endpoints preserved: first sample in head, last sample in tail
+    ok('LT E3: resampler preserves the exact first sample (in head)',
+      res.head.length > 0 && res.head[0].t === samples[0].t);
+    ok('LT E3: resampler preserves the exact last sample (in tail)',
+      res.tail.length > 0 && res.tail[res.tail.length - 1].t === samples[samples.length - 1].t);
+
+    // head/tail retain full per-sample fidelity (~8 revs * perRev samples each)
+    ok('LT E3: head retains near-full fidelity for the first ~8 revs',
+      res.head.length >= 8 * perRev * 0.9);
+    ok('LT E3: tail retains near-full fidelity for the last ~8 revs',
+      res.tail.length >= 8 * perRev * 0.9);
+
+    // middle is decimated to ~1 sample/rev (40-16=24 revs -> ~24 mid samples, not 24*20)
+    const midRevs = revs - 16;
+    ok('LT E3: middle is decimated to ~1 sample per rev, not per-sample fidelity',
+      res.mid.length > 0 && res.mid.length < midRevs * perRev * 0.5 && res.mid.length <= midRevs + 2);
+
+    // total sample count collapses hugely vs the raw input (the whole point of the LOD pass)
+    ok('LT E3: resampled total is far smaller than the raw sample count',
+      (res.head.length + res.mid.length + res.tail.length) < samples.length * 0.6);
+
+    // degenerate inputs don't throw
+    const short = ltResampleSpiralRevs(samples.slice(0, 5), 8, 8);
+    ok('LT E3: resampler falls back to all-head on a too-short/low-rev sample set (no throw)',
+      short.mid.length === 0 && short.tail.length === 0 && short.head.length === 5);
+    const empty = ltResampleSpiralRevs([], 8, 8);
+    ok('LT E3: resampler handles an empty sample array without throwing', empty.head.length === 0 && empty.revCount === 0);
   }
 }
 

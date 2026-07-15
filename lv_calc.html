@@ -18332,6 +18332,58 @@ function ltEdelbaumPlanarDv(v0_kms, v1_kms) {
   return Math.abs((v0_kms || 0) - (v1_kms || 0));
 }
 
+// ── E3: full-form Edelbaum (circular-to-circular, plane change included) ────
+//
+// MATH.md §7aa. Δv = sqrt(v0^2 + v1^2 - 2*v0*v1*cos(pi/2 * di)), the standard
+// circular-orbit Edelbaum result (di in DEGREES, full 90 deg = orthogonal
+// planes costs the quadrature sum v0^2+v1^2 rather than a naive |v0-v1|+
+// plane-change add). di=0 degenerates exactly to ltEdelbaumPlanarDv's
+// |v0-v1| (verified by gate). Node-map est. lane ONLY (§19 E3) — NEVER feeds
+// progNmComputeEdgeDv's impulsive accounting (frozen, CLAUDE.md).
+// di_deg: total relative inclination change between the two circular orbits,
+// in DEGREES (0-180). Interpretation (documented, MATH.md §7aa): the angle
+// argument is the plane-change angle itself in radians -- di_deg=0 -> cos=1
+// -> exact |v0-v1| (matches ltEdelbaumPlanarDv, gate-pinned); di_deg=90 ->
+// cos=0 -> sqrt(v0^2+v1^2) (orthogonal planes, pure quadrature); di_deg=180
+// -> cos=-1 -> v0+v1 (opposite planes, full retrograde re-launch cost). This
+// is the standard law-of-cosines closure between two circular-orbit velocity
+// VECTORS separated by angle di -- exact for that idealized geometry, and is
+// what "Edelbaum's full form" reduces to for a single combined burn; it is
+// still an UPPER-BOUND-ish single-maneuver estimate vs a true multi-rev
+// Edelbaum spiral that splits the plane change optimally across the whole
+// transfer (see critique below) -- an "est." lane number, not physics truth.
+function ltEdelbaumFullDv(v0_kms, v1_kms, di_deg) {
+  const v0 = v0_kms || 0, v1 = v1_kms || 0;
+  const di = Math.max(0, Math.min(180, di_deg || 0));
+  const theta = di * Math.PI / 180;
+  const inner = v0 * v0 + v1 * v1 - 2 * v0 * v1 * Math.cos(theta);
+  return Math.sqrt(Math.max(0, inner));
+}
+
+// ── E3: TOF estimate for a priced Edelbaum-style leg ────────────────────────
+//
+// tof_s = dv_ms / (T_N / mBar_kg), a mass-averaged constant-acceleration
+// estimate (mBar = (m0+mF)/2, mF from the SAME rocket-eq relation ltEstimateLeg
+// uses, so the TOF and the dv/prop numbers stay internally consistent). Not
+// exact (real accel rises through the burn as mass depletes -- see §7y), but
+// consistent with the est. lane's existing honesty boundary. Returns
+// {tof_s, mF_kg, propUsed_kg} or nulls if the burn can't be completed with
+// available prop (dv exceeds what the tank can deliver at that Isp).
+function ltEdelbaumTofEst(dv_kms, ep) {
+  const dv_ms = Math.max(0, (dv_kms || 0) * 1000);
+  const Isp = (ep && ep.isp_s) || 0, T = (ep && ep.thrust_N) || 0;
+  const m0 = Math.max(0, (ep && ep.m0_kg) || 0), mDry = Math.max(0, (ep && ep.mDry_kg) || 0);
+  if (!(Isp > 0) || !(T > 0) || !(m0 > mDry)) return { tof_s: null, mF_kg: null, propUsed_kg: null };
+  const ve = Isp * PHYS_G0_MS2;
+  const mF = m0 * Math.exp(-dv_ms / ve);
+  if (!(mF >= mDry)) return { tof_s: null, mF_kg: null, propUsed_kg: null }; // dv exceeds tank capacity
+  const propUsed = m0 - mF;
+  const mBar = (m0 + mF) / 2;
+  const accel = T / mBar; // m/s^2 (T in N, mBar in kg)
+  const tof_s = dv_ms / accel;
+  return { tof_s, mF_kg: mF, propUsed_kg: propUsed };
+}
+
 // ── est-orbit approximation: apply a planar dv to a circular-orbit alt ──────
 //
 // Documented approximation (MATH.md §7z): treats the vehicle's current orbit
@@ -18415,6 +18467,68 @@ function ltReadinessCheck(activeStage) {
     return { ok: false, message: 'Active EP stage is missing ep_thrust_N / ep_isp_s (set them in the Spacecraft editor).' };
   }
   return { ok: true, message: null };
+}
+
+// ── E3: rev-boundary resampler for LOD spiral rendering ─────────────────────
+//
+// MATH.md §7aa. ltComputeTrajectory's raw samples are near-uniform in TIME
+// (E1/E2, up to maxSamples decimation) -- a multi-hundred-rev spiral drawn as
+// a plain polyline through those aliases into visual noise (E2 critique 79).
+// This function re-expresses the samples by ORBITAL REV instead: detect rev
+// boundaries via accumulated winding angle (theta = atan2(y,x) in the orbit
+// plane, unwrapped), keep every sample for the first `headRevs` and last
+// `tailRevs` complete revs (full per-rev fidelity for the legible ends), and
+// decimate the middle to ~1 sample per rev (one point per boundary crossing --
+// enough for an envelope/annulus renderer, not a polyline).
+//
+// samples: [{t, r:[x,y,z], ...}] time-ordered, r relative to the body center,
+// SAME plane assumption ltApplyDvToCircularAlt already makes (planar spiral;
+// out-of-plane wobble isn't tracked by winding angle -- documented, §7aa
+// critique). Returns { head:[...], mid:[...], tail:[...], revCount }.
+// Degenerate inputs (< 2 samples, zero revs) fall back to returning
+// everything in `head` with revCount 0 rather than throwing.
+function ltResampleSpiralRevs(samples, headRevs, tailRevs) {
+  const hr = Math.max(0, headRevs == null ? 8 : headRevs);
+  const tr = Math.max(0, tailRevs == null ? 8 : tailRevs);
+  if (!Array.isArray(samples) || samples.length < 2) {
+    return { head: samples ? samples.slice() : [], mid: [], tail: [], revCount: 0 };
+  }
+  // unwrap winding angle across the sample sequence (planar theta = atan2(y,x))
+  let prevTheta = Math.atan2(samples[0].r[1], samples[0].r[0]);
+  let unwrapped = prevTheta;
+  const windAngle = [unwrapped];
+  for (let i = 1; i < samples.length; i++) {
+    const th = Math.atan2(samples[i].r[1], samples[i].r[0]);
+    let d = th - prevTheta;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    unwrapped += d;
+    windAngle.push(unwrapped);
+    prevTheta = th;
+  }
+  const totalAngle = Math.abs(windAngle[windAngle.length - 1] - windAngle[0]);
+  const revCount = totalAngle / (2 * Math.PI);
+  if (revCount < (hr + tr)) {
+    // too short to split meaningfully -- everything is "head" (full fidelity)
+    return { head: samples.slice(), mid: [], tail: [], revCount };
+  }
+  const sign = (windAngle[windAngle.length - 1] >= windAngle[0]) ? 1 : -1;
+  const a0 = windAngle[0];
+  const headCutAngle = a0 + sign * hr * 2 * Math.PI;
+  const tailCutAngle = windAngle[windAngle.length - 1] - sign * tr * 2 * Math.PI;
+  const head = [], mid = [], tail = [];
+  let lastMidRev = -1;
+  for (let i = 0; i < samples.length; i++) {
+    const a = windAngle[i];
+    const inHead = sign > 0 ? a <= headCutAngle : a >= headCutAngle;
+    const inTail = sign > 0 ? a >= tailCutAngle : a <= tailCutAngle;
+    if (inHead) { head.push(samples[i]); continue; }
+    if (inTail) { tail.push(samples[i]); continue; }
+    // middle: keep ~1 sample per rev boundary crossing
+    const revIdx = Math.floor(sign * (a - a0) / (2 * Math.PI));
+    if (revIdx !== lastMidRev) { mid.push(samples[i]); lastMidRev = revIdx; }
+  }
+  return { head, mid, tail, revCount };
 }
 
 // ─── MISSION MANAGER ─────────────────────────────────────────────────────
@@ -21012,6 +21126,70 @@ function missionExecLowThrust(id) {
   missionRenderDetail();
 }
 
+// ── MISSION_MODEL_V2 §19 E3 — low-thrust dual pricing (node-map est. lane) ──
+// The mission's acting vehicle's ACTIVE (top) stage, if it is EP-capable
+// (XENON_EP + positive ep_thrust_N/ep_isp_s), else null. Same "active stage"
+// convention as the LOWTHRUST recompute case.
+function _missionActiveEpStage(m) {
+  const fv = m && m.vehicleId && typeof PROG_ACTIVE_PROGRAM !== 'undefined'
+    ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+  const stage = fv && fv.stages && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
+  if (!stage || typeof ltReadinessCheck !== 'function') return null;
+  return ltReadinessCheck(stage).ok ? stage : null;
+}
+
+// Full-form Edelbaum est. for a node-map edge (MATH.md §7aa): coplanar-ish
+// circular/elliptic orbits of the SAME body only (the regime Edelbaum's
+// circular-to-circular form covers — transit/escape/surface edges return
+// null, the impulsive lane is the only honest price there). PARALLEL readout
+// ONLY — progNmComputeEdgeDv's impulsive accounting is never touched (frozen
+// rule). Returns { dv_ms, tof_s, di_deg } or null.
+function _missionLtEdgeEstimate(m, fromId, toId) {
+  const stage = _missionActiveEpStage(m);
+  if (!stage || typeof ltEdelbaumFullDv !== 'function') return null;
+  const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
+  const oa = nA && nA.orbit, ob = nB && nB.orbit;
+  if (!oa || !ob || oa.body !== ob.body) return null;
+  const okType = t => t === 'circular' || t === 'elliptic';
+  if (!okType(oa.type) || !okType(ob.type)) return null;
+  const b = PROG_BODIES[oa.body]; if (!b) return null;
+  const meanR = o => b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2);
+  const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
+  const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
+  const dv_kms = ltEdelbaumFullDv(v0, v1, di);
+  const ep = { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: progStageMass(stage), mDry_kg: stage.dry_mass };
+  const tof = ltEdelbaumTofEst(dv_kms, ep);
+  return { dv_ms: dv_kms * 1000, tof_s: tof.tof_s, di_deg: di };
+}
+
+// One-line HTML fragment for the dual-pricing readout ('' when not applicable).
+function _missionLtEdgeEstHTML(m, fromId, toId) {
+  const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
+  if (!est) return '';
+  const tofTxt = est.tof_s != null ? ` &middot; TOF ${(est.tof_s / 86400).toFixed(1)} d` : ' &middot; exceeds tank capacity';
+  return `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:3px;">&#x26A1; low-thrust est.: <b style="color:var(--text-bright)">${Math.round(est.dv_ms).toLocaleString()} m/s</b>${tofTxt} <span style="color:var(--text-dim);">(Edelbaum, &Delta;i ${est.di_deg.toFixed(1)}&deg;)</span></div>`;
+}
+
+// Insert a LOWTHRUST event pre-filled from the node-map est. (the Add-Event
+// maneuver form's "Add as Low-Thrust instead" button) — follows
+// missionExecLowThrust's authoring shape exactly; duration comes from the
+// Edelbaum TOF est., law from the transfer direction (raise vs lower).
+function missionExecLowThrustFromEdge(id) {
+  const m = _missionGet(id); if (!m || !m.vehicleId) return;
+  const fromId = document.getElementById('addev-mvf-' + id)?.value;
+  const toId = document.getElementById('addev-mvt-' + id)?.value;
+  const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
+  if (!est || est.tof_s == null) return;
+  const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
+  const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  const law = meanAlt(nB.orbit) >= meanAlt(nA.orbit) ? 'prograde' : 'retrograde';
+  m.log.push({ type: 'LOWTHRUST', duration_s: Math.round(est.tof_s), law, throttle: 1 });
+  _missionAddEvt = null; _missionAddMv = { from: null, to: null, steps: [] };
+  _missionExpandLast(m);
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
 // Re-author the duration/law/throttle on an existing LOWTHRUST entry (mirrors
 // missionApplyDurationOverride's pattern) — any edit changes the est-lane
 // signature inputs, so the next recompute will find the computed cache (if
@@ -21058,7 +21236,7 @@ function ltComputeTrajectory(id, idx) {
   const durTotal = Math.max(0, e.duration_s || 0);
   const CHUNK_S = 2 * 86400;   // 2-day slices per spec
 
-  const run = { id, authIdx: idx, cancelled: false, tSim: 0, r: r0, v: v0v, m: m0 };
+  const run = { id, authIdx: idx, cancelled: false, tSim: 0, r: r0, v: v0v, m: m0, samples: [] };
   _ltRunState = run;
   e._ltComputing = true; e._ltProgress = 0;
   missionRenderDetail();
@@ -21073,11 +21251,21 @@ function ltComputeTrajectory(id, idx) {
     // raise/lower, so the chunked compute pins ctx.center for the whole run
     // (opts.singleFrame, same knob E1's own gate uses) rather than handling a
     // mid-spiral SOI handoff — a genuine gap, noted in MATH.md §7z critiques.
-    const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true });
+    // E3: maxSamples 512/chunk (~16 samples/rev at LEO for a 2-day/~32-rev
+    // chunk) so the rev-boundary resampler below has real per-rev fidelity to
+    // keep for the head/tail revs — 256 was fine when nothing rendered (E2).
+    const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true, maxSamples: 512 });
     if (res && res.stateF) {
       run.r = res.stateF.r; run.v = res.stateF.v; run.m = res.stateF.m != null ? res.stateF.m : run.m;
       run.dvAccum = (run.dvAccum || 0) + (res.dvAccum || 0);
       run.depleted = run.depleted || !!res.propDepleted;
+      // E3 spiral rendering: accumulate the chunk's samples (t is burn-relative
+      // seconds — the run passes a continuous t axis chunk to chunk). The full
+      // array is resampled ONCE at completion (rev-boundary LOD, 568), never
+      // stored raw — a 30-day LEO spiral would otherwise hold ~8k samples.
+      if (res.samples && res.samples.length) {
+        for (const s of res.samples) run.samples.push({ t: s.t, r: s.r });
+      }
     }
     run.tSim = chunkEnd;
     e._ltProgress = durTotal > 0 ? run.tSim / durTotal : 1;
@@ -21085,7 +21273,14 @@ function ltComputeTrajectory(id, idx) {
     if (run.tSim >= durTotal || run.depleted) {
       const propUsed = Math.max(0, m0 - run.m);
       const sig = e._ltSig;   // signature computed by the est. lane this same recompute cycle
-      ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim });
+      // E3: rev-boundary LOD resample (568) — head/tail keep per-rev fidelity
+      // (first/last ~8 revs), the dense middle decimates to ~1 sample/rev for
+      // the envelope-band renderer (574). body rides along so the renderer
+      // knows which frame pass owns this spiral.
+      const lod = (typeof ltResampleSpiralRevs === 'function')
+        ? ltResampleSpiralRevs(run.samples, 8, 8) : { head: run.samples, mid: [], tail: [], revCount: 0 };
+      ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim,
+        body, samplesLod: lod });
       e._ltComputing = false; _ltRunState = null;
       missionRecompute(m);       // ONE recompute — downstream state now consumes the computed lane
       missionRenderDetail();
@@ -21366,11 +21561,11 @@ function missionLaunchPlanOptimize(id, idx) {
       }
     }
   }
-  setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site));
+  setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site, m));
 }
 // Formats the planner result into the readout caption. Handles the azimuth
 // object ({azNE,azSE,unreachable}) and the null dla (Earth-orbit target).
-function _missionLaunchPlanReadoutHTML(plan, dest, site) {
+function _missionLaunchPlanReadoutHTML(plan, dest, site, m) {
   const az = plan.azimuthDeg;
   const azTxt = (az && !az.unreachable && isFinite(az.azNE))
     ? ` &middot; az ${az.azNE.toFixed(0)}&deg;/${az.azSE.toFixed(0)}&deg; (NE/SE)`
@@ -21391,9 +21586,23 @@ function _missionLaunchPlanReadoutHTML(plan, dest, site) {
     : (dest === 'Moon' && plan.dvDepart != null)
       ? `TLI &Delta;V &asymp; ${Math.round(plan.dvDepart)} m/s (geocentric departure, not a heliocentric hyperbola)`
       : 'same-body transfer (no departure hyperbola)';
+  // E3: low-thrust departure line when the mission's acting vehicle carries an
+  // EP stage. "Spiral to escape est." uses the standard low-thrust escape
+  // limit: Δv ≈ v_circ(parking) — a many-rev Edelbaum spiral to escape spends
+  // (asymptotically) the full circular speed of the starting orbit (MATH.md
+  // §7aa). TOF from the same mass-averaged accel estimate the node-map uses.
+  let ltTxt = '';
+  const epStage = (m && typeof _missionActiveEpStage === 'function') ? _missionActiveEpStage(m) : null;
+  if (epStage && typeof ltEdelbaumTofEst === 'function' && typeof progVcirc === 'function') {
+    const vEsc_kms = progVcirc('Earth', plan.alt_km || 185);
+    const ep = { thrust_N: epStage.ep_thrust_N, isp_s: epStage.ep_isp_s, m0_kg: progStageMass(epStage), mDry_kg: epStage.dry_mass };
+    const tof = ltEdelbaumTofEst(vEsc_kms, ep);
+    ltTxt = `<br>&#x26A1; spiral to escape est.: ${Math.round(vEsc_kms * 1000).toLocaleString()} m/s (&asymp; v_circ at ${Math.round(plan.alt_km || 185)} km — low-thrust escape limit)`
+      + (tof.tof_s != null ? ` &middot; TOF ~${Math.round(tof.tof_s / 86400)} d` : ' &middot; <span style="color:var(--warn);">exceeds EP tank capacity</span>');
+  }
   return `<span style="color:var(--accent);">Ideal parking for ${_mrEsc(dest)}</span>: `
     + `${Math.round(plan.alt_km)} km &times; ${plan.inc_deg.toFixed(1)}&deg; incl, &Omega; ${plan.lan_deg.toFixed(1)}&deg;${dlaTxt}`
-    + `<br>${energyTxt}${azTxt}${winTxt}`
+    + `<br>${energyTxt}${azTxt}${winTxt}${ltTxt}`
     + `<br><span style="color:var(--text-dim);">ecliptic-frame approximation (no axial tilt) &middot; every field editable before Apply</span>`;
 }
 // Pure-ish readout builder — reads no DOM, just formats the three math
@@ -22503,13 +22712,22 @@ function _missionMvBuilderHTML(id, token) {
     status = `<div style="font-family:var(--mono);font-size:10px;margin-top:5px;color:${close ? 'var(--accent)' : 'var(--accent2,#e5c07b)'};">ΔV ${Math.round(delivered).toLocaleString()} / ${Math.round(fullDv).toLocaleString()} m/s — ${close ? '✓ closes' : 'short ' + Math.round(Math.max(0, fullDv - delivered)).toLocaleString()}</div>`;
   }
   const reqStr = fullDv > 0 ? Math.round(fullDv).toLocaleString() + ' m/s' : '—';
+  // E3 dual pricing: PARALLEL low-thrust est. line (Edelbaum full form, 568)
+  // when the acting vehicle's active stage is EP-capable — the impulsive
+  // "requires" number above is untouched (progNmComputeEdgeDv, frozen).
+  const ltFrom = isAdd ? document.getElementById('addev-mvf-' + id)?.value : (e && e.fromNode);
+  const ltTo   = isAdd ? document.getElementById('addev-mvt-' + id)?.value : (e && e.toNode);
+  const ltHTML = _missionLtEdgeEstHTML(ctx.m, ltFrom, ltTo);
+  const ltBtn  = (isAdd && ltHTML)
+    ? `<button class="act-btn" style="width:100%;margin-top:6px;font-size:10px;" title="Author a LOWTHRUST event pre-filled with the Edelbaum est. duration instead of an impulsive maneuver" onclick="missionExecLowThrustFromEdge('${id}')">⚡ Add as Low-Thrust instead</button>`
+    : '';
   return `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin:6px 0 3px;">// requires <b style="color:var(--text-bright)">${reqStr}</b> — steps:</div>
-    ${rows}${status}
+    ${ltHTML}${rows}${status}
     <div style="display:flex;gap:4px;margin-top:6px;">
       <button class="act-btn" style="flex:1;font-size:10px;" onclick="missionMvStep(${t},'add','burn')">＋ Burn</button>
       <button class="act-btn" style="flex:1;font-size:10px;" onclick="missionMvStep(${t},'add','separate')">＋ Separate</button>
       <button class="act-btn" style="flex:1;font-size:10px;" title="Auto-build a staged burn that closes the ΔV" onclick="missionMvStep(${t},'auto')">⚙ Auto</button>
-    </div>`;
+    </div>${ltBtn}`;
 }
 
 function missionExecManeuver(id, fromId, toId) {
@@ -23869,7 +24087,11 @@ function _missionNodeMapHTML(m) {
       const annTitle = ann.flown ? ` — ${_tsEsc(ann.label)}` : ' — estimated (schematic)';
       const chips = chipsByKey[k];
       const chipTitle = chips ? ' — ' + chips.map(c => `${c.name} ${Math.round(c.dv).toLocaleString()} m/s`).join(', ') : '';
-      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}</title>`;
+      // E3 dual pricing (tooltip): PARALLEL Edelbaum est. when the acting
+      // vehicle's active stage is EP-capable — impulsive numbers untouched.
+      const ltEst = (typeof _missionLtEdgeEstimate === 'function') ? _missionLtEdgeEstimate(m, p.lo, p.hi) : null;
+      const ltTitle = ltEst ? ` — low-thrust est.: ${Math.round(ltEst.dv_ms).toLocaleString()} m/s${ltEst.tof_s != null ? ' · TOF ' + (ltEst.tof_s / 86400).toFixed(1) + ' d' : ''}` : '';
+      edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}${ltTitle}</title>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="${col}" stroke-width="2.5" opacity="0.85"${chips ? ' stroke-dasharray="6 3"' : ''}/>`;
       if (p.loToHi != null || bothWays) edgesHTML += _nmArrowHead(Ax, Ay, Bx, By, col, 2);   // arrow at hi edge
@@ -26814,6 +27036,115 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
 // body's neighborhood (independent of the camera zoom, same "local scene
 // scale" concept as before — it just gets recentered on ox,oy instead of on
 // the SVG origin).
+// ── MISSION_MODEL_V2 §19 E3 — low-thrust spiral rendering (MATH.md §7aa) ────
+// COMPUTED legs: the signature-matched cache record (568) carries a
+// rev-boundary-LOD sample split (head/mid/tail from ltResampleSpiralRevs) —
+// head+tail draw as REAL polylines through _trajPolylineSVG (per-sample
+// epochs -> the N3 frame transform applies automatically, same as physics
+// legs), and the dense middle draws as a translucent min/max-radius annulus
+// ("washer") in the spiral's plane. The washer is built here with _trajProj3
+// at t=viewT rather than reusing Saturn's ring-band machinery
+// (_trajRingBandRunPath): that path projects through raw az/el and
+// _trajRingPlaneBasis(body), which BYPASSES the N3 frame transform — the
+// washer must rotate with the frame like the polylines it bridges. v1
+// spirals are ecliptic-planar by construction (ltComputeTrajectory seeds
+// r=[R+alt,0,0], v=[0,v,0]), so a flat z=0 annulus is exact, not an
+// approximation, for every leg this pass can author; the "washer uses the
+// plane at viewT" caveat only matters if out-of-plane laws ever land
+// (documented, §7aa).
+// UN-COMPUTED / STALE legs: an honest SCHEMATIC — a dashed log-spiral arc
+// from the start orbit's radius to the est.-lane end radius, var(--text-dim),
+// clearly stylized (fixed 4 revs, not a physics claim), so an authored leg
+// always has SOME visual (§19's contract) without pretending integration ran.
+function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, selAuthIdx) {
+  if (!m || !m.log || typeof ltComputedLeg !== 'function') return '';
+  const id = m.missionId;
+  const bodyDef = PROG_BODIES[body];
+  if (!bodyDef) return '';
+  let out = '';
+  m.log.forEach((e, i) => {
+    if (!e || e.type !== 'LOWTHRUST') return;
+    const ob = e.orbitBefore;
+    if (!ob || ob.body !== body) return;
+    const emphasized = selAuthIdx != null && i === selAuthIdx;
+    const met0 = e.metStart || 0;
+    const dur = Math.max(0, e.duration_s || 0);
+    const legState = vt >= met0 + dur ? 'history' : (vt >= met0 ? 'current' : 'planned');
+    const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
+    const clickAttr = ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${i})"`;
+    const rec = (e._ltState === 'computed') ? ltComputedLeg(id, i) : null;
+    const lod = rec && rec.samplesLod;
+
+    if (lod && ((lod.head && lod.head.length > 1) || (lod.tail && lod.tail.length > 1))) {
+      // ── computed: LOD render ──
+      const color = emphasized ? 'var(--accent)' : 'var(--accent2)';
+      const anchorOf = f => f === body ? { x: ox, y: oy, depth: oDepth != null ? oDepth : Infinity } : null;
+      const toLeg = seg => ({ samples: seg.map(s => ({ t: met0 + s.t, frame: body, r: s.r })) });
+      const title = `Low-thrust spiral (computed) &middot; ${_trajDvText(Math.round((rec.dvAccum_kms || 0) * 1000))}${lod.revCount ? ' &middot; ' + Math.round(lod.revCount) + ' revs' : ''} &middot; ${_metFmt(met0)}`;
+      // envelope washer FIRST (under the polylines): min/max radius over the
+      // decimated middle (plus the adjacent head/tail endpoints for a seamless
+      // bridge). Skipped when the middle is empty (short spiral — pure polyline).
+      if (lod.mid && lod.mid.length) {
+        let rMin = Infinity, rMax = 0;
+        const scan = s => { const r = Math.hypot(s.r[0], s.r[1], s.r[2] || 0); if (r < rMin) rMin = r; if (r > rMax) rMax = r; };
+        lod.mid.forEach(scan);
+        if (lod.head && lod.head.length) scan(lod.head[lod.head.length - 1]);
+        if (lod.tail && lod.tail.length) scan(lod.tail[0]);
+        const extentPx = rMax * zoom;
+        if (isFinite(rMin) && rMax > rMin && !_trajCullByExtent(extentPx) && !_trajCullRingByDiagonal(extentPx, viewportDiagPx)) {
+          const N = 48;
+          const arc = r => {
+            let d = '';
+            for (let k = 0; k <= N; k++) {
+              const a = k / N * 2 * Math.PI;
+              const q = _trajProj3(r * Math.cos(a), r * Math.sin(a), 0);   // t=viewT: washer plane rides the frame at view time
+              d += (d ? ' L ' : 'M ') + (ox + q.x * zoom).toFixed(2) + ' ' + (oy + q.y * zoom).toFixed(2);
+            }
+            return d + ' Z';
+          };
+          // two closed subpaths + evenodd = a true annulus (hole at the inner radius)
+          const washerD = arc(rMax) + ' ' + arc(rMin);
+          out += `<path d="${washerD}" fill="${color}" fill-opacity="${(0.10 * stateAlpha).toFixed(3)}" fill-rule="evenodd" stroke="${color}" stroke-width="0.4" stroke-opacity="${(0.35 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title} &middot; envelope ${Math.round(rMin - bodyDef.R).toLocaleString()}&ndash;${Math.round(rMax - bodyDef.R).toLocaleString()} km alt (dense middle revs)</title></path>`;
+        }
+      }
+      // head + tail polylines (real per-rev geometry; per-sample epochs -> N3)
+      [lod.head, lod.tail].forEach((seg, si) => {
+        if (!seg || seg.length < 2) return;
+        const poly = _trajPolylineSVG(toLeg(seg), anchorOf, zoom, { viewportDiagPx });
+        if (!poly || poly.hidden) return;
+        const dashAttr = legState === 'planned' ? ' stroke-dasharray="2.5,2"' : '';
+        const op = ((emphasized ? 1 : 0.85) * stateAlpha).toFixed(3);
+        out += `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${emphasized ? 1.1 : 0.7}"${dashAttr} opacity="${op}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title} &middot; ${si === 0 ? 'first' : 'last'} revs</title></path>`;
+        out += `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
+      });
+      return;
+    }
+
+    // ── un-computed / STALE: schematic dashed log-spiral glyph ──
+    const oa = e.orbitAfter;
+    const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+    const r0 = bodyDef.R + meanAlt(ob);
+    const r1 = bodyDef.R + (oa ? meanAlt(oa) : meanAlt(ob));
+    if (!(r0 > 0) || !(r1 > 0)) return;
+    const extentPx = Math.max(r0, r1) * zoom;
+    if (_trajCullByExtent(extentPx) || _trajCullRingByDiagonal(extentPx, viewportDiagPx)) return;
+    const REVS = 4, STEPS = 160;                       // stylized, NOT the est. rev count — a glyph, not physics
+    const thMax = REVS * 2 * Math.PI;
+    let d = '';
+    for (let k = 0; k <= STEPS; k++) {
+      const th = k / STEPS * thMax;
+      const r = r0 * Math.pow(r1 / r0, th / thMax);    // log spiral: exponential radius vs angle
+      const q = _trajProj3(r * Math.cos(th), r * Math.sin(th), 0);
+      d += (k ? ' L ' : 'M ') + (ox + q.x * zoom).toFixed(2) + ' ' + (oy + q.y * zoom).toFixed(2);
+    }
+    const stateTxt = e._ltState === 'stale' ? 'STALE — recompute' : 'est. — not computed';
+    const title = `Low-thrust spiral (schematic, ${stateTxt}) &middot; ${_trajDvText(Math.round(e.dv_est || 0))} est. &middot; ${_metFmt(met0)}`;
+    out += `<path d="${d}" fill="none" stroke="var(--text-dim)" stroke-width="0.7" stroke-dasharray="4,3" opacity="${(0.7 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title}</title></path>`;
+    out += `<path d="${d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
+  });
+  return out;
+}
+
 function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, viewT, overrides, calib, oDepth) {
   if (!m) return '';
   const frames = _trajGetExtraction(m);
@@ -26842,6 +27173,9 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
         ? _trajPropagatedRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts)
         : _trajRingSVG(rec, body, scale, rec.colors.size === 1 ? [...rec.colors][0] : null, ringOpts);
     });
+    // MISSION_MODEL_V2 §19 E3 — low-thrust spiral legs (computed LOD render /
+    // schematic dashed glyph). See _trajLowThrustSVG below + MATH.md §7aa.
+    out += _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, viewT != null ? viewT : Infinity, oDepth, selAuthIdx);
   }
 
   // transfer legs — C2 mission-state trimming: a leg's relationship to
@@ -31196,9 +31530,18 @@ function _ttdLaneModel(m) {
       // BURN literals AND the modern unified MNODE maneuvers (solved or
       // manual) — real missions author MNODEs, so BURN-only left the marker
       // pass empty on every current mission (found in delivery review).
-      return ev && (ev.type === 'BURN' || ev.type === 'MNODE');
+      // E3: LOWTHRUST joins the ▲ pass too (the burn STARTS here; its
+      // duration renders as a span below, not as this point marker).
+      return ev && (ev.type === 'BURN' || ev.type === 'MNODE' || ev.type === 'LOWTHRUST');
     }).map(p => ({ met: p.met, authIdx: p.authIdx, zoneKey: p.zoneKey }));
-    return { name: L.name, color: L.color, expended: L.expended, segs, burns };
+    // E3 (MISSION_MODEL_V2 §19): a LOWTHRUST leg is a months-long BAND on the
+    // lane, not a tick — collect [met, met+duration] spans (durationUsed is
+    // stamped by the recompute loop alongside metStart).
+    const ltSpans = pts.filter(p => {
+      const ev = band.events[p.index];
+      return ev && ev.type === 'LOWTHRUST' && ev.durationUsed > 0;
+    }).map(p => ({ t0: p.met, t1: p.met + (band.events[p.index].durationUsed || 0), authIdx: p.authIdx }));
+    return { name: L.name, color: L.color, expended: L.expended, segs, burns, ltSpans };
   });
   return { lanes, maxMet };
 }
@@ -31227,6 +31570,15 @@ function _ttdLanesHTML(m, id) {
       const title = `${_tsEsc(L.name)} · ${_tsEsc(s.zoneKey || '')} · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
       return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:${zoneColor};border-top-color:${L.color};opacity:${op}" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
     }).join('');
+    // E3: LOWTHRUST spans — duration-wide thrust-colored low-alpha bands laid
+    // over the zone segments (the ▲ start marker comes from the burns pass).
+    const ltHTML = (L.ltSpans || []).map(s => {
+      const l = Math.max(0, Math.min(100, (s.t0 / model.maxMet) * 100));
+      const r = Math.max(0, Math.min(100, (s.t1 / model.maxMet) * 100));
+      const w = Math.max(0.4, r - l);
+      const title = `${_tsEsc(L.name)} low-thrust burn · T+${_metFmt(s.t0)}–${_metFmt(s.t1)}`;
+      return `<div class="ttd-seg" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%;background:var(--accent2);border-top-color:var(--accent2);opacity:0.35" onclick="_trajSelectEventFromView('${id}',${s.authIdx})" title="${title}"></div>`;
+    }).join('');
     const burnsHTML = L.burns.map(b => {
       const l = Math.max(0, Math.min(100, (b.met / model.maxMet) * 100));
       return `<div class="ttd-burn" style="left:${l.toFixed(2)}%" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${b.authIdx})" title="${_tsEsc(L.name)} burn · T+${_metFmt(b.met)}">▲</div>`;
@@ -31234,7 +31586,7 @@ function _ttdLanesHTML(m, id) {
     const label = L.name.length > 14 ? L.name.slice(0, 13) + '…' : L.name;
     return `<div class="ttd-lane-row" style="height:${laneH + 4}px">
       <div class="ttd-lane-label" style="border-left-color:${L.color}" title="${_tsEsc(L.name)}">${_tsEsc(label)}</div>
-      <div class="ttd-lane-track" style="height:${laneH}px">${segsHTML}${burnsHTML}</div>
+      <div class="ttd-lane-track" style="height:${laneH}px">${segsHTML}${ltHTML}${burnsHTML}</div>
     </div>`;
   }).join('');
 
