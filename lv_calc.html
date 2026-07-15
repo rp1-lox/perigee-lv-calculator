@@ -4319,8 +4319,24 @@ const TS_VARS={
   altitude:{label:'Parking Altitude',unit:'km',from:200,to:10000,dom:'parking-alt'},
   inclination:{label:'Inclination',unit:'deg',from:0,to:90,dom:'inclination'},
   payload:{label:'Payload Mass',unit:'kg',from:0,to:20000,dom:'payload-mass'},
+  c3:{label:'Escape C3',unit:'km²/s²',from:0,to:120,dom:null},
   sensitivity:{label:'Sensitivity',unit:'',from:0,to:0,dom:null},
 };
+
+// On-orbit ΔV for an escape of characteristic energy c3 (km²/s²) from a circular
+// parking orbit at parkingAlt (km). Term-for-term replica of the dest.mode==='escape'
+// branch of destOnOrbitDV() (145-dest-dv.js) with decl defaulted to siteLat (as
+// destOnOrbitDV does when dest.decl is omitted) — that default makes the plane-change
+// term (ds=|siteLat|-|decl|-0.5) always negative, so it drops out here exactly as it
+// does there. tests/math.test.js pins this against destOnOrbitDV for every escape
+// destination in ORBIT_CATEGORIES at siteLat=that destination's own decl.
+function _tsOnOrbitDVEscapeC3(c3,parkingAlt){
+  const Vesc2=2*MU/(RE+parkingAlt);
+  if(c3<-Vesc2)return {onOrbitDV:0,error:`C3=${c3} below minimum (${(-Vesc2).toFixed(1)}) for ${parkingAlt} km orbit`};
+  const Vh=Math.sqrt(Vesc2+c3);
+  const onOrbitDV=(Vh-Math.sqrt(MU/(RE+parkingAlt)))*1000;
+  return {onOrbitDV};
+}
 
 // ── Metric selector (y-axis) ──────────────────
 // Applies to numeric sweeps (altitude/inclination/payload), destination sweeps, and
@@ -4420,6 +4436,7 @@ function tsRenderForm(){
             <option value="altitude">Parking Altitude (km)</option>
             <option value="inclination">Inclination (deg)</option>
             <option value="payload">Payload Mass (kg)</option>
+            <option value="c3">Escape C3 (km²/s²)</option>
             <option value="sensitivity">Sensitivity (tornado)</option>
           </select>
         </div>
@@ -4748,6 +4765,8 @@ function tsRunSweep(){
     if(noteEl)noteEl.textContent=`Varies: parking/target altitude (circular, apogee=perigee=parking). Metric: ${metricDef.label}. Holds constant: inclination, payload path, booster, all stage masses (per vehicle). Site latitude/azimuth is per-vehicle. On-orbit ΔV recomputed per point via the minimal circular-orbit plane-change formula (see 165-trade-study.js) — NOT calculate()\'s full elliptical logic.`;
   }else if(key==='inclination'){
     if(noteEl)noteEl.textContent=`Varies: target inclination at the shared sweep parking altitude (circular orbit assumed). Metric: ${metricDef.label}. Holds constant: parking altitude, booster, all stage masses (per vehicle). Site latitude/azimuth is per-vehicle. On-orbit ΔV = plane-change only, via the minimal circular-orbit formula — NOT calculate()\'s full elliptical logic.`;
+  }else if(key==='c3'){
+    if(noteEl)noteEl.textContent=`Varies: escape characteristic energy C3 (km²/s²) from each vehicle's own parking perigee/altitude. Metric: ${metricDef.label}. Holds constant: parking altitude, payload path, booster, all stage masses (per vehicle). On-orbit ΔV recomputed per point via ${'_tsOnOrbitDVEscapeC3'} (165-trade-study.js), a term-for-term replica of destOnOrbitDV()'s escape branch (145-dest-dv.js) at zero plane-change (decl=siteLat). C3 below the minimum reachable from the parking orbit shows a blank/zero value.`;
   }else{
     if(noteEl)noteEl.textContent=`Varies: payload mass. Metric: ${metricDef.label}. Holds constant: parking altitude, inclination (on-orbit ΔV taken from the last Calculate run for the current vehicle, or 0 if none — same fixed value applied to all compared vehicles for a fair x-axis), booster, all stage masses (per vehicle). Site latitude/azimuth is per-vehicle.`;
   }
@@ -4776,6 +4795,9 @@ function tsRunSweep(){
       }else if(key==='inclination'){
         const onOrbitDV=_tsOnOrbitDVCircular(sharedParkingAlt,x,base.siteLat);
         y=_tsMetricAt(metric,base,base.payload,sharedParkingAlt,onOrbitDV);
+      }else if(key==='c3'){
+        const r=_tsOnOrbitDVEscapeC3(x,sharedParkingAlt);
+        y=r.error?0:_tsMetricAt(metric,base,base.payload,sharedParkingAlt,r.onOrbitDV);
       }else{
         y=_tsMetricAt(metric,base,x,base.parkingAlt,fixedOnOrbitDV);
       }
@@ -4792,7 +4814,7 @@ function tsRunSweep(){
       // Zero-clip capability curves (altitude/inclination, maxpay/payfrac metrics only —
       // these legitimately hit a hard zero; margin/tdv/tbt/tw are exempt, they may
       // legitimately go negative (margin) or don't have a "capability cliff" meaning).
-      const clip=(key==='altitude'||key==='inclination')&&(metric==='maxpay'||metric==='payfrac');
+      const clip=(key==='altitude'||key==='inclination'||key==='c3')&&(metric==='maxpay'||metric==='payfrac');
       _tsResult={xLabel,xUnit,yLabel,yUnit,zeroLine,series,type:'line',clip};
       tsRenderChart(_tsResult);
       tsRenderTable(_tsResult);

@@ -25,6 +25,7 @@ const FILES = [
   'src/js/140-physics.js',
   'src/js/145-dest-dv.js',
   'src/js/150-stage-and-a-half.js',
+  'src/js/165-trade-study.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
@@ -124,6 +125,7 @@ const {
   progJDToDate, progDateToJD, progMissionTimeToDate, progDateToMissionTime, progDateToLocalInputValue,
   progDvTLI,
   physThrustDir, physThrustLawKnown,
+  _tsOnOrbitDVEscapeC3,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -312,6 +314,65 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // escape below minimum C3 → error, no crash
   ok('destOnOrbitDV: impossible C3 returns error field',
     !!destOnOrbitDV({ mode: 'escape', c3: -200, decl: 28.5, perigee: 185 }, 28.5).error);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _tsOnOrbitDVEscapeC3 (165-trade-study.js) — the C3-sweep replica of
+// destOnOrbitDV()'s escape branch. Pinned equal to destOnOrbitDV at every
+// escape-mode C3 that appears in ORBIT_CATEGORIES (060-orbit-categories.js),
+// all of which use decl=siteLat=28.5, perigee=185 — the exact condition under
+// which the replica's dropped plane-change term is guaranteed to vanish in the
+// original too. Then a monotonicity check and a Saturn V capability-curve
+// sanity (payload strictly decreases with C3).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  ok('_tsOnOrbitDVEscapeC3: function exists', typeof _tsOnOrbitDVEscapeC3 === 'function');
+
+  const destOnOrbitDV = sandbox.destOnOrbitDV;
+  const escapeC3s = [-1.9, 0.1, 0.5, 6.3, 8.7, 12.0, 16.0, 25.0, 56.7, 77.4, 98.5, 105.7, 127.5, 135.9, 139.6, 152.0];
+  escapeC3s.forEach(c3 => {
+    const pinned = destOnOrbitDV({ mode: 'escape', c3, decl: 28.5, perigee: 185 }, 28.5).onOrbitDV;
+    const replica = _tsOnOrbitDVEscapeC3(c3, 185).onOrbitDV;
+    approx(`_tsOnOrbitDVEscapeC3(${c3},185) == destOnOrbitDV escape pin`, replica, pinned, 1e-9);
+  });
+
+  // monotonicity: higher C3 → strictly more on-orbit ΔV, same parking orbit
+  {
+    const c3Series = [0, 10, 30, 60, 100, 120];
+    const dvs = c3Series.map(c3 => _tsOnOrbitDVEscapeC3(c3, 185).onOrbitDV);
+    let monotone = true;
+    for (let i = 1; i < dvs.length; i++) if (!(dvs[i] > dvs[i - 1])) monotone = false;
+    ok('_tsOnOrbitDVEscapeC3: monotonically increasing in C3', monotone);
+  }
+
+  // below-minimum C3 still reports an error, same as destOnOrbitDV
+  ok('_tsOnOrbitDVEscapeC3: impossible C3 returns error field',
+    !!_tsOnOrbitDVEscapeC3(-200, 185).error);
+
+  // capability curve: builtin Saturn V max payload strictly decreases as C3 rises
+  {
+    const satStages = [
+      { dry: 130980, prop: 2169290, thrust: 34020, isp: 304, res: 2 },
+      { dry: 34450,  prop: 451830,  thrust: 5165,  isp: 425, res: 2 },
+      { dry: 0,      prop: 0,       thrust: 0,     isp: 300, res: 2 },
+    ];
+    const c3Curve = [0, 10, 30, 60, 100, 120];
+    const site = { lat: 28.5, azMin: 37, azMax: 112 };
+    const pays = c3Curve.map(c3 => {
+      const r = _tsOnOrbitDVEscapeC3(c3, 185);
+      return lvMaxPayload(satStages, null, 0, 0, 185, r.onOrbitDV, site.lat, site.azMin, site.azMax);
+    });
+    // Non-increasing everywhere (a capability curve legitimately clips at 0 once
+    // C3 exceeds what the vehicle can reach), with at least one strict decrease
+    // so the curve isn't flat.
+    let nonIncreasing = true, sawStrictDrop = false;
+    for (let i = 1; i < pays.length; i++) {
+      if (pays[i] > pays[i - 1]) nonIncreasing = false;
+      if (pays[i] < pays[i - 1]) sawStrictDrop = true;
+    }
+    ok('_tsOnOrbitDVEscapeC3 + lvMaxPayload: Saturn V payload is non-increasing with C3', nonIncreasing);
+    ok('_tsOnOrbitDVEscapeC3 + lvMaxPayload: Saturn V payload curve actually drops (not flat)', sawStrictDrop);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
