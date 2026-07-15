@@ -807,7 +807,11 @@ function _tsClipSeriesAtZero(points){
 
 function tsRenderLineChart(res){
   const wrap=document.getElementById('ts-chart-wrap');
-  const W=960,H=340,ML=64,MR=24,MT=16,MB=40;
+  // 1280-unit viewBox (was 960): the SVG scales to container width, so a
+  // denser viewBox renders text/markers ~25% smaller on screen — user
+  // feedback 2026-07-15 ("everything on it is a bit big"). Line strokes are
+  // additionally non-scaling (true px) below.
+  const W=1280,H=420,ML=70,MR=26,MT=18,MB=44;
   const plotW=W-ML-MR,plotH=H-MT-MB;
 
   // Build per-series render data: clipped points + optional zero-crossing terminus.
@@ -837,24 +841,24 @@ function tsRenderLineChart(res){
   for(let i=0;i<=nTicks;i++){
     const xv=xMin+(xMax-xMin)*i/nTicks;
     const px=xToPx(xv);
-    xTicks+=`<line x1="${px}" y1="${MT}" x2="${px}" y2="${MT+plotH}" stroke="var(--border)" stroke-width="1"/>`;
+    xTicks+=`<line x1="${px}" y1="${MT}" x2="${px}" y2="${MT+plotH}" stroke="var(--border)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
     xTicks+=`<text x="${px}" y="${MT+plotH+16}" font-size="9" fill="var(--text-dim)" text-anchor="middle" font-family="var(--mono)">${_tsFmt(xv)}</text>`;
   }
   for(let i=0;i<=nTicks;i++){
     const yv=yMin+(yMax-yMin)*i/nTicks;
     const py=yToPx(yv);
-    yTicks+=`<line x1="${ML}" y1="${py}" x2="${ML+plotW}" y2="${py}" stroke="var(--border)" stroke-width="1"/>`;
+    yTicks+=`<line x1="${ML}" y1="${py}" x2="${ML+plotW}" y2="${py}" stroke="var(--border)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
     yTicks+=`<text x="${ML-6}" y="${py+3}" font-size="9" fill="var(--text-dim)" text-anchor="end" font-family="var(--mono)">${_tsFmt(yv)}</text>`;
   }
 
-  const zero=(res.zeroLine||res.clip)?`<line x1="${ML}" y1="${yToPx(0)}" x2="${ML+plotW}" y2="${yToPx(0)}" stroke="var(--border-bright)" stroke-width="1.5" stroke-dasharray="4,3"/>`:'';
+  const zero=(res.zeroLine||res.clip)?`<line x1="${ML}" y1="${yToPx(0)}" x2="${ML+plotW}" y2="${yToPx(0)}" stroke="var(--border-bright)" stroke-width="1" stroke-dasharray="4,3" vector-effect="non-scaling-stroke"/>`:'';
 
   const polylines=renderSeries.map((s,i)=>{
     const color=s.color||TS_SERIES_COLORS[i%TS_SERIES_COLORS.length];
     const linePts=s.terminus?[...s.points,s.terminus]:s.points;
     const pts=linePts.map(p=>`${xToPx(p.x)},${yToPx(p.y)}`).join(' ');
-    const line=`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.75"/>`;
-    const dot=s.terminus?`<circle cx="${xToPx(s.terminus.x)}" cy="${yToPx(s.terminus.y)}" r="3.5" fill="var(--panel)" stroke="${color}" stroke-width="1.75"/>`:'';
+    const line=`<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+    const dot=s.terminus?`<circle cx="${xToPx(s.terminus.x)}" cy="${yToPx(s.terminus.y)}" r="2.75" fill="var(--panel)" stroke="${color}" stroke-width="1" vector-effect="non-scaling-stroke"/>`:'';
     return line+dot;
   }).join('');
 
@@ -873,7 +877,7 @@ function tsRenderLineChart(res){
     ${polylines}
     <text x="${ML+plotW/2}" y="${H-4}" font-size="10" fill="var(--text-dim)" text-anchor="middle" font-family="var(--mono)">${res.xLabel} (${res.xUnit})</text>
     <text x="12" y="${MT+plotH/2}" font-size="10" fill="var(--text-dim)" text-anchor="middle" font-family="var(--mono)" transform="rotate(-90 12 ${MT+plotH/2})">${res.yLabel} (${res.yUnit})</text>
-    <circle id="ts-hover-dot" r="3.5" fill="var(--text-bright)" style="display:none;"/>
+    <circle id="ts-hover-dot" r="2.75" fill="var(--text-bright)" style="display:none;"/>
   </svg>
   <div id="ts-hover-readout" style="font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-top:4px;height:14px;"></div>`;
   wrap.innerHTML=svg;
