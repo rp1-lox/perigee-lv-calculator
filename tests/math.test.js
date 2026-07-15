@@ -29,6 +29,8 @@ const FILES = [
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
+  'src/js/565-physics-targeting.js',
+  'src/js/565-physics-nrho.js',
   'src/js/566-mission-state-v2.js',
   'src/js/568-lowthrust.js',
   'src/js/440-program-module-phase-9-spacecraft-defini.js',

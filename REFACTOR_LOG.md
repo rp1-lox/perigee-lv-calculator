@@ -197,3 +197,22 @@ Residual `5745-maneuver-gizmo.js` keeps the file banner, "(2) Interactive plumbi
 **Deleted**: none.
 **Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
 **Risk notes**: _missionPendingEventMet (read by 570's "Use time in Add Event") moved to -hover module; def-only, loads before runtime use. No frozen functions, persisted fields, or physics numerics touched.
+
+## [18] 565 physics-mission — expanded baseline + conservative split plan — 2026-07-15
+**Intent**: Split the two large self-contained solver blocks out of `565-physics-mission.js` (1,705 lines) — this is frozen-adjacent physics, so a stronger fingerprint was captured and the split is limited to clean phase-banner boundaries with the CLAUDE.md-named invariant functions (physSolveNodeBurn, physLegStateAt, physEscapeHorizonS, physShootLegAim) left intact.
+**Type**: baseline record.
+**Expanded 565 fingerprint (deterministic)**: physPhaseBurnAngle(0.7)=3.841593; physFreeReturnSolve(300,0,{},28.5)={converged:true, dv_ms:3119.7622, met_s:5193.0063, periAlt_km:383.7135}; physFreeReturnSolve(400,86400,{},0)={converged:true, dv_ms:3095.8245, met_s:87848.7866, periAlt_km:198.2079}; Gateway NRHO missKm=30.1135 (pins the WHOLE shooter chain physSolveNrhoTransfer->physShootLegAim->physShootToTarget->physClosestApproachKm->physAimBurnState->physSolveNodeBurn->physPropagateSegment); Apollo/Gateway budgets unchanged. Pure phasing geometry also gate-tested. Zero console errors.
+**Planned split (contiguous, phase-banner-anchored, def/decl-only; new files sort after 565-physics-mission.js and before 566-mission-state-v2.js; def-only so order irrelevant)**:
+- `565-physics-targeting.js` <- "P4: targeting" block (physAimBurnState, physClosestApproachKm, physArrivalStateAt, physArrivalOsculatingElements, physShootToTarget, physShootLegAim, _physShootCache).
+- `565-physics-nrho.js` <- "Phase 5a" block (_physNrhoShootCache, physSolveNrhoTransfer, physFreeReturnSolve).
+Residual `565-physics-mission.js` keeps: header/fidelity/body-set/encounter-constants/side-tables/leg-accessors, pure phasing geometry, physSolveNodeBurn, duration hook physLegTofFor, and the mission-wide rebuild (physEscapeHorizonS, physNextMnodeMetAfter, physLegStateAt, physRebuildMissionTrajectories) + MNODE authoring.
+
+## [19] 565 physics-mission split — extract targeting + NRHO solvers — 2026-07-15
+**Intent**: Extract the two large self-contained solver blocks from the physics-mission bridge, keeping all CLAUDE.md-named invariant functions and the mission-rebuild in the core.
+**Type**: split (behavior-preserving move) — PHYSICS module, extra verification.
+**Files**: `src/js/565-physics-mission.js` (1,705 → 881 lines) → new `src/js/565-physics-targeting.js` (411 lines: physAimBurnState, physClosestApproachKm, physArrivalStateAt, physArrivalOsculatingElements, physShootToTarget, physShootLegAim, _physShootCache) and new `src/js/565-physics-nrho.js` (442 lines: _physNrhoShootCache, physSolveNrhoTransfer, physFreeReturnSolve). Core retains fidelity/body-set/constants/side-tables/leg-accessors, pure phasing geometry, physSolveNodeBurn, physLegTofFor, and the mission-wide rebuild (physEscapeHorizonS, physNextMnodeMetAfter, physLegStateAt, physRebuildMissionTrajectories) + missionExecManeuverNode. `tests/math.test.js` FILES list gained both after 565-physics-mission.
+**Subagent**: one Sonnet subagent, two extractions, gate green first attempt, no code changes needed. 0 U+FFFD; each moved fn unique; invariant fns (physSolveNodeBurn/physLegStateAt/physEscapeHorizonS/physRebuildMissionTrajectories) confirmed remaining in core.
+**Behavior delta**: none. Expanded fingerprint AFTER == baseline (all MATCH): Apollo logLen3/6044/12372/45078/2678494; Gateway logLen4/6078/15064/45078/2714165; NRHO missKm=30.1135 (full shooter chain); physPhaseBurnAngle(0.7)=3.841593; physFreeReturnSolve(300,0,28.5)={3119.7622,5193.0063,383.7135}; physFreeReturnSolve(400,86400,0)={3095.8245,87848.7866,198.2079}. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
+**Risk notes**: runtime forward refs — core's physRebuildMissionTrajectories calls physSolveNrhoTransfer (nrho file, loads after core) which calls physShootLegAim (targeting file); all resolve at call time after all modules load; solved-burn magnitude accounting unchanged. No numbers/tolerances/formulas touched.
