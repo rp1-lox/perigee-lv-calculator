@@ -4736,6 +4736,19 @@ const PROG_BODY_COLORS = {
   Mars:'#b85848', Jupiter:'#cc8844', Saturn:'#ccbb88', Uranus:'#5fd0d0', Neptune:'#5566dd',
 };
 
+// Per-body atmosphere rim-glow tints (MISSION_MODEL_V2 §18 V1) — same DATA
+// palette exemption as PROG_BODY_COLORS immediately above (keep the two in
+// sync: any body with a meaningful atmosphere gets an entry here). Airless
+// bodies (Moon, Mercury, etc.) are intentionally ABSENT — the renderer draws
+// no glow, or at most a faint neutral-white limb, for anything missing here.
+// rgba() literals, not var(--...) — this is body identity data, not chrome.
+const PROG_BODY_ATMOSPHERE = {
+  Earth: 'rgba(120,170,255,0.55)',
+  Mars:  'rgba(214,140,90,0.40)',
+  Venus: 'rgba(230,210,140,0.50)',
+  Titan: 'rgba(230,150,70,0.50)',
+};
+
 // Compute the solar-system node-map layout: body positions + per-node positions.
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {

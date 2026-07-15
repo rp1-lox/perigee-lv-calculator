@@ -322,7 +322,15 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-focus-seg{flex-wrap:wrap;}
 .traj-canvas{position:relative;flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--nm-bg);border:1px solid var(--border);cursor:grab;}
 .traj-canvas:active{cursor:grabbing;}
-.traj-svg{display:block;width:100%;height:100%;}
+.traj-svg{display:block;width:100%;height:100%;position:relative;z-index:1;}
+/* Starfield (MISSION_MODEL_V2 §18 V1): screen-space, at infinity — does NOT
+   zoom/pan with the world. Sits behind the globe/scene layers via z-index
+   (DOM order alone would paint a positioned element after non-positioned
+   siblings, so both this and .traj-svg get explicit stacking). Built once
+   (deterministic seeded PRNG) and only redrawn on resize — see
+   _trajStarfieldSync (574). Neutral white-alpha only: the allowed
+   non-theme scrim exemption (CLAUDE.md theming rules), not chrome color. */
+.traj-starfield{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;}
 /* Symbology overlay (layer 2): sibling SVG stacked exactly over the world svg,
    sized in real container px (no viewBox scaling) so labels/markers are
    authored in literal CSS px and never counter-scale. pointer-events:none on

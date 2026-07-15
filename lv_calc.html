@@ -329,7 +329,15 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-focus-seg{flex-wrap:wrap;}
 .traj-canvas{position:relative;flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;background:var(--nm-bg);border:1px solid var(--border);cursor:grab;}
 .traj-canvas:active{cursor:grabbing;}
-.traj-svg{display:block;width:100%;height:100%;}
+.traj-svg{display:block;width:100%;height:100%;position:relative;z-index:1;}
+/* Starfield (MISSION_MODEL_V2 §18 V1): screen-space, at infinity — does NOT
+   zoom/pan with the world. Sits behind the globe/scene layers via z-index
+   (DOM order alone would paint a positioned element after non-positioned
+   siblings, so both this and .traj-svg get explicit stacking). Built once
+   (deterministic seeded PRNG) and only redrawn on resize — see
+   _trajStarfieldSync (574). Neutral white-alpha only: the allowed
+   non-theme scrim exemption (CLAUDE.md theming rules), not chrome color. */
+.traj-starfield{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;}
 /* Symbology overlay (layer 2): sibling SVG stacked exactly over the world svg,
    sized in real container px (no viewBox scaling) so labels/markers are
    authored in literal CSS px and never counter-scale. pointer-events:none on
@@ -23406,6 +23414,19 @@ const PROG_BODY_COLORS = {
   Mars:'#b85848', Jupiter:'#cc8844', Saturn:'#ccbb88', Uranus:'#5fd0d0', Neptune:'#5566dd',
 };
 
+// Per-body atmosphere rim-glow tints (MISSION_MODEL_V2 §18 V1) — same DATA
+// palette exemption as PROG_BODY_COLORS immediately above (keep the two in
+// sync: any body with a meaningful atmosphere gets an entry here). Airless
+// bodies (Moon, Mercury, etc.) are intentionally ABSENT — the renderer draws
+// no glow, or at most a faint neutral-white limb, for anything missing here.
+// rgba() literals, not var(--...) — this is body identity data, not chrome.
+const PROG_BODY_ATMOSPHERE = {
+  Earth: 'rgba(120,170,255,0.55)',
+  Mars:  'rgba(214,140,90,0.40)',
+  Venus: 'rgba(230,210,140,0.50)',
+  Titan: 'rgba(230,150,70,0.50)',
+};
+
 // Compute the solar-system node-map layout: body positions + per-node positions.
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {
@@ -24290,21 +24311,69 @@ function _trajFitWKmForBody(body, m) {
   return Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, fitR * 2));
 }
 
+// ── V1 fly-to easing (MISSION_MODEL_V2 §18) ─────────────────────────────────
+// Camera anchor/zoom/orientation changes ease (cubic in-out, ~600ms) instead
+// of snapping. The floating-origin design re-centers on the new anchor body
+// INSTANTLY (that's a precision requirement, not a style choice — see the
+// module header), so what eases here is wKm (zoom) and az/el (orientation);
+// a true zoom-out/arc/zoom-in path between distant bodies is V2+ (spec §18).
+// Interrupted cleanly by any user drag/wheel interaction mid-flight
+// (trajPanStart/trajWheelZoom cancel the animation for that mission id).
+let _trajFlyAnim = {}; // id -> requestAnimationFrame handle
+function _trajEaseCubicInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function _trajCancelFlyTo(id) {
+  if (_trajFlyAnim[id] != null) {
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_trajFlyAnim[id]);
+    delete _trajFlyAnim[id];
+  }
+}
+function _trajFlyTo(id, targetCam) {
+  _trajCancelFlyTo(id);
+  const from = _trajCam(id);
+  const az0 = from.az || 0, el0 = from.el != null ? from.el : Math.PI / 2, wKm0 = from.wKm;
+  const az1 = targetCam.az != null ? targetCam.az : az0;
+  const el1 = targetCam.el != null ? targetCam.el : el0;
+  let dAz = az1 - az0; // shortest-path wrap so a near-2pi az doesn't spin the long way
+  while (dAz > Math.PI) dAz -= 2 * Math.PI;
+  while (dAz < -Math.PI) dAz += 2 * Math.PI;
+  const dur = 600, t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const step = () => {
+    if (_trajDrag && _trajDrag.id === id) { delete _trajFlyAnim[id]; return; } // interrupted by drag on this panel
+    const p = Math.min(1, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0) / dur);
+    const e = _trajEaseCubicInOut(p);
+    const cam = Object.assign({}, targetCam, {
+      az: az0 + dAz * e,
+      el: el0 + (el1 - el0) * e,
+      wKm: wKm0 + (targetCam.wKm - wKm0) * e,
+      relOffsetKm: { x: 0, y: 0 },
+    });
+    _trajApplyCam(id, cam);
+    if (p < 1) { _trajFlyAnim[id] = requestAnimationFrame(step); }
+    else delete _trajFlyAnim[id];
+  };
+  _trajFlyAnim[id] = requestAnimationFrame(step);
+}
+
 function trajSetFocus(id, body) {
   const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
   const wKm = _trajFitWKmForBody(body, m);
   const prev = _trajCam(id); // fly-to keeps the user's 3D orientation
-  _trajCamByMission[id] = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
+  const target = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
+  // The anchor swap itself must be instant (floating-origin re-center is a
+  // precision requirement) — seed the camera at the new anchor but the OLD
+  // zoom/orientation, mount the panel there, then ease wKm/az/el to target.
+  _trajCamByMission[id] = Object.assign({}, target, { wKm: prev.wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 });
   missionRenderDetail();
+  _trajFlyTo(id, target);
 }
 
 function trajResetView(id) {
   const cam = _trajCam(id);
   const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
   const wKm = _trajFitWKmForBody(cam.anchorBody, m);
-  // Reset returns to the canonical top-down view (az/el included).
-  _trajCamByMission[id] = { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 };
-  missionRenderDetail();
+  // Reset returns to the canonical top-down view (az/el included) — anchor is
+  // unchanged, so no instant re-mount is needed; just ease there.
+  _trajFlyTo(id, { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 });
 }
 
 // Re-render both layers + update the world <svg>'s viewBox attribute — cheap
@@ -24378,6 +24447,7 @@ function _trajApplyCam(id, cam) {
 
 function trajWheelZoom(ev, id) {
   ev.preventDefault();
+  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: wheel interrupts an in-flight ease
   if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
   const cam = _trajCam(id);
   const dir = ev.deltaY < 0 ? 1 : -1;
@@ -24404,6 +24474,7 @@ function trajPanStart(ev, id) {
   // (see _trajCam / trajResetView / trajSetFocus) but the field stays on the
   // camera struct because the fit/zoom math still reads it.
   const mode = 'rotate';
+  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: a drag interrupts an in-flight ease cleanly
   _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
   const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
   if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
@@ -24850,10 +24921,22 @@ function _trajResolveLabels(cam, rect) {
     kept.push({ box });
     const plateW = maxW + 6, plateH = h + 4;
     const plateX = bx1 - 3, plateY = by1 - 1;
-    const groupOp = c.opacity < 1 ? ` opacity="${c.opacity.toFixed(3)}"` : '';
-    const textLines = c.lines.map(l => `<text x="${sx.toFixed(2)}" y="${(sy + l.dy).toFixed(2)}" text-anchor="${c.anchor}" font-family="var(--mono)" font-size="${l.fontPx}" fill="${l.color}">${l.text}</text>`).join('');
+    // V1 label restyle (MISSION_MODEL_V2 §18): small uppercase, letter-spaced,
+    // dimmed until hover/selection, with a short leader tick from the anchor
+    // point up to the text plate (match the NASA Eyes reference). Uppercasing
+    // is done via CSS text-transform (not l.text.toUpperCase()) so the plate
+    // width computed above from the ORIGINAL text stays the sizing basis —
+    // uppercase glyphs read slightly wider, so the plate keeps a hair of
+    // breathing room rather than clipping.
+    const dimF = c.selected ? 1 : 0.62;
+    const groupOp = (c.opacity * dimF) < 1 ? ` opacity="${(c.opacity * dimF).toFixed(3)}"` : '';
+    const textLines = c.lines.map(l => `<text x="${sx.toFixed(2)}" y="${(sy + l.dy).toFixed(2)}" text-anchor="${c.anchor}" font-family="var(--mono)" font-size="${l.fontPx}" letter-spacing="0.6" style="text-transform:uppercase" fill="${l.color}">${l.text}</text>`).join('');
     const plate = `<rect x="${plateX.toFixed(2)}" y="${plateY.toFixed(2)}" width="${plateW.toFixed(2)}" height="${plateH.toFixed(2)}" fill="var(--panel-tint-plate)" rx="2"/>`;
-    out += `<g${groupOp}>${plate}${textLines}</g>`;
+    const tickColor = c.lines[0].color;
+    const tickDir = c.lines[0].dy < 0 ? -1 : 1; // short stub pointing from the anchor toward the label
+    const tickLen = Math.min(5, Math.abs(by2 - by1) / 2 + 1);
+    const leaderTick = `<line x1="${sx.toFixed(2)}" y1="${sy.toFixed(2)}" x2="${sx.toFixed(2)}" y2="${(sy + tickDir * tickLen).toFixed(2)}" stroke="${tickColor}" stroke-width="0.5" opacity="0.5"/>`;
+    out += `<g${groupOp}>${leaderTick}${plate}${textLines}</g>`;
   });
   return out;
 }
@@ -25021,9 +25104,14 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const emphasized = !!opts.emphasized;
-  const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
-  const strokeW = emphasized ? 1.4 : 0.7;
-  const baseOpacity = emphasized ? 1 : 0.85;
+  // V1 line restyle (MISSION_MODEL_V2 §18): the ACTIVE/selected ring keeps its
+  // vehicle/zone color at full weight; every other ring drops to a thin
+  // desaturated near-white low-alpha line (neutral scrim, exempt from theme
+  // chroma per CLAUDE.md) so the reference reads as "space with lit objects"
+  // rather than a wall of colored rings.
+  const strokeColor = emphasized ? (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)')) : 'rgba(255,255,255,0.42)';
+  const strokeW = emphasized ? 1.4 : 0.6;
+  const baseOpacity = emphasized ? 1 : 0.5;
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
@@ -25149,9 +25237,14 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   const zoom = opts.zoom || 1;
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const emphasized = !!opts.emphasized;
-  const strokeColor = emphasized ? 'var(--accent)' : (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)'));
-  const strokeW = emphasized ? 1.4 : 0.7;
-  const baseOpacity = emphasized ? 1 : 0.85;
+  // V1 line restyle (MISSION_MODEL_V2 §18): the ACTIVE/selected ring keeps its
+  // vehicle/zone color at full weight; every other ring drops to a thin
+  // desaturated near-white low-alpha line (neutral scrim, exempt from theme
+  // chroma per CLAUDE.md) so the reference reads as "space with lit objects"
+  // rather than a wall of colored rings.
+  const strokeColor = emphasized ? (color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent)')) : 'rgba(255,255,255,0.42)';
+  const strokeW = emphasized ? 1.4 : 0.6;
+  const baseOpacity = emphasized ? 1 : 0.5;
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label} (propagated)`;
@@ -26672,7 +26765,9 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const ringAlpha = _trajLodOpacity(ringScreenR, _TRAJ_LOD_WIN.heliocentricRing[0], _trajWindowHi(_TRAJ_LOD_WIN.heliocentricRing[1], viewportDiagPx));
     if (!sunOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && ringAlpha > 0) {
       const oel = progBodyOrbitElementsAt(body, viewT);
-      if (oel) emit(-1e17, trueRingPath(oel, sunP, (0.55 * ringAlpha).toFixed(3), _trajBodyColor(body), 'au'));
+      // V1 line restyle: heliocentric background rings are reference geometry,
+      // not an active trajectory — thin desaturated near-white, not body color.
+      if (oel) emit(-1e17, trueRingPath(oel, sunP, (0.4 * ringAlpha).toFixed(3), 'rgba(255,255,255,0.4)', 'au'));
     }
     const wp = progBodyWorldPos(body, viewT);
     const p = toRender(wp.x, wp.y, wp.z);
@@ -26726,7 +26821,8 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     const parentZoiAlpha = _trajLodOpacity(Math.max(ringScreenR, _trajBodyPxR(3, zoom)), _TRAJ_LOD_WIN.zoneOfInfluence[0], Infinity);
     if (!parentOffscreen && !_trajCullRingByDiagonal(ringScreenR, viewportDiagPx) && !_trajCullByExtent(ringScreenR) && parentZoiAlpha > 0) {
       const oel = progBodyOrbitElementsAt(name, viewT);
-      if (oel) emit(-1e17, trueRingPath(oel, parentP, (0.55 * parentZoiAlpha).toFixed(3), _trajBodyColor(name), 'km'));
+      // V1 line restyle: same reasoning as the heliocentric ring above.
+      if (oel) emit(-1e17, trueRingPath(oel, parentP, (0.4 * parentZoiAlpha).toFixed(3), 'rgba(255,255,255,0.4)', 'km'));
     }
     if (parentZoiAlpha <= 0) return; // moon (and its content) hidden with its parent's ZOI
     const wp = progBodyWorldPos(name, viewT);
@@ -27045,6 +27141,28 @@ function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx) {
 // Shared limb-darkening overlay: transparent center -> ~35% black rim,
 // center offset toward the Sun's SCREEN direction (cheap 2D dot from already-
 // projected positions) for a rudimentary day-side/terminator feel.
+// ── V1 atmosphere rim glow (MISSION_MODEL_V2 §18) ──────────────────────────
+// Soft radial-gradient halo just outside a body's limb, using the per-body
+// PROG_BODY_ATMOSPHERE data-layer tint (570, next to PROG_BODY_COLORS — same
+// theming exemption). Bodies absent from that table (airless: Moon, Mercury,
+// ...) get nothing here — the existing inward limb-darkening gradient
+// (_trajLimbGradientDef) already gives them a faint neutral shading cue.
+// Emitted BEHIND the disc/globe by call order at the call site; a soft
+// donut (transparent -> tinted -> transparent) so it reads as a glow at the
+// edge rather than a hard ring.
+function _trajAtmosphereGlowSVG(body, cx, cy, rPx, instanceId) {
+  if (typeof PROG_BODY_ATMOSPHERE === 'undefined' || !PROG_BODY_ATMOSPHERE[body]) return '';
+  const col = PROG_BODY_ATMOSPHERE[body];
+  const gid = `traj-atmo-${(instanceId || 'x')}-${body}`;
+  // Tight rim hugging the limb (NASA-Eyes look) — the first cut (1.38x outer,
+  // 0.85 peak at 1.2x) read as a fat donut, not an atmosphere (review 2026-07-14).
+  const rOut = rPx * 1.16;
+  return `<defs><radialGradient id="${gid}" cx="50%" cy="50%" r="50%">` +
+    `<stop offset="80%" stop-color="${col}" stop-opacity="0"/>` +
+    `<stop offset="88%" stop-color="${col}" stop-opacity="0.5"/>` +
+    `<stop offset="100%" stop-color="${col}" stop-opacity="0"/></radialGradient></defs>` +
+    `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${rOut.toFixed(2)}" fill="url(#${gid})"/>`;
+}
 function _trajLimbGradientDef(gradId, body, sunDirAngle) {
   const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
   const limbColor = style.limb || 'rgba(0,0,0,.35)';
@@ -27354,6 +27472,75 @@ function _trajRasteredDiscDataURL(body, discPx, spinAngle, az, el, sunDir3) {
   _trajRasterCache[key] = { url, t: now };
   return url;
 }
+// ── V1 idle texture pre-warm (MISSION_MODEL_V2 §18) ─────────────────────────
+// The trajectory view's first-open lag is texture decode (network fetch +
+// getImageData), not a slow render — the per-pixel raster loop itself is a
+// few ms once tex.ready. Kick decode for every textured body shortly after
+// app init, chunked one body per idle slice, so the view opens with
+// tex.ready already true for everything it's about to draw. No loading
+// screen (decision 2026-07-14 — pre-warm removes the wait instead of
+// dressing it up).
+function _trajScheduleIdle(fn) {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 800 });
+  else setTimeout(() => fn({ timeRemaining: () => 0, didTimeout: true }), 120);
+}
+let _trajPrewarmStats = null; // {startedAt, bodies:[{body,ms}], totalMs} — read by verification/perf checks
+function _trajPrewarmTextures() {
+  if (typeof document === 'undefined' || typeof PROG_TEXTURES === 'undefined') return;
+  // Bodies present in the active mission's touched frames take priority (the
+  // ones the user will actually see first); fall back to every textured body
+  // so a fresh/empty program still warms the common planets.
+  let list = _trajAllBodies().filter(b => PROG_TEXTURES[b]);
+  if (typeof _missions !== 'undefined' && _missions && _missions[0]) {
+    try {
+      const m = _missions[0];
+      const frames = _trajGetExtraction ? _trajGetExtraction(m) : null;
+      if (frames) {
+        const touched = Object.keys(frames).filter(id => {
+          const sc = frames[id];
+          return sc && (sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length));
+        });
+        const parents = touched.map(id => (PROG_MOON_ORBITS[id] && PROG_MOON_ORBITS[id].parent) || id);
+        const wanted = ['Earth', ...parents, ...touched].filter(b => PROG_TEXTURES[b]);
+        if (wanted.length) list = [...new Set(wanted)].concat(list.filter(b => !wanted.includes(b)));
+      }
+    } catch (e) { /* best-effort prioritization only — never block the prewarm */ }
+  }
+  let i = 0, retries = 0;
+  const startedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  _trajPrewarmStats = { startedAt, bodies: [], totalMs: null };
+  const az = 0, el = Math.PI / 2;
+  const doOne = () => {
+    if (i >= list.length) {
+      _trajPrewarmStats.totalMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
+      return;
+    }
+    const body = list[i];
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const tex = _trajTextureFor(body); // kicks off img decode if not already started
+    if (!tex.ready) {
+      retries++;
+      if (retries > 60) { i++; retries = 0; } // ~a few seconds of retries, then give up on this body
+      _trajScheduleIdle(doOne);
+      return;
+    }
+    // Warm both fidelity-ladder tiers at a canonical top-down orientation —
+    // this is a bonus (populates the dataURL cache for the common default
+    // view); the real win already happened above (tex.ready).
+    _trajRasterGlobe(body, _TRAJ_RASTER_LO_PX, 0, az, el, [0, 0, 1], _TRAJ_RASTER_LO_PX);
+    _trajRasterGlobe(body, 512, 0, az, el, [0, 0, 1], 512);
+    _trajPrewarmStats.bodies.push({ body, ms: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0 });
+    i++; retries = 0;
+    _trajScheduleIdle(doOne);
+  };
+  _trajScheduleIdle(doOne);
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  const kickPrewarm = () => _trajScheduleIdle(() => _trajPrewarmTextures());
+  document.addEventListener('DOMContentLoaded', kickPrewarm);
+  if (document.readyState === 'interactive' || document.readyState === 'complete') kickPrewarm();
+}
+
 // Repaint hook: after an async texture decode completes, re-render every
 // mounted trajectory-view panel at its current camera (same rebuild path
 // _trajApplyCam/_missionTrajAfterRender use) so the fallback vector frame is
@@ -27422,13 +27609,16 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
       const az = _trajProjCtx.az, el = _trajProjCtx.el;
       rasterUrl = _trajRasteredDiscDataURL(body, r * 2, spin, az, el, sunDir3);
     }
+    const atmoGlow = _trajAtmosphereGlowSVG(body, cx, cy, r, clickId || body);
     if (rasterUrl) {
       // Globe bitmap → persistent layer (see _trajPendingGlobes note); only
-      // the crisp border stays inline in the per-frame scene.
+      // the crisp border stays inline in the per-frame scene. Glow is drawn
+      // inline (traj-scene paints above the globe layer) so it reads as a
+      // soft rim right at the bitmap's edge.
       _trajPendingGlobes.push({ body, url: rasterUrl, x: cx - r, y: cy - r, size: r * 2 });
-      disc = `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
+      disc = atmoGlow + `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
     } else {
-      disc = _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
+      disc = atmoGlow + _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
     }
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';
@@ -27578,6 +27768,7 @@ function _missionTrajViewHTML(m) {
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"
            onmousedown="trajPanStart(event,'${id}')" onmousemove="trajPanMove(event)"
            onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()" oncontextmenu="return false">
+        <canvas class="traj-starfield" data-mid="${id}"></canvas>
         ${hintChip}
         ${(typeof _oiCardHTML === 'function') ? _oiCardHTML(m) : ''}
         <svg class="traj-svg" data-mid="${id}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet">
@@ -27720,6 +27911,64 @@ function _trajFlyoutOutsideClick(e) {
 // window resize, etc.) — required for the "world svg rect == container rect
 // AND overlay rect == world rect, at all zoom levels and all container
 // sizes" invariant.
+// ── V1 starfield (MISSION_MODEL_V2 §18) ─────────────────────────────────────
+// Deterministic seeded PRNG (mulberry32) — the SAME seed every draw, so
+// stars never "twinkle" between re-renders. Built ONCE per panel size and
+// only redrawn when that size actually changes (resize), never on
+// camera/rotate/zoom (the starfield is screen-space, at infinity — it must
+// NOT track the world). Neutral white-alpha only, per the theming rule's
+// scrim exemption — this is not chrome color.
+function _trajMulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const _TRAJ_STARFIELD_SEED = 133742;
+let _trajStarfieldSize = {}; // id -> "WxH" of the last drawn size (resize-only regen gate)
+function _trajStarfieldSync(id) {
+  const canvas = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] canvas.traj-starfield`);
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width), h = Math.round(rect.height);
+  if (!(w > 0 && h > 0)) return;
+  const key = `${w}x${h}`;
+  if (_trajStarfieldSize[id] === key) return; // unchanged size — never redraw (no twinkle)
+  _trajStarfieldSize[id] = key;
+  const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const rnd = _trajMulberry32(_TRAJ_STARFIELD_SEED);
+  const count = Math.max(120, Math.min(500, Math.round((w * h) / 2200)));
+  for (let i = 0; i < count; i++) {
+    const x = rnd() * w, y = rnd() * h;
+    const tier = rnd();
+    let r, a, fill;
+    if (tier > 0.985) { // rare, slightly larger tinted stars
+      r = 1.5 + rnd() * 0.5;
+      a = 0.75 + rnd() * 0.2;
+      fill = rnd() > 0.5 ? `rgba(190,205,255,${a.toFixed(2)})` : `rgba(255,222,180,${a.toFixed(2)})`;
+    } else if (tier > 0.88) { // mid tier
+      r = 0.9 + rnd() * 0.4;
+      a = 0.55 + rnd() * 0.25;
+      fill = `rgba(255,255,255,${a.toFixed(2)})`;
+    } else { // faint background tier
+      r = 0.4 + rnd() * 0.3;
+      a = 0.2 + rnd() * 0.25;
+      fill = `rgba(255,255,255,${a.toFixed(2)})`;
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+}
+
 let _trajResizeObservers = {};
 function _missionTrajAfterRender(m) {
   const id = m.missionId;
@@ -27727,6 +27976,7 @@ function _missionTrajAfterRender(m) {
   const overlayEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] svg.traj-overlay`);
   if (!svgEl) return;
   const sync = () => {
+    _trajStarfieldSync(id);
     const cam = _trajCamByMission[id];
     if (!cam) return;
     const rect = svgEl.getBoundingClientRect();
