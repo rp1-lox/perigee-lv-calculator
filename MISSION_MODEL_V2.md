@@ -426,6 +426,20 @@ Gate green: 570 (Phase 2 end) → 606 (T1-T3) → **609 (T4)**, `python build.py
 - V3: gate (`tests/math.test.js`, "5a:" block, 9 assertions) pins converged:true, miss < 2,000 km, TLI-class TOF band, `|Δv|` accounting parity, and the approximate total-dv band; browser-verified end-to-end via the dev seed.
 - 5b (rendezvous phase-matching, multi-vehicle timing) remains explicitly OPEN, as scoped.
 
+### 5b — rendezvous phase-matching + multi-vehicle timing (spec drafted 2026-07-15, for review)
+
+**Goal:** arrive where the station IS, not just on its orbit. Today a RENDEZVOUS event succeeds co-orbitally regardless of phase; 5b makes phase a real, priced, visible quantity — the last dishonesty in the Gateway architecture.
+
+**R1 — phase truth (measurement + display, no new solving).** Define the phase error between two vehicles sharing a propagated ref (or any orbit): time-along-track offset Δt_phase (seconds ahead/behind along the loop; for the NRHO, from `refOrbitPropagatedStateAt`'s wrapped clock) and its distance equivalent at the current point. Surface it: HUD chips for co-orbital vehicles show "Δphase 2h 41m · 8,910 km"; the RENDEZVOUS event card shows the phase error AT its MET and goes readiness-AMBER when it exceeds a documented capture window (~minutes/tens of km, constant with rationale in MATH.md) instead of silently succeeding. Gate: phase math pinned on synthetic two-vehicle cases (same orbit, known offsets).
+
+**R2 — phase-matched arrival (extend the 5a solver).** `physSolveNrhoTransfer` gains `targetPhase` mode: instead of quantizing arrival to ANY perilune crossing, pick the departure epoch + TOF combination (scan the same perilune-crossing lattice 5a already builds) whose arrival minimizes phase error to the TARGET VEHICLE's actual predicted position (station state = its own anchor timeline at t_arr, not the raw ref seed). Expose the trade honestly: the solver returns the 3-4 nearest lattice options {tDepart, TOF, dv_total, Δphase_at_arrival}; the launch-window/edge UI lets the user pick (default = min phase error within the dv band). This is a SELECTION layer on 5a's machinery — no new dynamics, fails cleanly to 5a co-orbital behavior with a note when no option enters the capture window.
+
+**R3 — terminal phasing burns (the classic two-impulse phasing).** When arrival phase error is nonzero but co-orbital (the normal case, incl. after R2's best effort): author-able "PHASING" maneuver pair (drop to/raise from a phasing orbit with period offset ΔP chosen so N revs absorb Δt_phase; standard `ΔP = Δt_phase/N` construction, N user-pickable 1-5). For the NRHO, period comes from the catalog; the burn pair prices via the existing rocket-eq/impulsive lane at the ref's perilune. The RENDEZVOUS event then requires phase-in-window (R1's check) — the workflow becomes: transfer (R2, coarse) → phasing (R3, fine) → RENDEZVOUS (now honest). Gate: ΔP construction round-trips (chosen ΔP absorbs the synthetic offset within tolerance); browser: Gateway seed extended to a full honest rendezvous chain.
+
+**R4 — multi-vehicle timing surface (bounded).** The timeline dock gains a per-vehicle epoch alignment affordance: RENDEZVOUS/DOCK events draw a vertical link between the two lanes at their MET, red/amber-tinted when R1's phase check fails. NO new event kinds, no scheduling solver — display + the R1 check only (full multi-vehicle choreography stays a §16 design pass).
+
+**Sequencing:** R1 (pure math + display, small) → R2 (solver selection layer) → R3 (phasing events) → R4 (dock link). Each lands separately, gate+browser-verified. Risks: R2's lattice may be coarse for tight windows (documented, R3 absorbs the residual — that's why R3 exists); phase near a propagated ref's wrap point needs the rotating-frame wrap semantics (N2) — use the wrapped clock, never inertial position diffs.
+
 ---
 
 ## 16. v3.0 BACKLOG (user, 2026-07-14 — running list, capture only, NOT next-up)
