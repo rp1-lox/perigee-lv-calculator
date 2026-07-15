@@ -13082,6 +13082,66 @@ function physLeapfrogStepThrust(state, t, dt, ctx, thrust, tRel, a0) {
   return { r: r1, v: v1, m: burn.mEnd, a1, dvStep, depleted: burn.depleted, active };
 }
 
+// ── B1: state-transition-matrix substrate (MISSION_MODEL_V2 §21, MATH.md §7ah) ──
+// Opt-in via opts.stm = true on physPropagateSegment (NOT ctx.stm as the spec
+// prose says — documented deviation: STM tracking is a per-call diagnostic
+// concern like opts.singleFrame, not a physical force-model input, so it rides
+// opts like every other propagation-mode flag). Propagates Phi(t,t0), the 6x6
+// state-transition matrix (d state_f / d state_0), alongside the trajectory via
+// the variational equation d/dt[dr;dv] = [[0,I],[F,0]]*[dr;dv], F = dA/dr, on
+// the SAME kick-drift-kick scheme 386 already uses for r,v (E1's "ride the
+// existing scheme" precedent, not an Euler bolt-on). Ballistic byte-identity:
+// every function below is ONLY invoked when opts.stm is true (hoisted once),
+// so the default path evaluates none of this.
+/** 3x3 Jacobian term for one gravitating source: mu*(3 s s^T/|s|^5 - I/|s|^3),
+ *  row-major length-9 array. `s` is the vector from the test particle TO the
+ *  source (matches physAccel's own r/rel usage so signs fall out identically
+ *  to a direct differentiation of physAccel's sum, not a re-derivation). */
+function physJacTerm3(s, mu) {
+  const sMag = physMag(s);
+  if (!(sMag > 0) || !mu) return [0,0,0, 0,0,0, 0,0,0];
+  const inv3 = 1 / (sMag * sMag * sMag);
+  const inv5 = inv3 / (sMag * sMag);
+  const k3 = 3 * mu * inv5;
+  return [
+    k3*s[0]*s[0] - mu*inv3, k3*s[0]*s[1],           k3*s[0]*s[2],
+    k3*s[1]*s[0],           k3*s[1]*s[1] - mu*inv3, k3*s[1]*s[2],
+    k3*s[2]*s[0],           k3*s[2]*s[1],           k3*s[2]*s[2] - mu*inv3,
+  ];
+}
+function _physMat3Add(a, b) { const o = new Array(9); for (let i = 0; i < 9; i++) o[i] = a[i] + b[i]; return o; }
+function _physMat3Vec(m, v) {
+  return [
+    m[0]*v[0] + m[1]*v[1] + m[2]*v[2],
+    m[3]*v[0] + m[4]*v[1] + m[5]*v[2],
+    m[6]*v[0] + m[7]*v[1] + m[8]*v[2],
+  ];
+}
+/** dA/dr (3x3, row-major) for ctx's exact force sum at (r,t) — central body
+ *  uses s=r directly (physAccel's central term), each perturber uses
+ *  s=rel=d-r (physAccel's perturber term); see MATH.md §7ah for the
+ *  derivation. Does NOT include the optional J2 term (ctx.j2) — v1 limitation,
+ *  documented (MATH.md §7ah critique): an STM run with ctx.j2 true will be
+ *  linearized against the point-mass field only. */
+function physAccelJacobian(r, t, ctx) {
+  const rails = ctx.railFn || physBodyStateAt;
+  const muC = ctx.center === 'Sun' ? PROG_MU_SUN : PROG_BODIES[ctx.center].mu;
+  let J = physJacTerm3(r, muC);
+  const centerState = ctx.center === 'Sun' ? null : rails(ctx.center, t, ctx.overrides);
+  for (const body of (ctx.bodies || [])) {
+    if (body === ctx.center) continue;
+    const muP = body === 'Sun' ? PROG_MU_SUN : (PROG_BODIES[body] && PROG_BODIES[body].mu);
+    if (!muP) continue;
+    const bodyHelio = body === 'Sun' ? { r: [0,0,0] } : rails(body, t, ctx.overrides);
+    const d = centerState ? physSub(bodyHelio.r, centerState.r) : bodyHelio.r;
+    if (!(physMag(d) > 0)) continue;
+    const rel = physSub(d, r);
+    if (!(physMag(rel) > 0)) continue;
+    J = _physMat3Add(J, physJacTerm3(rel, muP));
+  }
+  return J;
+}
+
 // ── leapfrog (kick-drift-kick, symplectic, 2nd order) ────────────────────────
 // `a0` (optional): precomputed acceleration at (state.r, t). Between
 // consecutive steps a0 of step n+1 EQUALS a1 of step n (same r, same t) —
@@ -13146,6 +13206,25 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   // code, keeping it byte-identical to pre-E1 behavior.
   const hasThrust = !!ctx.thrust;
   const thrust = ctx.thrust;
+  // B1 (MATH.md §7ah): opts.stm opt-in. Unsupported with ctx.thrust (v1) —
+  // return stmF:null + a note rather than throwing (E1's "never throw
+  // mid-integration" discipline extended to this substrate).
+  const wantStm = !!opts.stm;
+  let stmActive = wantStm && !hasThrust;
+  let stmNote = null;
+  if (wantStm && hasThrust) stmNote = 'B1: STM unsupported with ctx.thrust (v1) — stmF is null. Low-thrust STM is future work.';
+  // Phi(t0) = I, stored as 6 columns (one per initial [dr;dv] basis vector);
+  // each column's r-part/v-part are ordinary 3-vectors, so the same leapfrog
+  // recursion physLeapfrogStep uses for the real trajectory applies column-
+  // wise (physAdd/physScale reused verbatim — see physAccelJacobian above).
+  let stmR = null, stmV = null;
+  if (stmActive) {
+    stmR = []; stmV = [];
+    for (let j = 0; j < 6; j++) {
+      stmR.push([j === 0 ? 1 : 0, j === 1 ? 1 : 0, j === 2 ? 1 : 0]);
+      stmV.push([j === 3 ? 1 : 0, j === 4 ? 1 : 0, j === 5 ? 1 : 0]);
+    }
+  }
   let state = { r: state0.r.slice(), v: state0.v.slice() };
   if (hasThrust) state.m = thrust.m0_kg;
   let t = t0;
@@ -13183,8 +13262,21 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     } else {
       next = physLeapfrogStep(state, t, dt, ctxNow, aCarry);
     }
-    aCarry = next.a1;
     const tNext = t + dt;
+    // B1: propagate Phi via the SAME kick-drift-kick recursion as r,v, using
+    // F evaluated at the reference trajectory's own (r,t) and (r1,t+dt) — the
+    // standard variational-equation linearization (same F for every column).
+    if (stmActive) {
+      const F0 = physAccelJacobian(state.r, t, ctxNow);
+      const F1 = physAccelJacobian(next.r, tNext, ctxNow);
+      for (let j = 0; j < 6; j++) {
+        const vHalf = physAdd(stmV[j], physScale(_physMat3Vec(F0, stmR[j]), dt / 2));
+        const r1c = physAdd(stmR[j], physScale(vHalf, dt));
+        const v1c = physAdd(vHalf, physScale(_physMat3Vec(F1, r1c), dt / 2));
+        stmR[j] = r1c; stmV[j] = v1c;
+      }
+    }
+    aCarry = next.a1;
     steps++;
 
     // apsis events: sign change of r·v (radial velocity) within this frame
@@ -13202,6 +13294,14 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {
       events.push({ type: 'soi', t: tNext, from: ctxNow.center, to: frameNext });
+      // B1: Phi's columns are expressed in the OLD frame's coordinates; a
+      // frame handoff is a translation of r,v by body state (physPatchState),
+      // not a linear map on the deviation coordinates, so Phi is not valid
+      // past a handoff. RECOMMENDED usage is opts.singleFrame (the N2/B2
+      // precedent — never reaches this branch). If a handoff occurs anyway,
+      // freeze Phi at its last value and note it rather than silently
+      // returning a wrong matrix.
+      if (stmActive) { stmActive = false; stmNote = `B1: frame handoff (${ctxNow.center}->${frameNext}) occurred with opts.stm set and opts.singleFrame not set — Phi frozen at the last in-frame value (t=${t}); use opts.singleFrame for full-segment STM support.`; }
       state = physPatchState(next, ctxNow.center, frameNext, tNext, ctxNow.overrides, ctxNow.railFn);
       if (hasThrust) state.m = next.m; // mass is frame-invariant — patch only touches r,v
       ctxNow = Object.assign({}, ctxNow, { center: frameNext });
@@ -13229,6 +13329,21 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
 
   const result = { stateF: state, tF: t, frame: ctxNow.center, samples, events, steps };
   if (hasThrust) { result.dvAccum = dvAccum; result.propDepleted = propDepleted; }
+  if (wantStm) {
+    if (hasThrust || !stmR) {
+      result.stmF = null;
+    } else {
+      // 6x6 row-major: rows 0-2 = dr/d(state0) across the 6 columns, rows
+      // 3-5 = dv/d(state0). stmR[j]/stmV[j] are the 3-vectors for column j.
+      const stmF = new Array(36);
+      for (let j = 0; j < 6; j++) {
+        stmF[0 * 6 + j] = stmR[j][0]; stmF[1 * 6 + j] = stmR[j][1]; stmF[2 * 6 + j] = stmR[j][2];
+        stmF[3 * 6 + j] = stmV[j][0]; stmF[4 * 6 + j] = stmV[j][1]; stmF[5 * 6 + j] = stmV[j][2];
+      }
+      result.stmF = stmF;
+    }
+    if (stmNote) result.stmNote = stmNote;
+  }
   return result;
 }
 

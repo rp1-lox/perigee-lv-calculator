@@ -3662,6 +3662,158 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §21 B1 — state-transition-matrix substrate (386, MATH.md §7ah)
+// Pure physics substrate only (no f16 family/targeting/UI — that's B2/B3/B4).
+// opts.stm:true on physPropagateSegment (NOT ctx.stm, see MATH.md §7ah for the
+// documented deviation from the spec's literal wording).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const RE_B1 = PROG_BODIES.Earth.R, muE_B1 = PROG_BODIES.Earth.mu;
+
+  function det6(M) {
+    const n = 6, A = [];
+    for (let i = 0; i < n; i++) A.push(M.slice(i * 6, i * 6 + 6));
+    let det = 1;
+    for (let col = 0; col < n; col++) {
+      let piv = col;
+      for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      if (piv !== col) { const tmp = A[piv]; A[piv] = A[col]; A[col] = tmp; det = -det; }
+      if (Math.abs(A[col][col]) < 1e-300) return 0;
+      det *= A[col][col];
+      for (let r = col + 1; r < n; r++) {
+        const f = A[r][col] / A[col][col];
+        for (let c = col; c < n; c++) A[r][c] -= f * A[col][c];
+      }
+    }
+    return det;
+  }
+  function matMul6(A, B) {
+    const out = new Array(36).fill(0);
+    for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) {
+      let s = 0;
+      for (let k = 0; k < 6; k++) s += A[i * 6 + k] * B[k * 6 + j];
+      out[i * 6 + j] = s;
+    }
+    return out;
+  }
+  function stmColRelErr(Phi, j, fdCol) {
+    const stmCol = [Phi[j], Phi[6 + j], Phi[12 + j], Phi[18 + j], Phi[24 + j], Phi[30 + j]];
+    let num = 0, den = 0;
+    for (let i = 0; i < 6; i++) { num += (fdCol[i] - stmCol[i]) ** 2; den += stmCol[i] ** 2; }
+    return den > 0 ? Math.sqrt(num) / Math.sqrt(den) : 0;
+  }
+  function fdColumn(s0, ctx, tEnd, j, eps, opts) {
+    const plusState = { r: s0.r.slice(), v: s0.v.slice() };
+    const minusState = { r: s0.r.slice(), v: s0.v.slice() };
+    if (j < 3) { plusState.r[j] += eps; minusState.r[j] -= eps; }
+    else { plusState.v[j - 3] += eps; minusState.v[j - 3] -= eps; }
+    const rp_ = physPropagateSegment(plusState, 0, tEnd, ctx, opts).stateF;
+    const rm_ = physPropagateSegment(minusState, 0, tEnd, ctx, opts).stateF;
+    return [
+      (rp_.r[0] - rm_.r[0]) / (2 * eps), (rp_.r[1] - rm_.r[1]) / (2 * eps), (rp_.r[2] - rm_.r[2]) / (2 * eps),
+      (rp_.v[0] - rm_.v[0]) / (2 * eps), (rp_.v[1] - rm_.v[1]) / (2 * eps), (rp_.v[2] - rm_.v[2]) / (2 * eps),
+    ];
+  }
+
+  // ── (1) ballistic byte-identity: opts.stm ABSENT is untouched (413-step N1
+  // golden), and opts.stm PRESENT reproduces the exact same trajectory (same
+  // steps, same stateF) — the Phi side-computation never perturbs r,v. ──
+  const rp1 = RE_B1 + 185;
+  const aS1 = (rp1 + 445000) / 2;
+  const dv1 = Math.sqrt(muE_B1 * (2 / rp1 - 1 / aS1)) - Math.sqrt(muE_B1 / rp1);
+  const th1 = 4.319689898685966;
+  const st1 = physElementsToState({ a: rp1, e: 0, i: 0, raan: 0, argp: 0, nu: th1 }, muE_B1);
+  const vHat1 = physScale(st1.v, 1 / physMag(st1.v));
+  const s0_1 = { r: st1.r, v: physAdd(st1.v, physScale(vHat1, dv1)) };
+  const bodiesB1 = ['Earth', 'Moon', 'Sun'];
+  const ctxB1 = { center: 'Earth', bodies: bodiesB1, overrides: {} };
+  const tEndB1 = 6 * 86400;
+  const noStm = physPropagateSegment({ r: s0_1.r.slice(), v: s0_1.v.slice() }, 0, tEndB1, ctxB1, { maxSamples: 512 });
+  const withStmHandoff = physPropagateSegment({ r: s0_1.r.slice(), v: s0_1.v.slice() }, 0, tEndB1, ctxB1, { maxSamples: 512, stm: true });
+  ok('B1: opts.stm absent reproduces the pinned N1 golden step count (413)', noStm.steps === 413);
+  ok('B1: opts.stm present does not alter the trajectory (same step count, same final state)',
+    withStmHandoff.steps === noStm.steps &&
+    JSON.stringify(withStmHandoff.stateF) === JSON.stringify(noStm.stateF));
+
+  // ── (2) frame-handoff boundary: this TLC scenario crosses the Moon SOI: with
+  // opts.stm and no opts.singleFrame, Phi must freeze (documented, not silent)
+  // — stmF non-null (last in-frame value) but stmNote explains the boundary. ──
+  ok('B1: frame handoff without singleFrame yields a documented stmNote (not a silent wrong Phi)',
+    withStmHandoff.events.some(e => e.type === 'soi') && typeof withStmHandoff.stmNote === 'string' &&
+    withStmHandoff.stmNote.indexOf('frame handoff') >= 0);
+  ok('B1: Phi is still returned (frozen at the last in-frame value), not null, on a handoff', !!withStmHandoff.stmF);
+
+  // ── (3) thrust interaction: v1 is unsupported — stmF:null + a note, NEVER a
+  // throw (E1's "never throw mid-integration" discipline extended here). ──
+  const rpThrust = RE_B1 + 300, v0Thrust = Math.sqrt(muE_B1 / rpThrust);
+  const ctxThrust = { center: 'Earth', bodies: ['Earth'], thrust: { thrust_N: 5, isp_s: 2000, m0_kg: 500, law: 'prograde' } };
+  let stmThrewErr = false, stmThrustRes = null;
+  try { stmThrustRes = physPropagateSegment({ r: [rpThrust, 0, 0], v: [0, v0Thrust, 0] }, 0, 3600, ctxThrust, { stm: true }); }
+  catch (e) { stmThrewErr = true; }
+  ok('B1: opts.stm with ctx.thrust never throws', !stmThrewErr);
+  ok('B1: opts.stm with ctx.thrust returns stmF:null + a documented note (v1 unsupported)',
+    stmThrustRes && stmThrustRes.stmF === null && typeof stmThrustRes.stmNote === 'string');
+
+  // ── (4) STM vs central-difference on a SHORT smooth 2-hour LEO arc (Earth-
+  // only, no Moon/Sun perturbation, no SOI handoff — FD is trustworthy here).
+  // Measured 2026-07-15: max relative error across all 6 columns = 2.08e-6;
+  // pinned at 1e-4 (headroom for float/step-quantization noise). ──
+  const rpSmooth = RE_B1 + 300, v0Smooth = Math.sqrt(muE_B1 / rpSmooth);
+  const s0Smooth = { r: [rpSmooth, 0, 0], v: [0, v0Smooth, 0] };
+  const ctxSmooth = { center: 'Earth', bodies: ['Earth'] };
+  const tSmooth = 2 * 3600;
+  const smoothStm = physPropagateSegment(s0Smooth, 0, tSmooth, ctxSmooth, { stm: true, maxSamples: 64 });
+  const PhiSmooth = smoothStm.stmF;
+  const epsSmooth = [1, 1, 1, 1e-4, 1e-4, 1e-4];
+  let maxRelErrSmooth = 0;
+  for (let j = 0; j < 6; j++) {
+    const fdCol = fdColumn(s0Smooth, ctxSmooth, tSmooth, j, epsSmooth[j], { maxSamples: 64 });
+    maxRelErrSmooth = Math.max(maxRelErrSmooth, stmColRelErr(PhiSmooth, j, fdCol));
+  }
+  console.log(`  B1 smooth-arc STM vs FD: max relErr across 6 columns = ${maxRelErrSmooth.toExponential(3)}`);
+  ok(`B1: STM matches central-difference FD on a short smooth arc (measured ${maxRelErrSmooth.toExponential(2)} < 1e-4)`,
+    maxRelErrSmooth < 1e-4);
+
+  // ── (5) determinant sanity: det(Phi) ~ 1 (volume preservation, conservative
+  // dynamics). Measured 2026-07-15: |det-1| = 6.8e-14 (float-noise scale). ──
+  const detPhiSmooth = det6(PhiSmooth);
+  console.log(`  B1 det(Phi) smooth arc = ${detPhiSmooth}, |det-1| = ${Math.abs(detPhiSmooth - 1).toExponential(3)}`);
+  ok(`B1: det(Phi) ~= 1 on the smooth arc (measured |det-1| = ${Math.abs(detPhiSmooth - 1).toExponential(2)} < 1e-9)`,
+    Math.abs(detPhiSmooth - 1) < 1e-9);
+
+  // ── (6) composition property: Phi(t2,t0) ~= Phi(t2,t1) . Phi(t1,t0) on a
+  // split arc. Measured 2026-07-15: relative residual 1.3e-14. ──
+  const tSplit = tSmooth / 2;
+  const legA = physPropagateSegment(s0Smooth, 0, tSplit, ctxSmooth, { stm: true, maxSamples: 64 });
+  const legB = physPropagateSegment(legA.stateF, tSplit, tSmooth, ctxSmooth, { stm: true, maxSamples: 64 });
+  const PhiComposed = matMul6(legB.stmF, legA.stmF);
+  let compNum = 0, compDen = 0;
+  for (let i = 0; i < 36; i++) { compNum += (PhiComposed[i] - PhiSmooth[i]) ** 2; compDen += PhiSmooth[i] ** 2; }
+  const compRelErr = Math.sqrt(compNum) / Math.sqrt(compDen);
+  console.log(`  B1 composition Phi(t2,t1).Phi(t1,t0) vs Phi(t2,t0): relErr = ${compRelErr.toExponential(3)}`);
+  ok(`B1: composition property holds (measured relErr ${compRelErr.toExponential(2)} < 1e-9)`, compRelErr < 1e-9);
+
+  // ── (7) LONG chaotic arc (the N1 TLC scenario, singleFrame:true — B1's
+  // recommended usage): Phi stays finite (no NaN/overflow), AND FD visibly
+  // disagrees with it far beyond the smooth-arc agreement — this is the WHOLE
+  // reason the substrate exists (Griesemer/ispace/Purdue all reject FD here;
+  // our own N2 Newton failure, MATH.md critique 62). Measured 2026-07-15: TLC
+  // max relErr vs FD = 1.97e-3 vs the smooth arc's 2.08e-6 — a ~950x gap. ──
+  const tlcStm = physPropagateSegment({ r: s0_1.r.slice(), v: s0_1.v.slice() }, 0, tEndB1, ctxB1, { stm: true, maxSamples: 512, singleFrame: true });
+  ok('B1: STM on the long chaotic (TLC) arc is finite (no NaN/overflow)', tlcStm.stmF.every(Number.isFinite));
+  const PhiTlc = tlcStm.stmF;
+  const epsTlc = [1, 1, 1, 1e-4, 1e-4, 1e-4];
+  let maxRelErrTlc = 0;
+  for (let j = 0; j < 6; j++) {
+    const fdCol = fdColumn(s0_1, ctxB1, tEndB1, j, epsTlc[j], { maxSamples: 64, singleFrame: true });
+    maxRelErrTlc = Math.max(maxRelErrTlc, stmColRelErr(PhiTlc, j, fdCol));
+  }
+  console.log(`  B1 chaotic-arc (TLC) STM vs FD: max relErr = ${maxRelErrTlc.toExponential(3)} (smooth-arc was ${maxRelErrSmooth.toExponential(3)}, ratio ${(maxRelErrTlc / maxRelErrSmooth).toFixed(0)}x)`);
+  ok(`B1: FD visibly diverges from STM on the chaotic arc, orders of magnitude beyond the smooth-arc agreement (measured ${maxRelErrTlc.toExponential(2)} vs ${maxRelErrSmooth.toExponential(2)}, ratio ${(maxRelErrTlc / maxRelErrSmooth).toFixed(0)}x > 100x)`,
+    maxRelErrTlc / maxRelErrSmooth > 100);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MISSION_MODEL_V2 §19 E2 — electric propulsion vehicle + event model (568)
 // ═══════════════════════════════════════════════════════════════════════════
 {
