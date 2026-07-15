@@ -3136,6 +3136,12 @@ function _trajTerminatorNightPath(sd, cx, cy, rPx) {
 // (defect3); `instanceId` (mission id or a fixed fallback) + `body` form a
 // STABLE per-body-per-instance id for the gradient/clip defs (defect2 — see
 // _trajBodyDiscTiered).
+// NOTE (clouds, MISSION_MODEL_V2 §18 V1 follow-up): this vector-geometry
+// tier has no per-pixel loop to sample a second texture into, unlike
+// _trajRasterGlobe — it draws discrete SVG shapes (coastline polygons,
+// craters), not a raster. Clouds are intentionally NOT drawn here; this is
+// the low-fidelity fallback used only before the real texture has decoded
+// or when raster is unavailable, so the omission is brief and low-stakes.
 function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDiagPx, instanceId) {
   const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
   // R6.2.1 item 2: skip vector feature sampling both when the disc is
@@ -3239,6 +3245,37 @@ function _trajTextureFor(body) {
   img.src = PROG_TEXTURES[body];
   return t;
 }
+// Cloud layer (Earth only, V1 follow-up MISSION_MODEL_V2 §18): same lazy
+// decode-to-ImageData cache as _trajTextureFor, keyed off PROG_CLOUD_TEXTURE
+// instead of PROG_TEXTURES. Kept as a separate store/function (not folded
+// into _trajTextureFor) because clouds sample at an INDEPENDENT longitude
+// offset from the ground texture — see the cloudSpin comment in
+// _trajRasterGlobe — and only Earth has an entry, so every other body's
+// lookup is a cheap `undefined` short-circuit.
+let _trajCloudTexStore = {};
+function _trajCloudTextureFor(body) {
+  if (!(typeof PROG_CLOUD_TEXTURE !== 'undefined' && PROG_CLOUD_TEXTURE[body])) return null;
+  let t = _trajCloudTexStore[body];
+  if (t) return t;
+  t = { ready: false, imgData: null, w: 0, h: 0 };
+  _trajCloudTexStore[body] = t;
+  const img = new Image();
+  img.onload = () => {
+    const sw = Math.min(img.naturalWidth || 1024, 1024);
+    const sh = Math.round(sw / 2);
+    const sc = document.createElement('canvas');
+    sc.width = sw; sc.height = sh;
+    const sctx = sc.getContext('2d');
+    sctx.drawImage(img, 0, 0, sw, sh);
+    t.imgData = sctx.getImageData(0, 0, sw, sh);
+    t.w = sw; t.h = sh;
+    t.ready = true;
+    _trajRasterCache = {};
+    _trajRequestRepaint();
+  };
+  img.src = PROG_CLOUD_TEXTURE[body];
+  return t;
+}
 // Bilinear sample of an ImageData at fractional pixel (fx,fy), wrapping X
 // (longitude seam) and clamping Y (poles).
 function _trajBilinearSample(imgData, w, h, fx, fy) {
@@ -3274,6 +3311,15 @@ function _trajBilinearSample(imgData, w, h, fx, fy) {
 function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   const tex = _trajTextureFor(body);
   if (!tex || !tex.ready) return null;
+  // Cloud layer (Earth only): drifts at an independent rate/offset from the
+  // ground so scrubbing time visibly moves clouds relative to the surface.
+  // 0.85x rate (slightly slower than the planet's own spin) + a fixed phase
+  // offset — both arbitrary but stable, chosen only so drift is obviously
+  // non-zero and non-degenerate (never exactly co-rotating with the ground).
+  const cloudTex = _trajCloudTextureFor(body);
+  const cloudActive = !!(cloudTex && cloudTex.ready);
+  const cloudSpin = (spinAngle || 0) * 0.85 + 0.6;
+  const cspc = Math.cos(cloudSpin), csps = Math.sin(cloudSpin);
   const size = Math.max(1, Math.min(Math.round(discPx), maxPx || 512));
   const canvas = document.createElement('canvas');
   canvas.width = size; canvas.height = size;
@@ -3284,6 +3330,7 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   const ca = Math.cos(az || 0), sa = Math.sin(az || 0), ct = Math.cos(t), st = Math.sin(t);
   const spc = Math.cos(spinAngle || 0), sps = Math.sin(spinAngle || 0);
   const iw = tex.w, ih = tex.h, id = tex.imgData;
+  const ciw = cloudActive ? cloudTex.w : 0, cih = cloudActive ? cloudTex.h : 0, cid = cloudActive ? cloudTex.imgData : null;
   const R = size / 2;
   // sunDir3 is WORLD-frame body->Sun unit vector (same one the vector
   // terminator uses) — no re-derivation, single source per the brief.
@@ -3312,6 +3359,24 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
       const fx = ((lon + Math.PI) / (2 * Math.PI)) * iw;
       const fy = ((Math.PI / 2 - lat) / Math.PI) * ih;
       const rgb = _trajBilinearSample(id, iw, ih, fx, fy);
+      if (cloudActive) {
+        // Independent longitude for the cloud layer: re-un-spin the SAME
+        // pre-spin world direction (x,y,z) with cloudSpin instead of the
+        // body's own spinAngle. Latitude is spin-invariant (z unchanged).
+        const ccx = x * cspc + y * csps;
+        const ccy = -x * csps + y * cspc;
+        const clon = Math.atan2(ccy, ccx);
+        const cfx = ((clon + Math.PI) / (2 * Math.PI)) * ciw;
+        const cfy = fy * (cih / ih); // same latitude fraction, cloud texture's own height
+        const crgb = _trajBilinearSample(cid, ciw, cih, cfx, cfy);
+        // Grayscale cloud map (R=G=B): brightness IS coverage. Screen/lerp
+        // toward white, capped so fully-bright cloud doesn't clip to pure
+        // white (keeps some surface tone visible through thin cloud).
+        const cw = Math.min(0.9, crgb[0] / 255);
+        rgb[0] += (255 - rgb[0]) * cw;
+        rgb[1] += (255 - rgb[1]) * cw;
+        rgb[2] += (255 - rgb[2]) * cw;
+      }
       // Shading in the SAME (world-frame, pre-unspin) coordinates as the
       // vector terminator: normal == (x,y,z), dot with sunDir3.
       let ndotl = x * sx + y * sy + z * sz;
@@ -3421,6 +3486,7 @@ function _trajPrewarmTextures() {
     const body = list[i];
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const tex = _trajTextureFor(body); // kicks off img decode if not already started
+    if (body === 'Earth') _trajCloudTextureFor(body); // kicks off cloud decode alongside the surface map
     if (!tex.ready) {
       retries++;
       if (retries > 60) { i++; retries = 0; } // ~a few seconds of retries, then give up on this body
