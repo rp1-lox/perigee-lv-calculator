@@ -155,3 +155,13 @@ Residual `574-trajectory-view.js` keeps the file header, the world-assembly orch
 **Deleted**: none.
 **Verified**: `python build.py` -> 772 passed, 0 failed on both OLD and NEW; node --check ok; U+FFFD guard ok.
 **Risk notes**: _trajProjectVec (single projection seam) now lives in 5740; def-only, loads before any runtime render. No frozen functions, persisted fields, or physics numerics touched.
+
+## [14] 574 split B — extract overlay/LOD + rings/legs — 2026-07-15
+**Intent**: Second 574 extraction: the overlay (px-native symbology) half — world->screen, label registry, LOD, occlusion — and the world-layer ring/arc/leg geometry rendering.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/574-trajectory-view.js` (3,753 → 2,786 lines) → new `src/js/5742-trajectory-overlay-lod.js` (302 lines: _trajWorldToScreen.._trajOcclusionSplitRuns incl. label registry, LOD windows, culling, occlusion) and new `src/js/5743-trajectory-rings-legs.js` (697 lines: _trajRingSVG.._trajLodOpacity incl. propagated rings, transfer arcs, phys-leg polylines, escape spurs). Header + _trajBurnMarker confirmed remaining in core. `tests/math.test.js` FILES list gained both.
+**Subagent**: one Sonnet subagent, both extractions, gate green first attempt. 0 U+FFFD; each moved fn unique across src/js.
+**Behavior delta**: none. Fingerprint AFTER == fixed 574 baseline: normalized world hashes [3983026606, 3110351937, 1308996569, 1089556814] (all 4 cams MATCH), projection seam identical. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
+**Risk notes**: the two-layer contract is now split across files (overlay symbology in 5742, world geometry in 5743) but both are def-only and load before any render; no cross-file load-time dependency. No frozen functions, persisted fields, or physics numerics touched.
