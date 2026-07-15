@@ -178,6 +178,28 @@ function missionRunChecks(m) {
       }
     }
 
+    // BUG FIX (2026-07-15 user report): a solved maneuver targeting a node
+    // routed through the dedicated physics solver (currently NRHO transfers,
+    // 565's physSolveNrhoTransfer) can fail to converge — e.g. a hand-
+    // authored one-hop LEO->NRHO maneuver shot from an unfavorable MET. The
+    // world/trajectory view withholds the polyline for an unconverged leg
+    // (honest — a non-converged ballistic path is not a real trajectory), but
+    // until now NOTHING else surfaced that fact: the card still shows a
+    // schematic patched-conic dv from progNmComputeEdgeDv and the view simply
+    // renders no leg at all, indistinguishable from a rendering bug. Surface
+    // it here (same RED-finding pattern as the LOWTHRUST not-ready check
+    // above) so a failed/unroutable leg is always visible somewhere, never
+    // silently nothing.
+    if (_evIsSolvedManeuver(e) && typeof physMissionLeg === 'function') {
+      const physLeg = physMissionLeg(m.missionId, authIdx);
+      if (physLeg && (physLeg.kind === 'nrho' || physLeg.kind === 'moon') && physLeg.converged === false) {
+        push('physics-leg-unconverged', 'red', 'Transfer trajectory did not converge',
+          _mcEscape(physLeg.note || 'The physics solver could not find a converged trajectory for this maneuver — the schematic ' +
+            '&Delta;V shown on the card is a patched-conic estimate only; no real transfer path exists for the current MET/target.'),
+          authIdx);
+      }
+    }
+
     // #3 RED maneuver-from-mismatch: a solved maneuver whose from-node != the
     // acting vehicle's orbit state at that event (pre-event snapshot).
     if (_evIsSolvedManeuver(e) && e.fromNode) {

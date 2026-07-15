@@ -689,7 +689,22 @@ function physRebuildMissionTrajectories(m) {
     // instead of the generic moon-leg shooter below — the NRHO isn't a
     // Keplerian target, it's a specific propagated trajectory phased to the
     // arrival epoch. physSolveNrhoTransfer owns its own solve cache.
-    const nrhoRef = burn.kind === 'moon' ? nrhoRefAfter(burn.dest, i) : null;
+    // BUG FIX (2026-07-15 user report): nrhoRefAfter only ever searched LATER
+    // log entries for the orbitRefId marker — the two-hop seeded pattern
+    // (LEO->TLC, then TLC->NRHO) always has it on a later edge, so that was
+    // the only case ever exercised. A hand-authored ONE-HOP maneuver straight
+    // FROM leo TO the nrho node IS toN itself — the marker is sitting on the
+    // very node this edge already resolved into toO, but nrhoRefAfter (which
+    // only scans j>i) never looked at it, so the leg silently fell through to
+    // the generic Keplerian moon-shooter aiming at the NRHO node's label-only
+    // perigee/apogee (not real Keplerian truth — see 430's comment on 'nrho'),
+    // which fails to converge and renders nothing while the card still shows
+    // a schematic dv from progNmComputeEdgeDv. Check the CURRENT toNode's own
+    // orbitRefId first; fall back to the forward scan for the seeded/two-hop
+    // pattern so devSeedGatewayMission stays byte-identical.
+    const nrhoRef = burn.kind === 'moon'
+      ? ((toN && toN.orbitRefId && toN.orbit && toN.orbit.body === burn.dest) ? toN.orbitRefId : nrhoRefAfter(burn.dest, i))
+      : null;
     if (nrhoRef) {
       let nsol;
       try { nsol = physSolveNrhoTransfer(fromO, nrhoRef, met, { dv_kms: dv_ms / 1000 }); }

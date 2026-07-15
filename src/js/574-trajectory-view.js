@@ -276,14 +276,24 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     const fromR = _trajLocalRadius(leg.fromO, body);
     const toR = _trajLocalRadius(leg.toO, body);
     if (fromR == null || toR == null) return;
-    const toPeri = toO_peri(leg.toO, R), toApo = toO_apo(leg.toO, R);
-    const redundant = toPeri != null && toApo != null && _trajTransferIsRedundant(fromR, toApo, toPeri, toApo);
-    const arcToR = (toApo != null && toPeri != null && Math.abs(toApo - toPeri) > Math.max(1, toApo * 0.001)) ? toApo : toR;
     // Moon-lead orientation (C2): for a leg whose destination is a MOON of
     // this body frame (o.destination present, e.g. LEO->TLC->LLO), orient
     // the apse line so the arrival end lands on that moon's world position
     // AT ARRIVAL TIME rather than the old fixed rotDeg=0 convention.
-    const destMoon = leg.toO.destination || null;
+    // BUG FIX (2026-07-15): also treat a direct (non-transit) node that
+    // orbits a moon of `body` as a moon destination for orientation purposes
+    // — see the matching _trajLocalRadius fix above (hand-authored one-hop
+    // LEO->NRHO maneuvers carry no `.destination` field at all).
+    const destMoon = leg.toO.destination ||
+      (leg.toO.body && PROG_MOON_ORBITS[leg.toO.body] && PROG_MOON_ORBITS[leg.toO.body].parent === body ? leg.toO.body : null);
+    // toO_peri/toO_apo assume `o`'s perigee/apogee are altitudes above THIS
+    // frame's body `R` — true for a same-body toO, meaningless for a direct
+    // cross-body destMoon toO (its perigee/apogee are altitudes above the
+    // MOON, not `body`). Skip the redundancy/ellipse-endpoint refinement in
+    // that case and just use the plain moon-orbital-radius toR from above.
+    const toPeri = !destMoon ? toO_peri(leg.toO, R) : null, toApo = !destMoon ? toO_apo(leg.toO, R) : null;
+    const redundant = toPeri != null && toApo != null && _trajTransferIsRedundant(fromR, toApo, toPeri, toApo);
+    const arcToR = (toApo != null && toPeri != null && Math.abs(toApo - toPeri) > Math.max(1, toApo * 0.001)) ? toApo : toR;
     let rotAng = 0, ghostLocal = null;
     if (destMoon && PROG_MOON_ORBITS[destMoon] && PROG_MOON_ORBITS[destMoon].parent === body) {
       const tArrive = leg.metArrive != null ? leg.metArrive : vt;
@@ -452,7 +462,23 @@ function _trajLocalRadius(o, body) {
     }
     return null;
   }
-  if (o.body !== body) return null;
+  // BUG FIX (2026-07-15 user report): a leg's toO can target a MOON ORBIT
+  // NODE directly (e.g. 430's 'nrho', body:'Moon') without going through a
+  // 'transit' corridor node at all — a hand-authored one-hop LEO->NRHO
+  // maneuver does exactly this. The transit/.destination branch above was
+  // the ONLY path that let a cross-body (parent-frame) schematic arc resolve
+  // a far radius; a direct non-transit cross-body node fell straight to
+  // `o.body !== body` => null and the leg silently drew nothing (physics
+  // convergence aside — physLegL !converged already withholds the polyline,
+  // so this schematic fallback is the only remaining honest picture). Mirror
+  // the transit/.destination case: when `o` orbits a MOON of `body` (this is
+  // the parent-frame view), use that moon's own orbital radius as the far
+  // endpoint, same as the transit branch's `mo.r`.
+  if (o.body !== body) {
+    const moD = PROG_MOON_ORBITS[o.body];
+    if (moD && moD.parent === body) return moD.r;
+    return null;
+  }
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   if (o.type === 'surface') return R;
   const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;

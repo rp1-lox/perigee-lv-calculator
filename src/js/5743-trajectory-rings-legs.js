@@ -127,16 +127,34 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // immediately beneath the light ring stroke, per visible run — standard
   // cartographic technique so the ring reads against both space AND a bright
   // day-side globe (the thin near-white line was invisible against Earth at
-  // close zoom, user-reported 2026-07-15). One casing path per run, same
-  // geometry/clipping as the light strokes above (so occlusion runs case
-  // identically — no halos at the gaps); no direction-fade or click wiring on
-  // the casing itself, that all stays on the light stroke(s) + hitArea.
-  const casingPaths = visRuns.map(run => {
-    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
-    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  // close zoom, user-reported 2026-07-15).
+  // BUG FIX (2026-07-15 user report, round 2): the casing used to be ONE flat-
+  // opacity path per run (`opacity`, the ring's baseOpacity*lodAlpha*historyMul)
+  // while the light stroke above it is split into faint->bright direction-fade
+  // SEGMENTS whose own opacity (`seg.opacity`, down to a small fraction on the
+  // trailing side) further multiplies that same baseline. In every segment
+  // dimmer than the ring's flat baseline — i.e. most of the ring, by design,
+  // since the fade exists precisely to make most of it dim — the opaque black
+  // casing outshone the faded-out color, so the trailing 3/4 of a close-zoomed
+  // ring read as solid black instead of a dim vehicle-colored line (the "near-
+  // black against the globe" report). Fix: build the casing from the SAME
+  // per-segment geometry/opacity as the light pass (segOpacity), so the
+  // casing fades in lockstep and never outweighs the color drawn on top of it.
+  const runSegs = visRuns.map(run => ({
+    run, segs: _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length))),
+  }));
+  const casingPaths = runSegs.map(({ run, segs }) => {
+    if (!segs.length) {
+      const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+    }
+    return segs.map(seg => {
+      const segD = seg.pts.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+      const segOpacity = (baseOpacity * lodAlpha * historyMul * seg.opacity).toFixed(3);
+      return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${segOpacity}" vector-effect="non-scaling-stroke"/>`;
+    }).join('');
   }).join('');
-  const segPaths = visRuns.map(run => {
-    const segs = _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length)));
+  const segPaths = runSegs.map(({ run, segs }) => {
     if (!segs.length) {
       const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
       return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
