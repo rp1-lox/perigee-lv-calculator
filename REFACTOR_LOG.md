@@ -176,3 +176,24 @@ Residual `574-trajectory-view.js` keeps the file header, the world-assembly orch
 **Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
 **Result**: `574-trajectory-view.js` decomposed from 4,408 lines into a 1,273-line core (file header, _trajBodyFrameContent per-body orchestrator, time/tick helpers, world-assembly _trajWorldSVG, glyph/neighborhood, view UI shell/scrubber/footer/flyout/starfield/afterRender) + 6 concern modules (camera 376, scene-extract 312, overlay-lod 302, rings-legs 697, eventnodes 546, globe 1007).
 **Risk notes**: _TRAJ_SVG_NS and the raster/repaint/prewarm scheduling helpers moved to 5744-trajectory-globe.js; called at runtime from core's afterRender/starfield (forward refs, def-only, resolve after load). No frozen functions, persisted fields, or physics numerics touched.
+
+## [16] 5745 maneuver-gizmo — baseline fingerprint + split plan — 2026-07-15
+**Intent**: Assess and split `5745-maneuver-gizmo.js` (1,796 lines, 87 fns). It already carries clean section banners; the guide blesses separating pure math from DOM plumbing and the hover/menu subsystem. Not frozen physics.
+**Type**: baseline record.
+**Assessment of the other tier-3 candidates**: `210-stage-library.js` (1,887 lines) is DATA-dominated (9 fns / 8 consts, one huge STAGE_LIBRARY literal + a few UI fns) — no clean code seams; splitting the data literal is arbitrary; readability benefit marginal -> NOT split. `565-physics-mission.js` (1,705 lines) has clean phase banners but is frozen-adjacent, gate-pinned physics on the critical path -> deferred to its own focused session (higher risk; wants physics-specific goldens). 5745 chosen as the third module.
+**5745 baseline fingerprint (deterministic, verified stable across reloads; Apollo seed)**: gizmo overlay SVG hash (missionId-normalized) opened on MNODE authIdx 1 = 2576509011, on authIdx 2 = 2992303077; `_trajGizmoFormatReadout(12.3,-4.5,0.8,3600)` = "pro +12 · rad -4 · nrm +1 m/s · MET 60m00s"; `_trajGizmoPullRate(40,false)` = 20; `_trajGizmoScreenDir(0.5,-0.3,{x:1,y:0},1e-6)` = {ux:0.8574929257125443, uy:-0.5144957554275266}. Pure-helper math is additionally gate-tested (772 assertions). Zero console errors.
+**Planned split (contiguous, banner-anchored, def-only; new files sort within the 5745-maneuver-gizmo prefix, after 574x and before 575-undo-redo)**:
+- `5745-maneuver-gizmo-math.js` <- section "(1) Pure helpers" (_trajGizmoAxes.._trajGizmoPreviewFidelity, gate-tested pure math).
+- `5745-maneuver-gizmo-hover.js` <- hover-ball + placement-menu on rings AND physics legs (_trajGizmoOrbitNodeAt.._trajLegClick).
+- `5745-maneuver-gizmo-drag.js` <- drag mechanics (handles + center-drag + center knob) + commit + scratch live-preview (_trajGizmoDetachManeuverIfNeeded.._trajGizmoRepaintScenePreview).
+Residual `5745-maneuver-gizmo.js` keeps the file banner, "(2) Interactive plumbing" (gizmo state, open/close/dismiss, dblclick), and the overlay-SVG rendering + R3.4 node menu (_trajGizmoOnEventSelected.._trajGizmoApplyMet).
+
+## [17] 5745 maneuver-gizmo split — extract math + hover + drag — 2026-07-15
+**Intent**: Split the maneuver gizmo along its existing section banners into pure math, hover/placement, and drag subsystems; keep the interactive-plumbing + overlay-render core.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/5745-maneuver-gizmo.js` (1,796 → 669 lines) → new `src/js/5745-maneuver-gizmo-math.js` (287 lines: _trajGizmoAxes.._trajGizmoPreviewFidelity, gate-tested pure math), new `src/js/5745-maneuver-gizmo-hover.js` (332 lines: _trajGizmoOrbitNodeAt.._trajLegClick, hover ball + placement menu on rings & legs), new `src/js/5745-maneuver-gizmo-drag.js` (561 lines: _trajGizmoDetachManeuverIfNeeded.._trajGizmoRepaintScenePreview, drag mechanics + commit + scratch preview). Core retains file banner + "(2) Interactive plumbing" + overlay/node-menu (_trajGizmoOnEventSelected.._trajGizmoApplyMet). `tests/math.test.js` FILES list gained all three.
+**Subagent**: one Sonnet subagent, three extractions, gate green. 0 U+FFFD; each moved fn unique across src/js.
+**Behavior delta**: none. Fingerprint AFTER == baseline: gizmo overlay hash MNODE authIdx1=2576509011, authIdx2=2992303077; readout "pro +12 · rad -4 · nrm +1 m/s · MET 60m00s"; pull=20; screenDir ux=0.8574929257125443 (all MATCH). Pure math also gate-pinned. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` -> 772 passed, 0 failed; node --check ok; U+FFFD guard ok.
+**Risk notes**: _missionPendingEventMet (read by 570's "Use time in Add Event") moved to -hover module; def-only, loads before runtime use. No frozen functions, persisted fields, or physics numerics touched.
