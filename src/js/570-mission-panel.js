@@ -766,6 +766,14 @@ function _missionManeuverLogCardHTML(entry, id, idx) {
   // editable step builder (bound to this event by its index)
   const builder = (id != null && idx != null) ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">${_missionMvBuilderHTML(id, String(idx))}</div>` : '';
   const porkChip = (id != null && idx != null && typeof progPorkChipHTML === 'function') ? progPorkChipHTML(id, idx, entry.toNode) : '';
+  // 5b R2 (MATH.md §7ae): an NRHO-bound leg with a co-orbital target vehicle
+  // carries leg.phaseOptions (565's physSolveNrhoTransfer) — surface the
+  // honest lattice choices as a compact radio-chip row. No target vehicle at
+  // the ref -> leg.phaseOptions is null -> this row renders '' (5a behavior
+  // unchanged, byte-identical card).
+  const nrhoLeg = (id != null && idx != null && typeof physMissionLeg === 'function') ? physMissionLeg(id, idx) : null;
+  const arrivalOptionsHTML = (nrhoLeg && nrhoLeg.kind === 'nrho' && Array.isArray(nrhoLeg.phaseOptions) && nrhoLeg.phaseOptions.length)
+    ? _missionArrivalOptionsRowHTML(id, idx, entry, nrhoLeg) : '';
   return `<div class="mission-log-card">
     <div class="mission-log-header">
       <span class="mission-log-type">MANEUVER</span>
@@ -780,6 +788,46 @@ function _missionManeuverLogCardHTML(entry, id, idx) {
       ${methodDisplay}
     </div>
     ${marginal}
+    ${arrivalOptionsHTML}
     ${builder}
   </div>`;
+}
+
+// 5b R2 UI (MATH.md §7ae): "T+4.7d · 4.32 km/s · Δφ 41m" radio chips — picking
+// one persists e.arrivalOption (the option's tof_s, an AUTHORED field, replay-
+// deterministic) and re-solves via missionRecompute; "auto" clears it back to
+// the solver's own min-|Δφ| default. Follows the existing card row pattern
+// (inline styles like the rest of this file's cards, no new CSS class rules).
+function _missionArrivalOptionsRowHTML(id, idx, entry, leg) {
+  const opts = leg.phaseOptions;
+  const selTof = entry.arrivalOption;
+  const chipHTML = (label, isSel, onchange) => `<label style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid ${isSel ? 'var(--accent)' : 'var(--border)'};font-family:var(--mono);font-size:9px;color:${isSel ? 'var(--accent)' : 'var(--text-dim)'};cursor:pointer;margin:0 4px 4px 0;">
+    <input type="radio" name="mnode-arrival-${id}-${idx}" style="margin:0;" ${isSel ? 'checked' : ''} onchange="${onchange}">${label}</label>`;
+  const autoActive = selTof == null;
+  const autoChip = chipHTML('auto (min &Delta;&phi;)', autoActive, `missionClearArrivalOption('${id}',${idx})`);
+  const chips = opts.map(o => {
+    const isSel = selTof != null && Math.abs(o.tof_s - selTof) < 60;
+    const days = (o.tof_s / 86400).toFixed(1);
+    const dvKms = (o.dvTotal_ms / 1000).toFixed(2);
+    const phaseTxt = (typeof _phaseFmtDt === 'function') ? _phaseFmtDt(o.phaseErr_s) : Math.round(o.phaseErr_s) + 's';
+    return chipHTML(`T+${days}d &middot; ${dvKms} km/s &middot; &Delta;&phi; ${phaseTxt}`, isSel, `missionSetArrivalOption('${id}',${idx},${o.tof_s})`);
+  }).join('');
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;">Arrival Options &mdash; phase-matched to co-orbital vehicle</div>
+    <div>${autoChip}${chips}</div>
+  </div>`;
+}
+function missionSetArrivalOption(id, idx, tof_s) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  e.arrivalOption = tof_s;
+  missionRecompute(m);
+  missionRenderDetail();
+}
+function missionClearArrivalOption(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  delete e.arrivalOption;
+  missionRecompute(m);
+  missionRenderDetail();
 }

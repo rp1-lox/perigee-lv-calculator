@@ -55,6 +55,27 @@ const _physNrhoShootCache = {};
  *   {t, frame, r, vPre, dvVec}, samples, events, frame, theta, pitch, dv_kms,
  *   note } — converged:false carries a `note` and no insertionBurn.
  */
+// ── MISSION_MODEL_V2 §15 5b R2 — phase-matched arrival (selection layer) ────
+// physSolveNrhoTransfer gains a targetPhase mode: when ctx.targetVehicle is an
+// orbitState-shaped record for a vehicle ALREADY parked on the same NRHO ref
+// (propagated:true, refId matches, real r + metAt — the DEPLOY-stamped shape
+// 567-phase-truth.js's _phaseVehiclePoint already reads), the solver scans the
+// SAME perilune-crossing lattice 5a builds (extended +/-2 crossings beyond the
+// default TLI-class band) and, for every candidate that CONVERGES to <2,000 km,
+// predicts the target vehicle's along-track clock at that arrival epoch via
+// R1's rotating-frame nearest-point machinery (_phaseVehiclePoint/_phaseNearestT,
+// 567) — an IDEALIZED STATION-KEEPING assumption (the target's clock advances
+// 1:1 with the ref's own wrapped clock; no real perturbation/closure-tolerance
+// drift is modeled — see MATH.md §7ae). This is a SELECTION layer only: no new
+// dynamics, no phasing burns (R3). Options outside a +15% dv band vs. the
+// cheapest converged candidate are dropped (documented band, MATH.md §7ae).
+// Fails clean to 5a's own default candidate when no option converges or when
+// ctx.targetVehicle is absent/mismatched — result is BYTE-IDENTICAL to today
+// in that case (regression gate).
+const _physNrhoPhaseCache = {};
+const NRHO_PHASE_DV_BAND = 1.15; // options costing >15% more than the cheapest converged candidate drop out (MATH.md §7ae)
+const NRHO_PHASE_MAX_OPTIONS = 4;
+
 function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   ctx = ctx || {};
   const overrides = {};
@@ -143,6 +164,116 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
     return [s - delta, Math.PI - s - delta];
   };
   const ACCEPT_KM = 2000; // spec: "closest approach to the target sample point < 2,000 km"
+
+  // ── 5b R2: full coarse-scan + Newton + MCC solve pinned to ONE fixed
+  // arrival epoch (no cross-candidate scan) — used to evaluate the extra
+  // lattice points the phase-matching selection layer needs, isolated from
+  // the default-path code below so the unphased (no targetVehicle) behavior
+  // above is untouched byte-for-byte (regression safety). Deliberately a
+  // near-duplicate of the pipeline below rather than a shared extraction —
+  // keeping the proven default path literally unmodified was judged safer
+  // than a risky refactor under this task's scope (MATH.md §7ae).
+  function _nrhoSolveFixedTArr(tArrFixed) {
+    try {
+      const cheapF = (th, pitch, rn) => {
+        const st = physAimBurnState('Earth', r1, th, pitch, dv_kms, incRad, 0, rn);
+        const res = physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, tArrFixed,
+          Object.assign({}, propCtx, { stepsPerOrbit: 90 }), { maxSamples: 4 });
+        if (!res || !res.stateF) return Infinity;
+        const tgtC = targetAtAbs(tArrFixed);
+        if (!tgtC) return Infinity;
+        return physMag(physSub(toMoonFrame(res.stateF, res.frame, tArrFixed).r, tgtC.r));
+      };
+      let best = { miss: Infinity, th: theta0, rn: 0 };
+      for (const rn of raanRootsFor(tArrFixed)) {
+        for (let k = 0; k < 24; k++) {
+          const th = (2 * Math.PI * k) / 24;
+          const miss = cheapF(th, 0, rn);
+          if (miss < best.miss) best = { miss, th, rn };
+        }
+      }
+      for (const div of [8, 64]) {
+        const step = (2 * Math.PI / 24) / div, centre = best.th;
+        for (let k = -7; k <= 7; k++) {
+          if (!k) continue;
+          const th = centre + k * step;
+          const miss = cheapF(th, 0, best.rn);
+          if (miss < best.miss) best = { miss, th, rn: best.rn };
+        }
+      }
+      const tgtN = targetAtAbs(tArrFixed);
+      const propTo = st => physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, tArrFixed, propCtx, { maxSamples: 128 });
+      const missFull = res => {
+        if (!res || !res.stateF || !tgtN) return null;
+        const a2 = toMoonFrame(res.stateF, res.frame, tArrFixed);
+        return [a2.r[0] - tgtN.r[0], a2.r[1] - tgtN.r[1], a2.r[2] - tgtN.r[2]];
+      };
+      const sol2 = physShootToTarget(
+        x => physAimBurnState('Earth', r1, x[0], x[1], dv_kms, incRad, 0, best.rn),
+        res => { const m = missFull(res); return m ? [m[0], m[1]] : null; },
+        [best.th, 0], { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3], maxIter: 14, maxProps: 30 });
+      const bs2 = physAimBurnState('Earth', r1, sol2.x[0], sol2.x[1], dv_kms, incRad, 0, best.rn);
+      const m2s = missFull(propTo(bs2));
+      let x = [sol2.x[0], sol2.x[1], 0], missBest = m2s ? Math.hypot(m2s[0], m2s[1], m2s[2]) : Infinity, raanUsed = best.rn;
+      if (missBest > ACCEPT_KM) {
+        const sol3 = physShootToTarget(
+          xx => physAimBurnState('Earth', r1, xx[0], xx[1], dv_kms, incRad, xx[2], best.rn),
+          res => missFull(res),
+          x, { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3, 1e-3], maxIter: 10, maxProps: 30 });
+        if (sol3.missKm < missBest) { x = sol3.x; missBest = sol3.missKm; }
+      }
+      const bsF = physAimBurnState('Earth', r1, x[0], x[1] || 0, dv_kms, incRad, x[2] || 0, raanUsed);
+      const finalRes = physPropagateSegment({ r: bsF.r, v: bsF.v }, tDepart_s, tArrFixed, propCtx, { maxSamples: 128 });
+      const tgt = tgtN;
+      if (!finalRes || !finalRes.stateF || !tgt) return { converged: false, tof_s: tArrFixed - tDepart_s, missKm: Infinity };
+      const arr = toMoonFrame(finalRes.stateF, finalRes.frame, tArrFixed);
+      let missKm = physMag(physSub(arr.r, tgt.r));
+      let converged = isFinite(missKm) && missKm <= ACCEPT_KM;
+      let mccBurn = null, outSamples = finalRes.samples, outEvents = finalRes.events, outFrame = finalRes.frame, arrFinal = arr;
+      if (!converged) {
+        const TOFq = tArrFixed - tDepart_s;
+        const tMcc = tDepart_s + 0.5 * TOFq;
+        const preRes = physPropagateSegment({ r: bsF.r, v: bsF.v }, tDepart_s, tMcc, propCtx, { maxSamples: 64 });
+        if (preRes && preRes.stateF && PROG_BODIES[preRes.frame]) {
+          const mccFrame = preRes.frame;
+          const mccCtx = { center: mccFrame, bodies: propCtx.bodies, overrides };
+          const propMcc = dv => physPropagateSegment({ r: preRes.stateF.r, v: physAdd(preRes.stateF.v, dv) }, tMcc, tArrFixed, mccCtx, { maxSamples: 128 });
+          const missOfMcc = res => {
+            if (!res || !res.stateF) return null;
+            const a2 = toMoonFrame(res.stateF, res.frame, tArrFixed);
+            return [a2.r[0] - tgt.r[0], a2.r[1] - tgt.r[1], a2.r[2] - tgt.r[2]];
+          };
+          let mccSol;
+          try {
+            mccSol = physShootToTarget(
+              xx => ({ r: preRes.stateF.r, v: physAdd(preRes.stateF.v, xx) }),
+              res => missOfMcc(res),
+              [0, 0, 0],
+              { propagate: (st, xx) => propMcc(xx), tolKm: Math.min(500, ACCEPT_KM / 4), eps: [1e-4, 1e-4, 1e-4], maxIter: 12, maxProps: 40 });
+          } catch (err) { mccSol = { converged: false, x: [0, 0, 0], missKm: Infinity }; }
+          const dvMcc = mccSol.x;
+          const postRes = propMcc(dvMcc);
+          const m2b = missOfMcc(postRes);
+          const missMcc = m2b ? Math.hypot(m2b[0], m2b[1], m2b[2]) : Infinity;
+          if (isFinite(missMcc) && missMcc < missKm) {
+            missKm = missMcc;
+            converged = missKm <= ACCEPT_KM;
+            mccBurn = { t: tMcc, frame: mccFrame, r: preRes.stateF.r, vPre: preRes.stateF.v, dvVec: dvMcc.slice(), dv_ms: physMag(dvMcc) * 1000 };
+            outSamples = (preRes.samples || []).concat(postRes.samples || []);
+            outEvents = (preRes.events || []).concat(postRes.events || []);
+            outFrame = postRes.frame;
+            arrFinal = toMoonFrame(postRes.stateF, postRes.frame, tArrFixed);
+          }
+        }
+      }
+      const insertionBurn = converged ? { t: tArrFixed, frame: 'Moon', r: arrFinal.r, vPre: arrFinal.v, dvVec: physSub(tgt.v, arrFinal.v) } : null;
+      return { converged, dvDepartVec: bsF.dvVec, tof_s: tArrFixed - tDepart_s, missKm, insertionBurn, mccBurn,
+        samples: outSamples, events: outEvents, frame: outFrame, theta: x[0], pitch: x[1] || 0, yaw: x[2] || 0 };
+    } catch (err) {
+      return { converged: false, tof_s: tArrFixed - tDepart_s, missKm: Infinity };
+    }
+  }
+
   const sig = `${r1.toFixed(0)}|${incRad.toFixed(4)}|${raanAuthored ? 'A' + raanAuthoredRad.toFixed(4) : 'S'}|${nrhoRefId}|${tDepart_s.toFixed(0)}|${dv_kms.toFixed(3)}`;
   let sol = _physNrhoShootCache[sig];
   if (!sol) {
@@ -296,13 +427,109 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   }
 
   const insertionBurn = converged ? { t: tArr, frame: 'Moon', r: arrFinal.r, vPre: arrFinal.v, dvVec: physSub(tgt.v, arrFinal.v) } : null;
-  return {
+  const baseResult = {
     converged, dvDepartVec: bs.dvVec, met: tDepart_s, tof_s: TOFf, missKm,
     insertionBurn, mccBurn, samples: outSamples, events: outEvents, frame: outFrame,
     theta: sol.x[0], pitch: sol.x[1] || 0, yaw: sol.x[2] || 0, dv_kms,
     note: converged
       ? (mccBurn ? `converged via mid-course correction (${Math.round(mccBurn.dv_ms)} m/s MCC at TLI+${(0.5 * TOFf / 86400).toFixed(1)} d)` : null)
       : `NRHO transfer did not converge (miss ${isFinite(missKm) ? Math.round(missKm) + ' km' : 'n/a'} > ${ACCEPT_KM} km window)`,
+  };
+
+  // ── 5b R2: targetPhase selection layer ─────────────────────────────────
+  // No targetVehicle, or it doesn't share this ref -> byte-identical 5a
+  // return (regression gate: this branch is a hard no-op for all existing
+  // callers/goldens that never pass ctx.targetVehicle).
+  const tv = ctx.targetVehicle;
+  if (!tv || !tv.propagated || tv.refId !== nrhoRefId || !tv.r ||
+      typeof _phaseVehiclePoint !== 'function' || typeof _phaseNearestT !== 'function' ||
+      typeof _phaseWrapDt !== 'function' || typeof refOrbitPropagatedStateAt !== 'function') {
+    return baseResult;
+  }
+  const pT = _phaseVehiclePoint(tv, tv.metAt != null ? tv.metAt : tDepart_s);
+  const nT = pT ? _phaseNearestT(nrhoRefId, pT.r, pT.t) : null;
+  if (!nT) {
+    baseResult.note = (baseResult.note ? baseResult.note + '; ' : '') +
+      'phase-matched arrival unavailable (ref is not rotating-frame capable) — 5a co-orbital fallback';
+    return baseResult;
+  }
+  const Pn = nT.period_s;
+  // idealized-station-keeping assumption (MATH.md §7ae): the target's along-
+  // track clock advances 1:1 with the ref's own wrapped clock from the moment
+  // it was last observed (pT.t) — no perturbation/closure-tolerance drift.
+  const predictedClockAt = tArrQ => nT.tPhase + (tArrQ - pT.t);
+
+  // lattice: the default band's candidates, extended +/-2 perilune crossings
+  // beyond each end (spec: "extended ±2 crossings"), departure-side only.
+  const candSet = new Set(tArrCands.map(t => Math.round(t)));
+  {
+    const sortedC = tArrCands.slice().sort((a, b) => a - b);
+    const loC = sortedC[0], hiC = sortedC[sortedC.length - 1];
+    for (let k = 1; k <= 2; k++) { candSet.add(Math.round(loC - k * P_nrho)); candSet.add(Math.round(hiC + k * P_nrho)); }
+  }
+  const allCands = [...candSet].filter(t => t > tDepart_s).sort((a, b) => a - b);
+
+  const evaluated = [];
+  for (const tArrQ of allCands) {
+    const candSig = sig + '|ph' + tArrQ.toFixed(0);
+    let cRes = _physNrhoPhaseCache[candSig];
+    if (!cRes) {
+      cRes = (tArrQ === tArr) ? { converged, tof_s: TOFf, missKm, dvDepartVec: bs.dvVec, mccBurn } : _nrhoSolveFixedTArr(tArrQ);
+      _physNrhoPhaseCache[candSig] = cRes;
+    }
+    if (!cRes.converged) continue;
+    const predictedClock = predictedClockAt(tArrQ);
+    const phaseErr_s = _phaseWrapDt(tArrQ - predictedClock, Pn);
+    const tgtPos = targetAtAbs(tArrQ);
+    const actualTgtSample = refOrbitPropagatedStateAt(nrhoRefId, predictedClock);
+    const phaseErrKm = (tgtPos && actualTgtSample) ? physMag(physSub(tgtPos.r, actualTgtSample.r)) : null;
+    const dvTotal_ms = dv_kms * 1000 + (cRes.mccBurn ? cRes.mccBurn.dv_ms : 0);
+    evaluated.push({ tArr: tArrQ, tof_s: cRes.tof_s, dvTotal_ms, phaseErr_s, phaseErrKm, res: cRes });
+  }
+  if (!evaluated.length) {
+    baseResult.note = (baseResult.note ? baseResult.note + '; ' : '') +
+      'no lattice option entered the phase capture window — 5a co-orbital fallback (R3 phasing burns absorb the residual)';
+    return baseResult;
+  }
+  // dv band: options costing more than +15% over the cheapest converged
+  // candidate drop out before ranking (MATH.md §7ae — documented band).
+  const bestDv = Math.min.apply(null, evaluated.map(o => o.dvTotal_ms));
+  const banded = evaluated.filter(o => o.dvTotal_ms <= bestDv * NRHO_PHASE_DV_BAND);
+  banded.sort((a, b) => Math.abs(a.phaseErr_s) - Math.abs(b.phaseErr_s));
+  const shown = banded.slice(0, NRHO_PHASE_MAX_OPTIONS);
+
+  // default selection = min |phaseErr| within the band (shown[0]); an
+  // authored pick (ctx.selectedTof_s, persisted as e.arrivalOption) overrides
+  // it when it matches one of the shown options' TOF within 60 s.
+  let chosen = shown[0];
+  if (ctx.selectedTof_s != null) {
+    let bestMatch = null, bestD = Infinity;
+    for (const o of shown) { const d = Math.abs(o.tof_s - ctx.selectedTof_s); if (d < bestD) { bestD = d; bestMatch = o; } }
+    if (bestMatch && bestD < 60) chosen = bestMatch;
+  }
+  const phaseOptions = shown.map(o => ({
+    tDepart_s, tof_s: o.tof_s, dvTotal_ms: o.dvTotal_ms, phaseErr_s: o.phaseErr_s, phaseErrKm: o.phaseErrKm, converged: true,
+  }));
+
+  if (chosen.tArr === tArr) {
+    // the base 5a candidate is also the phase-matched default — return it
+    // unchanged (byte-identical fields) plus the honest option list.
+    baseResult.phaseOptions = phaseOptions;
+    baseResult.phaseErr_s = chosen.phaseErr_s;
+    baseResult.phaseErrKm = chosen.phaseErrKm;
+    return baseResult;
+  }
+  // a different lattice point wins the selection — return ITS fully-solved
+  // result, reshaped to the same contract as the base path.
+  const cr = chosen.res;
+  return {
+    converged: cr.converged, dvDepartVec: cr.dvDepartVec, met: tDepart_s, tof_s: cr.tof_s, missKm: cr.missKm,
+    insertionBurn: cr.insertionBurn, mccBurn: cr.mccBurn, samples: cr.samples, events: cr.events, frame: cr.frame,
+    theta: cr.theta, pitch: cr.pitch, yaw: cr.yaw, dv_kms,
+    phaseOptions, phaseErr_s: chosen.phaseErr_s, phaseErrKm: chosen.phaseErrKm,
+    note: cr.converged
+      ? (cr.mccBurn ? `converged via mid-course correction (phase-matched arrival, &Delta;&phi; ${Math.round(chosen.phaseErr_s)}s)` : `phase-matched arrival (&Delta;&phi; ${Math.round(chosen.phaseErr_s)}s)`)
+      : `NRHO transfer did not converge at the phase-matched candidate (miss ${isFinite(cr.missKm) ? Math.round(cr.missKm) + ' km' : 'n/a'})`,
   };
 }
 

@@ -706,8 +706,28 @@ function physRebuildMissionTrajectories(m) {
       ? ((toN && toN.orbitRefId && toN.orbit && toN.orbit.body === burn.dest) ? toN.orbitRefId : nrhoRefAfter(burn.dest, i))
       : null;
     if (nrhoRef) {
+      // 5b R2 (MATH.md §7ae): if another vehicle in this mission already
+      // occupies the same NRHO ref (DEPLOY-stamped propagated+refId+r/metAt —
+      // 570-mission-manager.js's DEPLOY branch), pass it as ctx.targetVehicle
+      // so the solver evaluates the phase-matched lattice instead of any
+      // perilune crossing. e.arrivalOption (authored TOF pick, persisted by
+      // the MNODE card's ARRIVAL OPTIONS row) overrides the solver's own
+      // min-|phaseErr| default when present. Absent target vehicle -> ctx is
+      // unchanged from 5a, byte-identical result (regression gate).
+      let targetVehicle = null;
+      if (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && Array.isArray(m.vehicleIds)) {
+        for (const vid of m.vehicleIds) {
+          if (vid === e.vehicleId) continue;
+          const ofv = PROG_ACTIVE_PROGRAM.vehicles[vid];
+          const os = ofv && ofv.orbitState;
+          if (os && os.propagated && os.refId === nrhoRef && os.r) { targetVehicle = os; break; }
+        }
+      }
+      const nsolCtx = { dv_kms: dv_ms / 1000 };
+      if (targetVehicle) nsolCtx.targetVehicle = targetVehicle;
+      if (e.arrivalOption != null) nsolCtx.selectedTof_s = e.arrivalOption;
       let nsol;
-      try { nsol = physSolveNrhoTransfer(fromO, nrhoRef, met, { dv_kms: dv_ms / 1000 }); }
+      try { nsol = physSolveNrhoTransfer(fromO, nrhoRef, met, nsolCtx); }
       catch (err) { nsol = { converged: false, note: 'exception: ' + (err && err.message) }; }
       const leg = { authIdx: i, fromNode: e.fromNode, toNode: e.toNode, met,
         samples: nsol.samples || [], events: nsol.events || [],
@@ -717,6 +737,7 @@ function physRebuildMissionTrajectories(m) {
         converged: !!nsol.converged, kind: 'nrho', dest: burn.dest,
         missKm: nsol.missKm, note: nsol.note, nrhoInsertion: nsol.insertionBurn,
         mccBurn: nsol.mccBurn || null, nrhoRefId: nrhoRef,
+        phaseOptions: nsol.phaseOptions || null, phaseErr_s: nsol.phaseErr_s, phaseErrKm: nsol.phaseErrKm,
         burnState: burn.preState, initState: burn.state, center: burn.center, bodies: burn.bodies, dtMax: undefined };
       legs.push(leg);
       lastTransit = leg;

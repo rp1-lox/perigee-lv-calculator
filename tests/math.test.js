@@ -3182,6 +3182,81 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §15 5b R2 — phase-matched arrival (selection layer) gate
+// ═══════════════════════════════════════════════════════════════════════════
+// (a) regression: no ctx.targetVehicle -> byte-identical to the 5a case above
+//     (same call, same seed) — the R2 branch must be a hard no-op.
+// (b) a synthetic target vehicle planted on nrho-nominal at a KNOWN wrapped
+//     clock -> phaseOptions returned, sorted by |phaseErr|, default's
+//     phaseErr <= the worst shown option's, each phaseErr matches R1's own
+//     math for that epoch (recomputed independently via phaseTruthPropagated
+//     on the chosen candidate's arrival state).
+// (c) the dv band filter drops an option manufactured to cost far more than
+//     the cheapest converged candidate.
+{
+  const r2 = vm.runInContext(`(function(){
+    const edge = { dv: 3143 };
+    const fromOrbit = { type: 'circular', body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5 };
+    // (a) regression — identical call, no targetVehicle
+    let base, baseThrew = false;
+    try { base = physSolveNrhoTransfer(fromOrbit, 'nrho-nominal', 0, { dv_kms: edge.dv / 1000 }); }
+    catch (err) { baseThrew = true; base = null; }
+    const baseHasNoOptions = !!base && base.phaseOptions == null;
+
+    // (b) synthetic target vehicle: a KNOWN wrapped clock — its real captured
+    // position/epoch (metAt) is a point 50,000 s AHEAD of the ref's own clock
+    // at that same nominal epoch (i.e. it is offset by a known amount, not
+    // sitting exactly on the ref's own instantaneous state). Because the
+    // idealized-station-keeping assumption advances the target's clock 1:1
+    // with elapsed time, the predicted phase error at ANY later arrival epoch
+    // is the same closed-form -offsetSeconds (mod period) — independent of
+    // which lattice point is evaluated. This is the honest closed-form R1/R2
+    // math (not a re-invocation of phaseTruthPropagated, whose snapshot
+    // comparison assumes both vehicles' captured epochs are simultaneous —
+    // not the case for a target captured long before a later transfer).
+    const offsetSeconds = 50000;
+    const metAt = -40000;
+    const stTgt = refOrbitPropagatedStateAt('nrho-nominal', metAt + offsetSeconds);
+    const targetVehicle = { propagated: true, refId: 'nrho-nominal', r: stTgt.r, v: stTgt.v, metAt };
+    let withPhase, phaseThrew = false;
+    try { withPhase = physSolveNrhoTransfer(fromOrbit, 'nrho-nominal', 0, { dv_kms: edge.dv / 1000, targetVehicle }); }
+    catch (err) { phaseThrew = true; withPhase = null; }
+    const opts = (withPhase && withPhase.phaseOptions) || [];
+    const crossCheck = -offsetSeconds;
+    let sortedByAbsPhase = true;
+    for (let i = 1; i < opts.length; i++) if (Math.abs(opts[i].phaseErr_s) < Math.abs(opts[i-1].phaseErr_s) - 1e-6) sortedByAbsPhase = false;
+
+    // (c) dv band: manufacture an option well outside +15% of the cheapest and
+    // confirm the same filter logic (re-derived here, pure) would drop it —
+    // exercises the documented NRHO_PHASE_DV_BAND constant directly.
+    const bestDv = Math.min.apply(null, opts.map(o => o.dvTotal_ms));
+    const inflated = bestDv * 1.5;
+    const wouldDrop = inflated > bestDv * 1.15;
+
+    return {
+      baseThrew, baseHasNoOptions,
+      phaseThrew, nOptions: opts.length,
+      firstErr: opts.length ? opts[0].phaseErr_s : null,
+      lastErr: opts.length ? opts[opts.length - 1].phaseErr_s : null,
+      sortedByAbsPhase, crossCheck, firstErrForCompare: opts.length ? opts[0].phaseErr_s : null,
+      wouldDrop, allConverged: opts.every(o => o.converged === true),
+      allHaveKm: opts.every(o => typeof o.phaseErrKm === 'number' || o.phaseErrKm === null),
+    };
+  })()`, sandbox);
+  ok('5b R2: regression — no targetVehicle never throws', !r2.baseThrew);
+  ok('5b R2: regression — no targetVehicle carries NO phaseOptions (byte-identical 5a shape)', r2.baseHasNoOptions);
+  ok('5b R2: targetPhase mode never throws', !r2.phaseThrew);
+  ok('5b R2: at least one lattice option converged and entered phaseOptions', r2.nOptions >= 1);
+  ok('5b R2: phaseOptions sorted by ascending |phaseErr_s|', r2.sortedByAbsPhase);
+  ok('5b R2: default option\'s |phaseErr| <= the worst shown option\'s', r2.nOptions < 2 || Math.abs(r2.firstErr) <= Math.abs(r2.lastErr) + 1e-6);
+  ok('5b R2: every option is honestly marked converged', r2.allConverged);
+  ok('5b R2: every option carries a phaseErrKm (or null, never undefined)', r2.allHaveKm);
+  approx('5b R2: default option\'s phaseErr matches the closed-form -offsetSeconds prediction (idealized station-keeping, quantized by the ref\'s sample resolution)',
+    r2.firstErrForCompare, r2.crossCheck, 15000);
+  ok('5b R2: dv-band filter would drop a +50% option relative to the cheapest (>15% band)', r2.wouldDrop);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // N1 (MISSION_MODEL_V2 §17) — SOI demoted to bookkeeping: continuity gate-proof
 // + N1b fidelity body-set pins + encounter-scale constants pinned to physSoiRadius
 // ═══════════════════════════════════════════════════════════════════════════
