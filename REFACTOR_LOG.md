@@ -126,3 +126,32 @@ Each move updates the `tests/math.test.js` FILES list in the same commit.
 
 ## Suspected bugs (not fixed — refactor was behavior-preserving)
 - **Pre-existing name collision `missionExecManeuver`**: defined in BOTH `src/js/565-physics-mission.js` and (formerly) `src/js/570-mission-manager.js`, now `src/js/570-mission-panel.js`. This predates tonight's work (present in both files at commit 060b9d2e1). 570 loads after 565, so the 570 definition wins at runtime; behavior is unchanged by the split. Worth a look: either the 565 copy is dead (shadowed) or the two are intended to differ and the collision is accidental. Not a refactor regression.
+
+## [12] 574 trajectory-view — baseline fingerprint + split plan — 2026-07-15
+**Intent**: Begin approved split of `574-trajectory-view.js` (4,254 lines). Because the physics fingerprint (budget/missKm) does NOT exercise 574's rendering, a dedicated deterministic 574 fingerprint was captured first.
+**Type**: baseline record.
+**574 behavior fingerprint (deterministic; verified reproducible across a fresh re-seed)**:
+- `_trajProjectVec` samples (projection seam): `-364.296,1234.273;270559.185,-61810.664;0,0`.
+- `_trajWorldSVG(m,cam,zoom,rect)` djb2 hashes across 4 controlled cameras (Apollo seed, `_trajViewTimeOverride=100000`, rect 800x600): cam wKm 50000 -> 1471220718 (len 19691); Moon-anchored wKm 20000 -> 2180780925 (len 16768); wKm 2000000 -> 2521417511 (len 8075); Earth off-center wKm 400000 -> 699604813 (len 14708).
+- DOM default traj view: 2 svg, 7 paths (hash 1265621026), 12 circles (hash 952656802), 14 texts, 0 images at capture.
+- Physics fingerprint (secondary, still checked): Apollo/Gateway budgets + NRHO missKm=30.1135 unchanged.
+**Planned extractions (contiguous, def/decl-only; 574 has no top-level load-time execution; new files sort between `574-trajectory-view.js` and `5745-maneuver-gizmo.js`, all def-only so order is behavior-irrelevant)**:
+- `5740-trajectory-camera.js` <- camera/projection/frames-independent interaction (_trajCamByMission..trajPanEnd, incl. _trajProjectVec the single projection seam).
+- `5741-trajectory-scene-extract.js` <- orbit records + _trajExtractMission + ellipse geom (_trajOrbitKey.._trajEllipseGeom).
+- `5742-trajectory-overlay-lod.js` <- overlay world->screen + label registry + LOD windows + occlusion/culling (_trajWorldToScreen.._trajOcclusionSplitRuns).
+- `5743-trajectory-rings-legs.js` <- ring/arc/leg/phys-leg/escape-spur rendering (_trajRingSVG.._trajLodOpacity).
+- `5744-trajectory-eventnodes.js` <- burn markers + event nodes + low-thrust arc + selection (_trajBurnMarker.._trajLowThrustSVG).
+- `5744-trajectory-globe.js` <- body disc/surface/texture/raster/globe + reference frames + rings-3D (_TRAJ_MIN_BODY_PX.._trajBodyDiscTiered).
+Residual `574-trajectory-view.js` keeps the file header, the world-assembly orchestrator (_trajWorldSVG, _trajBodyFrameContent), time/tick helpers, glyph/neighborhood, and the view UI shell (_missionTrajViewHTML, scrubber, footer, flyout, starfield, afterRender).
+
+## [13] 574 split A — extract camera + scene-extract; fingerprint method corrected — 2026-07-15
+**Intent**: First 574 extraction (camera/projection/interaction + scene extraction), and hardening of the 574 verification method.
+**Type**: split (behavior-preserving move) + methodology note.
+**Fingerprint method correction (IMPORTANT for later 574 runs)**: the raw `_trajWorldSVG` string embeds the random per-mission id (progUUID, e.g. `traj-atmo-<missionId>-Earth`), so its hash varies per page load even on an unchanged build (lengths stay constant). Canonical fingerprint = normalize by replacing `m.missionId` with `MID` before hashing; this is stable across reloads. Also: `_trajWorldSVG` renders richer output when physics legs are warm — capture must use a FIXED COLD sequence (reload -> progMakeProgram('T') -> devSeedApolloMission({force:true}) -> `_trajViewTimeOverride[id]=100000`). The earlier entry-[12] hashes were warm-state and are superseded by the normalized cold baseline below.
+**574 canonical baseline (OLD build = HEAD 13d5ff004, normalized, cold, verified stable across reloads)**: proj `-364.296,1234.273;270559.185,-61810.664;0,0`; normalized world hashes across the 4 cams = [3983026606 (len4470), 3110351937 (3570), 1308996569 (3082), 1089556814 (4098)].
+**Files**: `src/js/574-trajectory-view.js` (4,408 → 3,753 lines) → new `src/js/5740-trajectory-camera.js` (376 lines: _trajCamByMission..trajPanEnd, incl. _trajProjectVec) and new `src/js/5741-trajectory-scene-extract.js` (312 lines: _trajOrbitKey.._trajEllipseGeom incl. _trajExtractMission). File header banner + _trajWorldToScreen confirmed remaining in core. `tests/math.test.js` FILES list gained both after 574.
+**Subagent**: one Sonnet subagent, both extractions, gate green. Accounting 4408 -> 3753+376+312 (+33 = 2 top-matter blocks). 0 U+FFFD. Each moved fn unique.
+**Behavior delta**: none. VERIFIED by a rigorous old-vs-new comparison: stashed the split, rebuilt the OLD artifact, captured the normalized cold fingerprint; restored the split, rebuilt, re-captured — NEW normalized world hashes == OLD baseline exactly ([3983026606, 3110351937, 1308996569, 1089556814]); projection seam identical; zero console errors. Physics budget/missKm unaffected (unchanged by 574).
+**Deleted**: none.
+**Verified**: `python build.py` -> 772 passed, 0 failed on both OLD and NEW; node --check ok; U+FFFD guard ok.
+**Risk notes**: _trajProjectVec (single projection seam) now lives in 5740; def-only, loads before any runtime render. No frozen functions, persisted fields, or physics numerics touched.

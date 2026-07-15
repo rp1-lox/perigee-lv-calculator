@@ -48,6 +48,8 @@ const FILES = [
   'src/js/570-mission-nodemap.js',
   'src/js/570-mission-manager.js',
   'src/js/574-trajectory-view.js',
+  'src/js/5740-trajectory-camera.js',
+  'src/js/5741-trajectory-scene-extract.js',
   'src/js/5745-maneuver-gizmo.js',
   'src/js/450-program-module-phase-10-save-load-closur.js',
 ];

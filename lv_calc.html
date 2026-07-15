@@ -25214,662 +25214,7 @@ function devSeedGatewayMission(opts) {
 
 // Module-local, session-only state (NOT authored — never touches m.log or
 // autosave; camera resets on reload, same spirit as _missionNmZoom).
-// Camera per mission: { anchorBody, relOffsetKm:{x,y}, wKm }.
-//   anchorBody   — body name the camera tracks ('Sun' or any PROG_BODIES key)
-//   relOffsetKm  — pan offset from the anchor's world position, in km
-//   wKm          — camera viewBox width, in km (zoom = independent of any
-//                  scene-local `scale` factor now — it's real km)
-let _trajCamByMission = {};
 
-// Fixed reference viewBox size in RENDER units (floating-origin km, i.e. 1
-// render unit = 1 km at zoom reference). Kept named _TRAJ_VB for continuity
-// with the mini-diagram's synthetic cam (still `{cx:0,cy:0,w:_OD_VBW}` in its
-// own unrelated unit space — no coupling).
-const _TRAJ_VB = 400;
-
-// Zoom clamps per the C1b brief: wKm in [~200 km, ~1.2e10 km] (just past
-// Neptune's ring so the full system is reachable in one continuous zoom).
-const _TRAJ_WKM_MIN = 200, _TRAJ_WKM_MAX = 1.2e10;
-
-// ── body -> chrome color mapping ─────────────────────────────────────────
-function _trajBodyColor(body) {
-  // Shared per-body DATA palette (570's PROG_BODY_COLORS) so glyphs, rings and
-  // labels here match the same body's color in the orbit map. Unlisted moons
-  // (e.g. Titan) fall back to the Moon's hue; anything else to the theme accent2.
-  if (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS[body]) return PROG_BODY_COLORS[body];
-  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS.Moon) || 'var(--nm-lunar)';
-  return 'var(--nm-interp)';
-}
-
-// All body names the world ever draws: Sun + every heliocentric body +
-// every moon. Used for the full-system render pass and the focus-bar list.
-function _trajAllBodies() {
-  const helio = Object.keys(PROG_HELIO_R);
-  const moons = Object.keys(PROG_MOON_ORBITS || {});
-  return ['Sun', ...helio, ...moons];
-}
-
-function _trajMoonsOf(body) {
-  return Object.entries(PROG_MOON_ORBITS || {})
-    .filter(([, mo]) => mo.parent === body)
-    .map(([name, mo]) => ({ name, r: mo.r }));
-}
-
-// ── camera helpers ─────────────────────────────────────────────────────────
-function _trajCam(id) {
-  return _trajCamByMission[id] || { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _TRAJ_VB, az: 0, el: Math.PI / 2 };
-}
-function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
-
-// ── R2: 3D projection (ONE seam) ────────────────────────────────────────────
-// Pure orthographic camera: rotate about the ecliptic normal by az, then tilt
-// from top-down by (π/2 − el) about the screen-x axis, drop the view axis as
-// depth. At el = π/2, az = 0 this is EXACTLY the pre-R2 mapping (u=x, v=y) —
-// 3D is a superset, not a re-projection. Linear, so planar LOCAL geometry
-// (arcs, spurs, ring offsets around a body) can be projected as offsets and
-// added to the body's already-projected anchor.
-function _trajProjectVec(x, y, z, az, el) {
-  const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
-  const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
-  const ct = Math.cos(t), st = Math.sin(t);
-  const xa = x * ca - y * sa, ya = x * sa + y * ca;
-  // R6.3 handedness fix (2026-07-11): world coords use the standard
-  // right-handed ecliptic convention (+z north, CCW prograde motion/east
-  // longitude as seen from +z looking down: x-right, y-UP). SVG screen space
-  // is y-DOWN, so plotting world-y directly as screen-y is a reflection —
-  // it mirrored geography (Australia rendered left of Asia) AND orbital
-  // motion (prograde appeared clockwise) system-wide, since every consumer
-  // (surface points, gizmo, hover rails, ring tangents) routes through this
-  // one seam. R6.3b (user flight-test): the first fix negated screen-Y, which
-  // repairs chirality but points north DOWN at tilted views (the tilt term's
-  // sign flipped with it) — the world read as "flipped 180°". Negating
-  // screen-X instead is the other det=−1 reflection: chirality fixed AND the
-  // north pole tilts toward the TOP of the screen (+z → v=−z·st → up in SVG's
-  // y-down space). See MATH.md §7o.
-  return { x: -xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
-}
-// Per-render-pass projection context (set by _trajWorldSVG from the camera;
-// helpers below read it so every emission site shares ONE projection).
-// N3: frameKind/frameBody/viewT added — 'inertial' (default) is a no-op path
-// (frameKind check short-circuits below, zero overhead, byte-identical to
-// pre-N3 rendering).
-let _trajProjCtx = { az: 0, el: Math.PI / 2, frameKind: 'inertial', frameBody: 'Earth', viewT: 0 };
-/** Project a 3D vector (any consistent units) through the pass camera. `t` is
- *  the vector's OWN epoch (seconds); omitted for content already evaluated
- *  "now" (bodies, glyphs, spin-baked surface points) — defaults to viewT.
- *  See MATH.md §7x for why t=viewT is NOT an identity no-op for non-inertial
- *  frames (that's what makes e.g. the Moon render frame-fixed). */
-function _trajProj3(x, y, z, t) {
-  const ctx = _trajProjCtx;
-  if (ctx.frameKind && ctx.frameKind !== 'inertial') {
-    const tv = t != null ? t : ctx.viewT;
-    const fc = _trajFrameTransform(ctx.frameKind, ctx.frameBody, [x, y, z || 0], tv);
-    return _trajProjectVec(fc[0], fc[1], fc[2], ctx.az, ctx.el);
-  }
-  return _trajProjectVec(x, y, z, ctx.az, ctx.el);
-}
-/** Project a PLANAR (ecliptic z=0) local offset through the pass camera. */
-function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProjCtx.az, _trajProjCtx.el); return { x: p.x, y: p.y }; }
-
-// Effective camera center in heliocentric km at the given view time — the
-// ONE place anchor + offset combine. Everything else in the render path
-// subtracts this from world km to get floating-origin render coords.
-// z rides along (R2): the anchor body's real out-of-plane position keeps it
-// centered under tilt. `overrides` is a retired R1 vestige, ignored.
-function _trajCamCenterKm(cam, viewT, overrides) {
-  const p = progBodyWorldPos(cam.anchorBody, viewT);
-  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0), z: p.z || 0 };
-}
-
-// Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
-//   - has moons  -> fit the outermost moon's ring (x ~2.6 headroom)
-//   - Sun        -> fit the outermost planet's ring
-//   - no moons   -> a schematic multiple of the body's own radius (local orbit space)
-// Mission content anchored at this body (if any) can extend the fit, same
-// spirit as the old _trajFitScale's "mission extent vs static extent" — we
-// take whichever is larger so authored orbits are never clipped on fly-to.
-function _trajFitWKmForBody(body, m) {
-  let staticR;
-  if (body === 'Sun') {
-    // Mission-aware solar fit: fitting the FULL system (out to Neptune) put
-    // any realistic mission's geometry in the inner ~5% of the view, below
-    // every LOD window — "fly to Sun" showed empty space. Frame the outermost
-    // heliocentric ring the mission actually touches instead (Earth's ring is
-    // the floor — every mission departs it); no mission -> full system.
-    const rs = Object.values(PROG_HELIO_R);
-    const fullR = rs.length ? Math.max(...rs) * 1.15 : 1e9;
-    let missionHelioR = 0;
-    if (m) {
-      const frames = _trajGetExtraction(m);
-      Object.keys(frames).forEach(frameId => {
-        const sc = frames[frameId];
-        const touched = sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length);
-        if (!touched) return;
-        const parent = (PROG_MOON_ORBITS[frameId] && PROG_MOON_ORBITS[frameId].parent) || frameId;
-        if (PROG_HELIO_R[parent] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[parent]);
-        (sc.legs || []).forEach(leg => {
-          [leg.fromO, leg.toO].forEach(o => {
-            if (o && o.type === 'transit' && PROG_HELIO_R[o.destination] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[o.destination]);
-          });
-        });
-      });
-      if (missionHelioR > 0 && PROG_HELIO_R.Earth) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R.Earth);
-    }
-    staticR = missionHelioR > 0 ? missionHelioR * 1.3 : fullR;
-  } else {
-    const moons = _trajMoonsOf(body);
-    if (moons.length) {
-      staticR = Math.max(...moons.map(mo => mo.r)) * 2.6;
-    } else {
-      const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 6371;
-      staticR = R * 8; // schematic local-orbit neighborhood
-    }
-  }
-  const missionR = m ? _trajMissionExtentForBody(body, m) : 0;
-  const fitR = Math.max(staticR, missionR * 1.2);
-  return Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, fitR * 2));
-}
-
-// ── V1 fly-to easing (MISSION_MODEL_V2 §18) ─────────────────────────────────
-// Camera anchor/zoom/orientation changes ease (cubic in-out, ~600ms) instead
-// of snapping. The floating-origin design re-centers on the new anchor body
-// INSTANTLY (that's a precision requirement, not a style choice — see the
-// module header), so what eases here is wKm (zoom) and az/el (orientation);
-// a true zoom-out/arc/zoom-in path between distant bodies is V2+ (spec §18).
-// Interrupted cleanly by any user drag/wheel interaction mid-flight
-// (trajPanStart/trajWheelZoom cancel the animation for that mission id).
-let _trajFlyAnim = {}; // id -> requestAnimationFrame handle
-function _trajEaseCubicInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
-function _trajCancelFlyTo(id) {
-  if (_trajFlyAnim[id] != null) {
-    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_trajFlyAnim[id]);
-    delete _trajFlyAnim[id];
-  }
-}
-function _trajFlyTo(id, targetCam) {
-  _trajCancelFlyTo(id);
-  const from = _trajCam(id);
-  const az0 = from.az || 0, el0 = from.el != null ? from.el : Math.PI / 2, wKm0 = from.wKm;
-  const az1 = targetCam.az != null ? targetCam.az : az0;
-  const el1 = targetCam.el != null ? targetCam.el : el0;
-  let dAz = az1 - az0; // shortest-path wrap so a near-2pi az doesn't spin the long way
-  while (dAz > Math.PI) dAz -= 2 * Math.PI;
-  while (dAz < -Math.PI) dAz += 2 * Math.PI;
-  const dur = 600, t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  const step = () => {
-    if (_trajDrag && _trajDrag.id === id) { delete _trajFlyAnim[id]; return; } // interrupted by drag on this panel
-    const p = Math.min(1, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0) / dur);
-    const e = _trajEaseCubicInOut(p);
-    const cam = Object.assign({}, targetCam, {
-      az: az0 + dAz * e,
-      el: el0 + (el1 - el0) * e,
-      wKm: wKm0 + (targetCam.wKm - wKm0) * e,
-      relOffsetKm: { x: 0, y: 0 },
-    });
-    _trajApplyCam(id, cam);
-    if (p < 1) { _trajFlyAnim[id] = requestAnimationFrame(step); }
-    else delete _trajFlyAnim[id];
-  };
-  _trajFlyAnim[id] = requestAnimationFrame(step);
-}
-
-function trajSetFocus(id, body) {
-  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
-  const wKm = _trajFitWKmForBody(body, m);
-  const prev = _trajCam(id); // fly-to keeps the user's 3D orientation
-  const target = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
-  // The anchor swap itself must be instant (floating-origin re-center is a
-  // precision requirement) — seed the camera at the new anchor but the OLD
-  // zoom/orientation, mount the panel there, then ease wKm/az/el to target.
-  _trajCamByMission[id] = Object.assign({}, target, { wKm: prev.wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 });
-  missionRenderDetail();
-  _trajFlyTo(id, target);
-}
-
-function trajResetView(id) {
-  const cam = _trajCam(id);
-  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
-  const wKm = _trajFitWKmForBody(cam.anchorBody, m);
-  // Reset returns to the canonical top-down view (az/el included) — anchor is
-  // unchanged, so no instant re-mount is needed; just ease there.
-  _trajFlyTo(id, { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 });
-}
-
-// Re-render both layers + update the world <svg>'s viewBox attribute — cheap
-// camera-only update path shared by wheel-zoom and pan so neither has to
-// rebuild the whole mission panel.
-function _trajApplyCam(id, cam) {
-  _trajCamByMission[id] = cam;
-  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
-  if (!va) { missionRenderDetail(); return; }
-  const svgEl = va.querySelector('svg.traj-svg');
-  const overlayEl = va.querySelector('svg.traj-overlay');
-  if (!svgEl) { missionRenderDetail(); return; }
-  const rect = svgEl.getBoundingClientRect();
-  const aspect = (rect.width > 0 && rect.height > 0) ? (rect.height / rect.width) : 1;
-  // Geometry is emitted in render units (km·zoom), so the viewBox is a
-  // CONSTANT ~±200-unit window regardless of camera width — attribute floats
-  // stay small at every zoom (software-rasterizer safety; see _trajWorldSVG).
-  const vbH = _TRAJ_VB * aspect;
-  svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2).toFixed(3)} ${(-vbH / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
-  const sceneEl = svgEl.querySelector('g.traj-scene');
-  if (sceneEl && typeof _missions !== 'undefined') {
-    const m = (_missions || []).find(mm => mm.missionId === id);
-    const zoom = _trajZoomFromCam(cam);
-    _trajResetLabels();
-    sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);
-    _trajReconcileGlobeLayer(svgEl); // R6.4c: patch persistent globe images in place (no flicker)
-    if (overlayEl && rect.width > 0 && rect.height > 0) {
-      overlayEl.style.transform = ''; // clear any mid-drag pan slide
-      overlayEl.setAttribute('width', rect.width);
-      overlayEl.setAttribute('height', rect.height);
-      overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
-      const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
-      overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
-      if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
-      // R3.5.2: the world re-render just rebuilt g.traj-scene, wiping the
-      // gizmo's scene-space preview path — repaint it too, or the previewed
-      // trajectory vanishes the moment the user zooms/rotates to look at it.
-      if (typeof _trajGizmoRepaintScenePreview === 'function') _trajGizmoRepaintScenePreview();
-    }
-  }
-  const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
-  if (footEl) footEl.innerHTML = _trajFooterHTML(cam);
-  // Scrubber: keep thumb/readout/ticks live across camera AND view-time
-  // refreshes alike (_trajSetViewTime routes through this same function).
-  // outerHTML replaces the track node, so preserve keyboard focus across the
-  // swap (arrow-key nudging calls this on every keypress — losing focus
-  // would break repeat presses) — the drag path re-queries the track fresh
-  // each tick instead of holding a reference, for the same reason.
-  const scrubEl = va.querySelector('.traj-scrubber');
-  if (scrubEl && typeof _missions !== 'undefined') {
-    const mm = (_missions || []).find(x => x.missionId === id);
-    if (mm) {
-      const hadFocus = scrubEl.contains(document.activeElement);
-      scrubEl.outerHTML = _trajScrubberHTML(mm, id);
-      if (hadFocus) {
-        const t = va.querySelector('.traj-scrub-track');
-        if (t) t.focus();
-      }
-      // Timeline dock lanes: cheap-only refresh (dim-past-viewT segment opacity)
-      // in step with the scrub track, without a full missionRenderDetail() pass.
-      if (typeof _ttdLanesHTML === 'function') {
-        const lanesEl = va.querySelector('.ttd-lanes');
-        if (lanesEl) {
-          const fresh = _ttdLanesHTML(mm, id);
-          if (fresh) lanesEl.outerHTML = fresh;
-        }
-      }
-    }
-  }
-}
-
-function trajWheelZoom(ev, id) {
-  ev.preventDefault();
-  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: wheel interrupts an in-flight ease
-  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
-  const cam = _trajCam(id);
-  const dir = ev.deltaY < 0 ? 1 : -1;
-  const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
-  if (nextW === cam.wKm) return;
-  // R3.4: cursor-anchored zoom RETIRES with drag-pan (item 1) — without a way
-  // to undo an accumulated offset by panning, a cursor-anchored zoom could
-  // walk the view away from the anchor body with no way back. Zoom is now a
-  // pure wKm change about the anchor; relOffsetKm stays forced to {0,0}.
-  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: 0, y: 0 }, wKm: nextW }));
-}
-
-let _trajDrag = null;
-// Set true when a pan-drag actually moved the pointer (>3px, same threshold as
-// the node map's missionNmPanMove) so the click that follows a real drag on an
-// interactive arc/marker/ring doesn't also select an event (drag-vs-click
-// disambiguation, per the node map / library-browser _didDrag pattern).
-let _trajJustDragged = false;
-function trajPanStart(ev, id) {
-  // R3.4 (KSP semantics): plain left-drag ROTATES by default now (the enabler
-  // for a grabbable gizmo — see PHYSICS_PLAN R3.4 item 1). Shift-drag / right-
-  // button drag remain aliases for rotate (kept for muscle-memory / R2 users).
-  // Drag-PAN is retired entirely — relOffsetKm is only ever written as {0,0}
-  // (see _trajCam / trajResetView / trajSetFocus) but the field stays on the
-  // camera struct because the fit/zoom math still reads it.
-  const mode = 'rotate';
-  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: a drag interrupts an in-flight ease cleanly
-  _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
-  const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
-  if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
-  ev.preventDefault();
-}
-// Rotate re-renders per move (same cost class as wheel zoom); throttle to
-// ~one render per animation-frame-ish interval so slow machines stay live.
-let _trajRotLastMs = 0;
-function trajPanMove(ev) {
-  if (!_trajDrag) return;
-  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
-  const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
-  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
-  const cam0 = _trajDrag.cam0;
-  // R3.5 (user flight-test item 3): az already wrapped freely (JS `%` on a
-  // growing/shrinking value just cycles, negative results are harmless to
-  // sin/cos) — the actual clamp bug was el being pinned to [0.087, π/2], i.e.
-  // ONE quarter-turn of tilt only (top-down to just-above-the-horizon), so
-  // dragging past the horizon (or trying to look from "below") visibly
-  // stalled ("doesn't let me go beyond a certain point"). Loosen el to the
-  // full ±(π/2 − 0.01) continuous range (a hair short of the poles, where the
-  // az/el decomposition is singular) so drag-rotate reaches every orientation
-  // a KSP-style free camera would.
-  const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
-  const elMax = Math.PI / 2 - 0.01;
-  const el = Math.max(-elMax, Math.min(elMax, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
-  const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
-  const now = performance.now();
-  if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
-  else _trajCamByMission[_trajDrag.id] = cam;
-}
-function trajPanEnd() {
-  if (_trajDrag) {
-    _trajJustDragged = _trajDrag.moved;
-    if (_trajDrag.moved) _trajApplyCam(_trajDrag.id, _trajCamByMission[_trajDrag.id]);
-  }
-  _trajDrag = null;
-}
-
-// ── mission content extraction ───────────────────────────────────────────
-// Everything below reads the REPLAYED log (m._expanded, populated by
-// missionRecompute — each entry carries e.snapshot[] of live-vehicle states
-// AFTER that event, plus e.metStart / e.dvRequired / e.dvDelivered / e.fromNode
-// / e.toNode for MANEUVER, e.days for COAST). Positions along orbits are NOT
-// modeled — this is a geometry-true, time-schematic map, per the design brief.
-
-// A scene-local orbit record: { key, body, a, e, r_peri, r_apo, label, colors:Set, names:Set }
-// key dedupes identical orbits (rounded so float noise from repeated snapshots
-// doesn't fork the same LEO into two near-identical rings).
-function _trajOrbitKey(body, peri, apo) {
-  return body + '|' + Math.round(peri) + '|' + Math.round(apo);
-}
-
-// Detects a transit-corridor snapshot (e.g. a TLC leg captured mid-coast: peri
-// near a low parking orbit, apo near a moon's orbital radius around `body`).
-// C2: corridor STATE RINGS DIE — arcs carry all transfer meaning now. This
-// detector is kept only to SUPPRESS ring generation for these snapshots (see
-// addOrbitRing below), not to relabel them. Tolerance generous (2%) since
-// these are snapshot-of-the-moment radii, not exact apsides.
-function _trajCorridorMoon(body, apo) {
-  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
-  const moons = _trajMoonsOf(body);
-  for (const mo of moons) {
-    if (Math.abs((apo + R) - mo.r) < mo.r * 0.02) return mo.name;
-  }
-  return null;
-}
-
-function _trajOrbitLabel(body, peri, apo) {
-  const group = (typeof ORBIT_CATEGORIES !== 'undefined') ? ORBIT_CATEGORIES.find(g => g.planet === body) : null;
-  if (group) {
-    for (const cat of group.orbits) {
-      if (cat.mode === 'orbit' && cat.perigee != null && Math.abs(cat.perigee - peri) < 50 && cat.apogee != null && Math.abs(cat.apogee - apo) < 50) {
-        return cat.name;
-      }
-    }
-  }
-  const prefix = body === 'Earth' ? '' : (body + ' ');
-  const rounded = Math.round(peri);
-  return Math.abs(apo - peri) < 5 ? `${prefix}${rounded}` : `${prefix}${rounded}×${Math.round(apo)}`;
-}
-
-// Which body-frame ('Sun' for interplanetary/heliocentric legs, else a body
-// name) an orbit/transit record belongs in. Renamed conceptually from "scene"
-// to "frame" in C1b (there's no scene to route to any more — this only picks
-// which body's world position the content is drawn around).
-function _trajFrameForOrbit(o) {
-  if (!o) return null;
-  // Field is `o.type === 'transit'`, not a boolean `o.transit` — PROG_NM_NODES
-  // (430) node specs use `type:'transit'` (see e.g. mars-transfer's orbit
-  // `{type:'transit', body:'Sun', destination:'Mars'}`); fixed here (was
-  // checking a field name that's never actually set on any node, so every
-  // Sun-frame/translunar transit leg silently fell through to the plain
-  // `o.body` branch below — for a Sun-body transit that's `'Sun'` anyway
-  // (harmless), but for local-frame transits like TLC (`body:'Earth'`) it
-  // was accidentally correct too; the bug only bites callers that branch on
-  // this function's SPECIFIC transit-vs-plain distinction, e.g. the planet
-  // calibration pass added here needing to identify Sun-frame legs reliably).
-  if (o.type === 'transit' && o.body === 'Sun') return 'Sun';
-  if (o.type === 'transit') return o.body || 'Earth'; // translunar etc — parent body's local frame
-  if (o.escape) return o.body || 'Earth';
-  return o.body || 'Earth';
-}
-
-// Walk m._expanded snapshots, building per-body-frame: orbit rings, transfer
-// legs, burn markers, and surface events. Cached per mission per render call
-// (cheap enough to just recompute; log length is small).
-function _trajExtractMission(m) {
-  const frames = {}; // bodyFrame -> { orbits: Map<key,rec>, legs: [], surface: [] }
-  const frameFor = id => (frames[id] = frames[id] || { orbits: new Map(), legs: [], surface: [] });
-  const log = (m && m._expanded && m._expanded.length) ? m._expanded : (m ? (m.log || []) : []);
-  if (!log.length) return frames;
-
-  const laneColorFor = (ownerKeys) => {
-    if (!ownerKeys || !ownerKeys.length) return null;
-    const key = ownerKeys[0];
-    const label = (m._ownerLabels && m._ownerLabels[key]) || null;
-    if (!label) return null;
-    let idx = 0; for (let i = 0; i < label.length; i++) idx = (idx * 31 + label.charCodeAt(i)) >>> 0;
-    return { color: _missionLaneColor(m, label, idx), label };
-  };
-
-  // C2 "expended vehicle" dimming: earliest EXPEND met per owner key, so an
-  // orbit ring whose only owners are all-expended-by-viewTime can be dimmed
-  // the same as history legs (reuses _TRAJ_HISTORY_ALPHA). Best-effort: keys
-  // by originKey when present (vehicle-level EXPEND) — stage-level EXPENDs
-  // don't retire the whole vehicle so are intentionally NOT tracked here.
-  const expendMetByOwner = {};
-  log.forEach(e => {
-    if (e.type === 'EXPEND' && e.vehicleLevel && e.targetKey != null && e.metStart != null) {
-      if (expendMetByOwner[e.targetKey] == null || e.metStart < expendMetByOwner[e.targetKey]) expendMetByOwner[e.targetKey] = e.metStart;
-    }
-  });
-
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
-    if (body == null || peri == null || apo == null) return null;
-    if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
-    const frameId = body;
-    const sc = frameFor(frameId);
-    const key = _trajOrbitKey(body, peri, apo);
-    const lane = laneColorFor(ownerKeys);
-    if (!sc.orbits.has(key)) {
-      sc.orbits.set(key, {
-        key, body, peri, apo,
-        inc: inc || 0,   // authored inclination (deg) — drawn for real since R2 (Ω,ω assumed 0)
-        label: _trajOrbitLabel(body, peri, apo),
-        colors: new Set(), names: new Set(),
-        firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
-        ownerKeys: new Set(),
-      });
-    }
-    const rec = sc.orbits.get(key);
-    // R3.2 tier 1: an orbit spec that AUTHORED Ω/ω wins outright — stamped at
-    // ring creation so the R3.1 state-derived pass below (which only sets
-    // rec.elements when absent) can never override it. Precedence enforced by
-    // write order: authored (here) -> flight-derived (§7i pass) -> default
-    // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
-    if (!rec.elements && lan_deg != null) {
-      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
-        argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
-    }
-    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
-    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
-    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
-    return rec;
-  };
-
-  // Phase 4 U3: a propagated ref (e.g. nrho-nominal) has no peri/apo — keyed
-  // by refId instead of the (body,peri,apo) size key. The actual loop shape
-  // is resolved at RENDER time via refOrbitSamplePropagated (574's ring
-  // emitter), not here — this just registers the group (owners/color/label).
-  const addPropagatedRing = (body, refId, refName, ownerKeys, authIdx) => {
-    if (body == null || !refId) return null;
-    const sc = frameFor(body);
-    const key = 'propagated:' + refId;
-    const lane = laneColorFor(ownerKeys);
-    if (!sc.orbits.has(key)) {
-      sc.orbits.set(key, {
-        key, body, kind: 'propagated', refId,
-        label: refName || 'Propagated orbit',
-        colors: new Set(), names: new Set(),
-        firstAuthIdx: authIdx != null ? authIdx : null,
-        ownerKeys: new Set(),
-      });
-    }
-    const rec = sc.orbits.get(key);
-    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
-    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
-    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
-    return rec;
-  };
-
-  // ── snapshots: every distinct orbit any vehicle occupies ─────────────────
-  log.forEach(e => {
-    (e.snapshot || []).forEach(v => {
-      if (!v.orbit || v.orbit.surface) return;
-      const o = v.orbit;
-      if (o.propagated && o.refId) {
-        const refEntry = (typeof refOrbitGet === 'function') ? refOrbitGet(o.refId) : null;
-        addPropagatedRing(o.body || 'Moon', o.refId, refEntry ? refEntry.name : null, v.owners, e._authIdx);
-        return;
-      }
-      const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
-      if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
-    });
-  });
-
-  // ── surface events: LAUNCH / (REENTER-derived) LAND ──────────────────────
-  log.forEach(e => {
-    if (e.type === 'LAUNCH') {
-      const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
-      frameFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
-    } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
-      const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';
-      frameFor(body).surface.push({ kind: 'land', body, label: e.type === 'RECOVER' ? 'Recovery' : 'Landing', met: e.metStart });
-    }
-  });
-
-  // ── transfer legs: MANEUVER events with a from/to node pair ──────────────
-  log.forEach(e => {
-    if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode) return;
-    const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
-    if (!fromN || !toN || !fromN.orbit || !toN.orbit) return;
-    const fromO = fromN.orbit, toO = toN.orbit;
-    const frameId = _trajFrameForOrbit(toO) || _trajFrameForOrbit(fromO);
-    if (!frameId) return;
-    const lane = laneColorFor(_trajOwnerKeysForManeuver(e));
-    const dvUsed = (e.dvDelivered != null ? e.dvDelivered : e.dvRequired) || 0;
-    const metArrive = (e.metStart != null && e.durationUsed != null) ? (e.metStart + e.durationUsed) : null;
-    const vehName = (_trajOwnerKeysForManeuver(e) && m._ownerLabels && m._ownerLabels[_trajOwnerKeysForManeuver(e)[0]]) || e.activeName || '';
-    frameFor(frameId).legs.push({
-      frameId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
-      dv: dvUsed, met: e.metStart, metArrive, vehName,
-      color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
-      authIdx: e._authIdx != null ? e._authIdx : null,
-    });
-  });
-
-  // ── COAST loiter badges: attach to the orbit ring active at that point ───
-  log.forEach((e, i) => {
-    if (e.type !== 'COAST') return;
-    const snap = e.snapshot || [];
-    // pick the first non-surface orbit in this snapshot as "where we're loitering"
-    const v = snap.find(vv => vv.orbit && !vv.orbit.surface && ((vv.orbit.perigee ?? 0) > 0 || (vv.orbit.apogee ?? 0) > 0));
-    if (!v) return;
-    const o = v.orbit;
-    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
-    const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
-    if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
-  });
-
-  // ── R3.1: state-derived ring orientation (MATH.md §7i) ───────────────────
-  // A converged physics leg's departure/arrival plane OVERRIDES the ring's
-  // Ω=ω=0 convention when the ring's (body, peri, apo) matches the leg's
-  // parking/arrival orbit. First converged leg to touch a shared ring wins
-  // (stability under replay) — later legs never re-orient an already-derived
-  // ring. Size (peri/apo) is unchanged — orientation only (tier 2 of the
-  // three-tier rule; unmatched rings keep the Ω=0 default, tier 3).
-  if (m.missionId != null && typeof _physTrajByMission !== 'undefined') {
-    const physLegs = (_physTrajByMission[m.missionId] && _physTrajByMission[m.missionId].legs) || [];
-    physLegs.forEach(L => {
-      if (!L.converged || (!L.departElements && !L.arrivalElements)) return;
-      const auth = m.log[L.authIdx];
-      if (!auth || !_evIsSolvedManeuver(auth)) return;
-      const fromN = _missionNmNodeById(auth.fromNode);
-      const fromO = fromN && fromN.orbit;
-      if (L.departElements && fromO && fromO.body) {
-        const sc = frames[fromO.body];
-        const key = _trajOrbitKey(fromO.body, fromO.perigee ?? fromO.apogee ?? 0, fromO.apogee ?? fromO.perigee ?? 0);
-        const rec = sc && sc.orbits.get(key);
-        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.departElements);
-      }
-      // Arrival: L.toNode is the transit/corridor node (no peri/apo of its
-      // own), so match by L.dest (the real destination BODY, stored on the
-      // leg) + peri/apo RECOVERED from arrivalElements' own {a, e} — those
-      // were already set to the AUTHORED destination orbit's size in 565, so
-      // this reproduces exactly the (body, peri, apo) key the real LLO/
-      // arrival ring was registered under.
-      if (L.arrivalElements && L.dest && PROG_BODIES[L.dest]) {
-        const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
-        const peri = el.a * (1 - el.e) - Rd, apo = el.a * (1 + el.e) - Rd;
-        const sc = frames[L.dest];
-        const key = _trajOrbitKey(L.dest, peri, apo);
-        const rec = sc && sc.orbits.get(key);
-        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.arrivalElements);
-      }
-    });
-  }
-
-  // Resolve each ring's expend-at-met (C2 "expended vehicle" dimming): the
-  // LATEST of its owners' expend times (a ring is only "history" once ALL
-  // its owners are gone — a multi-owner co-located ring with one surviving
-  // owner stays current).
-  Object.values(frames).forEach(sc => {
-    sc.orbits.forEach(rec => {
-      if (!rec.ownerKeys || !rec.ownerKeys.size) { rec.expendMet = null; return; }
-      let allExpended = true, maxMet = -Infinity;
-      rec.ownerKeys.forEach(k => {
-        const em = expendMetByOwner[k];
-        if (em == null) { allExpended = false; return; }
-        if (em > maxMet) maxMet = em;
-      });
-      rec.expendMet = allExpended ? maxMet : null;
-    });
-  });
-
-  return frames;
-}
-
-// A MANEUVER event doesn't carry v.owners directly — resolve via the active
-// vehicle key (activeKey) against m._ownerLabels-keyed owner sets is indirect,
-// so instead prefer the destination snapshot's owners for the SAME event (the
-// vehicle that just arrived is the one that flew the leg).
-function _trajOwnerKeysForManeuver(e) {
-  const snap = e.snapshot || [];
-  if (!snap.length) return null;
-  const v = snap.find(vv => vv.owners && vv.owners.length);
-  return v ? v.owners : null;
-}
-
-// ── geometry helpers ──────────────────────────────────────────────────────
-// True-geometry ellipse for a (peri,apo) orbit around a body of radius R,
-// focus at the body center (LOCAL coords, before the body's world offset is
-// added). Returns SVG-ready numbers in KM (caller applies scene `scale`).
-//   a       = semi-major axis
-//   c       = center-to-focus distance = a - r_peri
-//   cx      = -c  (center is on the -x side since periapsis is drawn at +x)
-// Periapsis is placed at angle 0 (local +x) by convention.
-function _trajEllipseGeom(peri, apo, R) {
-  const rPeri = R + peri, rApo = R + apo;
-  const a = (rPeri + rApo) / 2;
-  const b = Math.sqrt(Math.max(0, rPeri * rApo));
-  const c = a - rPeri; // signed offset from focus to center along +x
-  return { rPeri, rApo, a, b, c };
-}
 
 // ── PROJECTION — the one function every overlay anchor goes through ───────
 // Render-space (floating-origin km * scale, same space g.traj-scene draws
@@ -29546,6 +28891,694 @@ function _missionTrajAfterRender(m) {
 function _trajStarfieldUnmount(id) {
   delete _trajStarfieldSize[id];
   if (_trajResizeObservers[id]) { try { _trajResizeObservers[id].disconnect(); } catch (e) {} delete _trajResizeObservers[id]; }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// 5740-trajectory-camera.js — Trajectory-view camera, projection seam, and pan/zoom
+//
+// OWNS: per-mission camera state (_trajCamByMission) and its zoom clamps
+//   (_TRAJ_VB, _TRAJ_WKM_MIN/MAX); the SINGLE projection seam _trajProjectVec
+//   (+ _trajProj3/_trajProjLocal and the _trajProjCtx az/el/frame context);
+//   camera framing/centering (_trajCamCenterKm, _trajFitWKmForBody, trajSetFocus,
+//   trajResetView, _trajApplyCam) and the fly-to animation (_trajFlyTo,
+//   _trajCancelFlyTo, _trajEaseCubicInOut); wheel-zoom and pan interaction
+//   (trajWheelZoom, trajPanStart/Move/End); plus the small body-color/moons
+//   lookups (_trajBodyColor, _trajAllBodies, _trajMoonsOf).
+// Does NOT own: world/overlay rendering, rings/legs, globes, event nodes — those
+//   are the other 574x trajectory modules, all of which load AFTER this file.
+// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions/decls
+//   only (no load-time execution); load order among the 574x def-only modules is
+//   behavior-irrelevant. The residual 574-trajectory-view.js keeps the file header.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Camera per mission: { anchorBody, relOffsetKm:{x,y}, wKm }.
+//   anchorBody   — body name the camera tracks ('Sun' or any PROG_BODIES key)
+//   relOffsetKm  — pan offset from the anchor's world position, in km
+//   wKm          — camera viewBox width, in km (zoom = independent of any
+//                  scene-local `scale` factor now — it's real km)
+let _trajCamByMission = {};
+
+// Fixed reference viewBox size in RENDER units (floating-origin km, i.e. 1
+// render unit = 1 km at zoom reference). Kept named _TRAJ_VB for continuity
+// with the mini-diagram's synthetic cam (still `{cx:0,cy:0,w:_OD_VBW}` in its
+// own unrelated unit space — no coupling).
+const _TRAJ_VB = 400;
+
+// Zoom clamps per the C1b brief: wKm in [~200 km, ~1.2e10 km] (just past
+// Neptune's ring so the full system is reachable in one continuous zoom).
+const _TRAJ_WKM_MIN = 200, _TRAJ_WKM_MAX = 1.2e10;
+
+// ── body -> chrome color mapping ─────────────────────────────────────────
+function _trajBodyColor(body) {
+  // Shared per-body DATA palette (570's PROG_BODY_COLORS) so glyphs, rings and
+  // labels here match the same body's color in the orbit map. Unlisted moons
+  // (e.g. Titan) fall back to the Moon's hue; anything else to the theme accent2.
+  if (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS[body]) return PROG_BODY_COLORS[body];
+  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS.Moon) || 'var(--nm-lunar)';
+  return 'var(--nm-interp)';
+}
+
+// All body names the world ever draws: Sun + every heliocentric body +
+// every moon. Used for the full-system render pass and the focus-bar list.
+function _trajAllBodies() {
+  const helio = Object.keys(PROG_HELIO_R);
+  const moons = Object.keys(PROG_MOON_ORBITS || {});
+  return ['Sun', ...helio, ...moons];
+}
+
+function _trajMoonsOf(body) {
+  return Object.entries(PROG_MOON_ORBITS || {})
+    .filter(([, mo]) => mo.parent === body)
+    .map(([name, mo]) => ({ name, r: mo.r }));
+}
+
+// ── camera helpers ─────────────────────────────────────────────────────────
+function _trajCam(id) {
+  return _trajCamByMission[id] || { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _TRAJ_VB, az: 0, el: Math.PI / 2 };
+}
+function _trajZoomFromCam(cam) { return _TRAJ_VB / cam.wKm; }
+
+// ── R2: 3D projection (ONE seam) ────────────────────────────────────────────
+// Pure orthographic camera: rotate about the ecliptic normal by az, then tilt
+// from top-down by (π/2 − el) about the screen-x axis, drop the view axis as
+// depth. At el = π/2, az = 0 this is EXACTLY the pre-R2 mapping (u=x, v=y) —
+// 3D is a superset, not a re-projection. Linear, so planar LOCAL geometry
+// (arcs, spurs, ring offsets around a body) can be projected as offsets and
+// added to the body's already-projected anchor.
+function _trajProjectVec(x, y, z, az, el) {
+  const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
+  const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
+  const ct = Math.cos(t), st = Math.sin(t);
+  const xa = x * ca - y * sa, ya = x * sa + y * ca;
+  // R6.3 handedness fix (2026-07-11): world coords use the standard
+  // right-handed ecliptic convention (+z north, CCW prograde motion/east
+  // longitude as seen from +z looking down: x-right, y-UP). SVG screen space
+  // is y-DOWN, so plotting world-y directly as screen-y is a reflection —
+  // it mirrored geography (Australia rendered left of Asia) AND orbital
+  // motion (prograde appeared clockwise) system-wide, since every consumer
+  // (surface points, gizmo, hover rails, ring tangents) routes through this
+  // one seam. R6.3b (user flight-test): the first fix negated screen-Y, which
+  // repairs chirality but points north DOWN at tilted views (the tilt term's
+  // sign flipped with it) — the world read as "flipped 180°". Negating
+  // screen-X instead is the other det=−1 reflection: chirality fixed AND the
+  // north pole tilts toward the TOP of the screen (+z → v=−z·st → up in SVG's
+  // y-down space). See MATH.md §7o.
+  return { x: -xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
+}
+// Per-render-pass projection context (set by _trajWorldSVG from the camera;
+// helpers below read it so every emission site shares ONE projection).
+// N3: frameKind/frameBody/viewT added — 'inertial' (default) is a no-op path
+// (frameKind check short-circuits below, zero overhead, byte-identical to
+// pre-N3 rendering).
+let _trajProjCtx = { az: 0, el: Math.PI / 2, frameKind: 'inertial', frameBody: 'Earth', viewT: 0 };
+/** Project a 3D vector (any consistent units) through the pass camera. `t` is
+ *  the vector's OWN epoch (seconds); omitted for content already evaluated
+ *  "now" (bodies, glyphs, spin-baked surface points) — defaults to viewT.
+ *  See MATH.md §7x for why t=viewT is NOT an identity no-op for non-inertial
+ *  frames (that's what makes e.g. the Moon render frame-fixed). */
+function _trajProj3(x, y, z, t) {
+  const ctx = _trajProjCtx;
+  if (ctx.frameKind && ctx.frameKind !== 'inertial') {
+    const tv = t != null ? t : ctx.viewT;
+    const fc = _trajFrameTransform(ctx.frameKind, ctx.frameBody, [x, y, z || 0], tv);
+    return _trajProjectVec(fc[0], fc[1], fc[2], ctx.az, ctx.el);
+  }
+  return _trajProjectVec(x, y, z, ctx.az, ctx.el);
+}
+/** Project a PLANAR (ecliptic z=0) local offset through the pass camera. */
+function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProjCtx.az, _trajProjCtx.el); return { x: p.x, y: p.y }; }
+
+// Effective camera center in heliocentric km at the given view time — the
+// ONE place anchor + offset combine. Everything else in the render path
+// subtracts this from world km to get floating-origin render coords.
+// z rides along (R2): the anchor body's real out-of-plane position keeps it
+// centered under tilt. `overrides` is a retired R1 vestige, ignored.
+function _trajCamCenterKm(cam, viewT, overrides) {
+  const p = progBodyWorldPos(cam.anchorBody, viewT);
+  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0), z: p.z || 0 };
+}
+
+// Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
+//   - has moons  -> fit the outermost moon's ring (x ~2.6 headroom)
+//   - Sun        -> fit the outermost planet's ring
+//   - no moons   -> a schematic multiple of the body's own radius (local orbit space)
+// Mission content anchored at this body (if any) can extend the fit, same
+// spirit as the old _trajFitScale's "mission extent vs static extent" — we
+// take whichever is larger so authored orbits are never clipped on fly-to.
+function _trajFitWKmForBody(body, m) {
+  let staticR;
+  if (body === 'Sun') {
+    // Mission-aware solar fit: fitting the FULL system (out to Neptune) put
+    // any realistic mission's geometry in the inner ~5% of the view, below
+    // every LOD window — "fly to Sun" showed empty space. Frame the outermost
+    // heliocentric ring the mission actually touches instead (Earth's ring is
+    // the floor — every mission departs it); no mission -> full system.
+    const rs = Object.values(PROG_HELIO_R);
+    const fullR = rs.length ? Math.max(...rs) * 1.15 : 1e9;
+    let missionHelioR = 0;
+    if (m) {
+      const frames = _trajGetExtraction(m);
+      Object.keys(frames).forEach(frameId => {
+        const sc = frames[frameId];
+        const touched = sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length);
+        if (!touched) return;
+        const parent = (PROG_MOON_ORBITS[frameId] && PROG_MOON_ORBITS[frameId].parent) || frameId;
+        if (PROG_HELIO_R[parent] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[parent]);
+        (sc.legs || []).forEach(leg => {
+          [leg.fromO, leg.toO].forEach(o => {
+            if (o && o.type === 'transit' && PROG_HELIO_R[o.destination] != null) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R[o.destination]);
+          });
+        });
+      });
+      if (missionHelioR > 0 && PROG_HELIO_R.Earth) missionHelioR = Math.max(missionHelioR, PROG_HELIO_R.Earth);
+    }
+    staticR = missionHelioR > 0 ? missionHelioR * 1.3 : fullR;
+  } else {
+    const moons = _trajMoonsOf(body);
+    if (moons.length) {
+      staticR = Math.max(...moons.map(mo => mo.r)) * 2.6;
+    } else {
+      const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 6371;
+      staticR = R * 8; // schematic local-orbit neighborhood
+    }
+  }
+  const missionR = m ? _trajMissionExtentForBody(body, m) : 0;
+  const fitR = Math.max(staticR, missionR * 1.2);
+  return Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, fitR * 2));
+}
+
+// ── V1 fly-to easing (MISSION_MODEL_V2 §18) ─────────────────────────────────
+// Camera anchor/zoom/orientation changes ease (cubic in-out, ~600ms) instead
+// of snapping. The floating-origin design re-centers on the new anchor body
+// INSTANTLY (that's a precision requirement, not a style choice — see the
+// module header), so what eases here is wKm (zoom) and az/el (orientation);
+// a true zoom-out/arc/zoom-in path between distant bodies is V2+ (spec §18).
+// Interrupted cleanly by any user drag/wheel interaction mid-flight
+// (trajPanStart/trajWheelZoom cancel the animation for that mission id).
+let _trajFlyAnim = {}; // id -> requestAnimationFrame handle
+function _trajEaseCubicInOut(t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; }
+function _trajCancelFlyTo(id) {
+  if (_trajFlyAnim[id] != null) {
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_trajFlyAnim[id]);
+    delete _trajFlyAnim[id];
+  }
+}
+function _trajFlyTo(id, targetCam) {
+  _trajCancelFlyTo(id);
+  const from = _trajCam(id);
+  const az0 = from.az || 0, el0 = from.el != null ? from.el : Math.PI / 2, wKm0 = from.wKm;
+  const az1 = targetCam.az != null ? targetCam.az : az0;
+  const el1 = targetCam.el != null ? targetCam.el : el0;
+  let dAz = az1 - az0; // shortest-path wrap so a near-2pi az doesn't spin the long way
+  while (dAz > Math.PI) dAz -= 2 * Math.PI;
+  while (dAz < -Math.PI) dAz += 2 * Math.PI;
+  const dur = 600, t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const step = () => {
+    if (_trajDrag && _trajDrag.id === id) { delete _trajFlyAnim[id]; return; } // interrupted by drag on this panel
+    const p = Math.min(1, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0) / dur);
+    const e = _trajEaseCubicInOut(p);
+    const cam = Object.assign({}, targetCam, {
+      az: az0 + dAz * e,
+      el: el0 + (el1 - el0) * e,
+      wKm: wKm0 + (targetCam.wKm - wKm0) * e,
+      relOffsetKm: { x: 0, y: 0 },
+    });
+    _trajApplyCam(id, cam);
+    if (p < 1) { _trajFlyAnim[id] = requestAnimationFrame(step); }
+    else delete _trajFlyAnim[id];
+  };
+  _trajFlyAnim[id] = requestAnimationFrame(step);
+}
+
+function trajSetFocus(id, body) {
+  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const wKm = _trajFitWKmForBody(body, m);
+  const prev = _trajCam(id); // fly-to keeps the user's 3D orientation
+  const target = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
+  // The anchor swap itself must be instant (floating-origin re-center is a
+  // precision requirement) — seed the camera at the new anchor but the OLD
+  // zoom/orientation, mount the panel there, then ease wKm/az/el to target.
+  _trajCamByMission[id] = Object.assign({}, target, { wKm: prev.wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 });
+  missionRenderDetail();
+  _trajFlyTo(id, target);
+}
+
+function trajResetView(id) {
+  const cam = _trajCam(id);
+  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const wKm = _trajFitWKmForBody(cam.anchorBody, m);
+  // Reset returns to the canonical top-down view (az/el included) — anchor is
+  // unchanged, so no instant re-mount is needed; just ease there.
+  _trajFlyTo(id, { anchorBody: cam.anchorBody, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 });
+}
+
+// Re-render both layers + update the world <svg>'s viewBox attribute — cheap
+// camera-only update path shared by wheel-zoom and pan so neither has to
+// rebuild the whole mission panel.
+function _trajApplyCam(id, cam) {
+  _trajCamByMission[id] = cam;
+  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
+  if (!va) { missionRenderDetail(); return; }
+  const svgEl = va.querySelector('svg.traj-svg');
+  const overlayEl = va.querySelector('svg.traj-overlay');
+  if (!svgEl) { missionRenderDetail(); return; }
+  const rect = svgEl.getBoundingClientRect();
+  const aspect = (rect.width > 0 && rect.height > 0) ? (rect.height / rect.width) : 1;
+  // Geometry is emitted in render units (km·zoom), so the viewBox is a
+  // CONSTANT ~±200-unit window regardless of camera width — attribute floats
+  // stay small at every zoom (software-rasterizer safety; see _trajWorldSVG).
+  const vbH = _TRAJ_VB * aspect;
+  svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2).toFixed(3)} ${(-vbH / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
+  const sceneEl = svgEl.querySelector('g.traj-scene');
+  if (sceneEl && typeof _missions !== 'undefined') {
+    const m = (_missions || []).find(mm => mm.missionId === id);
+    const zoom = _trajZoomFromCam(cam);
+    _trajResetLabels();
+    sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);
+    _trajReconcileGlobeLayer(svgEl); // R6.4c: patch persistent globe images in place (no flicker)
+    if (overlayEl && rect.width > 0 && rect.height > 0) {
+      overlayEl.style.transform = ''; // clear any mid-drag pan slide
+      overlayEl.setAttribute('width', rect.width);
+      overlayEl.setAttribute('height', rect.height);
+      overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+      const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
+      overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
+      if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
+      // R3.5.2: the world re-render just rebuilt g.traj-scene, wiping the
+      // gizmo's scene-space preview path — repaint it too, or the previewed
+      // trajectory vanishes the moment the user zooms/rotates to look at it.
+      if (typeof _trajGizmoRepaintScenePreview === 'function') _trajGizmoRepaintScenePreview();
+    }
+  }
+  const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
+  if (footEl) footEl.innerHTML = _trajFooterHTML(cam);
+  // Scrubber: keep thumb/readout/ticks live across camera AND view-time
+  // refreshes alike (_trajSetViewTime routes through this same function).
+  // outerHTML replaces the track node, so preserve keyboard focus across the
+  // swap (arrow-key nudging calls this on every keypress — losing focus
+  // would break repeat presses) — the drag path re-queries the track fresh
+  // each tick instead of holding a reference, for the same reason.
+  const scrubEl = va.querySelector('.traj-scrubber');
+  if (scrubEl && typeof _missions !== 'undefined') {
+    const mm = (_missions || []).find(x => x.missionId === id);
+    if (mm) {
+      const hadFocus = scrubEl.contains(document.activeElement);
+      scrubEl.outerHTML = _trajScrubberHTML(mm, id);
+      if (hadFocus) {
+        const t = va.querySelector('.traj-scrub-track');
+        if (t) t.focus();
+      }
+      // Timeline dock lanes: cheap-only refresh (dim-past-viewT segment opacity)
+      // in step with the scrub track, without a full missionRenderDetail() pass.
+      if (typeof _ttdLanesHTML === 'function') {
+        const lanesEl = va.querySelector('.ttd-lanes');
+        if (lanesEl) {
+          const fresh = _ttdLanesHTML(mm, id);
+          if (fresh) lanesEl.outerHTML = fresh;
+        }
+      }
+    }
+  }
+}
+
+function trajWheelZoom(ev, id) {
+  ev.preventDefault();
+  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: wheel interrupts an in-flight ease
+  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
+  const cam = _trajCam(id);
+  const dir = ev.deltaY < 0 ? 1 : -1;
+  const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
+  if (nextW === cam.wKm) return;
+  // R3.4: cursor-anchored zoom RETIRES with drag-pan (item 1) — without a way
+  // to undo an accumulated offset by panning, a cursor-anchored zoom could
+  // walk the view away from the anchor body with no way back. Zoom is now a
+  // pure wKm change about the anchor; relOffsetKm stays forced to {0,0}.
+  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: 0, y: 0 }, wKm: nextW }));
+}
+
+let _trajDrag = null;
+// Set true when a pan-drag actually moved the pointer (>3px, same threshold as
+// the node map's missionNmPanMove) so the click that follows a real drag on an
+// interactive arc/marker/ring doesn't also select an event (drag-vs-click
+// disambiguation, per the node map / library-browser _didDrag pattern).
+let _trajJustDragged = false;
+function trajPanStart(ev, id) {
+  // R3.4 (KSP semantics): plain left-drag ROTATES by default now (the enabler
+  // for a grabbable gizmo — see PHYSICS_PLAN R3.4 item 1). Shift-drag / right-
+  // button drag remain aliases for rotate (kept for muscle-memory / R2 users).
+  // Drag-PAN is retired entirely — relOffsetKm is only ever written as {0,0}
+  // (see _trajCam / trajResetView / trajSetFocus) but the field stays on the
+  // camera struct because the fit/zoom math still reads it.
+  const mode = 'rotate';
+  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: a drag interrupts an in-flight ease cleanly
+  _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
+  const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
+  if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
+  ev.preventDefault();
+}
+// Rotate re-renders per move (same cost class as wheel zoom); throttle to
+// ~one render per animation-frame-ish interval so slow machines stay live.
+let _trajRotLastMs = 0;
+function trajPanMove(ev) {
+  if (!_trajDrag) return;
+  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
+  const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
+  if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
+  const cam0 = _trajDrag.cam0;
+  // R3.5 (user flight-test item 3): az already wrapped freely (JS `%` on a
+  // growing/shrinking value just cycles, negative results are harmless to
+  // sin/cos) — the actual clamp bug was el being pinned to [0.087, π/2], i.e.
+  // ONE quarter-turn of tilt only (top-down to just-above-the-horizon), so
+  // dragging past the horizon (or trying to look from "below") visibly
+  // stalled ("doesn't let me go beyond a certain point"). Loosen el to the
+  // full ±(π/2 − 0.01) continuous range (a hair short of the poles, where the
+  // az/el decomposition is singular) so drag-rotate reaches every orientation
+  // a KSP-style free camera would.
+  const az = ((cam0.az || 0) - dx * 0.008) % (2 * Math.PI);
+  const elMax = Math.PI / 2 - 0.01;
+  const el = Math.max(-elMax, Math.min(elMax, (cam0.el != null ? cam0.el : Math.PI / 2) + dy * 0.008));
+  const cam = Object.assign({}, cam0, { relOffsetKm: Object.assign({}, cam0.relOffsetKm), az, el });
+  const now = performance.now();
+  if (now - _trajRotLastMs > 33) { _trajRotLastMs = now; _trajApplyCam(_trajDrag.id, cam); }
+  else _trajCamByMission[_trajDrag.id] = cam;
+}
+function trajPanEnd() {
+  if (_trajDrag) {
+    _trajJustDragged = _trajDrag.moved;
+    if (_trajDrag.moved) _trajApplyCam(_trajDrag.id, _trajCamByMission[_trajDrag.id]);
+  }
+  _trajDrag = null;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// 5741-trajectory-scene-extract.js — Trajectory scene extraction + orbit records
+//
+// OWNS: the per-mission scene extractor _trajExtractMission (walks m.log into
+//   dedup'd orbit records + transfer/leg descriptors the render layer draws),
+//   orbit-record identity/labelling helpers (_trajOrbitKey, _trajCorridorMoon,
+//   _trajOrbitLabel, _trajFrameForOrbit), maneuver owner-key resolution
+//   (_trajOwnerKeysForManeuver), and the parametric ellipse geometry helper
+//   (_trajEllipseGeom).
+// Does NOT own: rendering, labels/LOD, camera, globes. Consumers live in the
+//   other 574x modules (loaded after this file).
+// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions only
+//   (no load-time execution); load order among 574x def-only modules is irrelevant.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── mission content extraction ───────────────────────────────────────────
+// Everything below reads the REPLAYED log (m._expanded, populated by
+// missionRecompute — each entry carries e.snapshot[] of live-vehicle states
+// AFTER that event, plus e.metStart / e.dvRequired / e.dvDelivered / e.fromNode
+// / e.toNode for MANEUVER, e.days for COAST). Positions along orbits are NOT
+// modeled — this is a geometry-true, time-schematic map, per the design brief.
+
+// A scene-local orbit record: { key, body, a, e, r_peri, r_apo, label, colors:Set, names:Set }
+// key dedupes identical orbits (rounded so float noise from repeated snapshots
+// doesn't fork the same LEO into two near-identical rings).
+function _trajOrbitKey(body, peri, apo) {
+  return body + '|' + Math.round(peri) + '|' + Math.round(apo);
+}
+
+// Detects a transit-corridor snapshot (e.g. a TLC leg captured mid-coast: peri
+// near a low parking orbit, apo near a moon's orbital radius around `body`).
+// C2: corridor STATE RINGS DIE — arcs carry all transfer meaning now. This
+// detector is kept only to SUPPRESS ring generation for these snapshots (see
+// addOrbitRing below), not to relabel them. Tolerance generous (2%) since
+// these are snapshot-of-the-moment radii, not exact apsides.
+function _trajCorridorMoon(body, apo) {
+  const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
+  const moons = _trajMoonsOf(body);
+  for (const mo of moons) {
+    if (Math.abs((apo + R) - mo.r) < mo.r * 0.02) return mo.name;
+  }
+  return null;
+}
+
+function _trajOrbitLabel(body, peri, apo) {
+  const group = (typeof ORBIT_CATEGORIES !== 'undefined') ? ORBIT_CATEGORIES.find(g => g.planet === body) : null;
+  if (group) {
+    for (const cat of group.orbits) {
+      if (cat.mode === 'orbit' && cat.perigee != null && Math.abs(cat.perigee - peri) < 50 && cat.apogee != null && Math.abs(cat.apogee - apo) < 50) {
+        return cat.name;
+      }
+    }
+  }
+  const prefix = body === 'Earth' ? '' : (body + ' ');
+  const rounded = Math.round(peri);
+  return Math.abs(apo - peri) < 5 ? `${prefix}${rounded}` : `${prefix}${rounded}×${Math.round(apo)}`;
+}
+
+// Which body-frame ('Sun' for interplanetary/heliocentric legs, else a body
+// name) an orbit/transit record belongs in. Renamed conceptually from "scene"
+// to "frame" in C1b (there's no scene to route to any more — this only picks
+// which body's world position the content is drawn around).
+function _trajFrameForOrbit(o) {
+  if (!o) return null;
+  // Field is `o.type === 'transit'`, not a boolean `o.transit` — PROG_NM_NODES
+  // (430) node specs use `type:'transit'` (see e.g. mars-transfer's orbit
+  // `{type:'transit', body:'Sun', destination:'Mars'}`); fixed here (was
+  // checking a field name that's never actually set on any node, so every
+  // Sun-frame/translunar transit leg silently fell through to the plain
+  // `o.body` branch below — for a Sun-body transit that's `'Sun'` anyway
+  // (harmless), but for local-frame transits like TLC (`body:'Earth'`) it
+  // was accidentally correct too; the bug only bites callers that branch on
+  // this function's SPECIFIC transit-vs-plain distinction, e.g. the planet
+  // calibration pass added here needing to identify Sun-frame legs reliably).
+  if (o.type === 'transit' && o.body === 'Sun') return 'Sun';
+  if (o.type === 'transit') return o.body || 'Earth'; // translunar etc — parent body's local frame
+  if (o.escape) return o.body || 'Earth';
+  return o.body || 'Earth';
+}
+
+// Walk m._expanded snapshots, building per-body-frame: orbit rings, transfer
+// legs, burn markers, and surface events. Cached per mission per render call
+// (cheap enough to just recompute; log length is small).
+function _trajExtractMission(m) {
+  const frames = {}; // bodyFrame -> { orbits: Map<key,rec>, legs: [], surface: [] }
+  const frameFor = id => (frames[id] = frames[id] || { orbits: new Map(), legs: [], surface: [] });
+  const log = (m && m._expanded && m._expanded.length) ? m._expanded : (m ? (m.log || []) : []);
+  if (!log.length) return frames;
+
+  const laneColorFor = (ownerKeys) => {
+    if (!ownerKeys || !ownerKeys.length) return null;
+    const key = ownerKeys[0];
+    const label = (m._ownerLabels && m._ownerLabels[key]) || null;
+    if (!label) return null;
+    let idx = 0; for (let i = 0; i < label.length; i++) idx = (idx * 31 + label.charCodeAt(i)) >>> 0;
+    return { color: _missionLaneColor(m, label, idx), label };
+  };
+
+  // C2 "expended vehicle" dimming: earliest EXPEND met per owner key, so an
+  // orbit ring whose only owners are all-expended-by-viewTime can be dimmed
+  // the same as history legs (reuses _TRAJ_HISTORY_ALPHA). Best-effort: keys
+  // by originKey when present (vehicle-level EXPEND) — stage-level EXPENDs
+  // don't retire the whole vehicle so are intentionally NOT tracked here.
+  const expendMetByOwner = {};
+  log.forEach(e => {
+    if (e.type === 'EXPEND' && e.vehicleLevel && e.targetKey != null && e.metStart != null) {
+      if (expendMetByOwner[e.targetKey] == null || e.metStart < expendMetByOwner[e.targetKey]) expendMetByOwner[e.targetKey] = e.metStart;
+    }
+  });
+
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
+    if (body == null || peri == null || apo == null) return null;
+    if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
+    const frameId = body;
+    const sc = frameFor(frameId);
+    const key = _trajOrbitKey(body, peri, apo);
+    const lane = laneColorFor(ownerKeys);
+    if (!sc.orbits.has(key)) {
+      sc.orbits.set(key, {
+        key, body, peri, apo,
+        inc: inc || 0,   // authored inclination (deg) — drawn for real since R2 (Ω,ω assumed 0)
+        label: _trajOrbitLabel(body, peri, apo),
+        colors: new Set(), names: new Set(),
+        firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
+        ownerKeys: new Set(),
+      });
+    }
+    const rec = sc.orbits.get(key);
+    // R3.2 tier 1: an orbit spec that AUTHORED Ω/ω wins outright — stamped at
+    // ring creation so the R3.1 state-derived pass below (which only sets
+    // rec.elements when absent) can never override it. Precedence enforced by
+    // write order: authored (here) -> flight-derived (§7i pass) -> default
+    // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
+    if (!rec.elements && lan_deg != null) {
+      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
+        argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
+    }
+    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
+    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
+    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
+    return rec;
+  };
+
+  // Phase 4 U3: a propagated ref (e.g. nrho-nominal) has no peri/apo — keyed
+  // by refId instead of the (body,peri,apo) size key. The actual loop shape
+  // is resolved at RENDER time via refOrbitSamplePropagated (574's ring
+  // emitter), not here — this just registers the group (owners/color/label).
+  const addPropagatedRing = (body, refId, refName, ownerKeys, authIdx) => {
+    if (body == null || !refId) return null;
+    const sc = frameFor(body);
+    const key = 'propagated:' + refId;
+    const lane = laneColorFor(ownerKeys);
+    if (!sc.orbits.has(key)) {
+      sc.orbits.set(key, {
+        key, body, kind: 'propagated', refId,
+        label: refName || 'Propagated orbit',
+        colors: new Set(), names: new Set(),
+        firstAuthIdx: authIdx != null ? authIdx : null,
+        ownerKeys: new Set(),
+      });
+    }
+    const rec = sc.orbits.get(key);
+    if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
+    if (authIdx != null && rec.firstAuthIdx == null) rec.firstAuthIdx = authIdx;
+    (ownerKeys || []).forEach(k => rec.ownerKeys.add(k));
+    return rec;
+  };
+
+  // ── snapshots: every distinct orbit any vehicle occupies ─────────────────
+  log.forEach(e => {
+    (e.snapshot || []).forEach(v => {
+      if (!v.orbit || v.orbit.surface) return;
+      const o = v.orbit;
+      if (o.propagated && o.refId) {
+        const refEntry = (typeof refOrbitGet === 'function') ? refOrbitGet(o.refId) : null;
+        addPropagatedRing(o.body || 'Moon', o.refId, refEntry ? refEntry.name : null, v.owners, e._authIdx);
+        return;
+      }
+      const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+      if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
+    });
+  });
+
+  // ── surface events: LAUNCH / (REENTER-derived) LAND ──────────────────────
+  log.forEach(e => {
+    if (e.type === 'LAUNCH') {
+      const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+      frameFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
+    } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
+      const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';
+      frameFor(body).surface.push({ kind: 'land', body, label: e.type === 'RECOVER' ? 'Recovery' : 'Landing', met: e.metStart });
+    }
+  });
+
+  // ── transfer legs: MANEUVER events with a from/to node pair ──────────────
+  log.forEach(e => {
+    if (!_evIsSolvedManeuver(e) || !e.fromNode || !e.toNode) return;
+    const fromN = _missionNmNodeById(e.fromNode), toN = _missionNmNodeById(e.toNode);
+    if (!fromN || !toN || !fromN.orbit || !toN.orbit) return;
+    const fromO = fromN.orbit, toO = toN.orbit;
+    const frameId = _trajFrameForOrbit(toO) || _trajFrameForOrbit(fromO);
+    if (!frameId) return;
+    const lane = laneColorFor(_trajOwnerKeysForManeuver(e));
+    const dvUsed = (e.dvDelivered != null ? e.dvDelivered : e.dvRequired) || 0;
+    const metArrive = (e.metStart != null && e.durationUsed != null) ? (e.metStart + e.durationUsed) : null;
+    const vehName = (_trajOwnerKeysForManeuver(e) && m._ownerLabels && m._ownerLabels[_trajOwnerKeysForManeuver(e)[0]]) || e.activeName || '';
+    frameFor(frameId).legs.push({
+      frameId, fromO, toO, fromLabel: e.fromLabel || fromN.label, toLabel: e.toLabel || toN.label,
+      dv: dvUsed, met: e.metStart, metArrive, vehName,
+      color: lane ? lane.color : null, key: e._authIdx != null ? ('mv' + e._authIdx + '#' + (e._rep || 0)) : ('mv' + Math.random()),
+      authIdx: e._authIdx != null ? e._authIdx : null,
+    });
+  });
+
+  // ── COAST loiter badges: attach to the orbit ring active at that point ───
+  log.forEach((e, i) => {
+    if (e.type !== 'COAST') return;
+    const snap = e.snapshot || [];
+    // pick the first non-surface orbit in this snapshot as "where we're loitering"
+    const v = snap.find(vv => vv.orbit && !vv.orbit.surface && ((vv.orbit.perigee ?? 0) > 0 || (vv.orbit.apogee ?? 0) > 0));
+    if (!v) return;
+    const o = v.orbit;
+    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const rec = addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx);
+    if (rec) { rec.coast = rec.coast || []; rec.coast.push({ days: e.days || 0 }); }
+  });
+
+  // ── R3.1: state-derived ring orientation (MATH.md §7i) ───────────────────
+  // A converged physics leg's departure/arrival plane OVERRIDES the ring's
+  // Ω=ω=0 convention when the ring's (body, peri, apo) matches the leg's
+  // parking/arrival orbit. First converged leg to touch a shared ring wins
+  // (stability under replay) — later legs never re-orient an already-derived
+  // ring. Size (peri/apo) is unchanged — orientation only (tier 2 of the
+  // three-tier rule; unmatched rings keep the Ω=0 default, tier 3).
+  if (m.missionId != null && typeof _physTrajByMission !== 'undefined') {
+    const physLegs = (_physTrajByMission[m.missionId] && _physTrajByMission[m.missionId].legs) || [];
+    physLegs.forEach(L => {
+      if (!L.converged || (!L.departElements && !L.arrivalElements)) return;
+      const auth = m.log[L.authIdx];
+      if (!auth || !_evIsSolvedManeuver(auth)) return;
+      const fromN = _missionNmNodeById(auth.fromNode);
+      const fromO = fromN && fromN.orbit;
+      if (L.departElements && fromO && fromO.body) {
+        const sc = frames[fromO.body];
+        const key = _trajOrbitKey(fromO.body, fromO.perigee ?? fromO.apogee ?? 0, fromO.apogee ?? fromO.perigee ?? 0);
+        const rec = sc && sc.orbits.get(key);
+        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.departElements);
+      }
+      // Arrival: L.toNode is the transit/corridor node (no peri/apo of its
+      // own), so match by L.dest (the real destination BODY, stored on the
+      // leg) + peri/apo RECOVERED from arrivalElements' own {a, e} — those
+      // were already set to the AUTHORED destination orbit's size in 565, so
+      // this reproduces exactly the (body, peri, apo) key the real LLO/
+      // arrival ring was registered under.
+      if (L.arrivalElements && L.dest && PROG_BODIES[L.dest]) {
+        const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
+        const peri = el.a * (1 - el.e) - Rd, apo = el.a * (1 + el.e) - Rd;
+        const sc = frames[L.dest];
+        const key = _trajOrbitKey(L.dest, peri, apo);
+        const rec = sc && sc.orbits.get(key);
+        if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.arrivalElements);
+      }
+    });
+  }
+
+  // Resolve each ring's expend-at-met (C2 "expended vehicle" dimming): the
+  // LATEST of its owners' expend times (a ring is only "history" once ALL
+  // its owners are gone — a multi-owner co-located ring with one surviving
+  // owner stays current).
+  Object.values(frames).forEach(sc => {
+    sc.orbits.forEach(rec => {
+      if (!rec.ownerKeys || !rec.ownerKeys.size) { rec.expendMet = null; return; }
+      let allExpended = true, maxMet = -Infinity;
+      rec.ownerKeys.forEach(k => {
+        const em = expendMetByOwner[k];
+        if (em == null) { allExpended = false; return; }
+        if (em > maxMet) maxMet = em;
+      });
+      rec.expendMet = allExpended ? maxMet : null;
+    });
+  });
+
+  return frames;
+}
+
+// A MANEUVER event doesn't carry v.owners directly — resolve via the active
+// vehicle key (activeKey) against m._ownerLabels-keyed owner sets is indirect,
+// so instead prefer the destination snapshot's owners for the SAME event (the
+// vehicle that just arrived is the one that flew the leg).
+function _trajOwnerKeysForManeuver(e) {
+  const snap = e.snapshot || [];
+  if (!snap.length) return null;
+  const v = snap.find(vv => vv.owners && vv.owners.length);
+  return v ? v.owners : null;
+}
+
+// ── geometry helpers ──────────────────────────────────────────────────────
+// True-geometry ellipse for a (peri,apo) orbit around a body of radius R,
+// focus at the body center (LOCAL coords, before the body's world offset is
+// added). Returns SVG-ready numbers in KM (caller applies scene `scale`).
+//   a       = semi-major axis
+//   c       = center-to-focus distance = a - r_peri
+//   cx      = -c  (center is on the -x side since periapsis is drawn at +x)
+// Periapsis is placed at angle 0 (local +x) by convention.
+function _trajEllipseGeom(peri, apo, R) {
+  const rPeri = R + peri, rApo = R + apo;
+  const a = (rPeri + rApo) / 2;
+  const b = Math.sqrt(Math.max(0, rPeri * rApo));
+  const c = a - rPeri; // signed offset from focus to center along +x
+  return { rPeri, rApo, a, b, c };
 }
 // ─── R3.3/R3.4 — KSP-style maneuver gizmo for MNODE authoring (574 overlay + 565/386 physics) ───
 // See PHYSICS_PLAN.md COHERENCE SERIES R3.3 + R3.4 and MATH.md §7k.
