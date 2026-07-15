@@ -564,6 +564,12 @@ function missionRecompute(m) {
       if (active) { e.vehicleId = active.vehicleId; e.activeName = _missionVehicleDisplayName(active); }
       const tgt = findVehE(e, e.targetKey, e.targetName);
       if (tgt) { e.targetName = _missionVehicleDisplayName(tgt); e.targetVehId = tgt.vehicleId; }
+      // 5b R1 (MATH.md §7ad): phase truth AT this event's MET, measured BEFORE
+      // the co-orbital merge below overwrites active's orbitState with tgt's —
+      // this is the honest "how far apart were they really" reading; the merge
+      // itself stays R1-unchanged (still co-orbital success, no new solving).
+      e.phase = (active && tgt && tgt !== active && typeof phaseTruthBetween === 'function')
+        ? phaseTruthBetween(active.orbitState, tgt.orbitState, metClock) : null;
       if (active && tgt && tgt !== active && tgt.orbitState) { active.orbitState = { ...tgt.orbitState }; e.matched = true; } else { e.matched = false; }
     }
     else if (e.type === 'TRANSFER_PROPELLANT') {

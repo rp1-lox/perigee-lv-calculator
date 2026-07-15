@@ -38,6 +38,7 @@ const FILES = [
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/415-launch-planner.js',
   'src/js/425-reference-orbits.js',
+  'src/js/567-phase-truth.js',   // after 425: uses refOrbitResolve/_refToRot/refOrbitSamplePropagatedRaw
   'src/js/430-program-module-phase-8-node-map.js',
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
@@ -3928,6 +3929,73 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('LT E4: max-achievable returns null for a stage with no usable prop (m0<=mDry)', ltMaxAchievableAlt('Earth', alt0, { thrust_N: 1, isp_s: 3000, m0_kg: 300, mDry_kg: 300 }, true) === null);
     ok('LT E4: inverse-Edelbaum returns null for an unknown body (no throw)', ltInverseEdelbaumDuration('Nonexistentia', alt0, alt1, ep) === null);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §15 5b R1 — phase truth (567-phase-truth.js, MATH.md §7ad)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const r = vm.runInContext(`(function(){
+    const out = {};
+
+    // -- Keplerian analytic case: pure mean-anomaly-difference/mean-motion primitive --
+    const muE = PROG_BODIES.Earth.mu, aTest = PROG_BODIES.Earth.R + 400;
+    out.kepA = phaseTruthKeplerian(muE, aTest, 200, 150); // A is 50 deg ahead of B
+    const nTest = Math.sqrt(muE / (aTest * aTest * aTest));
+    out.dtExpected = (50 * Math.PI / 180) / nTest;
+
+    // -- capture-window boundary (just inside / just outside PHASE_CAPTURE_WINDOW_S) --
+    const dMIn = (PHASE_CAPTURE_WINDOW_S * 0.9) * nTest * 180 / Math.PI;
+    const dMOut = (PHASE_CAPTURE_WINDOW_S * 1.5) * nTest * 180 / Math.PI;
+    out.capIn = phaseTruthKeplerian(muE, aTest, dMIn, 0);
+    out.capOut = phaseTruthKeplerian(muE, aTest, dMOut, 0);
+
+    // -- disjoint: different refIds -> null, never a bogus number --
+    const osA = { propagated: true, refId: 'nrho-nominal', r: [1, 0, 0] };
+    const osB = { propagated: true, refId: 'some-other-ref', r: [1, 0, 0] };
+    out.disjointNull = phaseTruthBetween(osA, osB, 0) === null;
+
+    // -- disjoint: one side not propagated at all (classical orbit, no anomaly data) --
+    const osC = { propagated: false, body: 'Earth', perigee: 400, apogee: 400 };
+    out.mixedNull = phaseTruthBetween(osA, osC, 0) === null;
+
+    // -- propagated-ref pair on the real nrho-nominal catalog entry: two real
+    //    vehicle points offset by a known metNow delta must recover that delta
+    //    within the nearest-point sampler's own resolution (default 180 samples/period) --
+    const res = refOrbitResolve('nrho-nominal');
+    const spacing = res.period_s / 180;
+    const t0 = 40000;
+    const delta = spacing * 5; // several sample-widths, well inside half the period
+    const stA = refOrbitPropagatedStateAt('nrho-nominal', t0);
+    const stB = refOrbitPropagatedStateAt('nrho-nominal', t0 + delta);
+    const pOsA = { propagated: true, refId: 'nrho-nominal', r: stA.r, metAt: t0 };
+    const pOsB = { propagated: true, refId: 'nrho-nominal', r: stB.r, metAt: t0 + delta };
+    out.phase = phaseTruthPropagated(pOsA, pOsB, 0);
+    out.delta = delta; out.spacing = spacing;
+
+    // same point vs itself -> ~zero phase error, captured
+    out.phaseSame = phaseTruthPropagated(pOsA, { ...pOsA }, 0);
+
+    // maneuver-arrived vehicle (propagated/refId, no r/v) vs a captured vehicle:
+    // exercises _phaseVehiclePoint's refOrbitPropagatedStateAt(refId, metNow) fallback.
+    const osArrived = { propagated: true, refId: 'nrho-nominal' };
+    out.phaseArrivedHasResult = !!phaseTruthBetween(osArrived, pOsA, t0);
+
+    return out;
+  })()`, sandbox);
+
+  ok('5b R1: phaseTruthKeplerian returns a finite dt for a synthetic 50 deg mean-anomaly offset', !!r.kepA && isFinite(r.kepA.dt_s));
+  approx('5b R1: Keplerian dt matches the analytic mean-anomaly-difference/mean-motion formula', r.kepA.dt_s, r.dtExpected, 1e-6);
+  ok('5b R1: Keplerian capture is true just inside the capture window', r.capIn.capture === true);
+  ok('5b R1: Keplerian capture is false just outside the capture window', r.capOut.capture === false);
+  ok('5b R1: phaseTruthBetween returns null for two propagated orbits with different refIds (disjoint)', r.disjointNull);
+  ok('5b R1: phaseTruthBetween returns null when one orbit is not propagated (no comparable anomaly data)', r.mixedNull);
+  ok('5b R1: phaseTruthPropagated returns a real measurement on the live nrho-nominal catalog ref', !!r.phase);
+  approx(`5b R1: propagated-ref phase Δt recovers the known ${r.delta.toFixed(0)}s offset within the nearest-point sampler's own resolution (±${(r.spacing * 3).toFixed(0)}s)`,
+    Math.abs(r.phase.dt_s), r.delta, r.spacing * 3);
+  ok('5b R1: propagated-ref phase distance equivalent is a finite non-negative chord distance', r.phase.distKm != null && isFinite(r.phase.distKm) && r.phase.distKm >= 0);
+  ok('5b R1: identical propagated point vs itself measures ~zero phase error and reports capture', !!r.phaseSame && Math.abs(r.phaseSame.dt_s) < 60 && r.phaseSame.capture === true);
+  ok("5b R1: a maneuver-arrived vehicle (no r/v) still measures phase via the ref's own wrapped-clock fallback", r.phaseArrivedHasResult);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -178,6 +178,24 @@ function missionRunChecks(m) {
       }
     }
 
+    // 5b R1 (MATH.md §7ad): RENDEZVOUS is co-orbital-only through R1 (the
+    // event still succeeds — matching orbits, not stations, per critique 63)
+    // — this is a PLAN-QUALITY warning (AMBER), not a broken plan (RED): the
+    // rendezvous itself did not fail, it just arrived out of phase, which R2/
+    // R3 (deferred) are the intended fix for. e.phase is stamped in
+    // 570-mission-replay.js's RENDEZVOUS branch, computed BEFORE the
+    // co-orbital merge, using 567's phaseTruthBetween at this event's MET.
+    // e.phase === null means "not comparable" (disjoint orbits, or one side
+    // has no propagated/refId data) — silently skipped, not flagged, since
+    // R1 only checks phase where it CAN be measured.
+    if (e.type === 'RENDEZVOUS' && e.matched && e.phase && e.phase.capture === false) {
+      push('rendezvous-phase-error', 'amber', 'Rendezvous phase error outside capture window',
+        `Arriving vehicle is ${_mcEscape(_phaseFmtDt ? _phaseFmtDt(e.phase.dt_s) : Math.round(Math.abs(e.phase.dt_s)) + 's')} ` +
+        `(${_mcEscape(_phaseFmtDistKm ? _phaseFmtDistKm(e.phase.distKm) : Math.round(e.phase.distKm || 0) + ' km')}) out of phase with ` +
+        `${_mcEscape(e.targetName || 'the target')} at rendezvous MET — same orbit, wrong place. Phase-matched arrival/phasing burns are not yet modeled (5b R2/R3).`,
+        authIdx);
+    }
+
     // BUG FIX (2026-07-15 user report): a solved maneuver targeting a node
     // routed through the dedicated physics solver (currently NRHO transfers,
     // 565's physSolveNrhoTransfer) can fail to converge — e.g. a hand-

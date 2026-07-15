@@ -259,6 +259,13 @@ function _missionApplyDeploy(m, e, metNow) {
     orbitState = {
       body: o.body, propagated: true, refId: o.refId,
       r: st0 ? st0.r : null, v: st0 ? st0.v : null, frame: st0 ? st0.frame : o.body,
+      // 5b R1: the MET this state was captured at — phase-truth's nearest-point
+      // search (567) needs the epoch a captured r/v is valid at, to rotate it
+      // into the Earth-Moon frame correctly (§7v: the rotating basis itself
+      // moves with real time). Without this, a DEPLOY'd vehicle's phase could
+      // only be measured relative to "now", losing the very offset R1 exists
+      // to surface.
+      metAt: metNow || 0,
       perigee: null, apogee: null, inclination: null, lan: null, epoch: 0, surface: false,
     };
   } else {

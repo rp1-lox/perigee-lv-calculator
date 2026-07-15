@@ -180,6 +180,26 @@ function _missionHudStripHTML(m) {
     ? (os.propagated ? (os.body || 'Moon') + ' NRHO' : os.surface ? (os.body || 'Earth') + ' surface'
         : `${os.body || 'Earth'} ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()}km`)
     : '—';
+  // 5b R1 (MATH.md §7ad): compact "Δφ 2h41m · 8,910 km" HUD readout for a
+  // vehicle that is co-orbital with ANOTHER vehicle in this same chip list
+  // (shares propagated+refId — the Gateway/NRHO case; see 567-phase-truth.js).
+  // Neutral styling (information, not alarm) — reuses the chip's own default
+  // --text-dim color like the other secondary chip spans, no --warn/--danger.
+  // Returns '' when there's no other co-orbital vehicle to compare against, or
+  // phaseTruthBetween can't measure a phase (disjoint/non-propagated orbits).
+  const phaseChipHTML = (osList, i, metNow) => {
+    if (typeof phaseTruthBetween !== 'function' || typeof _phaseChipText !== 'function') return '';
+    const osA = osList[i];
+    if (!osA || !osA.propagated || !osA.refId) return '';
+    for (let j = 0; j < osList.length; j++) {
+      if (j === i) continue;
+      const osB = osList[j];
+      if (!osB || !osB.propagated || osB.refId !== osA.refId) continue;
+      const phase = phaseTruthBetween(osA, osB, metNow);
+      if (phase) return `<span class="mcc-hud-chip-phase" title="Phase offset vs. co-orbital vehicle">${_phaseChipText(phase)}</span>`;
+    }
+    return '';
+  };
 
   let contextLabel = '', vehChips = '', totalsChip = '';
 
@@ -189,7 +209,9 @@ function _missionHudStripHTML(m) {
     if (!snap.length) return '';
     const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
     contextLabel = `<span class="mcc-hud-ctx">— at ${_mcEscape ? _mcEscape(evLabel) : evLabel}</span>`;
-    vehChips = snap.map(v => {
+    const snapOsList = snap.map(v => v.orbit);
+    const snapMetNow = entry.metStart != null ? entry.metStart : (m._metTotal || 0);
+    vehChips = snap.map((v, vi) => {
       const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
       const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
       const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, v.vehicleId) : (accent || '#888');
@@ -198,6 +220,7 @@ function _missionHudStripHTML(m) {
         ${swatchHTML}
         <span class="mcc-hud-chip-name">${v.name}</span>
         <span class="mcc-hud-chip-orbit">${orbitTxt(v.orbit)}</span>
+        ${phaseChipHTML(snapOsList, vi, snapMetNow)}
         <span class="mcc-hud-chip-dv">${Math.round(v.remDv).toLocaleString()} m/s</span>
         <span class="mcc-hud-chip-prop">${Math.round(v.remProp).toLocaleString()} kg</span>
       </div>`;
@@ -225,7 +248,9 @@ function _missionHudStripHTML(m) {
     const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
     if (!live.length) return '';
     contextLabel = `<span class="mcc-hud-ctx">— current</span>`;
-    vehChips = live.map(({ id: vid, fv }) => {
+    const liveOsList = live.map(({ fv }) => fv.orbitState);
+    const liveMetNow = m._metTotal || 0;
+    vehChips = live.map(({ id: vid, fv }, vi) => {
       const isActive = vid === m.vehicleId;
       const remDv = Math.round(_missionVehicleRemainingDv(fv));
       const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
@@ -236,6 +261,7 @@ function _missionHudStripHTML(m) {
         ${swatchHTML}
         <span class="mcc-hud-chip-name">${_missionVehicleDisplayName(fv)}</span>
         <span class="mcc-hud-chip-orbit">${orbitTxt(fv.orbitState)}</span>
+        ${phaseChipHTML(liveOsList, vi, liveMetNow)}
         <span class="mcc-hud-chip-dv">${remDv.toLocaleString()} m/s</span>
         <span class="mcc-hud-chip-prop">${remProp.toLocaleString()} kg</span>
       </div>`;
