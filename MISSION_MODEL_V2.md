@@ -402,3 +402,20 @@ Gate green: 570 (Phase 2 end) → 606 (T1-T3) → **609 (T4)**, `python build.py
 
 ### Sequencing & risk
 N1 (+N1b settings) first — smallest, everything stands on it; gate-proof of dynamical continuity before anything consumes it. N2 second (mostly re-running existing machinery in the freed model; re-pins per D6). N3 last (rendering-only; the per-sample-epoch transform is the one genuinely new renderer concept). Perf watch: full-system fidelity on multi-year legs (profile before optimizing; the dt ladder already coarsens far from bodies).
+
+---
+
+## 18. V-SERIES — NASA-Eyes visual direction (user go 2026-07-14; reference https://eyes.nasa.gov/apps/solar-system/#/earth)
+
+**Direction (from the reference):** black space with a subtle starfield; bodies read as LIT OBJECTS (day side bright, night side dark, soft atmosphere rim glow) instead of flat texture discs; orbit/trajectory lines thin and desaturated (near-white, low alpha) with the ACTIVE trajectory carrying the color; labels small, uppercase, dimmed, with leader ticks; camera moves eased. Incremental polish track — same renderer (SVG + canvas raster globes), NOT a WebGL rewrite.
+
+### V1 — space, light, and line language (one pass)
+- **Starfield**: screen-space layer (does NOT zoom/pan with the world — it is at infinity) behind the scene: a few hundred deterministic points (seeded PRNG so it never twinkles between frames), 2-3 size/alpha tiers, plus a handful of slightly-larger tinted stars. Neutral white-alpha = allowed non-theme scrim; regenerate on resize only. Cheap: one static canvas or SVG group built once.
+- **Sun-driven terminator shading**: the Sun's direction at viewT is KNOWN (ephemeris). Darken each raster globe's night hemisphere (multiply-shade in the existing `_trajRasterGlobe` inverse-orthographic pass — it already iterates pixels; add a lambert term from the sun vector, floor ~0.15 so the night side stays readable, soft terminator band). This is the single highest-impact change. Verify the terminator moves with viewT scrubbing.
+- **Atmosphere rim glow**: per-body radial-gradient halo just outside the limb (Earth blue, Mars dusty orange, Venus pale yellow, Titan orange haze; airless bodies NONE — Moon/Mercury get only a faint white limb). Data-layer colors (PROG_BODY_COLORS-adjacent, new PROG_BODY_ATMOSPHERE constant next to it) — exempt from chrome theming like body colors.
+- **Line + label restyle**: non-active orbit rings drop to thin desaturated near-white (low alpha); the selected/active trajectory keeps its vehicle/zone color at full weight; labels move to small uppercase tracking-spaced style with a short leader tick (match the reference), dimmed until hover/selection. Respect existing LOD/occlusion.
+- **Fly-to easing**: camera anchor changes ease (cubic in-out, ~600ms) instead of snapping — compose with `_trajApplyCam`; skip easing during drag.
+- **Texture pre-warm (the "loading" answer)**: the trajectory view's first-open lag is canvas texture rasterization, not network. Pre-rasterize the fidelity-ladder tiers for the bodies present in the mission during an idle callback shortly after app init (requestIdleCallback, chunked one body per idle slice) so trajectory mode opens warm. NO dedicated loading screen — with pre-warm + the existing cheap-disc-then-swap ladder there is nothing left to wait for; a loading screen would advertise a delay we can remove instead (decision 2026-07-14).
+
+### V2+ (captured, not next-up)
+- Smoother fly-to between bodies (zoom-out-arc-zoom-in path like Eyes, not straight lerp), body selection glow/pulse, richer starfield (density map from a real catalog), day/night city lights on Earth's night side (needs a second texture), rings for Saturn.
