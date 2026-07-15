@@ -3537,6 +3537,16 @@ function _trajReconcileGlobeLayer(svgEl) {
   const seen = {};
   for (const g of _trajPendingGlobes) {
     seen[g.body] = true;
+    // Ring-behind group, kept as this body's DOM predecessor of its <image>
+    // so it paints underneath the bitmap (see the pending-globe note at the
+    // push site) while staying in the same behind-traj-scene layer.
+    let ringG = layer.querySelector(`g[data-ring-behind="${g.body}"]`);
+    if (!ringG) {
+      ringG = document.createElementNS(_TRAJ_SVG_NS, 'g');
+      ringG.setAttribute('data-ring-behind', g.body);
+      layer.appendChild(ringG);
+    }
+    ringG.innerHTML = g.ringsBehind || '';
     let img = layer.querySelector(`image[data-body="${g.body}"]`);
     if (!img) {
       img = document.createElementNS(_TRAJ_SVG_NS, 'image');
@@ -3544,15 +3554,24 @@ function _trajReconcileGlobeLayer(svgEl) {
       img.setAttribute('preserveAspectRatio', 'none');
       layer.appendChild(img);
     }
+    // Keep ring-behind immediately before its image in paint order even if
+    // both nodes already existed from a prior frame (appendChild moves an
+    // existing node rather than duplicating it).
+    layer.appendChild(ringG);
+    layer.appendChild(img);
     img.setAttribute('x', g.x.toFixed(2));
     img.setAttribute('y', g.y.toFixed(2));
     img.setAttribute('width', g.size.toFixed(2));
     img.setAttribute('height', g.size.toFixed(2));
     if (img.getAttribute('href') !== g.url) img.setAttribute('href', g.url);
     if (img.style.display === 'none') img.style.display = '';
+    if (ringG.style.display === 'none') ringG.style.display = '';
   }
   layer.querySelectorAll('image[data-body]').forEach(img => {
     if (!seen[img.getAttribute('data-body')]) img.style.display = 'none';
+  });
+  layer.querySelectorAll('g[data-ring-behind]').forEach(rg => {
+    if (!seen[rg.getAttribute('data-ring-behind')]) rg.style.display = 'none';
   });
 }
 // Tiered body disc dispatcher — replaces the old flat _trajGlyph call for
@@ -3560,6 +3579,104 @@ function _trajReconcileGlobeLayer(svgEl) {
 // one of the three LOD tiers from the TRUE apparent radius (trueRpx,
 // unclamped) and returns the disc svg, wrapped in the same fly-to click
 // handler as _trajGlyph. Registers the body-name label exactly as before.
+// ── V2+ ring systems (MISSION_MODEL_V2 §18, NASA-Eyes direction) ───────────
+// Ring-plane orientation approximation: STATIC tilt about world +X by the
+// body's real obliquity (Saturn 26.73°) — the ring plane is really the
+// body's own equatorial plane, whose orientation should rotate with a real
+// per-epoch frame (N3), but a fixed tilted normal already reads correctly
+// from any camera az/el and is documented here as the accepted shortcut
+// until N3 lands. e1 = world X axis (lies in the tilted plane, since the
+// tilt rotation is about X); e2 = the plane's other in-plane axis (world Y/Z
+// rotated by the same tilt) — together an orthonormal basis for the ring
+// plane, so a point at ring-plane angle phi and radius r (km) is
+// r*(cos(phi)*e1 + sin(phi)*e2) in WORLD-frame km, ready for _trajProjectVec.
+const _TRAJ_RING_OBLIQUITY_DEG = { Saturn: 26.73 };
+function _trajRingPlaneBasis(body) {
+  const deg = _TRAJ_RING_OBLIQUITY_DEG[body];
+  if (deg == null) return null;
+  const th = deg * _PROG_D2R;
+  return { e1: [1, 0, 0], e2: [0, Math.cos(th), Math.sin(th)] };
+}
+// Sample the ring plane's UNIT circle (radius-independent — see note below)
+// into contiguous front/back runs by projected-depth sign, exactly like
+// _trajHemiClipRuns' front/back split but for an open ring curve rather than
+// a closed hemisphere polygon. Because _trajProjectVec is a pure rotation,
+// depth(phi, r) = r * depth(phi, 1) for any r > 0 — the sign of the depth,
+// and therefore every front/back boundary angle, is IDENTICAL at every ring
+// radius. So the split is computed once per body per frame and reused for
+// every band (outer AND inner edge) instead of resampling per band.
+function _trajRingAngleRuns(basis, az, el, N) {
+  N = N || 120;
+  const dirAt = (phi) => {
+    const cp = Math.cos(phi), sp = Math.sin(phi);
+    return [cp * basis.e1[0] + sp * basis.e2[0], cp * basis.e1[1] + sp * basis.e2[1], cp * basis.e1[2] + sp * basis.e2[2]];
+  };
+  const depthAt = (phi) => { const v = dirAt(phi); return _trajProjectVec(v[0], v[1], v[2], az, el).depth; };
+  const samples = [];
+  for (let k = 0; k < N; k++) { const phi = 2 * Math.PI * k / N; samples.push({ phi, d: depthAt(phi) }); }
+  const runs = [];
+  let cur = null;
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    const sa = samples[i], sb = samples[j];
+    const frontA = sa.d >= 0;
+    if (!cur) cur = { front: frontA, phis: [sa.phi] };
+    else cur.phis.push(sa.phi);
+    const frontB = sb.d >= 0;
+    if (frontA !== frontB) {
+      const t = sa.d / (sa.d - sb.d);
+      let dphi = sb.phi - sa.phi; if (dphi <= 0) dphi += 2 * Math.PI;
+      const crossPhi = sa.phi + dphi * (isFinite(t) ? t : 0.5);
+      cur.phis.push(crossPhi);
+      runs.push(cur);
+      cur = { front: frontB, phis: [crossPhi] };
+    }
+  }
+  if (cur) {
+    if (runs.length && runs[0].front === cur.front) runs[0].phis = cur.phis.concat(runs[0].phis);
+    else runs.push(cur);
+  }
+  if (!runs.length) runs.push({ front: samples[0].d >= 0, phis: samples.map(s => s.phi).concat([samples[0].phi + 2 * Math.PI]) });
+  return runs;
+}
+// One angular run (contiguous phi list, same boundary angles for every
+// radius per the note above) -> a filled "washer wedge" SVG path: outer edge
+// forward, inner edge back, at the run's screen-projected positions.
+function _trajRingBandRunPath(basis, run, rOut, rIn, cx, cy, zoom, az, el) {
+  const project = (phi, r) => {
+    const cp = Math.cos(phi), sp = Math.sin(phi);
+    const vx = (cp * basis.e1[0] + sp * basis.e2[0]) * r;
+    const vy = (cp * basis.e1[1] + sp * basis.e2[1]) * r;
+    const vz = (cp * basis.e1[2] + sp * basis.e2[2]) * r;
+    const q = _trajProjectVec(vx, vy, vz, az, el);
+    return { x: cx + q.x * zoom, y: cy + q.y * zoom };
+  };
+  const outPts = run.phis.map(phi => project(phi, rOut));
+  const inPts = run.phis.map(phi => project(phi, rIn)).reverse();
+  const all = outPts.concat(inPts);
+  return all.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ') + ' Z';
+}
+// PROG_BODY_RINGS -> { behind, front } SVG strings, ready to splice around a
+// body's disc: `behind` emitted BEFORE the disc/globe so the sphere occludes
+// the far side of the ring; `front` emitted AFTER so the near side occludes
+// the sphere. Bodies absent from PROG_BODY_RINGS (everything but Saturn)
+// return empty strings — the caller reads the table, no per-body branching.
+function _trajRingsSVG(body, cx, cy, zoom, az, el) {
+  const cfg = typeof PROG_BODY_RINGS !== 'undefined' && PROG_BODY_RINGS[body];
+  const basis = _trajRingPlaneBasis(body);
+  if (!cfg || !basis) return { behind: '', front: '' };
+  const runs = _trajRingAngleRuns(basis, az, el, 120);
+  let behind = '', front = '';
+  cfg.bands.forEach(band => {
+    runs.forEach(run => {
+      if (run.phis.length < 2) return;
+      const d = _trajRingBandRunPath(basis, run, band.rOut, band.rIn, cx, cy, zoom, az, el);
+      const piece = `<path d="${d}" fill="${band.color}"/>`;
+      if (run.front) front += piece; else behind += piece;
+    });
+  });
+  return { behind, front };
+}
 function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceLabel, clickId, viewT, sunDir3, viewportDiagPx) {
   const labelSize = Math.max(trueRpx, _TRAJ_CHIP_R);
   _trajRegisterLabel(cx, cy - labelSize, [{ text: body, dy: -4, fontPx: 10, color: color || 'var(--nm-label)' }], 'body',
@@ -3573,21 +3690,33 @@ function _trajBodyDiscTiered(cx, cy, trueRpx, color, body, zoom, isFocus, forceL
     // sampling itself is skipped internally below _TRAJ_FEATURE_PX).
     const r = Math.max(trueRpx, _TRAJ_MIN_BODY_PX);
     const spin = _trajBodySpinAngle(body, viewT);
+    const az = _trajProjCtx.az, el = _trajProjCtx.el;
     let rasterUrl = null;
     if (r >= _TRAJ_FEATURE_PX && typeof PROG_TEXTURES !== 'undefined' && PROG_TEXTURES[body]) {
-      const az = _trajProjCtx.az, el = _trajProjCtx.el;
       rasterUrl = _trajRasteredDiscDataURL(body, r * 2, spin, az, el, sunDir3);
     }
     const atmoGlow = _trajAtmosphereGlowSVG(body, cx, cy, r, clickId || body);
+    // Rings (item 4/5): rendered at both the raster and vector disc tiers —
+    // never below the chip threshold this whole branch is already gated by —
+    // and ride the same km->px zoom as the disc itself (world-geometry
+    // layer). Split behind/front around the disc so occlusion is correct.
+    const rings = _trajRingsSVG(body, cx, cy, zoom, az, el);
     if (rasterUrl) {
       // Globe bitmap → persistent layer (see _trajPendingGlobes note); only
       // the crisp border stays inline in the per-frame scene. Glow is drawn
       // inline (traj-scene paints above the globe layer) so it reads as a
       // soft rim right at the bitmap's edge.
-      _trajPendingGlobes.push({ body, url: rasterUrl, x: cx - r, y: cy - r, size: r * 2 });
-      disc = atmoGlow + `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>`;
+      // Ring-behind content can't just go inline here: the raster globe
+      // <image> lives in the PERSISTENT traj-globe-layer sibling, which
+      // paints BEHIND the whole per-frame traj-scene (see _trajPendingGlobes
+      // note above) — so inline content in `disc` would show IN FRONT of the
+      // bitmap regardless of string order. Ship ringsBehind alongside the
+      // pending globe so _trajReconcileGlobeLayer can place it in that same
+      // layer, under the image, for correct occlusion.
+      _trajPendingGlobes.push({ body, url: rasterUrl, x: cx - r, y: cy - r, size: r * 2, ringsBehind: rings.behind });
+      disc = atmoGlow + `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="none" stroke="var(--border-bright)" stroke-width="0.5" vector-effect="non-scaling-stroke"/>` + rings.front;
     } else {
-      disc = atmoGlow + _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId);
+      disc = rings.behind + atmoGlow + _trajSurfacedDiscSVG(body, cx, cy, r, spin, sunDir3, viewportDiagPx, clickId) + rings.front;
     }
   } else {
     const glyph = _TRAJ_BODY_GLYPH[body] || '•';

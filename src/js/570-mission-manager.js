@@ -4749,6 +4749,25 @@ const PROG_BODY_ATMOSPHERE = {
   Titan: 'rgba(230,150,70,0.50)',
 };
 
+// Per-body ring systems (MISSION_MODEL_V2 §18 V2+) — same DATA palette
+// exemption as PROG_BODY_COLORS/PROG_BODY_ATMOSPHERE above. Real Saturn
+// proportions (equatorial R = 60,268 km): C ring 74,500-92,000 km (faint),
+// B ring 92,000-117,580 km (brightest), Cassini division 117,580-122,170 km
+// (intentionally OMITTED — the gap between the B and A band paths reads as
+// the dark division on its own), A ring 122,170-136,780 km (medium). Radii
+// are km from body center; the renderer (574's _trajRingsSVG) samples each
+// band's inner/outer edge as a 3D circle in the body's ring plane and scales
+// by the same km->px zoom factor as the body disc.
+const PROG_BODY_RINGS = {
+  Saturn: {
+    bands: [
+      { rIn: 74500,  rOut: 92000,  color: 'rgba(196,178,140,0.28)' }, // C ring
+      { rIn: 92000,  rOut: 117580, color: 'rgba(214,196,156,0.55)' }, // B ring
+      { rIn: 122170, rOut: 136780, color: 'rgba(200,182,144,0.40)' }, // A ring
+    ],
+  },
+};
+
 // Compute the solar-system node-map layout: body positions + per-node positions.
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {
