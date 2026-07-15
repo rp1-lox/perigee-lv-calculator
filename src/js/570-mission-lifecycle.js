@@ -244,12 +244,12 @@ function missionRenderDetail() {
       </div></div>`
     : '';
 
-  // WORKFLOW PASS 2 deliverable B3: the primary stage-switching affordance —
-  // three labeled buttons, active-state styled like the old Band|Orbit-Map
-  // toggle. Wired straight to _missionPromote (⤢ promote controls on the
-  // rails stay as the secondary path, unchanged).
-  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
-  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world','World')}${stageBtn('timeline','Timeline')}${stageBtn('plan','Plan')}</div>`;
+  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
+  // undo/redo used to live here as a floating .mcc-view-toggle-float that
+  // occluded the stage — moved into the HUD strip (_missionHudStripHTML,
+  // 570-mission-panel.js), which is the mission's one docked control bar now.
+  // Nothing floats over the stage except the camera-context selects on the
+  // world surface.
 
   cc.innerHTML = `
     <!-- BODY -->
@@ -258,19 +258,6 @@ function missionRenderDetail() {
            the old far-left .mcc-left-col is gone; this column now claims the
            freed width. -->
       <div class="mcc-center-col">
-        <!-- toolbar is a sibling of the scrolling view area (not inside it) so it
-             can never be clipped by .mcc-view-area's overflow -->
-        <div class="mcc-view-toggle-float">
-          ${stageSelHTML}
-          <div class="mcc-toolbar-sep"></div>
-          <div class="mcc-topbar-undoredo">
-            <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo==='function'&&_missionUndoCanUndo())?'':' disabled'}>&#x21B6;</button>
-            <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo==='function'&&_missionUndoCanRedo())?'':' disabled'}>&#x21B7;</button>
-          </div>
-          <!-- readiness chip lives in the HUD strip (workflow pass 1) — NOT
-               duplicated here; a pass-2 agent re-added it to the toolbar and
-               the orchestrator removed the duplicate (2026-07-15). -->
-        </div>
         <div class="mcc-view-row">
           ${leftSlotHTML}
           <div class="mcc-view-area">

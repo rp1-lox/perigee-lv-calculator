@@ -188,7 +188,10 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
       const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as
+      // the ring/physics-leg casing, reusing this arc's own geometry.
+      const casing = `<path d="${arc.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      out += `${casing}<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
       _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {
@@ -306,7 +309,10 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
     if (!redundant) {
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as
+      // the ring/physics-leg casing, reusing this arc's own geometry.
+      const casing = `<path d="${arc.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      out += `${casing}<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
       _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {

@@ -205,7 +205,9 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-export-danger{color:var(--accent2);}
 .mcc-export-danger:hover{background:rgba(198,160,87,.12);color:var(--accent2);}
 .mcc-body{display:flex;flex:1;min-height:0;overflow:hidden;}
-.mcc-view-toggle-float{position:absolute;top:8px;right:8px;z-index:20;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);display:flex;align-items:center;gap:6px;padding:4px 6px;}
+/* WORKFLOW PASS 3: the floating .mcc-view-toggle-float toolbar is retired —
+   its contents (stage selectors + undo/redo) moved into the HUD strip
+   (.mcc-hud-strip); these two utility classes are reused there. */
 .mcc-toolbar-sep{width:1px;height:16px;background:var(--border);flex-shrink:0;}
 /* WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (Vehicles &
    Mission State / Flight Readiness, both retired pass 1) and its unused
@@ -215,8 +217,9 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 /* Plan-staged rail slot: ORBITS catalog stacked above the demoted World
    thumbnail, same rail width/border as .mcc-plan-rail (pass 2 deliverable A). */
 .mcc-plan-orbit-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;}
-/* Primary stage-switching affordance (pass 2 deliverable B3), first in the
-   floating toolbar; active state matches the old Band|Orbit-Map toggle. */
+/* Primary stage-switching affordance (pass 2 deliverable B3), now docked at
+   the left end of the HUD strip; active state matches the old Band|Orbit-Map
+   toggle. */
 .mcc-stagesel-seg{display:flex;gap:2px;}
 .mcc-stagesel-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}
@@ -21913,12 +21916,12 @@ function missionRenderDetail() {
       </div></div>`
     : '';
 
-  // WORKFLOW PASS 2 deliverable B3: the primary stage-switching affordance —
-  // three labeled buttons, active-state styled like the old Band|Orbit-Map
-  // toggle. Wired straight to _missionPromote (⤢ promote controls on the
-  // rails stay as the secondary path, unchanged).
-  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
-  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world','World')}${stageBtn('timeline','Timeline')}${stageBtn('plan','Plan')}</div>`;
+  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
+  // undo/redo used to live here as a floating .mcc-view-toggle-float that
+  // occluded the stage — moved into the HUD strip (_missionHudStripHTML,
+  // 570-mission-panel.js), which is the mission's one docked control bar now.
+  // Nothing floats over the stage except the camera-context selects on the
+  // world surface.
 
   cc.innerHTML = `
     <!-- BODY -->
@@ -21927,19 +21930,6 @@ function missionRenderDetail() {
            the old far-left .mcc-left-col is gone; this column now claims the
            freed width. -->
       <div class="mcc-center-col">
-        <!-- toolbar is a sibling of the scrolling view area (not inside it) so it
-             can never be clipped by .mcc-view-area's overflow -->
-        <div class="mcc-view-toggle-float">
-          ${stageSelHTML}
-          <div class="mcc-toolbar-sep"></div>
-          <div class="mcc-topbar-undoredo">
-            <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo==='function'&&_missionUndoCanUndo())?'':' disabled'}>&#x21B6;</button>
-            <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo==='function'&&_missionUndoCanRedo())?'':' disabled'}>&#x21B7;</button>
-          </div>
-          <!-- readiness chip lives in the HUD strip (workflow pass 1) — NOT
-               duplicated here; a pass-2 agent re-added it to the toolbar and
-               the orchestrator removed the duplicate (2026-07-15). -->
-        </div>
         <div class="mcc-view-row">
           ${leftSlotHTML}
           <div class="mcc-view-area">
@@ -23711,7 +23701,22 @@ function _missionHudStripHTML(m) {
   const id = m.missionId;
   const collapsed = !!_missionStateCardCollapsed[id];
   const chevron = `<button class="mcc-hud-toggle" onclick="_missionStateCardToggle('${id}')" title="${collapsed ? 'Expand' : 'Collapse'} Vehicles &amp; Mission State">${collapsed ? '&#9656;' : '&#9662;'}</button>`;
-  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}</div>`;
+
+  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
+  // undo/redo, formerly a floating .mcc-view-toggle-float that occluded the
+  // stage, now live docked in the HUD strip — left end (before the context
+  // label) for the stage selectors, right end (next to the readiness chip)
+  // for undo/redo. Shown even when the strip is collapsed, since these are
+  // the mission's primary navigation controls and must never be hidden.
+  const stageSurf = (typeof _missionStageOf === 'function') ? _missionStageOf(id) : 'world';
+  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
+  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world', 'World')}${stageBtn('timeline', 'Timeline')}${stageBtn('plan', 'Plan')}</div>`;
+  const undoRedoHTML = `<div class="mcc-topbar-undoredo">
+      <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo === 'function' && _missionUndoCanUndo()) ? '' : ' disabled'}>&#x21B6;</button>
+      <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo === 'function' && _missionUndoCanRedo()) ? '' : ' disabled'}>&#x21B7;</button>
+    </div>`;
+
+  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}${stageSelHTML}<div class="mcc-toolbar-sep"></div>${undoRedoHTML}</div>`;
 
   const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
   const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
@@ -23783,9 +23788,11 @@ function _missionHudStripHTML(m) {
 
   return `<div class="mcc-hud-strip">
     ${chevron}
+    ${stageSelHTML}
+    <div class="mcc-toolbar-sep"></div>
     <span class="mcc-hud-label">Vehicles &amp; Mission State ${contextLabel}</span>
     <div class="mcc-hud-chips">${vehChips}${totalsChip}</div>
-    <div class="mcc-hud-right">${readinessChip}</div>
+    <div class="mcc-hud-right">${undoRedoHTML}${readinessChip}</div>
   </div>`;
 }
 
@@ -25808,7 +25815,10 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
       const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
       const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as
+      // the ring/physics-leg casing, reusing this arc's own geometry.
+      const casing = `<path d="${arc.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      out += `${casing}<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
       _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {
@@ -25926,7 +25936,10 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
     const opacity = (arcAlpha * (emphasized ? 1 : 0.8) * stateAlpha).toFixed(3);
     if (!redundant) {
       const hitArea = leg.authIdx != null ? `<path d="${arc.d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>` : '';
-      out += `<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+      // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as
+      // the ring/physics-leg casing, reusing this arc's own geometry.
+      const casing = `<path d="${arc.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+      out += `${casing}<path d="${arc.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
       _trajBurnMarker(arc.depX, arc.depY, 'up', _trajDvText(leg.dv), _metFmt(leg.met), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       _trajBurnMarker(arc.arrX, arc.arrY, 'down', '', _metFmt(leg.metArrive), Object.assign(markerOpts(arcExtentPx), { opacity: stateAlpha }));
       if (legState === 'current' && hasTOF) {
@@ -28029,6 +28042,18 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // opacity path, so which way the orbit goes is visible at a glance (KSP
   // fades the trailing side). Segmenting per-run (not across an occlusion
   // break) keeps each visible arc's own fade coherent.
+  // Casing pass (MISSION_MODEL_V2 §12 addendum): a dark underlay stroke drawn
+  // immediately beneath the light ring stroke, per visible run — standard
+  // cartographic technique so the ring reads against both space AND a bright
+  // day-side globe (the thin near-white line was invisible against Earth at
+  // close zoom, user-reported 2026-07-15). One casing path per run, same
+  // geometry/clipping as the light strokes above (so occlusion runs case
+  // identically — no halos at the gaps); no direction-fade or click wiring on
+  // the casing itself, that all stays on the light stroke(s) + hitArea.
+  const casingPaths = visRuns.map(run => {
+    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
   const segPaths = visRuns.map(run => {
     const segs = _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length)));
     if (!segs.length) {
@@ -28043,6 +28068,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   }).join('');
   return `<g${clickAttr}>
     <title>${title}${incTxt}</title>
+    ${casingPaths}
     ${segPaths}
     ${hitArea}
   </g>`;
@@ -28124,12 +28150,19 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
     _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: strokeColor }, { text: _trajFmtApseDist(Math.max(0, apoRLocal - R), 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
       'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
   }
+  // Casing pass (MISSION_MODEL_V2 §12 addendum) — see _trajRingSVG for the
+  // rationale; same per-run dark underlay, kept in sync with that function.
+  const casingPaths = visRuns.map(run => {
+    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
   const segPaths = visRuns.map(run => {
     const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
     return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
   }).join('');
   return `<g${clickAttr}>
     <title>${title}</title>
+    ${casingPaths}
     ${segPaths}
     ${hitArea}
   </g>`;
@@ -28458,7 +28491,14 @@ function _trajPhysLegRender(ctx) {
   // stroke keeps the plain select/dblclick attrs unchanged.
   const legHoverAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajLegClick('${id}',${clickIdx},event)" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)" onmousemove="_trajLegHoverMove(event,'${id}',${clickIdx},'${color}')" onmouseleave="_trajRingHoverLeave('${id}')"` : '';
   const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${legHoverAttr}/>` : '';
-  let out = `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+  // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as the
+  // ring casing above, reusing this leg's own polyline geometry/clipping so
+  // occlusion-split runs case identically (poly.d already carries any 'M'
+  // breaks from _trajPolylineSVG's run splitting). No dash pattern on the
+  // casing itself — a solid underlay reads best regardless of the leg's
+  // planned/history dash state.
+  const casing = `<path d="${poly.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  let out = `${casing}<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
   // SOI handoff seams: small dashed circles where the trajectory leaves one
   // sphere of influence for another (the polyline BREAKS here by design —
   // the two frames' gluings disagree by the body's drift; see _trajPolylineSVG).

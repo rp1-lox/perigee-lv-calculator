@@ -198,7 +198,9 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-export-danger{color:var(--accent2);}
 .mcc-export-danger:hover{background:rgba(198,160,87,.12);color:var(--accent2);}
 .mcc-body{display:flex;flex:1;min-height:0;overflow:hidden;}
-.mcc-view-toggle-float{position:absolute;top:8px;right:8px;z-index:20;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);display:flex;align-items:center;gap:6px;padding:4px 6px;}
+/* WORKFLOW PASS 3: the floating .mcc-view-toggle-float toolbar is retired —
+   its contents (stage selectors + undo/redo) moved into the HUD strip
+   (.mcc-hud-strip); these two utility classes are reused there. */
 .mcc-toolbar-sep{width:1px;height:16px;background:var(--border);flex-shrink:0;}
 /* WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (Vehicles &
    Mission State / Flight Readiness, both retired pass 1) and its unused
@@ -208,8 +210,9 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 /* Plan-staged rail slot: ORBITS catalog stacked above the demoted World
    thumbnail, same rail width/border as .mcc-plan-rail (pass 2 deliverable A). */
 .mcc-plan-orbit-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;}
-/* Primary stage-switching affordance (pass 2 deliverable B3), first in the
-   floating toolbar; active state matches the old Band|Orbit-Map toggle. */
+/* Primary stage-switching affordance (pass 2 deliverable B3), now docked at
+   the left end of the HUD strip; active state matches the old Band|Orbit-Map
+   toggle. */
 .mcc-stagesel-seg{display:flex;gap:2px;}
 .mcc-stagesel-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}

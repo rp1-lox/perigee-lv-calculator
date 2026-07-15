@@ -123,6 +123,18 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // opacity path, so which way the orbit goes is visible at a glance (KSP
   // fades the trailing side). Segmenting per-run (not across an occlusion
   // break) keeps each visible arc's own fade coherent.
+  // Casing pass (MISSION_MODEL_V2 §12 addendum): a dark underlay stroke drawn
+  // immediately beneath the light ring stroke, per visible run — standard
+  // cartographic technique so the ring reads against both space AND a bright
+  // day-side globe (the thin near-white line was invisible against Earth at
+  // close zoom, user-reported 2026-07-15). One casing path per run, same
+  // geometry/clipping as the light strokes above (so occlusion runs case
+  // identically — no halos at the gaps); no direction-fade or click wiring on
+  // the casing itself, that all stays on the light stroke(s) + hitArea.
+  const casingPaths = visRuns.map(run => {
+    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
   const segPaths = visRuns.map(run => {
     const segs = _trajRingDirSegments(run, Math.max(1, Math.round(10 * run.length / screenPts.length)));
     if (!segs.length) {
@@ -137,6 +149,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   }).join('');
   return `<g${clickAttr}>
     <title>${title}${incTxt}</title>
+    ${casingPaths}
     ${segPaths}
     ${hitArea}
   </g>`;
@@ -218,12 +231,19 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
     _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: strokeColor }, { text: _trajFmtApseDist(Math.max(0, apoRLocal - R), 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
       'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
   }
+  // Casing pass (MISSION_MODEL_V2 §12 addendum) — see _trajRingSVG for the
+  // rationale; same per-run dark underlay, kept in sync with that function.
+  const casingPaths = visRuns.map(run => {
+    const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
+    return `<path d="${segD}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
   const segPaths = visRuns.map(run => {
     const segD = run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ');
     return `<path d="${segD}" fill="none" stroke="${strokeColor}" stroke-width="${strokeW}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
   }).join('');
   return `<g${clickAttr}>
     <title>${title}</title>
+    ${casingPaths}
     ${segPaths}
     ${hitArea}
   </g>`;
@@ -552,7 +572,14 @@ function _trajPhysLegRender(ctx) {
   // stroke keeps the plain select/dblclick attrs unchanged.
   const legHoverAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajLegClick('${id}',${clickIdx},event)" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)" onmousemove="_trajLegHoverMove(event,'${id}',${clickIdx},'${color}')" onmouseleave="_trajRingHoverLeave('${id}')"` : '';
   const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${legHoverAttr}/>` : '';
-  let out = `<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
+  // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as the
+  // ring casing above, reusing this leg's own polyline geometry/clipping so
+  // occlusion-split runs case identically (poly.d already carries any 'M'
+  // breaks from _trajPolylineSVG's run splitting). No dash pattern on the
+  // casing itself — a solid underlay reads best regardless of the leg's
+  // planned/history dash state.
+  const casing = `<path d="${poly.d}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${(strokeW * 2.5).toFixed(2)}" opacity="${opacity}" vector-effect="non-scaling-stroke"/>`;
+  let out = `${casing}<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
   // SOI handoff seams: small dashed circles where the trajectory leaves one
   // sphere of influence for another (the polyline BREAKS here by design —
   // the two frames' gluings disagree by the body's drift; see _trajPolylineSVG).

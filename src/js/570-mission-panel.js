@@ -157,7 +157,22 @@ function _missionHudStripHTML(m) {
   const id = m.missionId;
   const collapsed = !!_missionStateCardCollapsed[id];
   const chevron = `<button class="mcc-hud-toggle" onclick="_missionStateCardToggle('${id}')" title="${collapsed ? 'Expand' : 'Collapse'} Vehicles &amp; Mission State">${collapsed ? '&#9656;' : '&#9662;'}</button>`;
-  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}</div>`;
+
+  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
+  // undo/redo, formerly a floating .mcc-view-toggle-float that occluded the
+  // stage, now live docked in the HUD strip — left end (before the context
+  // label) for the stage selectors, right end (next to the readiness chip)
+  // for undo/redo. Shown even when the strip is collapsed, since these are
+  // the mission's primary navigation controls and must never be hidden.
+  const stageSurf = (typeof _missionStageOf === 'function') ? _missionStageOf(id) : 'world';
+  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
+  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world', 'World')}${stageBtn('timeline', 'Timeline')}${stageBtn('plan', 'Plan')}</div>`;
+  const undoRedoHTML = `<div class="mcc-topbar-undoredo">
+      <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo === 'function' && _missionUndoCanUndo()) ? '' : ' disabled'}>&#x21B6;</button>
+      <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo === 'function' && _missionUndoCanRedo()) ? '' : ' disabled'}>&#x21B7;</button>
+    </div>`;
+
+  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}${stageSelHTML}<div class="mcc-toolbar-sep"></div>${undoRedoHTML}</div>`;
 
   const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
   const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
@@ -229,9 +244,11 @@ function _missionHudStripHTML(m) {
 
   return `<div class="mcc-hud-strip">
     ${chevron}
+    ${stageSelHTML}
+    <div class="mcc-toolbar-sep"></div>
     <span class="mcc-hud-label">Vehicles &amp; Mission State ${contextLabel}</span>
     <div class="mcc-hud-chips">${vehChips}${totalsChip}</div>
-    <div class="mcc-hud-right">${readinessChip}</div>
+    <div class="mcc-hud-right">${undoRedoHTML}${readinessChip}</div>
   </div>`;
 }
 
