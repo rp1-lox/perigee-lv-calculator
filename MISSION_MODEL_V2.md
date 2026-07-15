@@ -420,4 +420,36 @@ N1 (+N1b settings) first — smallest, everything stands on it; gate-proof of dy
 - **Texture pre-warm (the "loading" answer)**: the trajectory view's first-open lag is canvas texture rasterization, not network. Pre-rasterize the fidelity-ladder tiers for the bodies present in the mission during an idle callback shortly after app init (requestIdleCallback, chunked one body per idle slice) so trajectory mode opens warm. NO dedicated loading screen — with pre-warm + the existing cheap-disc-then-swap ladder there is nothing left to wait for; a loading screen would advertise a delay we can remove instead (decision 2026-07-14).
 
 ### V2+ (captured, not next-up)
-- Smoother fly-to between bodies (zoom-out-arc-zoom-in path like Eyes, not straight lerp), body selection glow/pulse, richer starfield (density map from a real catalog), day/night city lights on Earth's night side (needs a second texture), rings for Saturn.
+- Smoother fly-to between bodies (zoom-out-arc-zoom-in path like Eyes, not straight lerp), body selection glow/pulse, richer starfield (density map from a real catalog), day/night city lights on Earth's night side (needs a second texture), rings for Saturn — **rings DONE 2026-07-14** (PROG_BODY_RINGS, occlusion-correct front/back split).
+
+---
+
+## 19. E-SERIES — electric propulsion / low-thrust trajectories (user go 2026-07-14; spec draft for review)
+
+**Thesis (user):** very-low-thrust spiraling over months — electric propulsion mission architectures (LEO→GEO raises, escape spirals, interplanetary SEP cruises). Feasible BECAUSE of the N-series: one integrator entry point (`physPropagateSegment`, N1-honest), frame handoffs as pure bookkeeping, fidelity setting, and N3 rotating frames (the natural way to LOOK at a spiral).
+
+**Core interaction decision (user, 2026-07-14): expensive legs are computed on EXPLICIT user action ("Compute trajectory" button in the event card) with a real progress bar — never inside the synchronous replay.** Rationale: `missionRecompute` replays the whole log on every mutation; a multi-second integration inside it would hang every unrelated edit. The full contract:
+- **Instant estimate, always**: authoring a low-thrust event immediately prices it analytically (Edelbaum) — ΔV, TOF, prop — labeled `est.` Budgets/node map never blank; the un-computed trajectory renders as an honest schematic (dashed spiral glyph), not a fake integrated path.
+- **Compute button + progress**: chunked integration (a few simulated days per rAF/idle slice — progress through a spiral is near-linear in simulated time, so the bar and ETA are honest), UI stays responsive, CANCELLABLE mid-solve (partial results discarded).
+- **Signature-keyed cache + STALE badge**: computed result cached in the physics side-table (NEVER on `m` — autosave-leak rule) keyed by a hash of its actual inputs (initial state, engine params, mass, duration, steering law, coast windows, fidelity mode). Replays consume the cache for free. ANY upstream edit that changes the signature flips the leg to a visible STALE badge; budget falls back to `est.` until recomputed. Nothing ever silently renders a trajectory that no longer matches the plan (D6 honesty, new lane). Not session-persisted: a restored session shows STALE; one click rebuilds.
+
+### E1 — physics substrate
+- `physPropagateSegment` gains an OPT-IN thrust term: `ctx.thrust = { thrust_N, isp_s, m0_kg, law, coastWindows? }` — acceleration `+ (T/m)·û(law)`, coupled mass ODE `ṁ = −T/(Isp·g₀)`; state extends to (r, v, m). **Ballistic paths byte-identical when ctx.thrust is absent** (gate-pinned: propagate a golden case with and without the code path present).
+- Steering laws v1: `prograde` / `retrograde` (tangential — the spiral workhorses); law is a function û(r, v, t) so later laws (normal for plane change, Q-law) slot in.
+- **Step control**: a thrusting arc must resolve every rev — cap dt ≤ period(local)/40 while thrusting, composed with the existing dt ladder (which handles distance). A 6-month LEO spiral ≈ 10⁵–10⁶ steps — seconds-scale, hence the compute-button contract above.
+- **Gate**: pin against analytic truth — Edelbaum circular-to-circular ΔV (`Δv = √(v₀² + v₁² − 2v₀v₁cos(π/2·Δi))`, and the planar `|v₀−v₁|` case) vs the integrated spiral's actual ΔV within a documented band (~1-3%: Edelbaum assumes constant acceleration, ours depletes mass); mass depletion vs rocket equation exactly; a short spiral's energy gain vs `∫ a_T·v dt`.
+- MATH.md §7y: model, steering laws, step policy, Edelbaum derivation + its assumptions as critiques.
+
+### E2 — vehicle + event model
+- **Electric stages**: stage-library entries with realistic SEP numbers (Isp 1,500–4,000 s, thrust mN–N, power fields optional/cosmetic v1). Register a proper electric propType in PROG_PROPELLANT_TYPES (fixes the adjacent MMH/NTO backlog item's pattern while there).
+- **New event kind LOWTHRUST** (or MNODE mode `'lowthrust'` — decide against the MNODE substrate's assumptions and document): authored fields = duration, throttle, steering law, coast windows; engine/mass from the vehicle's live stage state at the event, like every burn.
+- **Accounting (the identity rule, new lane)**: planning/required ΔV = Edelbaum (the node-map/pricing side); delivered ΔV = `∫(T/m)dt` from the computed leg; prop = integrated mass depletion, reconciled against `progBurnPropellant` within a documented tolerance (D6). The solved-burn magnitude rule (`progNmComputeEdgeDv` only) explicitly does NOT govern low-thrust legs — document the boundary.
+- Replay/undo/autosave: the log entry stores AUTHORED intent only (params + signature of last computed result); recompute stamps `est.`/computed/STALE state; undo snapshots stay tiny.
+
+### E3 — planning + rendering
+- **Node-map pricing**: Edelbaum edge pricing for low-thrust-capable vehicles (LEO→GEO the canonical case); "Plan for destination" gains a low-thrust option when the vehicle's active stage is electric (TOF from Δv/a₀, honest `est.`).
+- **Spiral rendering**: per-rev or curvature-adaptive sampling (a 2,600-rev spiral through 512 uniform samples is aliasing garbage); LOD: first/last N revs as real polylines, dense middle as a translucent annulus/envelope band; N3 rotating frames make the spiral legible (showcase: LEO→GEO raise in body-fixed? no — inertial + EM frame for lunar spirals; document which frame shows what).
+- Timeline dock: a low-thrust leg is a months-long BAND, not a tick — render as a span with the thrust duty cycle.
+
+### Sequencing & risk
+E1 first (pure physics + gate, no UI); E2 (event kind + accounting rules — the design-heavy step); E3 last. Risks: perf (bounded by the compute-button contract), rendering aliasing (E3's whole job), accounting drift between Edelbaum est. and integrated truth (bounded + badged, never silent). Multi-rev step control is the one place the dt ladder gets a new rule — gate it hard.
