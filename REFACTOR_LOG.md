@@ -112,3 +112,17 @@ Each move updates the `tests/math.test.js` FILES list in the same commit.
 **Verified**: `python build.py` → 772 passed, 0 failed; node --check ok; U+FFFD guard ok; each moved fn present exactly once in src/js; browser fingerprint on rebuilt artifact identical to baseline.
 **Risk notes**: recompute tail hooks (autosaveScheduleSave/missionUndoCapture) moved verbatim inside missionRecompute; forward references from cards to per-type renderers/appliers left in manager resolve at call time. No frozen functions, persisted fields, or physics numerics touched.
 **Commit note**: split A landed as b7d954b2c.
+
+## [11] 570 split C — extract event execution/editing + state panel/maneuver builder — 2026-07-15
+**Intent**: Final extraction phase for 570: land the manager remainder under the ~1,200-line readability threshold by isolating the two remaining large contiguous concern-blocks.
+**Type**: split (behavior-preserving move).
+**Files**: `src/js/570-mission-manager.js` (2,550 → 776 lines) → new `src/js/570-mission-events.js` (1,182 lines: missionExecBurn.._missionDockLogCardHTML — all exec handlers, inline-edit appliers, low-thrust compute, launch-window/geometry planning, separation picker, roster/owner helpers, per-type log cards; incl. _ltRunState/_MISSION_SOI_INJECT/_missionSepIndex/_missionSepDrag) and new `src/js/570-mission-panel.js` (635 lines: _missionMultiVehicleHTML.._missionManeuverLogCardHTML — state panel, view switching, maneuver-step builder, node/edge interaction, MANEUVER log card). `tests/math.test.js` FILES list gained both.
+**Subagent**: one Sonnet subagent, single pass, both extractions, gate green first attempt. missionInit/_missionMultiVehicleHTML confirmed at correct sides of the seams; no function duplicated or lost across the 570 family (boundary-sentinel + per-file uniqueness checks).
+**Behavior delta**: none. Fingerprint AFTER == baseline: Apollo logLen=3 (LAUNCH,MNODE,MNODE) 6044/12372/45078/2678494; Gateway logLen=4 6078/15064/45078/2714165, NRHO missKm=30.1135. Zero console errors.
+**Deleted**: none.
+**Verified**: `python build.py` → 772 passed, 0 failed; node --check ok; U+FFFD guard ok; browser fingerprint on rebuilt artifact identical to baseline.
+**Result**: 570-mission-manager.js is now 776 lines (from 5,067 at the start of tonight); the mission manager is decomposed into 10 load-ordered modules (core-state, event-model, interaction-state, lifecycle, replay, events, panel, cards, band, nodemap, + the 776-line manager core: launch-setup UI, budget/state helpers, burn worksheet, export menu, lifecycle glue).
+**Risk notes**: forward references between the new modules (events↔replay↔panel↔cards) resolve at call time after all concatenated modules load. No frozen functions, persisted fields, replay hooks, or physics numerics touched.
+
+## Suspected bugs (not fixed — refactor was behavior-preserving)
+- **Pre-existing name collision `missionExecManeuver`**: defined in BOTH `src/js/565-physics-mission.js` and (formerly) `src/js/570-mission-manager.js`, now `src/js/570-mission-panel.js`. This predates tonight's work (present in both files at commit 060b9d2e1). 570 loads after 565, so the 570 definition wins at runtime; behavior is unchanged by the split. Worth a look: either the 565 copy is dead (shadowed) or the two are intended to differ and the collision is accidental. Not a refactor regression.
