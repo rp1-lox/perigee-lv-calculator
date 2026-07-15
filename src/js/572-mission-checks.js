@@ -164,6 +164,20 @@ function missionRunChecks(m) {
         authIdx);
     }
 
+    // MISSION_MODEL_V2 §19 E2: LOWTHRUST readiness + STALE. Not-ready is a RED
+    // (the event failed to price at all — e._ltReady stamped false by 570's
+    // recompute case); STALE is an INFO nudge (the est. lane still prices it,
+    // just not with the last computed run's numbers) rather than a failure.
+    if (e.type === 'LOWTHRUST') {
+      if (e._ltReady === false) {
+        push('lowthrust-not-ready', 'red', 'Low-thrust burn not ready',
+          _mcEscape(e._ltReadyMessage || 'Active stage cannot perform this burn.'), authIdx);
+      } else if (e._ltState === 'stale') {
+        push('lowthrust-stale', 'info', 'Low-thrust leg is STALE',
+          'A computed trajectory exists for this event but no longer matches its authored inputs — budget/orbit are using the est. lane until it is recomputed.', authIdx);
+      }
+    }
+
     // #3 RED maneuver-from-mismatch: a solved maneuver whose from-node != the
     // acting vehicle's orbit state at that event (pre-event snapshot).
     if (_evIsSolvedManeuver(e) && e.fromNode) {

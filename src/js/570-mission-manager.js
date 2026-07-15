@@ -353,6 +353,7 @@ function _missionLogCardHTML(entry, id, idx) {
   // target) renders through the SAME card as a legacy MANEUVER — the
   // predicate is the shim that keeps both forms indistinguishable to the UI.
   if (_evIsSolvedManeuver(entry)) return _missionManeuverLogCardHTML(entry, id, idx);
+  if (entry.type === 'LOWTHRUST') return _missionLowThrustLogCardHTML(entry, id, idx);
   if (entry.type === 'EXPEND') return `<div class="mission-log-card" style="padding:8px 14px;display:flex;align-items:center;gap:8px;">
     <span class="mission-log-type">EXPEND</span>
     <span style="font-family:var(--mono);font-size:11px;color:var(--text-bright)">${entry.vehicleLevel ? entry.vehicleName : entry.stageName}</span>
@@ -1554,6 +1555,62 @@ function missionRecompute(m) {
       // here since the burn already completed; it matters for OTHER live vehicles idling
       // through the same span, e.g. a docked depot).
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
+    } else if (e.type === 'LOWTHRUST') {
+      // MISSION_MODEL_V2 §19 E2 — see MATH.md §7z for the full est./computed
+      // lane writeup. This branch ALWAYS runs the cheap est. (Edelbaum/
+      // rocket-eq) lane synchronously; the expensive integrated lane is
+      // computed out-of-band by the "Compute trajectory" button (572/UI) and
+      // consulted here ONLY via the signature-keyed side-table (568) — never
+      // recomputed inline, per the compute-button contract (no multi-second
+      // integration inside missionRecompute).
+      active = resolveActive(e);
+      if (!active) continue;
+      e.vehicleId = active.vehicleId;
+      const stage = active.stages.length ? active.stages[active.stages.length - 1] : null;
+      const readiness = ltReadinessCheck(stage);
+      e._ltReady = readiness.ok;
+      e._ltReadyMessage = readiness.message;
+      const dur = Math.max(0, e.duration_s || 0);
+      const throttle = e.throttle == null ? 1 : Math.max(0, Math.min(1, e.throttle));
+      const law = e.law === 'retrograde' ? 'retrograde' : 'prograde';
+      e.orbitBefore = active.orbitState ? { ...active.orbitState } : null;
+      if (!readiness.ok || !active.orbitState) {
+        e.result = 'FAILED'; e._ltState = 'est';
+        e.dv_est = 0; e.propUsed_est = 0; e.dv_actual = 0; e.prop_consumed = 0;
+        durationAuto = dur;
+        e.boiloffKg = applyMissionBoiloff(dur / 86400);
+        continue;
+      }
+      const m0 = progStageMass(stage);   // top/active stage — nothing rides above it by convention
+      const ep = { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: m0, mDry_kg: stage.dry_mass };
+      const est = ltEstimateLeg(ep, dur, throttle);
+      e.dv_est = est.dv_est_kms * 1000;   // m/s, matches e.dv_actual's units elsewhere
+      e.propUsed_est = est.propUsed_kg;
+      const body = active.orbitState.body;
+      const altKm = active.orbitState.perigee ?? active.orbitState.apogee ?? 0;
+      const vCirc = (typeof progVcirc === 'function') ? progVcirc(body, altKm) : 0;
+      const bodyDef = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+      const sig = ltSignature({
+        r: [(bodyDef ? bodyDef.R : 0) + altKm, 0, 0], v: [0, vCirc, 0],
+        m0_kg: m0, thrust_N: ep.thrust_N, isp_s: ep.isp_s, throttle, law, duration_s: dur, fidelity: 'default',
+      });
+      e._ltSig = sig;
+      const cached = ltComputedLeg(m.missionId, e._authIdx);
+      const useComputed = !!(cached && cached.sig === sig);
+      e._ltState = useComputed ? 'computed' : (cached ? 'stale' : 'est');
+      const dv_kms   = useComputed ? cached.dvAccum_kms : est.dv_est_kms;
+      const propUsed = useComputed ? cached.propUsed_kg : est.propUsed_kg;
+      e.dv_actual = dv_kms * 1000;
+      e.prop_consumed = propUsed;
+      progBurnPropellant(stage, propUsed);
+      const signedDv = (law === 'retrograde') ? -dv_kms : dv_kms;
+      const newAlt = ltApplyDvToCircularAlt(body, altKm, signedDv);
+      active.orbitState = { ...active.orbitState, apogee: newAlt, perigee: newAlt, estOrbit: !useComputed };
+      active.status = 'ORBIT';
+      e.orbitAfter = { ...active.orbitState };
+      e.result = 'SUCCESS';
+      durationAuto = dur;
+      e.boiloffKg = applyMissionBoiloff(dur / 86400);
     } else if (_evIsSolvedManeuver(e)) {
       // R6.2' Phase B (step 2): a unified MNODE(mode:'solved') replays through
       // this IDENTICAL accounting path as a legacy MANEUVER — same
@@ -1897,6 +1954,105 @@ function missionExecBurn(id) {
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
+}
+
+function missionExecLowThrust(id) {
+  const m = _missionGet(id);
+  if (!m || !m.vehicleId) return;
+  const durVal  = parseFloat(document.getElementById('addev-lt-dur-' + id)?.value) || 0;
+  const durUnit = document.getElementById('addev-lt-dur-unit-' + id)?.value || 'd';
+  const law     = document.getElementById('addev-lt-law-' + id)?.value || 'prograde';
+  const throttle = Math.max(0, Math.min(1, parseFloat(document.getElementById('addev-lt-throttle-' + id)?.value)));
+  m.log.push({ type: 'LOWTHRUST', duration_s: _missionDurationToSeconds(durVal, durUnit), law, throttle: isFinite(throttle) ? throttle : 1 });
+  _missionAddEvt = null; _missionExpandLast(m);
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
+// Re-author the duration/law/throttle on an existing LOWTHRUST entry (mirrors
+// missionApplyDurationOverride's pattern) — any edit changes the est-lane
+// signature inputs, so the next recompute will find the computed cache (if
+// any) STALE via ltSignature, never silently reusing a mismatched result.
+function missionEditLowThrust(id, idx, field, val) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LOWTHRUST') return;
+  if (field === 'duration_s') e.duration_s = Math.max(0, +val || 0);
+  else if (field === 'law') e.law = val === 'retrograde' ? 'retrograde' : 'prograde';
+  else if (field === 'throttle') e.throttle = Math.max(0, Math.min(1, +val || 0));
+  missionRecompute(m);
+  missionRenderDetail();
+}
+
+// "Compute trajectory" — the expensive integrated lane, run ONLY on explicit
+// user action (never inside missionRecompute; see the compute-button contract,
+// MISSION_MODEL_V2 §19). Chunked via rAF so the UI progress bar is honest and
+// the run is cancellable; the result lands in 568's signature-keyed side-table
+// and triggers exactly ONE missionRecompute on completion so downstream state
+// (budget, orbit) picks up the computed end-state (stale-by-one recompute
+// pattern, same as 570's physics-TOF convergence pass).
+let _ltRunState = null;   // { id, authIdx, cancelled } — one run at a time
+function ltCancelCompute() {
+  if (_ltRunState) _ltRunState.cancelled = true;
+}
+function ltComputeTrajectory(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LOWTHRUST') return;
+  if (!e._ltReady) { missionRenderDetail(); return; }
+  const fv = e.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId] : null;
+  const stage = fv && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
+  const ob = e.orbitBefore;
+  if (!fv || !stage || !ob || typeof physPropagateSegment !== 'function') return;
+
+  const body = ob.body;
+  const altKm = ob.perigee ?? ob.apogee ?? 0;
+  const bodyDef = PROG_BODIES[body];
+  const v0 = (typeof progVcirc === 'function') ? progVcirc(body, altKm) : 0;
+  const r0 = [bodyDef.R + altKm, 0, 0];
+  const v0v = [0, v0, 0];
+  const m0 = progStageMass(stage);
+  const throttle = e.throttle == null ? 1 : e.throttle;
+  const law = e.law === 'retrograde' ? 'retrograde' : 'prograde';
+  const durTotal = Math.max(0, e.duration_s || 0);
+  const CHUNK_S = 2 * 86400;   // 2-day slices per spec
+
+  const run = { id, authIdx: idx, cancelled: false, tSim: 0, r: r0, v: v0v, m: m0 };
+  _ltRunState = run;
+  e._ltComputing = true; e._ltProgress = 0;
+  missionRenderDetail();
+
+  function step() {
+    if (run.cancelled) { e._ltComputing = false; missionRenderDetail(); return; }
+    const chunkEnd = Math.min(durTotal, run.tSim + CHUNK_S);
+    const ctx = { center: body, bodies: [body],
+      thrust: { thrust_N: stage.ep_thrust_N * throttle, isp_s: stage.ep_isp_s, m0_kg: run.m, law, mDry_kg: stage.dry_mass } };
+    // Single-frame v1 (documented limit): a real months-long spiral can cross
+    // SOI boundaries in principle, but v1's authored use case is a body-centric
+    // raise/lower, so the chunked compute pins ctx.center for the whole run
+    // (opts.singleFrame, same knob E1's own gate uses) rather than handling a
+    // mid-spiral SOI handoff — a genuine gap, noted in MATH.md §7z critiques.
+    const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true });
+    if (res && res.stateF) {
+      run.r = res.stateF.r; run.v = res.stateF.v; run.m = res.stateF.m != null ? res.stateF.m : run.m;
+      run.dvAccum = (run.dvAccum || 0) + (res.dvAccum || 0);
+      run.depleted = run.depleted || !!res.propDepleted;
+    }
+    run.tSim = chunkEnd;
+    e._ltProgress = durTotal > 0 ? run.tSim / durTotal : 1;
+
+    if (run.tSim >= durTotal || run.depleted) {
+      const propUsed = Math.max(0, m0 - run.m);
+      const sig = e._ltSig;   // signature computed by the est. lane this same recompute cycle
+      ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim });
+      e._ltComputing = false; _ltRunState = null;
+      missionRecompute(m);       // ONE recompute — downstream state now consumes the computed lane
+      missionRenderDetail();
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(step);
+    else setTimeout(step, 0);
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(step);
+  else setTimeout(step, 0);
 }
 
 function missionApplyBurnEdit(id, idx) {
@@ -2441,6 +2597,54 @@ function _missionBurnLogCardHTML(entry) {
       ${stateKV('Inc',     (o.inclination || 0) + '&deg;')}
     </div>
     ${warns}
+  </div>`;
+}
+
+// MISSION_MODEL_V2 §19 E2 — LOWTHRUST event card. Shows the est./computed/
+// STALE lane state (568/572), a live progress bar while computing, and the
+// Compute/Cancel buttons. v1 rendering note (E3 defers spiral polylines/LOD):
+// this card shows NUMBERS only — no schematic dashed-spiral glyph yet.
+function _missionLowThrustLogCardHTML(entry, id, idx) {
+  const state = entry._ltState || 'est';
+  const badgeColor = state === 'computed' ? 'var(--accent3)' : state === 'stale' ? 'var(--warn)' : 'var(--text-dim)';
+  const badgeLabel = state === 'computed' ? 'COMPUTED' : state === 'stale' ? 'STALE' : 'EST.';
+  const durDays = ((entry.duration_s || 0) / 86400).toFixed(1);
+  const stateKV = (k, v) => `<div class="mission-state-kv"><span class="mission-state-key">${k}</span><span class="mission-state-val">${v}</span></div>`;
+  const dv = Math.round(entry.dv_actual || 0);
+  const prop = Math.round(entry.prop_consumed || 0);
+  const showBoth = state !== 'computed' && entry._ltComputedShadowDv != null;
+  let progressHTML = '';
+  if (entry._ltComputing) {
+    const pct = Math.round((entry._ltProgress || 0) * 100);
+    progressHTML = `<div style="margin:8px 0;">
+      <div style="height:6px;background:var(--input);border:1px solid var(--border);border-radius:3px;overflow:hidden;">
+        <div id="lt-bar-${id}-${idx}" style="height:100%;width:${pct}%;background:var(--accent);transition:width .15s linear;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+        <span id="lt-pct-${id}-${idx}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${pct}% — integrating…</span>
+        <button class="act-btn" style="padding:2px 8px;font-size:9px;" onclick="ltCancelCompute()">Cancel</button>
+      </div>
+    </div>`;
+  }
+  const readyMsg = entry._ltReady === false
+    ? `<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:4px;">⚠ ${entry._ltReadyMessage || 'not ready'}</div>` : '';
+  return `<div class="mission-log-card">
+    <div class="mission-log-header">
+      <span class="mission-log-type">LOWTHRUST</span>
+      <span style="font-family:var(--mono);font-size:9px;letter-spacing:.1em;padding:1px 6px;border:1px solid ${badgeColor};color:${badgeColor}">${badgeLabel}</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.law || 'prograde'} · ${durDays} d</span>
+    </div>
+    <div class="mission-state-grid">
+      ${stateKV('ΔV (' + (state === 'computed' ? 'integrated' : 'est.') + ')', dv.toLocaleString() + ' m/s')}
+      ${stateKV('Prop Used', prop.toLocaleString() + ' kg')}
+      ${stateKV('Throttle', Math.round((entry.throttle ?? 1) * 100) + '%')}
+    </div>
+    ${state === 'stale' ? `<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:4px;">STALE — inputs changed since the last computed run; budget/orbit fall back to est. Click Compute to rebuild.</div>` : ''}
+    ${readyMsg}
+    ${progressHTML}
+    ${!entry._ltComputing ? `<div style="margin-top:8px;display:flex;gap:6px;">
+      <button class="act-btn" style="flex:1;" ${entry._ltReady === false ? 'disabled' : ''} onclick="ltComputeTrajectory('${id}',${idx})">▶ Compute Trajectory</button>
+    </div>` : ''}
   </div>`;
 }
 
@@ -3689,7 +3893,7 @@ function _missionAddEventHTML(m) {
   if (_missionAddEvt == null) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
-  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
+  const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['lowthrust','Low-Thrust'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -3727,6 +3931,26 @@ function _missionAddEventHTML(m) {
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no spacecraft defined — add one in the Spacecraft tab</div>`;
   } else if (_missionAddEvt === 'burn') {
     form = _missionBurnSectionHTML(m);
+  } else if (_missionAddEvt === 'lowthrust') {
+    const stage = fv && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
+    const readiness = (typeof ltReadinessCheck === 'function') ? ltReadinessCheck(stage) : { ok: false, message: 'n/a' };
+    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// months-long electric-propulsion burn — priced instantly (est.), integrate for real via "Compute trajectory" on the card</div>
+      ${!readiness.ok ? `<div style="font-family:var(--mono);font-size:10px;color:var(--warn);margin-bottom:8px;">⚠ ${readiness.message}</div>` : ''}
+      <label class="cfg-label">Duration</label>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <input type="number" id="addev-lt-dur-${id}" class="field" value="30" style="width:100px;">
+        <select id="addev-lt-dur-unit-${id}" class="mcc-field-select" style="width:90px;">
+          <option value="d" selected>days</option><option value="h">hours</option><option value="min">min</option><option value="s">sec</option>
+        </select>
+      </div>
+      <label class="cfg-label">Steering Law</label>
+      <select id="addev-lt-law-${id}" class="mcc-field-select" style="margin-bottom:8px;">
+        <option value="prograde" selected>Prograde (raise)</option>
+        <option value="retrograde">Retrograde (lower)</option>
+      </select>
+      <label class="cfg-label">Throttle</label>
+      <input type="number" id="addev-lt-throttle-${id}" class="field" min="0" max="1" step="0.05" value="1" style="width:80px;margin-bottom:10px;">
+      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecLowThrust('${id}')">▶ Add Low-Thrust Burn</button>`;
   } else if (_missionAddEvt === 'separate') {
     if (fv && fv.stages.length >= 2) {
       // quick per-payload detach buttons (separate at each spacecraft boundary)

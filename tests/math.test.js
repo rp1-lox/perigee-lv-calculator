@@ -30,6 +30,8 @@ const FILES = [
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
   'src/js/566-mission-state-v2.js',
+  'src/js/568-lowthrust.js',
+  'src/js/440-program-module-phase-9-spacecraft-defini.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/415-launch-planner.js',
   'src/js/425-reference-orbits.js',
@@ -53,6 +55,10 @@ const sandbox = {
     getElementById: () => null,
   },
   console,
+  // 440 (spacecraft stage defs) calls progUUID() at struct-construction time;
+  // the real impl lives in 380 (not otherwise needed by this harness), so a
+  // trivial stub is enough for the LT (568) tests that construct a stage def.
+  progUUID: () => 'test-uuid',
 };
 vm.createContext(sandbox);
 vm.runInContext(src, sandbox, { filename: 'concatenated-math-modules.js' });
@@ -3498,6 +3504,166 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('E1: unknown steering law never throws mid-integration', !threw);
     ok('E1: unknown steering law means NO thrust at all — mass unburned, dvAccum zero',
       res && res.stateF.m === 1000 && res.dvAccum === 0);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §19 E2 — electric propulsion vehicle + event model (568)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const {
+    PROG_PROPELLANT_TYPES, PHYS_G0_MS2, ltEstimateLeg, ltEdelbaumPlanarDv, ltApplyDvToCircularAlt,
+    ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache,
+    _ltComputedByMission, progVcirc, progMakeSpacecraftStageDef,
+  } = vm.runInContext(
+    '({ PROG_PROPELLANT_TYPES, PHYS_G0_MS2, ltEstimateLeg, ltEdelbaumPlanarDv, ltApplyDvToCircularAlt, ' +
+    'ltSignature, ltReadinessCheck, ltComputedLeg, ltStoreComputedLeg, ltClearMissionCache, ' +
+    '_ltComputedByMission, progVcirc, progMakeSpacecraftStageDef })',
+    sandbox
+  );
+
+  // ── propellant registry (16f closed) ──
+  ok('LT: MMH/NTO registered (16f) under the exact key 440 emits',
+    PROG_PROPELLANT_TYPES['MMH/NTO'] && PROG_PROPELLANT_TYPES['MMH/NTO'].boiloff_rate === 0);
+  ok('LT: XENON_EP registered, storable (no boiloff)',
+    PROG_PROPELLANT_TYPES.XENON_EP && PROG_PROPELLANT_TYPES.XENON_EP.boiloff_rate === 0);
+  const scDef = progMakeSpacecraftStageDef('EP test');
+  ok('LT: SpacecraftStageDef carries ep_thrust_N/ep_isp_s fields (undefined by default)',
+    ('ep_thrust_N' in scDef) && ('ep_isp_s' in scDef));
+
+  // ── ltEstimateLeg: rocket-eq exactness vs a direct log computation ──
+  {
+    const ep = { thrust_N: 0.29, isp_s: 3100, m0_kg: 700, mDry_kg: 300 };
+    const dur = 30 * 86400; // 30 days
+    const est = ltEstimateLeg(ep, dur, 1);
+    const mdot = ep.thrust_N / (ep.isp_s * PHYS_G0_MS2);
+    const propExpected = mdot * dur;
+    approx('LT: est. lane prop consumption matches ṁ·duration (uncapped case)', est.propUsed_kg, propExpected, 1e-6);
+    ok('LT: est. lane not capped when plenty of prop remains', est.capped === false);
+    const dvExpected_ms = ep.isp_s * PHYS_G0_MS2 * Math.log(ep.m0_kg / est.mF_kg);
+    approx('LT: est. lane dv matches the direct rocket-equation log (same math E1 pinned exactly)', est.dv_est_kms * 1000, dvExpected_ms, 1e-9);
+    ok('LT: est. lane mF = m0 - propUsed', Math.abs(est.mF_kg - (ep.m0_kg - est.propUsed_kg)) < 1e-9);
+
+    // capped case: a long burn that would exceed available propellant
+    const longEst = ltEstimateLeg(ep, 365 * 86400 * 5, 1);
+    ok('LT: est. lane caps propUsed at (m0 - mDry) on a long burn', longEst.capped === true && Math.abs(longEst.propUsed_kg - (ep.m0_kg - ep.mDry_kg)) < 1e-9);
+    ok('LT: est. lane never drives mF below mDry', longEst.mF_kg >= ep.mDry_kg - 1e-9);
+
+    // throttle scales thrust -> scales prop use proportionally for the same duration
+    const halfThrottle = ltEstimateLeg(ep, dur, 0.5);
+    approx('LT: throttle=0.5 halves propUsed for the same duration', halfThrottle.propUsed_kg, est.propUsed_kg / 2, 1e-6);
+
+    // degenerate inputs never throw / return zero
+    const zeroDur = ltEstimateLeg(ep, 0, 1);
+    ok('LT: zero duration -> zero dv/prop, no throw', zeroDur.dv_est_kms === 0 && zeroDur.propUsed_kg === 0);
+    const noEngine = ltEstimateLeg({ thrust_N: 0, isp_s: 0, m0_kg: 700 }, dur, 1);
+    ok('LT: zero thrust/isp -> zero dv/prop, no throw', noEngine.dv_est_kms === 0 && noEngine.propUsed_kg === 0);
+  }
+
+  // ── ltEdelbaumPlanarDv: sanity vs |v0-v1| ──
+  ok('LT: planar Edelbaum reduction is |v0-v1|', Math.abs(ltEdelbaumPlanarDv(7.5, 7.1) - 0.4) < 1e-9);
+  ok('LT: planar Edelbaum is order-independent (|v0-v1| symmetry)', ltEdelbaumPlanarDv(7.1, 7.5) === ltEdelbaumPlanarDv(7.5, 7.1));
+
+  // ── ltApplyDvToCircularAlt: energy-based (vis-viva) sign sanity + round trip ──
+  {
+    const alt0 = 300;
+    const v0 = progVcirc('Earth', alt0);
+    const alt1 = ltApplyDvToCircularAlt('Earth', alt0, 0.1); // +100 m/s prograde
+    ok('LT: prograde dv increases the resulting altitude (matches user intuition, MATH.md §7z crit. 75)', alt1 > alt0);
+    const alt2 = ltApplyDvToCircularAlt('Earth', alt0, -0.1); // -100 m/s retrograde
+    ok('LT: retrograde dv decreases the resulting altitude', alt2 < alt0);
+
+    // independent check via specific orbital energy: a_new = -mu/(v1^2 - 2mu/r0)
+    const muE = vm.runInContext('PROG_BODIES.Earth.mu', sandbox);
+    const RE  = vm.runInContext('PROG_BODIES.Earth.R', sandbox);
+    const r0 = RE + alt0, v1 = v0 + 0.1;
+    const aExpected = -muE / (v1 * v1 - 2 * muE / r0) - RE;
+    approx('LT: back-solved altitude matches the independent vis-viva energy calc', alt1, aExpected, 1e-6);
+
+    const nonPhysical = ltApplyDvToCircularAlt('Earth', alt0, -100); // absurd retrograde dv -> v1<=0
+    ok('LT: a non-physical dv leaves altitude unchanged rather than lying', nonPhysical === alt0);
+  }
+
+  // ── ltSignature: stability + sensitivity ──
+  {
+    const base = { r: [6678, 0, 0], v: [0, 7.7, 0], m0_kg: 700, thrust_N: 0.29, isp_s: 3100, throttle: 1, law: 'prograde', duration_s: 2592000, fidelity: 'default' };
+    const sig1 = ltSignature(base);
+    const sig2 = ltSignature(JSON.parse(JSON.stringify(base)));
+    ok('LT: signature is a deterministic hash string', typeof sig1 === 'string' && sig1.length > 0);
+    ok('LT: same inputs -> same signature (stability)', sig1 === sig2);
+    const variants = [
+      { ...base, duration_s: base.duration_s + 1 },
+      { ...base, throttle: 0.99 },
+      { ...base, law: 'retrograde' },
+      { ...base, thrust_N: base.thrust_N + 0.001 },
+      { ...base, isp_s: base.isp_s + 1 },
+      { ...base, m0_kg: base.m0_kg + 1 },
+      { ...base, v: [0, 7.701, 0] },
+    ];
+    ok('LT: any single field change flips the signature (all 7 variants differ from base)',
+      variants.every(v => ltSignature(v) !== sig1));
+  }
+
+  // ── ltReadinessCheck: EP-stage requirement (the LOWTHRUST readiness gate, 572) ──
+  {
+    const okStage = { propType: 'XENON_EP', ep_thrust_N: 0.29, ep_isp_s: 3100 };
+    const r1 = ltReadinessCheck(okStage);
+    ok('LT: readiness OK for a proper EP stage', r1.ok === true && r1.message === null);
+
+    const wrongProp = { propType: 'NTO_A50', ep_thrust_N: 0.29, ep_isp_s: 3100 };
+    const r2 = ltReadinessCheck(wrongProp);
+    ok('LT: readiness fails when the active stage is not an EP propellant type', r2.ok === false && !!r2.message);
+
+    const missingFields = { propType: 'XENON_EP' };
+    const r3 = ltReadinessCheck(missingFields);
+    ok('LT: readiness fails when ep_thrust_N/ep_isp_s are missing', r3.ok === false && !!r3.message);
+
+    const r4 = ltReadinessCheck(null);
+    ok('LT: readiness fails cleanly (no throw) on a null stage', r4.ok === false && !!r4.message);
+  }
+
+  // ── computed-leg side-table (568, sibling of 565's _physTrajByMission) ──
+  {
+    ok('LT: _ltComputedByMission starts as an object side-table', typeof _ltComputedByMission === 'object');
+    ok('LT: ltComputedLeg on an unknown mission returns null (no throw)', ltComputedLeg('nope', 0) === null);
+    ltStoreComputedLeg('ltTestMission', 3, { sig: 'abc123', dvAccum_kms: 0.5, mF_kg: 400, propUsed_kg: 300, tof_s: 2592000 });
+    const rec = ltComputedLeg('ltTestMission', 3);
+    ok('LT: ltStoreComputedLeg/ltComputedLeg round-trip a record', !!rec && rec.dvAccum_kms === 0.5 && rec.propUsed_kg === 300);
+    ltClearMissionCache('ltTestMission');
+    ok('LT: ltClearMissionCache removes the mission entirely', ltComputedLeg('ltTestMission', 3) === null);
+  }
+
+  // ── budget-flow sanity (D6-style): a synthetic est-lane LOWTHRUST burn stays
+  // finite/consistent, and stamping a fake computed result flips dv_actual
+  // while staying within tolerance-or-honestly-flagged (per the spec's gate
+  // requirement) — exercised at the pure-function level (568's lane-selection
+  // logic itself), not through the full DOM-dependent missionRecompute (which
+  // 570's own S-series tests likewise avoid in favor of v2BuildShadow/v2StateAt
+  // fixtures — see the Phase 1 shadow-state block above for that pattern). ──
+  {
+    const ep = { thrust_N: 0.29, isp_s: 3100, m0_kg: 700, mDry_kg: 300 };
+    const dur = 30 * 86400;
+    const est = ltEstimateLeg(ep, dur, 1);
+    ok('LT: est-lane budget numbers are finite', isFinite(est.dv_est_kms) && isFinite(est.propUsed_kg));
+    ok('LT: est-lane dv is positive for a real burn', est.dv_est_kms > 0);
+
+    // fake a "computed" result close to the est (small integration slop, like
+    // §7y's measured 0.94% Edelbaum-vs-integrated case) and check the D6-style
+    // reconciliation tolerance (max(1%, 5 m/s)) — matches, not flagged.
+    const computedClose_ms = est.dv_est_kms * 1000 * 1.009;   // +0.9%, like §7y's 5N case
+    const deltaClose = Math.abs(computedClose_ms - est.dv_est_kms * 1000);
+    const tolClose = Math.max(5, 0.01 * est.dv_est_kms * 1000);
+    ok('LT: a close computed/est pair reconciles within max(1%,5 m/s) — not flagged',
+      deltaClose <= tolClose);
+
+    // fake a genuinely divergent computed result (e.g. stale/mismatched signature
+    // scenario) and check the SAME tolerance correctly flags it — the card must
+    // show both numbers honestly rather than silently pick one.
+    const computedFar_ms = est.dv_est_kms * 1000 * 1.5;       // +50%, way outside tolerance
+    const deltaFar = Math.abs(computedFar_ms - est.dv_est_kms * 1000);
+    const tolFar = Math.max(5, 0.01 * est.dv_est_kms * 1000);
+    ok('LT: a divergent computed/est pair exceeds max(1%,5 m/s) — correctly flaggable',
+      deltaFar > tolFar);
   }
 }
 

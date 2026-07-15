@@ -25,6 +25,8 @@ function _scStageSpec(o) {
     tunnelCapable:       !!o.tunnelCapable,
     isLandingTruss:      !!o.isLandingTruss,
     descentPropFraction: o.descentPropFraction || 0,
+    ep_thrust_N:         o.ep_thrust_N,
+    ep_isp_s:            o.ep_isp_s,
   };
 }
 

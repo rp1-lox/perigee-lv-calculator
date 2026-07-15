@@ -398,6 +398,17 @@ const PROG_PROPELLANT_TYPES = {
   NTO_A50:  { boiloff_rate: 0.0000, label: 'NTO/Aerozine-50',  cryo: false     },
   NTO_UDMH: { boiloff_rate: 0.0000, label: 'NTO/UDMH',         cryo: false     },
   SOLID:    { boiloff_rate: 0.0000, label: 'Solid',             cryo: false     },
+  // 16f fix (2026-07-14): 440's SC stage default literally uses the key
+  // 'MMH/NTO' (not 'NTO_A50') and always has — that lookup silently missed
+  // the registry, so unedited SC stages boiled off nothing by accident, not
+  // by design. Registered under the SAME key the default already emits, so
+  // no call site changes: storable hypergolic, matches NTO_A50's physics.
+  'MMH/NTO': { boiloff_rate: 0.0000, label: 'MMH/NTO',          cryo: false     },
+  // MISSION_MODEL_V2 §19 E2: electric propulsion propellant (xenon ion/Hall
+  // thrusters). Storable at room temperature/pressure as a supercritical
+  // fluid in practice — no boiloff modeled (consistent with the other
+  // storables above; this program has no ionization/plume physics).
+  XENON_EP: { boiloff_rate: 0.0000, label: 'Xenon (EP)',        cryo: false     },
 };
 
 // ── OrbitalState ──────────────────────────────────────────────────────────────

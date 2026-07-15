@@ -29,6 +29,11 @@ function progMakeSpacecraftStageDef(name) {
     tunnelCapable:       false,      // pressurised tunnel to adjacent stage
     isLandingTruss:      false,      // structural-only; auto-candidate for surface separation (spec §3.4)
     descentPropFraction: 0,          // fraction of propKg reserved for powered descent (0–1)
+    // MISSION_MODEL_V2 §19 E2: electric-propulsion engine params. Only meaningful
+    // (and only shown in the editor) when propType === 'XENON_EP'; a LOWTHRUST
+    // event's readiness check requires both to be present and > 0.
+    ep_thrust_N:         undefined, // thrust, newtons
+    ep_isp_s:             undefined, // vacuum Isp, seconds (typically 1500-4000 for EP)
   };
 }
 
@@ -55,6 +60,12 @@ function progSpacecraftToLiveStages(scd) {
     ls.tunnelCapable       = def.tunnelCapable        ?? false;
     ls.isLandingTruss      = def.isLandingTruss       ?? false;
     ls.descentPropFraction = def.descentPropFraction  ?? 0;
+    // MISSION_MODEL_V2 §19 E2: carried onto the live stage so a LOWTHRUST
+    // event's readiness check / est. math can read them directly off the
+    // active stage, same as any other live-stage field.
+    ls.propType             = def.propType;
+    ls.ep_thrust_N          = def.ep_thrust_N;
+    ls.ep_isp_s             = def.ep_isp_s;
     return ls;
   });
 }

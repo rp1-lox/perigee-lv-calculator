@@ -207,8 +207,17 @@ function scEdRenderDetail() {
           <input type="number" class="field" min="0" value="${st.propKg || 0}" style="width:100px"
             oninput="scEdStageSet('${id}',${i},'propKg',+this.value)"></div>
         <div class="cfg-item"><label>Prop Type</label>
-          <select class="field" style="width:170px" onchange="scEdStageSet('${id}',${i},'propType',this.value)">${propOpts}</select></div>
+          <select class="field" style="width:170px" onchange="scEdStageSet('${id}',${i},'propType',this.value);scEdRenderDetail()">${propOpts}</select></div>
       </div>
+      ${st.propType === 'XENON_EP' ? `
+      <div class="cfg-row" style="gap:16px;padding-top:8px;border-top:1px solid var(--border);margin-bottom:0;">
+        <div class="cfg-item"><label>EP Thrust (N)</label>
+          <input type="number" class="field" min="0" step="0.001" value="${st.ep_thrust_N ?? ''}" style="width:90px" placeholder="0.29"
+            oninput="scEdStageSet('${id}',${i},'ep_thrust_N',+this.value)"></div>
+        <div class="cfg-item"><label>EP Isp (s)</label>
+          <input type="number" class="field" min="0" value="${st.ep_isp_s ?? ''}" style="width:90px" placeholder="3100"
+            oninput="scEdStageSet('${id}',${i},'ep_isp_s',+this.value)"></div>
+      </div>` : ''}
       <div class="cfg-row" style="gap:16px;padding-top:8px;border-top:1px solid var(--border);margin-bottom:0;">
         <div class="cfg-item"><label>Crew Capacity</label>
           <input type="number" class="field" min="0" value="${st.crewCapacity || 0}" style="width:70px"
