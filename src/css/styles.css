@@ -436,7 +436,7 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    burn tick lines up with its lane marker at any collapsed/expanded height. */
 .traj-timeline-dock{display:flex;align-items:stretch;gap:4px;flex-shrink:0;padding:6px 2px 0;}
 .ttd-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
-.ttd-lanes{display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
+.ttd-lanes{position:relative;display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
 .ttd-lanes.expanded{max-height:220px;}
 .ttd-lane-row{display:flex;align-items:center;gap:6px;}
 .ttd-lane-label{flex-shrink:0;width:8.5em;font-family:var(--mono);font-size:8px;color:var(--text-dim);border-left:3px solid var(--border);padding-left:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -446,6 +446,14 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .ttd-burn{position:absolute;top:-7px;transform:translateX(-50%);font-size:7px;line-height:1;color:var(--accent2);cursor:pointer;user-select:none;}
 .ttd-burn:hover{color:var(--accent);}
 .ttd-more-row .ttd-more-track{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:7.5px;color:var(--text-dim);background:transparent;border-style:dashed;cursor:default;}
+/* 5b R4 (MISSION_MODEL_V2 §15): dock timing links — thin verticals joining a
+   RENDEZVOUS/DOCK event's two lanes at its MET. Overlay is offset to align
+   exactly with the lane-track column (past the fixed-width label) so its
+   left% matches segs/burns' own %-of-track-width positioning. */
+.ttd-link-overlay{position:absolute;left:calc(8.5em + 6px);right:0;top:0;bottom:0;pointer-events:none;}
+.ttd-link{position:absolute;width:0;border-left:1.5px solid var(--border-bright);pointer-events:auto;cursor:pointer;}
+.ttd-link:hover{filter:brightness(1.35);}
+.ttd-link-end{position:absolute;left:-3px;width:6px;height:6px;border-radius:50%;pointer-events:none;}
 .ttd-expand-btn{flex-shrink:0;align-self:center;width:16px;height:16px;line-height:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-dim);background:var(--input);border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:0;}
 .ttd-expand-btn:hover{color:var(--text-bright);border-color:var(--border-bright);}
 /* U2 (§12 promotion) */

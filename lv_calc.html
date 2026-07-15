@@ -443,7 +443,7 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    burn tick lines up with its lane marker at any collapsed/expanded height. */
 .traj-timeline-dock{display:flex;align-items:stretch;gap:4px;flex-shrink:0;padding:6px 2px 0;}
 .ttd-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
-.ttd-lanes{display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
+.ttd-lanes{position:relative;display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
 .ttd-lanes.expanded{max-height:220px;}
 .ttd-lane-row{display:flex;align-items:center;gap:6px;}
 .ttd-lane-label{flex-shrink:0;width:8.5em;font-family:var(--mono);font-size:8px;color:var(--text-dim);border-left:3px solid var(--border);padding-left:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -453,6 +453,14 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .ttd-burn{position:absolute;top:-7px;transform:translateX(-50%);font-size:7px;line-height:1;color:var(--accent2);cursor:pointer;user-select:none;}
 .ttd-burn:hover{color:var(--accent);}
 .ttd-more-row .ttd-more-track{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:7.5px;color:var(--text-dim);background:transparent;border-style:dashed;cursor:default;}
+/* 5b R4 (MISSION_MODEL_V2 §15): dock timing links — thin verticals joining a
+   RENDEZVOUS/DOCK event's two lanes at its MET. Overlay is offset to align
+   exactly with the lane-track column (past the fixed-width label) so its
+   left% matches segs/burns' own %-of-track-width positioning. */
+.ttd-link-overlay{position:absolute;left:calc(8.5em + 6px);right:0;top:0;bottom:0;pointer-events:none;}
+.ttd-link{position:absolute;width:0;border-left:1.5px solid var(--border-bright);pointer-events:auto;cursor:pointer;}
+.ttd-link:hover{filter:brightness(1.35);}
+.ttd-link-end{position:absolute;left:-3px;width:6px;height:6px;border-radius:50%;pointer-events:none;}
 .ttd-expand-btn{flex-shrink:0;align-self:center;width:16px;height:16px;line-height:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-dim);background:var(--input);border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:0;}
 .ttd-expand-btn:hover{color:var(--text-bright);border-color:var(--border-bright);}
 /* U2 (§12 promotion) */
@@ -33555,6 +33563,75 @@ function _ttdLaneModel(m) {
 
 const _TTD_LANE_H_COLLAPSED = 7, _TTD_LANE_H_EXPANDED = 14, _TTD_MAX_COLLAPSED_LANES = 3, _TTD_MAX_EXPANDED_LANES = 6;
 
+// ── 5b R4 (MISSION_MODEL_V2 §15, MATH.md §7ad-§7af) — dock timing links ─────
+// RENDEZVOUS/DOCK events draw a thin vertical link between the ACTIVE and
+// TARGET vehicle's lanes at the event's MET. Display + R1's phase check
+// only — no new event kinds, no scheduling. Resolves the two lanes the SAME
+// way the band model tags owners: a lane's `points[].vehicleId` at this
+// event's log index is the source of truth (the band model already places
+// one point per owner per column from the replay's per-event snapshot).
+function _ttdDockLinksModel(m) {
+  if (typeof _missionBandModel !== 'function' || typeof _trajMissionMaxMet !== 'function') return [];
+  const band = _missionBandModel(m);
+  const maxMet = _trajMissionMaxMet(m);
+  if (!(maxMet > 0) || !band.lanes.length) return [];
+  const log = (m._expanded && m._expanded.length) ? m._expanded : m.log;
+  const laneIdxForPoint = (vehId, idx) => {
+    if (vehId == null) return -1;
+    for (let li = 0; li < band.lanes.length; li++) {
+      if (band.lanes[li].points.some(p => p.index === idx && p.vehicleId === vehId)) return li;
+    }
+    return -1;
+  };
+  const out = [];
+  (log || []).forEach((e, i) => {
+    if (e.type !== 'RENDEZVOUS' && e.type !== 'DOCK') return;
+    const aVeh = e.type === 'RENDEZVOUS' ? e.vehicleId : e.aVehId;
+    const tVeh = e.type === 'RENDEZVOUS' ? e.targetVehId : e.tVehId;
+    if (aVeh == null || tVeh == null) return;
+    const laneA = laneIdxForPoint(aVeh, i), laneB = laneIdxForPoint(tVeh, i);
+    if (laneA < 0 || laneB < 0 || laneA === laneB) return;
+    const ev = band.events[i];
+    const met = ev && ev.met != null ? ev.met : 0;
+    if (!isFinite(met)) return;
+    const authIdx = e._authIdx != null ? e._authIdx : i;
+    // Only RENDEZVOUS carries R1's e.phase (570-mission-replay.js); DOCK's
+    // own outright failure (e.result==='FAILED') is the only other tint.
+    const phase = e.type === 'RENDEZVOUS' ? e.phase : null;
+    const failed = e.type === 'RENDEZVOUS' ? (e.matched === false) : (e.result === 'FAILED');
+    let color = 'var(--border-bright)';
+    if (failed) color = 'var(--danger)';
+    else if (phase && phase.capture === false) color = 'var(--warn,var(--accent2))';
+    const title = `${e.type} T+${_metFmt(met)}${phase ? ' · Δφ ' + _phaseFmtDt(phase.dt_s) : ''}`;
+    out.push({ laneA, laneB, met, authIdx, color, title });
+  });
+  return out;
+}
+
+// Overlay HTML: absolutely positioned within `.ttd-link-overlay` (CSS aligns
+// it to exactly the lane-TRACK column, offset past the fixed-width label —
+// see styles.css), so `left` is a %-of-track-width just like segs/burns.
+// Vertical position is pixel math over the SAME row geometry the lane rows
+// render at (laneH + row's 4px padding + the flex `gap:2px`). Links whose
+// lane is beyond the current collapse cap are dropped — no dangling ends.
+function _ttdLinksOverlayHTML(m, id, model, laneH, capIdx) {
+  const links = _ttdDockLinksModel(m);
+  if (!links.length) return '';
+  const rowBox = laneH + 4 + 2;
+  const parts = links.map(L => {
+    if (L.laneA >= capIdx || L.laneB >= capIdx) return '';
+    const left = Math.max(0, Math.min(100, (L.met / model.maxMet) * 100));
+    const cA = L.laneA * rowBox + (laneH + 4) / 2;
+    const cB = L.laneB * rowBox + (laneH + 4) / 2;
+    const top = Math.min(cA, cB), h = Math.max(1, Math.abs(cB - cA));
+    return `<div class="ttd-link" style="left:${left.toFixed(2)}%;top:${top.toFixed(1)}px;height:${h.toFixed(1)}px;border-left-color:${L.color}" onclick="event.stopPropagation();_trajSelectEventFromView('${id}',${L.authIdx})" title="${_tsEsc(L.title)}">
+      <span class="ttd-link-end" style="top:-3px;background:${L.color}"></span>
+      <span class="ttd-link-end" style="bottom:-3px;background:${L.color}"></span>
+    </div>`;
+  }).join('');
+  return parts ? `<div class="ttd-link-overlay">${parts}</div>` : '';
+}
+
 function _ttdLanesHTML(m, id) {
   const model = _ttdLaneModel(m);
   if (!model.lanes.length || !(model.maxMet > 0)) return '';
@@ -33607,7 +33684,8 @@ function _ttdLanesHTML(m, id) {
     ? `<div class="ttd-lane-row ttd-more-row" style="height:${laneH + 4}px"><div class="ttd-lane-label">&nbsp;</div><div class="ttd-lane-track ttd-more-track" style="height:${laneH}px">+${hiddenN} more</div></div>`
     : '';
 
-  return `<div class="ttd-lanes${expanded ? ' expanded' : ''}" data-mid="${id}">${rowsHTML}${moreHTML}</div>`;
+  const linksHTML = _ttdLinksOverlayHTML(m, id, model, laneH, capIdx);
+  return `<div class="ttd-lanes${expanded ? ' expanded' : ''}" data-mid="${id}">${rowsHTML}${moreHTML}${linksHTML}</div>`;
 }
 
 // Top-level dock builder — replaces the plain `.traj-scrubber` row in
