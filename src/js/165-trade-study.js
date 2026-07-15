@@ -496,7 +496,7 @@ function tsRunSweep(){
   const noteEl=document.getElementById('ts-note');
   const csvBtn=document.getElementById('ts-csv-btn');
   if(csvBtn)csvBtn.disabled=true;
-  _tsResult=null;
+  _tsResult=null;_tsChartView=null;_tsChartPan=null; // fresh sweep = fresh zoom
 
   let xLabel=v.label,xUnit=v.unit,yLabel=metricDef.label,yUnit=metricDef.unit,zeroLine=metricDef.zeroLine;
 
@@ -589,7 +589,7 @@ function tsRunDestinationSweep(){
   const noteEl=document.getElementById('ts-note');
   const csvBtn=document.getElementById('ts-csv-btn');
   if(csvBtn)csvBtn.disabled=true;
-  _tsResult=null;
+  _tsResult=null;_tsChartView=null;_tsChartPan=null; // fresh sweep = fresh zoom
   if(noteEl)noteEl.textContent=`Varies: destination (per ORBIT_CATEGORIES). Metric: ${metricDef.label} (margin/T:W/ΔV/burn-time metrics evaluated at each vehicle's current payload input). Holds constant: all stage masses, booster, fairing per vehicle. On-orbit ΔV per destination computed via the pinned pure destOnOrbitDV() (145-dest-dv.js) — same math as the main calculator. Impossible C3 (below escape minimum for the parking perigee) shows a blank/zero value.`;
 
   const progEl=document.getElementById('ts-progress');
@@ -689,7 +689,7 @@ function tsRunSensitivitySweep(){
   const noteEl=document.getElementById('ts-note');
   const csvBtn=document.getElementById('ts-csv-btn');
   if(csvBtn)csvBtn.disabled=true;
-  _tsResult=null;
+  _tsResult=null;_tsChartView=null;_tsChartPan=null; // fresh sweep = fresh zoom
   if(noteEl)noteEl.textContent=`Sensitivity (tornado) for ${_tsEsc(_tsResolveLabel(cv))}. Metric: ${metricDef.label}. Each parameter varied independently by ±${pct}% around baseline; all others held at baseline (current payload input, on-orbit ΔV from the last Calculate run or 0).`;
 
   const progEl=document.getElementById('ts-progress');
@@ -805,6 +805,14 @@ function _tsClipSeriesAtZero(points){
   return {clipped,terminus};
 }
 
+// Transient x-domain zoom/pan state for the line chart (user 2026-07-15:
+// "add zoom/scroll to the chart"). {x0,x1} in DATA units, or null = full
+// extent. Cleared whenever a new sweep renders (tsRenderChart). Y auto-fits
+// to the points visible in the zoomed window — that's the analysis win.
+let _tsChartView=null;
+let _tsChartPan=null;
+function _tsChartResetView(){ _tsChartView=null; _tsChartPan=null; if(_tsResult) tsRenderChart(_tsResult); }
+
 function tsRenderLineChart(res){
   const wrap=document.getElementById('ts-chart-wrap');
   // 1280-unit viewBox (was 960): the SVG scales to container width, so a
@@ -825,10 +833,17 @@ function tsRenderLineChart(res){
 
   const allPts=res.series.flatMap(s=>s.points);
   const xs=allPts.map(p=>p.x),ys=allPts.map(p=>p.y);
-  let xMin=Math.min(...xs),xMax=Math.max(...xs);
-  let yMin=Math.min(...ys),yMax=Math.max(...ys);
+  const xFull={min:Math.min(...xs),max:Math.max(...xs)};
+  let xMin=xFull.min,xMax=xFull.max;
+  const zoomed=!!_tsChartView;
+  if(zoomed){ xMin=_tsChartView.x0; xMax=_tsChartView.x1; }
+  // Y range: fit to the points inside the visible x-window (full-extent
+  // behavior unchanged when not zoomed — same set of points).
+  const visYs=allPts.filter(p=>p.x>=xMin&&p.x<=xMax).map(p=>p.y);
+  let yMin=visYs.length?Math.min(...visYs):Math.min(...ys);
+  let yMax=visYs.length?Math.max(...visYs):Math.max(...ys);
   if(res.zeroLine){yMin=Math.min(yMin,0);yMax=Math.max(yMax,0);}
-  if(res.clip)yMin=Math.min(yMin,0);
+  if(res.clip&&!zoomed)yMin=Math.min(yMin,0);
   if(xMin===xMax){xMin-=1;xMax+=1;}
   if(yMin===yMax){yMin-=1;yMax+=1;}
   const yPad=(yMax-yMin)*0.08||1;
@@ -867,14 +882,20 @@ function tsRenderLineChart(res){
     return `<span style="display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-right:14px;"><span style="width:10px;height:10px;background:${color};display:inline-block;"></span>${_tsEsc(s.name)}</span>`;
   }).join('');
 
-  const svg=`<div style="margin-bottom:6px;">${legend}</div>
+  const zoomHint=zoomed
+    ?`<button onclick="_tsChartResetView()" style="font-family:var(--mono);font-size:9px;background:var(--panel);color:var(--text-bright);border:1px solid var(--border-bright);padding:1px 6px;cursor:pointer;margin-left:10px;">⟲ reset zoom</button>`
+    :`<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:10px;">wheel: zoom · drag: pan · dbl-click: reset</span>`;
+  const svg=`<div style="margin-bottom:6px;">${legend}${zoomHint}</div>
   <svg id="ts-svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;" xmlns="http://www.w3.org/2000/svg">
+    <defs><clipPath id="ts-plot-clip"><rect x="${ML}" y="${MT}" width="${plotW}" height="${plotH}"/></clipPath></defs>
     <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
     ${xTicks}${yTicks}
     <line x1="${ML}" y1="${MT}" x2="${ML}" y2="${MT+plotH}" stroke="var(--border-bright)" stroke-width="1"/>
     <line x1="${ML}" y1="${MT+plotH}" x2="${ML+plotW}" y2="${MT+plotH}" stroke="var(--border-bright)" stroke-width="1"/>
+    <g clip-path="url(#ts-plot-clip)">
     ${zero}
     ${polylines}
+    </g>
     <text x="${ML+plotW/2}" y="${H-4}" font-size="10" fill="var(--text-dim)" text-anchor="middle" font-family="var(--mono)">${res.xLabel} (${res.xUnit})</text>
     <text x="12" y="${MT+plotH/2}" font-size="10" fill="var(--text-dim)" text-anchor="middle" font-family="var(--mono)" transform="rotate(-90 12 ${MT+plotH/2})">${res.yLabel} (${res.yUnit})</text>
     <circle id="ts-hover-dot" r="2.75" fill="var(--text-bright)" style="display:none;"/>
@@ -902,6 +923,45 @@ function tsRenderLineChart(res){
     readout.textContent=`${_tsEsc(nearestSeries.name)} — ${res.xLabel}: ${_tsFmt(nearest.x)} ${res.xUnit}   →   ${res.yLabel}: ${_tsFmt(nearest.y)} ${res.yUnit}`;
   });
   svgEl.addEventListener('mouseleave',()=>{dot.style.display='none';readout.textContent='';});
+
+  // ── zoom / pan (x-domain; y auto-fits on re-render) ────────────────────────
+  const fullSpan=xFull.max-xFull.min||1;
+  const clampView=v=>{
+    const minSpan=fullSpan/200;
+    let span=Math.max(minSpan,Math.min(fullSpan,v.x1-v.x0));
+    let x0=Math.max(xFull.min,Math.min(v.x0,xFull.max-span));
+    return {x0,x1:x0+span};
+  };
+  const pxToX=px=>xMin+(px-ML)/plotW*(xMax-xMin);
+  svgEl.addEventListener('wheel',ev=>{
+    ev.preventDefault();
+    const rect=svgEl.getBoundingClientRect();
+    const px=(ev.clientX-rect.left)/rect.width*W;
+    const cx=pxToX(Math.max(ML,Math.min(ML+plotW,px)));
+    const f=ev.deltaY>0?1.18:1/1.18;
+    const nx0=cx-(cx-xMin)*f, nx1=cx+(xMax-cx)*f;
+    const v=clampView({x0:nx0,x1:nx1});
+    _tsChartView=(v.x1-v.x0)>=fullSpan*0.999?null:v;   // fully zoomed out = reset
+    tsRenderChart(res);
+  },{passive:false});
+  // Pan state is MODULE-level (_tsChartPan), not a closure var: each pan step
+  // re-renders the chart, replacing this svg element and its listeners — a
+  // closure var would orphan the drag after the first step. The freshly
+  // rendered instance picks the drag up from the shared state instead.
+  svgEl.addEventListener('mousedown',ev=>{ _tsChartPan={px:ev.clientX,x0:xMin,x1:xMax}; });
+  svgEl.addEventListener('mousemove',ev=>{
+    if(!_tsChartPan)return;
+    if(!(ev.buttons&1)){_tsChartPan=null;return;}
+    if(Math.abs(ev.clientX-_tsChartPan.px)<3)return;  // dead zone: keep plain clicks cheap
+    const rect=svgEl.getBoundingClientRect();
+    const dx=(ev.clientX-_tsChartPan.px)/rect.width*W/plotW*(_tsChartPan.x1-_tsChartPan.x0);
+    const v=clampView({x0:_tsChartPan.x0-dx,x1:_tsChartPan.x1-dx});
+    _tsChartView=(v.x1-v.x0)>=fullSpan*0.999&&v.x0<=xFull.min?null:v;
+    _tsChartPan={px:ev.clientX,x0:v.x0,x1:v.x1};
+    tsRenderChart(res);
+  });
+  svgEl.addEventListener('mouseup',()=>{_tsChartPan=null;});
+  svgEl.addEventListener('dblclick',()=>{_tsChartResetView();});
 }
 
 // Grouped-bar chart for the Destination sweep. Linear y-axis with a per-bar value
