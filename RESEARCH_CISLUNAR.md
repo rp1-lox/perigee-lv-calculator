@@ -65,9 +65,14 @@ NTRS 20090016184 (read in full):
 ## mean-element ephemeris, not DE405)
 - [V] Griesemer-class LEO BLT: dv_TLI ~3.05 km/s, TOF 87-180 d by capture perigee.
 - [U] GRAIL: ~3-month BLT, LOI ~670 m/s vs ~940 direct (~270 m/s saved) (Scheuerle).
-- [U] BLT-to-NRHO without flyby: TOF ~101-112 d, total deterministic dv ~17-41 m/s,
-  NRHO insertion ~15.8-15.9 m/s (NTRS 20200011549 — CAPSTONE-class; if this holds
-  it makes BLT-to-Gateway spectacularly cheap and is THE number to validate for B4).
+- [V] BLT-to-NRHO without flyby: TOF 101.3 d, total deterministic dv 17.4 m/s,
+  NRHO insertion 15.8-15.9 m/s (Parrish et al., Advanced Space/NASA, NTRS
+  20200011549 — verified against source text 2026-07-15). CONFIRMED: BLT-to-Gateway
+  insertion is ~60x cheaper than our direct 5a (~1 km/s) — B4's headline trade.
+  Bonus findings: same paper covers single- and multi-spacecraft NRHO rendezvous
+  with Monte Carlo error analyses; arriving on a different NRHO revolution delays
+  arrival by ~1-3 revs; a monthly launch cadence ("trifecta") all rendezvous with
+  the same NRHO — validates the R2 lattice/R3 phasing decomposition.
 - [U] JPL DESCANSO monograph: LET to libration orbits 70-120 d, near-zero insertion,
   ~500 m/s saved vs direct L1/L2 insertion; ~70 m/s of deterministic maneuvers
   covers a 21-day launch period from fixed inclination.
