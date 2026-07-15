@@ -1712,6 +1712,7 @@ button,input,select,textarea{font-family:inherit;}
     </div>
     <div class="modal-footer">
       <button class="modal-btn" onclick="closeModal('modal-save-lv')">Cancel</button>
+      <button class="modal-btn" id="lv-update-btn" style="display:none" onclick="doUpdateLV()" title="Replace the saved library entry this vehicle was loaded from, in place">Update</button>
       <button class="modal-btn primary" onclick="doSaveLV()">Save to Library</button>
     </div>
   </div>
@@ -2161,6 +2162,10 @@ function _initVersionUI(){
 // ─── STATE ────────────────────────────────────
 let numStages=1,useBooster=false,restartable=false,trajectory='two-burn',destMode='orbit';
 let activePresetKey=null,activeOrbitKey=null;
+// Provenance for the "overwrite a saved LV" flow: the _sessionId of the userLVs[] entry
+// the worksheet was last loaded FROM via the library (loadPreset, user cards only).
+// null = fresh vehicle / builtin loaded / provenance lost -> no Update affordance.
+let _worksheetLoadedFromLvId=null;
 let userDefinedLV=false,userDefinedOrbit=false;
 let _suppressUD=false;
 let lastResult=null;
@@ -3407,6 +3412,9 @@ function buildPresets(){
 
 function loadPreset(p,key){
   activePresetKey=key||null;userDefinedLV=false;
+  // Track "overwrite" provenance: only user library entries (key = 'user_'+i) are
+  // overwrite-eligible; loading a builtin/preset clears it.
+  _worksheetLoadedFromLvId=(key&&key.indexOf('user_')===0&&p&&p._sessionId!=null)?p._sessionId:null;
   // Set stage name tracking BEFORE resolving
   currentStageNames=new Array(15).fill(null);
   currentBoosterName=null;
@@ -5578,11 +5586,84 @@ function buildLVObject(name,note){
 }
 function downloadJSON(obj,filename){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);}
 function openSaveLVModal(){
-  document.getElementById('lv-save-name').value='';document.getElementById('lv-save-note').value='';
+  // If the worksheet was loaded from a user library entry, prefill name/note from it so
+  // the Update button (see refreshLVUpdateButton) has something sensible to rename from.
+  const _srcIdx=_lvUpdateSourceIdx();
+  const _src=_srcIdx>=0?userLVs[_srcIdx]:null;
+  document.getElementById('lv-save-name').value=_src?(_src.name||''):'';
+  document.getElementById('lv-save-note').value=_src?(_src.note||''):'';
   if(typeof libBuildTagEditor==='function')
     libBuildTagEditor(document.getElementById('lv-save-tags'), _lvTagHolder, [{dim:'era',multi:true},{dim:'origin',multi:false}], 'veh');
   refreshLVSaveSummary();
+  refreshLVUpdateButton();
   openModal('modal-save-lv');setTimeout(()=>document.getElementById('lv-save-name').focus(),100);
+}
+// Resolves the userLVs[] index the worksheet was loaded from (via loadPreset), or -1 if
+// there is none / the entry was since deleted. Single lookup used by both the save-modal
+// Update button and doUpdateLV so they never disagree.
+function _lvUpdateSourceIdx(){
+  if(_worksheetLoadedFromLvId==null)return -1;
+  return userLVs.findIndex(lv=>lv._sessionId===_worksheetLoadedFromLvId);
+}
+// Show/hide + label the "Update ..." button in the Save LV modal based on provenance.
+function refreshLVUpdateButton(){
+  const btn=document.getElementById('lv-update-btn');
+  if(!btn)return;
+  const idx=_lvUpdateSourceIdx();
+  if(idx>=0){
+    btn.style.display='';
+    btn.textContent='Update "'+(userLVs[idx].name||'Unnamed LV')+'"';
+  } else {
+    btn.style.display='none';
+  }
+}
+// Replaces userLVs[idx] in place with a freshly-collected worksheet snapshot, preserving
+// the entry's _sessionId (identity) so anything keyed off it stays valid. Reused by both
+// the modal Update button and the per-card library overwrite action — same collect path
+// (buildLVObject) as save-as-new, just no push.
+function _replaceUserLVAt(idx,name,note){
+  const keepId=userLVs[idx]._sessionId;
+  const obj=buildLVObject(name,note);
+  obj._sessionId=keepId;
+  userLVs[idx]=obj;
+  buildPresets();
+  if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
+  return obj;
+}
+// "Update '<name>'" button handler in the Save LV modal.
+function doUpdateLV(){
+  const idx=_lvUpdateSourceIdx();
+  if(idx<0){
+    showAlert('The vehicle this was loaded from is no longer in your library (it may have been deleted). Use "Save to Library" to save it as new.','Cannot Update');
+    return;
+  }
+  const oldName=userLVs[idx].name||'Unnamed LV';
+  const name=document.getElementById('lv-save-name').value.trim()||'LV';
+  const note=document.getElementById('lv-save-note').value.trim();
+  const renaming=name!==oldName;
+  showConfirm('Update Saved Vehicle',
+    'Overwrite "'+oldName+'" with the current worksheet configuration?'+(renaming?' It will be renamed to "'+name+'".':''),
+    ()=>{
+      const obj=_replaceUserLVAt(idx,name,note);
+      activePresetKey='user_'+idx;
+      closeModal('modal-save-lv');
+      showAlert('Updated "'+obj.name+'" in your library.','Vehicle Updated');
+    },'Update');
+}
+// Per-card "⟲ overwrite with worksheet" action in the library browser (221). Targets the
+// card's own entry directly — covers the case where load provenance was lost but the user
+// knows which saved vehicle they want to replace. Builtins are never overwritable.
+function libOverwriteVehicleCard(key){
+  if(!key||key.indexOf('user_')!==0)return; // builtin/other keys refused
+  const idx=parseInt(key.slice(5),10);
+  const entry=userLVs[idx];
+  if(!entry)return;
+  showConfirm('Overwrite Saved Vehicle',
+    'Overwrite "'+(entry.name||'Unnamed LV')+'" with the current worksheet configuration? This replaces its saved stages and settings.',
+    ()=>{
+      const obj=_replaceUserLVAt(idx,entry.name,entry.note||'');
+      showAlert('Overwrote "'+obj.name+'" with the current worksheet.','Vehicle Updated');
+    },'Overwrite');
 }
 // "Saving: N stages · boosters: M×/none · launch site: <name> (<lat>°)" — refreshed each open.
 function refreshLVSaveSummary(){
@@ -5684,6 +5765,8 @@ function libLoadVehicleFile(input){
   reader.readAsText(file);
 }
 function applyLVObject(obj){
+  // Loading a raw file/JSON object isn't "loaded from the library" -- no overwrite target.
+  _worksheetLoadedFromLvId=null;
   currentStageNames=new Array(15).fill(null);
   currentBoosterName=null;
   stageSaved=new Array(15).fill(false);
@@ -8825,6 +8908,18 @@ function libMakeVehicleCard(p,key,isUser){
     // user LVs load directly (same as old preset list); built-ins open the detail modal
     if(isUser) loadPreset(p,key); else if(typeof openVehicleModal==='function') openVehicleModal(p); else loadPreset(p,key);
   });
+  // My-Vehicles-only: overwrite this saved entry with whatever's currently in the worksheet.
+  // Builtins never get this (isUser guards it here; libOverwriteVehicleCard refuses too).
+  if(isUser){
+    const ov=document.createElement('button');
+    ov.className='lib-vcard-overwrite';
+    ov.textContent='⟲';
+    ov.title='Overwrite "'+(p.name||'Unnamed LV')+'" with the current worksheet configuration (replaces its saved stages/config)';
+    ov.style.cssText='position:absolute;top:4px;right:4px;background:var(--panel);border:1px solid var(--border);color:var(--text-dim);font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;border-radius:2px;';
+    ov.onclick=e=>{e.stopPropagation();if(typeof libOverwriteVehicleCard==='function')libOverwriteVehicleCard(key);};
+    card.style.position='relative';
+    card.appendChild(ov);
+  }
   return card;
 }
 function libTagRow(item){

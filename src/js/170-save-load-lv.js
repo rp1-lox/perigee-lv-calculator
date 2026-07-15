@@ -13,11 +13,84 @@ function buildLVObject(name,note){
 }
 function downloadJSON(obj,filename){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href);}
 function openSaveLVModal(){
-  document.getElementById('lv-save-name').value='';document.getElementById('lv-save-note').value='';
+  // If the worksheet was loaded from a user library entry, prefill name/note from it so
+  // the Update button (see refreshLVUpdateButton) has something sensible to rename from.
+  const _srcIdx=_lvUpdateSourceIdx();
+  const _src=_srcIdx>=0?userLVs[_srcIdx]:null;
+  document.getElementById('lv-save-name').value=_src?(_src.name||''):'';
+  document.getElementById('lv-save-note').value=_src?(_src.note||''):'';
   if(typeof libBuildTagEditor==='function')
     libBuildTagEditor(document.getElementById('lv-save-tags'), _lvTagHolder, [{dim:'era',multi:true},{dim:'origin',multi:false}], 'veh');
   refreshLVSaveSummary();
+  refreshLVUpdateButton();
   openModal('modal-save-lv');setTimeout(()=>document.getElementById('lv-save-name').focus(),100);
+}
+// Resolves the userLVs[] index the worksheet was loaded from (via loadPreset), or -1 if
+// there is none / the entry was since deleted. Single lookup used by both the save-modal
+// Update button and doUpdateLV so they never disagree.
+function _lvUpdateSourceIdx(){
+  if(_worksheetLoadedFromLvId==null)return -1;
+  return userLVs.findIndex(lv=>lv._sessionId===_worksheetLoadedFromLvId);
+}
+// Show/hide + label the "Update ..." button in the Save LV modal based on provenance.
+function refreshLVUpdateButton(){
+  const btn=document.getElementById('lv-update-btn');
+  if(!btn)return;
+  const idx=_lvUpdateSourceIdx();
+  if(idx>=0){
+    btn.style.display='';
+    btn.textContent='Update "'+(userLVs[idx].name||'Unnamed LV')+'"';
+  } else {
+    btn.style.display='none';
+  }
+}
+// Replaces userLVs[idx] in place with a freshly-collected worksheet snapshot, preserving
+// the entry's _sessionId (identity) so anything keyed off it stays valid. Reused by both
+// the modal Update button and the per-card library overwrite action — same collect path
+// (buildLVObject) as save-as-new, just no push.
+function _replaceUserLVAt(idx,name,note){
+  const keepId=userLVs[idx]._sessionId;
+  const obj=buildLVObject(name,note);
+  obj._sessionId=keepId;
+  userLVs[idx]=obj;
+  buildPresets();
+  if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
+  return obj;
+}
+// "Update '<name>'" button handler in the Save LV modal.
+function doUpdateLV(){
+  const idx=_lvUpdateSourceIdx();
+  if(idx<0){
+    showAlert('The vehicle this was loaded from is no longer in your library (it may have been deleted). Use "Save to Library" to save it as new.','Cannot Update');
+    return;
+  }
+  const oldName=userLVs[idx].name||'Unnamed LV';
+  const name=document.getElementById('lv-save-name').value.trim()||'LV';
+  const note=document.getElementById('lv-save-note').value.trim();
+  const renaming=name!==oldName;
+  showConfirm('Update Saved Vehicle',
+    'Overwrite "'+oldName+'" with the current worksheet configuration?'+(renaming?' It will be renamed to "'+name+'".':''),
+    ()=>{
+      const obj=_replaceUserLVAt(idx,name,note);
+      activePresetKey='user_'+idx;
+      closeModal('modal-save-lv');
+      showAlert('Updated "'+obj.name+'" in your library.','Vehicle Updated');
+    },'Update');
+}
+// Per-card "⟲ overwrite with worksheet" action in the library browser (221). Targets the
+// card's own entry directly — covers the case where load provenance was lost but the user
+// knows which saved vehicle they want to replace. Builtins are never overwritable.
+function libOverwriteVehicleCard(key){
+  if(!key||key.indexOf('user_')!==0)return; // builtin/other keys refused
+  const idx=parseInt(key.slice(5),10);
+  const entry=userLVs[idx];
+  if(!entry)return;
+  showConfirm('Overwrite Saved Vehicle',
+    'Overwrite "'+(entry.name||'Unnamed LV')+'" with the current worksheet configuration? This replaces its saved stages and settings.',
+    ()=>{
+      const obj=_replaceUserLVAt(idx,entry.name,entry.note||'');
+      showAlert('Overwrote "'+obj.name+'" with the current worksheet.','Vehicle Updated');
+    },'Overwrite');
 }
 // "Saving: N stages · boosters: M×/none · launch site: <name> (<lat>°)" — refreshed each open.
 function refreshLVSaveSummary(){
@@ -119,6 +192,8 @@ function libLoadVehicleFile(input){
   reader.readAsText(file);
 }
 function applyLVObject(obj){
+  // Loading a raw file/JSON object isn't "loaded from the library" -- no overwrite target.
+  _worksheetLoadedFromLvId=null;
   currentStageNames=new Array(15).fill(null);
   currentBoosterName=null;
   stageSaved=new Array(15).fill(false);
