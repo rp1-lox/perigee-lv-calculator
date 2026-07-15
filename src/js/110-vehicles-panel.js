@@ -119,6 +119,9 @@ function buildPresets(){
 
 function loadPreset(p,key){
   activePresetKey=key||null;userDefinedLV=false;
+  // Track "overwrite" provenance: only user library entries (key = 'user_'+i) are
+  // overwrite-eligible; loading a builtin/preset clears it.
+  _worksheetLoadedFromLvId=(key&&key.indexOf('user_')===0&&p&&p._sessionId!=null)?p._sessionId:null;
   // Set stage name tracking BEFORE resolving
   currentStageNames=new Array(15).fill(null);
   currentBoosterName=null;

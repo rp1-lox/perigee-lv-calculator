@@ -24,6 +24,7 @@ const FILES = [
   'src/js/010-constants.js',
   'src/js/140-physics.js',
   'src/js/145-dest-dv.js',
+  'src/js/165-trade-study.js',   // v2.0.1: C3-sweep replica pinned below
   'src/js/360-program-module-phase-1-delta-v-engine.js',
 ];
 
@@ -278,6 +279,28 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok(`all builtin preset stage/booster names resolve (${presets.length} presets)` +
        (missing.length ? ' — MISSING: ' + missing.join('; ') : ''), missing.length === 0);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v2.0.1 backport: C3-sweep replica pinned to destOnOrbitDV's escape branch
+// (adapted from the dev branch's fuller block — same invariant: the sweep's
+// _tsOnOrbitDVEscapeC3 must equal the FROZEN 145 escape math exactly, so the
+// capability curve can never drift from what the Orbits page reports).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const esc = vm.runInContext('_tsOnOrbitDVEscapeC3', sandbox);
+  const dod = vm.runInContext('destOnOrbitDV', sandbox);
+  const c3s = [0.1, 6.3, 8.7, 56.7, 77.4, 105.7, 127.5, 135.9];
+  let maxDiff = 0;
+  for (const c3 of c3s) {
+    const a = esc(c3, 185).onOrbitDV;
+    const b = dod({ mode: 'escape', c3, decl: 28.5, perigee: 185 }, 28.5).onOrbitDV;
+    maxDiff = Math.max(maxDiff, Math.abs(a - b));
+  }
+  ok(`C3 sweep replica === destOnOrbitDV escape branch at ${c3s.length} C3 values (max diff ${maxDiff.toExponential(2)})`, maxDiff < 1e-9);
+  const lo = esc(0, 185).onOrbitDV, hi = esc(120, 185).onOrbitDV;
+  ok('C3 sweep replica: dv strictly increases with C3 (0 -> 120)', hi > lo && lo > 0);
+  ok('C3 sweep replica: impossible C3 (< -v_esc^2 ~ -121.5) returns error field', !!esc(-130, 185).error);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
