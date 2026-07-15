@@ -6,7 +6,7 @@ physics/architecture. If you are that session: this is your contract.
 
 ## How the user starts you
 Open a new Claude Code session in this folder → `/model` → pick Haiku or Sonnet →
-say "read UI_SESSION.md and work the backlog" (CLAUDE.md loads automatically and
+say "read docs/UI_SESSION.md and work the backlog" (CLAUDE.md loads automatically and
 its Agent orientation map applies to you too).
 
 ## Scope — UI ONLY (same boundary as .claude/agents/ui-polish.md)
