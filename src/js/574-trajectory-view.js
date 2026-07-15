@@ -149,9 +149,24 @@ function _trajProjectVec(x, y, z, az, el) {
 }
 // Per-render-pass projection context (set by _trajWorldSVG from the camera;
 // helpers below read it so every emission site shares ONE projection).
-let _trajProjCtx = { az: 0, el: Math.PI / 2 };
-/** Project a 3D vector (any consistent units) through the pass camera. */
-function _trajProj3(x, y, z) { return _trajProjectVec(x, y, z, _trajProjCtx.az, _trajProjCtx.el); }
+// N3: frameKind/frameBody/viewT added — 'inertial' (default) is a no-op path
+// (frameKind check short-circuits below, zero overhead, byte-identical to
+// pre-N3 rendering).
+let _trajProjCtx = { az: 0, el: Math.PI / 2, frameKind: 'inertial', frameBody: 'Earth', viewT: 0 };
+/** Project a 3D vector (any consistent units) through the pass camera. `t` is
+ *  the vector's OWN epoch (seconds); omitted for content already evaluated
+ *  "now" (bodies, glyphs, spin-baked surface points) — defaults to viewT.
+ *  See MATH.md §7x for why t=viewT is NOT an identity no-op for non-inertial
+ *  frames (that's what makes e.g. the Moon render frame-fixed). */
+function _trajProj3(x, y, z, t) {
+  const ctx = _trajProjCtx;
+  if (ctx.frameKind && ctx.frameKind !== 'inertial') {
+    const tv = t != null ? t : ctx.viewT;
+    const fc = _trajFrameTransform(ctx.frameKind, ctx.frameBody, [x, y, z || 0], tv);
+    return _trajProjectVec(fc[0], fc[1], fc[2], ctx.az, ctx.el);
+  }
+  return _trajProjectVec(x, y, z, ctx.az, ctx.el);
+}
 /** Project a PLANAR (ecliptic z=0) local offset through the pass camera. */
 function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProjCtx.az, _trajProjCtx.el); return { x: p.x, y: p.y }; }
 
@@ -1152,7 +1167,14 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label} (propagated)`;
   const ox = opts.originX || 0, oy = opts.originY || 0;
-  const raw = refOrbitSamplePropagated(rec.refId, 96);
+  // N3: non-inertial frames draw the LIVE loop from raw (un-rebased) samples,
+  // each transformed at its own epoch below — this is what closes the ring in
+  // the rotating frame at any viewT (retires MATH.md critique 64). Inertial
+  // keeps the existing seed-epoch-rebased shape (byte-identical, zero
+  // regression) since refOrbitSamplePropagated already IS the frame-frozen
+  // shape that transform is a no-op for.
+  const liveFrame = _trajProjCtx.frameKind && _trajProjCtx.frameKind !== 'inertial' && typeof refOrbitSamplePropagatedRaw === 'function';
+  const raw = liveFrame ? refOrbitSamplePropagatedRaw(rec.refId, 96) : refOrbitSamplePropagated(rec.refId, 96);
   if (!raw.length) return '';
   let maxR = 0;
   raw.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (d > maxR) maxR = d; });
@@ -1168,7 +1190,7 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   let periIdx = 0, apoIdx = 0, periRLocal = Infinity, apoRLocal = -Infinity;
   for (let k = 0; k < raw.length; k++) {
     const p = raw[k].r;
-    const qRaw = _trajProj3(p[0], p[1], p[2]);
+    const qRaw = _trajProj3(p[0], p[1], p[2], raw[k].t);
     const x = ox + qRaw.x * scale, y = oy + qRaw.y * scale;
     if (!isFinite(x) || !isFinite(y)) return '';
     const depth = centerDepth + qRaw.depth;
@@ -1327,7 +1349,7 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     if (s.t > clipT) { cur = null; continue; }
     const a = anchorOf(s.frame);
     if (!a) { cur = null; continue; }
-    const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0); // R2: samples are 3D (Moon-frame patches carry real z)
+    const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0, s.t); // R2: samples are 3D (Moon-frame patches carry real z); N3: sample's OWN epoch
     const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
     // R3.5.2 (viewClampUnits): drop samples far outside the viewport instead
@@ -2564,7 +2586,9 @@ function _trajWorldSVG(m, cam, zoom, rect) {
 
   // R2: arm the pass projection context — EVERY emission below (positions,
   // rings, arcs, spurs, physics samples, grid) projects through it.
-  _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
+  _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2,
+    frameKind: (m && typeof _trajFrame === 'function') ? _trajFrame(m.missionId) : 'inertial',
+    frameBody: cam.anchorBody, viewT };
   const tilt = Math.PI / 2 - _trajProjCtx.el;
 
   // World-to-render: heliocentric km -> PROJECTED render units (floating
@@ -2922,6 +2946,81 @@ function _trajBodySpinAngle(body, viewT_s) {
   if (body === 'Moon' && typeof progBodyAngleAt === 'function') return progBodyAngleAt('Moon', t) + Math.PI;
   return 0;
 }
+
+// ── §17 N3 — switchable reference frames (pure rendering transform) ────────
+// See MATH.md §7x for the full derivation. Frame kinds:
+//   'inertial'            — today's rendering, B = null (identity, skipped).
+//   'body-fixed'          — B(t) = rotation about the anchor body's spin axis
+//                            by its OWN spinAngle(t) (same source the globes
+//                            use, _trajBodySpinAngle) — so a surface point's
+//                            world position (which is ALSO spin(t)-rotated)
+//                            transforms back to its constant body-local
+//                            direction: the globe stops turning on screen.
+//   'earth-moon-rotating' — B(t) from the Earth->Moon line (_refRotBasisPair,
+//                            425; identical math to the N2 wrap/harness).
+//   'sun-earth-rotating'  — same construction for the Sun->Earth pair.
+// `body` is the frame's ANCHOR (passed from the camera's anchorBody so
+// body-fixed knows whose spin to use; earth-moon/sun-earth ignore it — the
+// pair is fixed by the frame choice, only the render CENTER varies, and the
+// center is already handled by the existing floating-origin camCenter
+// subtraction upstream of this transform).
+function _trajFrameBasisAt(frameKind, body, t) {
+  if (!frameKind || frameKind === 'inertial') return null;
+  if (frameKind === 'body-fixed') {
+    const a = (typeof _trajBodySpinAngle === 'function') ? _trajBodySpinAngle(body, t) : 0;
+    const c = Math.cos(a), s = Math.sin(a);
+    return { xh: [c, s, 0], yh: [-s, c, 0], zh: [0, 0, 1] };
+  }
+  if (frameKind === 'earth-moon-rotating' && typeof _refRotBasisPair === 'function') {
+    return _refRotBasisPair('Earth', 'Moon', t);
+  }
+  if (frameKind === 'sun-earth-rotating' && typeof _refRotBasisPair === 'function') {
+    return _refRotBasisPair('Sun', 'Earth', t);
+  }
+  return null;
+}
+// q(t) = B(t)^T . pRel(t) — pRel EXPRESSED IN FRAME COORDINATES AT ITS OWN
+// EPOCH, fed directly to the camera projector (_trajProjectVec). This is the
+// az-convention choice documented in MATH.md §7x: the projector's az/el rotate
+// the FRAME's axes, not fixed ecliptic-world axes, when a non-inertial frame
+// is active ("the frame rotates the world, the camera stays put"). Because
+// B(t) is a pure rotation, this is valid for ANY world-axis-aligned vector
+// regardless of what its origin represents (camera-relative body position,
+// leg-local sample, or a spin-baked surface direction) — the same one
+// function is the whole seam for (a) polyline/ring samples (call with the
+// sample's OWN t — this is what closes a rotating-frame-periodic loop live,
+// retiring MATH.md critique 64), (b) bodies/markers (called with t=viewT by
+// the _trajProj3 default — NOT an identity no-op for non-inertial frames,
+// see the §7x critique: a body's frame-coordinates at its own current epoch
+// are exactly what makes e.g. the Moon render at a fixed screen direction in
+// the Earth-Moon frame), (c) spin-baked surface/globe points (also default
+// t=viewT — composes with the SAME spin(t) baked into their world direction,
+// exactly cancelling it for body-fixed anchored on that body).
+function _trajFrameTransform(frameKind, body, pRel, t) {
+  const B = _trajFrameBasisAt(frameKind, body, t);
+  if (!B) return pRel;
+  return [
+    pRel[0] * B.xh[0] + pRel[1] * B.xh[1] + pRel[2] * B.xh[2],
+    pRel[0] * B.yh[0] + pRel[1] * B.yh[1] + pRel[2] * B.yh[2],
+    pRel[0] * B.zh[0] + pRel[1] * B.zh[1] + pRel[2] * B.zh[2],
+  ];
+}
+
+// Per-mission transient view state (sibling of _trajCamByMission — NOT
+// session-persisted: the camera itself isn't persisted either, so frame
+// choice matches that existing pattern, see MATH.md §7x).
+let _trajFrameByMission = {};
+function _trajFrame(id) { return (_trajFrameByMission[id] && _trajFrameByMission[id].kind) || 'inertial'; }
+function trajSetFrame(id, kind) {
+  _trajFrameByMission[id] = { kind };
+  missionRenderDetail();
+}
+const _TRAJ_FRAME_KINDS = [
+  { id: 'inertial', label: 'Inertial' },
+  { id: 'body-fixed', label: 'Body-fixed' },
+  { id: 'earth-moon-rotating', label: 'Earth-Moon' },
+  { id: 'sun-earth-rotating', label: 'Sun-Earth' },
+];
 // Project a body-local (already spin-rotated) UNIT direction through the pass
 // camera and scale by the disc's screen radius — linear, so this is exactly
 // equivalent to projecting the rPx-scaled vector (same seam as _trajProj3).
@@ -3861,6 +3960,9 @@ function _missionTrajViewHTML(m) {
     <div class="traj-wrap" data-mid="${id}">
       <div class="traj-toolbar">
         <div class="seg traj-focus-seg">${focusSeg}</div>
+        <select class="traj-frame-select" title="Reference frame (MISSION_MODEL_V2 §17 N3)" onchange="trajSetFrame('${id}',this.value)">
+          ${_TRAJ_FRAME_KINDS.map(f => `<option value="${f.id}"${_trajFrame(id) === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
+        </select>
         <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan/orientation (top-down)">&#x21BA; Reset</button>
       </div>
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"

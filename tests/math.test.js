@@ -3235,6 +3235,94 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     blt.stepsA > 0 && blt.stepsA < 4e6 && blt.stepsB > 0 && blt.stepsB < 4e6);
 }
 
+{
+  // §17 N3 — switchable reference frames (574's _trajFrameBasisAt /
+  // _trajFrameTransform). Pure rendering transform; no physics/mission-log
+  // consequence. See MATH.md §7x for the formula and the az-convention note.
+  const n3 = vm.runInContext(`(function(){
+    const t0 = 0, t1 = 200000, t2 = 450000; // arbitrary epochs across a week-ish span
+    const pRel = [12345.6, -6789.1, 234.5];
+
+    // (1) inertial === identity, EXACTLY (no float drift — the whole point of
+    // the null-basis short-circuit / zero-overhead-when-selected requirement).
+    const idOut = _trajFrameTransform('inertial', 'Earth', pRel, t1);
+    const idExact = idOut[0] === pRel[0] && idOut[1] === pRel[1] && idOut[2] === pRel[2];
+
+    // (2) EM-rotating: the MOON's own position relative to EARTH, transformed
+    // sample-at-its-own-epoch across a week of epochs, has a FIXED direction
+    // (exact by construction: the frame's x-axis IS defined as the
+    // Earth->Moon direction at that same epoch) and a magnitude within the
+    // real Earth-Moon distance range (~356k-407k km, eccentricity ~10%).
+    const epochs = [];
+    for (let k = 0; k < 8; k++) epochs.push(k * 86400 * 1); // 8 days, 1/day
+    const emSamples = epochs.map(t => {
+      const e = physBodyStateAt('Earth', t), m = physBodyStateAt('Moon', t);
+      const pRelMoon = [e.r[0] - m.r[0], e.r[1] - m.r[1], e.r[2] - m.r[2]].map(v => -v); // Moon rel Earth
+      const fc = _trajFrameTransform('earth-moon-rotating', 'Earth', pRelMoon, t);
+      return { fc, mag: Math.hypot(fc[0], fc[1], fc[2]) };
+    });
+    let maxAngleRad = 0, minMag = Infinity, maxMag = -Infinity;
+    emSamples.forEach(s => {
+      const dirAngle = Math.atan2(s.fc[1], s.fc[0]); // should be ~0 (along +x) every time
+      const zAngle = Math.atan2(s.fc[2], s.fc[0]);
+      maxAngleRad = Math.max(maxAngleRad, Math.abs(dirAngle), Math.abs(zAngle));
+      minMag = Math.min(minMag, s.mag); maxMag = Math.max(maxMag, s.mag);
+    });
+
+    // (3) magnitude preservation: a rotation never distorts vector length —
+    // true for EVERY frame kind at ANY epoch (the honest replacement for a
+    // literal "t===viewT => identity" claim, which only holds for inertial —
+    // see MATH.md §7x critique).
+    const magIn = Math.hypot(pRel[0], pRel[1], pRel[2]);
+    const kinds = ['body-fixed', 'earth-moon-rotating', 'sun-earth-rotating'];
+    let magOk = true;
+    kinds.forEach(k => {
+      [t0, t1, t2].forEach(t => {
+        const q = _trajFrameTransform(k, 'Earth', pRel, t);
+        const magOut = Math.hypot(q[0], q[1], q[2]);
+        if (Math.abs(magOut - magIn) > 1e-6) magOk = false;
+      });
+    });
+
+    // (4) basis orthonormality across epochs (EM + sun-earth), several t.
+    let orthoOk = true;
+    ['earth-moon-rotating', 'sun-earth-rotating'].forEach(k => {
+      [t0, t1, t2].forEach(t => {
+        const B = _trajFrameBasisAt(k, 'Earth', t);
+        const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+        const mag = a => Math.hypot(a[0], a[1], a[2]);
+        if (Math.abs(mag(B.xh) - 1) > 1e-9 || Math.abs(mag(B.yh) - 1) > 1e-9 || Math.abs(mag(B.zh) - 1) > 1e-9) orthoOk = false;
+        if (Math.abs(dot(B.xh, B.yh)) > 1e-9 || Math.abs(dot(B.xh, B.zh)) > 1e-9 || Math.abs(dot(B.yh, B.zh)) > 1e-9) orthoOk = false;
+      });
+    });
+
+    // (5) NRHO closure improvement: transform the RAW propagated NRHO loop's
+    // samples (refOrbitSamplePropagatedRaw, un-rebased) into the EM frame,
+    // each at its OWN epoch — the endpoints (t=0 and t=period) should land
+    // close to the measured 345.6 km rotating-frame closure (MATH.md §7v),
+    // NOT the ~27,000 km inertial gap the same raw loop shows un-transformed.
+    const raw = refOrbitSamplePropagatedRaw('nrho-nominal', 96);
+    const first = raw[0], last = raw[raw.length - 1];
+    const fcFirst = _trajFrameTransform('earth-moon-rotating', 'Moon', first.r, first.t);
+    const fcLast = _trajFrameTransform('earth-moon-rotating', 'Moon', last.r, last.t);
+    const closureKm = Math.hypot(fcFirst[0]-fcLast[0], fcFirst[1]-fcLast[1], fcFirst[2]-fcLast[2]);
+    const rawInertialGapKm = Math.hypot(first.r[0]-last.r[0], first.r[1]-last.r[1], first.r[2]-last.r[2]);
+
+    return { idExact, maxAngleRad, minMag, maxMag, magOk, orthoOk, closureKm, rawInertialGapKm, nRaw: raw.length };
+  })()`, sandbox);
+  ok('N3: inertial frame transform is EXACT identity (zero-overhead path)', n3.idExact);
+  ok(`N3: EM-rotating — Moon direction fixed to <1e-6 rad across a week (measured ${n3.maxAngleRad.toExponential(3)})`, n3.maxAngleRad < 1e-6);
+  ok(`N3: EM-rotating — Moon magnitude stays in the real Earth-Moon range (measured ${n3.minMag.toFixed(0)}-${n3.maxMag.toFixed(0)} km)`,
+    n3.minMag > 350000 && n3.maxMag < 410000);
+  ok('N3: frame transform preserves vector magnitude (pure rotation) at every epoch/kind', n3.magOk);
+  ok('N3: earth-moon-rotating / sun-earth-rotating bases are orthonormal across epochs', n3.orthoOk);
+  ok(`N3: NRHO raw-sample count sane (${n3.nRaw})`, n3.nRaw > 50);
+  ok(`N3: NRHO ring closes live in the EM frame near the measured 345.6 km pin (got ${n3.closureKm.toFixed(1)} km)`,
+    n3.closureKm < 500);
+  ok(`N3: same raw loop's INERTIAL gap is the large ~27,000 km figure (got ${n3.rawInertialGapKm.toFixed(0)} km) — confirms the frame transform, not raw propagation, is what closes it`,
+    n3.rawInertialGapKm > 10000);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════

@@ -245,17 +245,21 @@ function refOrbitResolve(id) {
 // phase-wrapping MUST happen here: wrap in rotating coordinates at the
 // wrapped epoch, reconstruct inertial at the TRUE epoch. Same math as
 // tests/corrector_harness.js's emFrame/toRot/fromRot (keep in sync).
-function _refEmRotBasis(t) {
-  const e = physBodyStateAt('Earth', t), m = physBodyStateAt('Moon', t);
-  const rE = physSub(e.r, m.r), vE = physSub(e.v, m.v);   // Earth rel Moon
+// N3: generalized to any (primary, secondary) pair so the renderer's
+// sun-earth-rotating frame reuses this exact math (§17 N3, 574's
+// _trajFrameBasisAt). xh points AWAY FROM primary, TOWARD secondary.
+function _refRotBasisPair(primary, secondary, t) {
+  const e = physBodyStateAt(primary, t), m = physBodyStateAt(secondary, t);
+  const rE = physSub(e.r, m.r), vE = physSub(e.v, m.v);   // primary rel secondary
   const d = physMag(rE);
-  const xh = physScale(rE, -1 / d);                        // +x: away from Earth (L2 side)
+  const xh = physScale(rE, -1 / d);                        // +x: away from primary (toward secondary)
   const h = physCross(rE, vE);
   const om = physScale(h, 1 / (d * d));                    // instantaneous angular velocity
   const zh = physScale(om, 1 / physMag(om));
   const yh = physCross(zh, xh);
   return { xh, yh, zh, om };
 }
+function _refEmRotBasis(t) { return _refRotBasisPair('Earth', 'Moon', t); }
 function _refToRot(state, t) {
   const f = _refEmRotBasis(t);
   const vr = physSub(state.v, physCross(f.om, state.r));
@@ -336,6 +340,23 @@ function refOrbitPropagatedStateAt(id, metOffset) {
   const rot = _refToRot(stPhase, phase);
   const back = _refFromRot(rot.r, rot.v, t);
   return { r: back.r, v: back.v, frame: res.frame };
+}
+
+// N3: RAW propagated samples — no rotating-frame re-base to the seed epoch
+// (compare refOrbitSamplePropagated, which freezes the drawn shape at t0 for
+// the inertial renderer). Each sample keeps its true epoch `t` and its true
+// propagated position, so a LIVE frame-aware renderer (574's
+// _trajFrameTransform, per-sample-epoch) can close the loop in the rotating
+// frame without the epoch-freeze critique 64 described (MATH.md §7v/§7x).
+function refOrbitSamplePropagatedRaw(id, nSamples) {
+  const res = refOrbitResolve(id);
+  if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return [];
+  if (typeof physPropagateSegment !== 'function') return [];
+  const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
+  const state0 = { r: res.seedState.r.slice(), v: res.seedState.v.slice() };
+  const out = physPropagateSegment(state0, 0, res.period_s, ctx, { maxSamples: nSamples || 200, singleFrame: true });
+  if (!out || !out.samples) return [];
+  return out.samples.map(s => ({ t: s.t, r: s.r, frame: s.frame }));
 }
 
 function refOrbitCatalogList() {
