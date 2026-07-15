@@ -43,10 +43,15 @@ NTRS 20090016184 (read in full):
   points mapped to DSMs, stepped through increasing force-model fidelity; LOI split
   into three burns (post-burn periods ~8 h / ~4 h / ~1.96 h) to cut gravity losses.
 - [V] BLT saves ~100-150 m/s at lunar insertion vs direct; apogee 1-1.5M km.
-- [U-FLAGGED] The extracted linear LOI model "dv_LOI = 0.677 + 0.2164*C3 km/s"
-  was NOT found in the paper's text layer — possibly an equation image, possibly
-  over-synthesis by the extraction agent. DO NOT cite without re-checking the PDF
-  figures/equations by eye.
+- [V] Linear LOI model CONFIRMED by eye (page 3, Eq. 3 — the PDF text layer
+  dropped the decimal points, which caused an initial false fabrication flag,
+  retracted 2026-07-15): dv_LOI ~= 0.677 + 0.2164*c3 km/s, error < 1 m/s for c3
+  up to +/-0.25 km2/s2; exact form dv_LOI = sqrt(vp*^2 + delta_c3) - vp* with
+  vp* ~= 1.6335 km/s (100x100 km LLO). Directly usable as B4's est.-lane LOI
+  pricing (E2 compute-button contract: honest estimate before the real solve).
+- [V] (page 4, by eye) c3 below ~-0.2 km2/s2 prevents crossing the zero-velocity
+  curves near EM-L2 (threshold epoch-dependent via lunar eccentricity) —
+  completes claim 7's verification.
 
 ## Correction/optimization practice (the convergence question)
 - [V x2 schools] Both flown methods reject naive single-shooting FD Newton on long
