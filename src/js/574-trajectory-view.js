@@ -926,6 +926,34 @@ function _trajFocusGroups() {
   return bodies.map(s => ({ scene: s, moons: s.id === 'Sun' ? [] : _trajMoonsOf(s.id) }));
 }
 
+// ── MISSION_MODEL_V2 §12 U2: compact live WORLD thumbnail ──────────────────
+// Used when World is DEMOTED (docked in the rail or a stage corner while Plan
+// or Timeline is staged). Reuses the SAME data path as the full stage
+// (_trajCamByMission's live camera + _trajWorldSVG, the one source of scene
+// geometry) so camera/selection/view-time context is identical — it is a
+// cheaper RENDER of the same state, not a separate camera. Cost cap for the
+// "interacting tier": no starfield canvas, no globe-layer image reconciliation,
+// no overlay-label resolution pass, no toolbar/footer — just the scene <g>.
+// Liveness: _trajApplyCam / _trajSetViewTime already fall back to a full
+// missionRenderDetail() whenever `.mcc-view-area .traj-wrap[data-mid]` isn't
+// found (i.e. whenever World isn't the stage) — that existing fallback is
+// what keeps this thumbnail's markup fresh across camera drags/zoom/scrub
+// while demoted, with no extra sync plumbing needed.
+function _missionWorldThumbHTML(m, opts) {
+  const id = m.missionId;
+  const slot = (opts && opts.slot) || 'rail';   // 'rail' (left rail width) | 'corner' (pinned over the stage)
+  let cam = _trajCamByMission[id];
+  if (!cam) { cam = { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _trajFitWKmForBody('Earth', m) }; _trajCamByMission[id] = cam; }
+  const zoom = _trajZoomFromCam(cam);
+  _trajResetLabels();
+  const svgInner = _trajWorldSVG(m, cam, zoom, null);
+  const viewBox = `${(-_TRAJ_VB / 2).toFixed(3)} ${(-_TRAJ_VB / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${_TRAJ_VB.toFixed(3)}`;
+  return `<div class="mcc-world-thumb mcc-world-thumb-${slot}" data-mid="${id}" onclick="_missionPromote('${id}','world')" title="Promote World to stage">
+    <svg class="traj-svg-thumb" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet"><g>${svgInner}</g></svg>
+    <button class="mcc-thumb-promote" onclick="event.stopPropagation();_missionPromote('${id}','world')" title="Promote World to stage">&#x2922;</button>
+  </div>`;
+}
+
 // ── top-level view builder (called from missionRenderDetail via 570's hook) ──
 function _missionTrajViewHTML(m) {
   const id = m.missionId;

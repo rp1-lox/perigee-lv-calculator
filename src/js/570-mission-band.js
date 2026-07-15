@@ -285,7 +285,12 @@ function missionSetAddEvt(id, type) {
   _missionAddMv = { from: null, to: null, steps: [] };   // fresh maneuver step draft each open
   _missionXferDest = null;                                // fresh prop-transfer destination each open
   if (_missionAddEvt === 'maneuver') {
-    _missionViewMode = 'nodemap';        // node map for drawing maneuvers
+    // MISSION_MODEL_V2 §12 U2: promote Plan to the stage for drawing maneuvers
+    // (keeps _missionStageSurface in sync with the legacy _missionViewMode
+    // mirror instead of setting the mirror directly — direct assignment here
+    // used to desync the two after U2 introduced per-mission promotion state).
+    if (typeof _missionPromote === 'function') _missionPromote(id, 'plan');
+    else _missionViewMode = 'nodemap';
     _missionBridgeMode = true;           // auto-enter Draw Maneuver mode
     _missionBridgeFrom = null;
   } else {

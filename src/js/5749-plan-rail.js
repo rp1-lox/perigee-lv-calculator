@@ -111,7 +111,10 @@ function _planRailHTML(m) {
   if (!zonesHTML) zonesHTML = `<div class="pr-empty">No nodes yet.</div>`;
 
   return `<div class="mcc-plan-rail">
-    <button class="pr-toggle" onclick="_planRailToggle('${id}')" title="Collapse Plan rail">⟨</button>
+    <div class="pr-headerbar">
+      <button class="pr-toggle" onclick="_planRailToggle('${id}')" title="Collapse Plan rail">⟨</button>
+      ${typeof _missionPromote === 'function' ? `<button class="pr-promote-btn" onclick="_missionPromote('${id}','plan')" title="Promote Plan to stage">&#x2922;</button>` : ''}
+    </div>
     <div class="pr-body">${zonesHTML}</div>
   </div>`;
 }

@@ -147,10 +147,18 @@ function _missionMultiVehicleHTML(m) {
 
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
+// MISSION_MODEL_V2 §12 U2: the Band|Orbit Map|Trajectory toggle is RETIRED —
+// promotion (⤢ on each rail/dock/thumb, see 570-mission-lifecycle.js
+// _missionPromote) replaced it. missionSetView(id, mode) survives as a thin
+// alias so external callers that still hold the old three-mode contract
+// (devSeedApolloMission/devSeedGatewayMission-driven browser verification,
+// this file's own orientation-map note) keep working unchanged:
+// 'traj' -> promote 'world', 'band' -> promote 'timeline', 'nodemap' -> promote 'plan'.
 function missionSetView(id, mode) {
-  // R6.5 fix: leaving the trajectory view drops its cached starfield size
-  // (see _trajStarfieldUnmount, 574) so a later return re-measures instead
-  // of trusting a size cached while the panel was hidden/resized.
+  const surface = mode === 'nodemap' ? 'plan' : mode === 'band' ? 'timeline' : 'world';
+  if (typeof _missionPromote === 'function') { _missionPromote(id, surface); return; }
+  // fallback (should be unreachable — _missionPromote is defined unconditionally
+  // in 570-mission-lifecycle.js, which always loads): preserves pre-U2 behavior.
   if (_missionViewMode === 'traj' && mode !== 'traj' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
   _missionViewMode  = mode;
   _missionBridgeMode = false;

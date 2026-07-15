@@ -129,11 +129,17 @@ function _ttdDockHTML(m, id) {
   const toggleHTML = hasLanes
     ? `<button class="ttd-expand-btn" onclick="_ttdToggleExpand('${id}')" title="${expanded ? 'Collapse lanes' : 'Expand lanes'}">${expanded ? '⌃' : '⌄'}</button>`
     : '';
+  // MISSION_MODEL_V2 §12 U2: promote control — present unconditionally, both
+  // when this dock is embedded inside the World stage (its normal home) and
+  // when it's used standalone in the dock slot beside another staged surface.
+  const promoteHTML = (typeof _missionPromote === 'function')
+    ? `<button class="ttd-promote-btn" onclick="_missionPromote('${id}','timeline')" title="Promote Timeline to stage">&#x2922;</button>` : '';
   return `<div class="traj-timeline-dock" data-mid="${id}">
     <div class="ttd-body">
       ${lanesHTML}
       ${_trajScrubberHTML(m, id)}
     </div>
     ${toggleHTML}
+    ${promoteHTML}
   </div>`;
 }
