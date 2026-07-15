@@ -81,6 +81,71 @@ function _missionVehicleColor(m, vehicleKey, fallback) {
   return fallback == null ? null : fallback;
 }
 
+// HUD-swatch discoverability (workflow pass 2, user report 2026-07-15: "can't
+// figure out how to change the color of the orbit in the trajectory map").
+// The HUD chip is vehicle-granularity but m.laneColors is owner-label-granularity
+// (see _missionVehicleColor above); this resolves the PRIMARY owner label for a
+// vehicleKey — the same label whose color the chip's accent already shows — so
+// the swatch edits exactly the lane the user sees colored. Mirrors the lookup
+// order in _missionVehicleColor (direct label match, else first band-lane owner
+// on this vehicle) so the swatch always targets what's actually displayed.
+function _missionVehiclePrimaryLabel(m, vehicleKey) {
+  if (!m || !vehicleKey) return null;
+  const directLabel = m._ownerLabels && m._ownerLabels[vehicleKey];
+  if (directLabel) return directLabel;
+  if (typeof _missionBandModel === 'function') {
+    try {
+      const band = _missionBandModel(m);
+      for (const L of band.lanes) {
+        if (L.points.some(p => p.vehicleId === vehicleKey)) return L.name;
+      }
+    } catch (e) { /* best-effort only */ }
+  }
+  return null;
+}
+
+// Effective color for a vehicle chip's swatch fill: custom override if set,
+// else the same default the band-view legend would show for that owner.
+function _missionVehicleSwatchColor(m, vehicleKey) {
+  const label = _missionVehiclePrimaryLabel(m, vehicleKey);
+  if (!label) return _MISSION_BAND_PALETTE[0];
+  if (m.laneColors && m.laneColors[label]) return m.laneColors[label];
+  if (typeof _missionBandModel === 'function') {
+    try {
+      const band = _missionBandModel(m);
+      const L = band.lanes.find(l => l.name === label);
+      if (L) return L.color;
+    } catch (e) { /* best-effort only */ }
+  }
+  return _MISSION_BAND_PALETTE[0];
+}
+
+// Reset gesture (right-click the HUD swatch): deletes the override for this
+// vehicle's primary owner label so the default palette color returns. Shares
+// the same storage + save/undo/re-render path as missionSetLaneColor — one
+// write path to m.laneColors, just the delete branch of it.
+function missionResetLaneColorForVehicle(missionId, vehicleKey) {
+  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  if (!m || !m.laneColors) return;
+  const label = _missionVehiclePrimaryLabel(m, vehicleKey);
+  if (!label || !(label in m.laneColors)) return;
+  delete m.laneColors[label];
+  if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
+  if (typeof missionUndoCapture === 'function') missionUndoCapture(m);
+  missionRenderDetail();
+}
+
+// HUD chip swatch: reuses missionSetLaneColor as the sole write path (same
+// function the band-view legend's <input type="color"> onchange calls) —
+// resolves vehicleKey to its primary owner label first.
+function missionSetLaneColorForVehicle(missionId, vehicleKey, hex) {
+  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  if (!m) return;
+  const label = _missionVehiclePrimaryLabel(m, vehicleKey);
+  if (!label) return;
+  missionSetLaneColor(missionId, label, hex);
+}
+
 function _missionBandModel(m) {
   const palette = _MISSION_BAND_PALETTE;
   const log = (m._expanded && m._expanded.length) ? m._expanded : m.log;

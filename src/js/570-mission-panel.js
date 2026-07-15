@@ -192,7 +192,10 @@ function _missionHudStripHTML(m) {
     vehChips = snap.map(v => {
       const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
       const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
+      const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, v.vehicleId) : (accent || '#888');
+      const swatchHTML = `<input type="color" class="mcc-hud-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${v.vehicleId}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${v.vehicleId}')">`;
       return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" title="${v.name}">
+        ${swatchHTML}
         <span class="mcc-hud-chip-name">${v.name}</span>
         <span class="mcc-hud-chip-orbit">${orbitTxt(v.orbit)}</span>
         <span class="mcc-hud-chip-dv">${Math.round(v.remDv).toLocaleString()} m/s</span>
@@ -227,7 +230,10 @@ function _missionHudStripHTML(m) {
       const remDv = Math.round(_missionVehicleRemainingDv(fv));
       const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
       const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
+      const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, fv.vehicleId) : (accent || '#888');
+      const swatchHTML = `<input type="color" class="mcc-hud-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${fv.vehicleId}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${fv.vehicleId}')">`;
       return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active">
+        ${swatchHTML}
         <span class="mcc-hud-chip-name">${_missionVehicleDisplayName(fv)}</span>
         <span class="mcc-hud-chip-orbit">${orbitTxt(fv.orbitState)}</span>
         <span class="mcc-hud-chip-dv">${remDv.toLocaleString()} m/s</span>
