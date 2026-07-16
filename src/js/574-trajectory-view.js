@@ -958,34 +958,6 @@ function _trajFocusGroups() {
   return bodies.map(s => ({ scene: s, moons: s.id === 'Sun' ? [] : _trajMoonsOf(s.id) }));
 }
 
-// ── MISSION_MODEL_V2 §12 U2: compact live WORLD thumbnail ──────────────────
-// Used when World is DEMOTED (docked in the rail or a stage corner while Plan
-// or Timeline is staged). Reuses the SAME data path as the full stage
-// (_trajCamByMission's live camera + _trajWorldSVG, the one source of scene
-// geometry) so camera/selection/view-time context is identical — it is a
-// cheaper RENDER of the same state, not a separate camera. Cost cap for the
-// "interacting tier": no starfield canvas, no globe-layer image reconciliation,
-// no overlay-label resolution pass, no toolbar/footer — just the scene <g>.
-// Liveness: _trajApplyCam / _trajSetViewTime already fall back to a full
-// missionRenderDetail() whenever `.mcc-view-area .traj-wrap[data-mid]` isn't
-// found (i.e. whenever World isn't the stage) — that existing fallback is
-// what keeps this thumbnail's markup fresh across camera drags/zoom/scrub
-// while demoted, with no extra sync plumbing needed.
-function _missionWorldThumbHTML(m, opts) {
-  const id = m.missionId;
-  const slot = (opts && opts.slot) || 'rail';   // 'rail' (left rail width) | 'corner' (pinned over the stage)
-  let cam = _trajCamByMission[id];
-  if (!cam) { cam = { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _trajFitWKmForBody('Earth', m) }; _trajCamByMission[id] = cam; }
-  const zoom = _trajZoomFromCam(cam);
-  _trajResetLabels();
-  const svgInner = _trajWorldSVG(m, cam, zoom, null);
-  const viewBox = `${(-_TRAJ_VB / 2).toFixed(3)} ${(-_TRAJ_VB / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${_TRAJ_VB.toFixed(3)}`;
-  return `<div class="mcc-world-thumb mcc-world-thumb-${slot}" data-mid="${id}" onclick="_missionPromote('${id}','world')" title="Promote World to stage">
-    <svg class="traj-svg-thumb" viewBox="${viewBox}" preserveAspectRatio="xMidYMid meet"><g>${svgInner}</g></svg>
-    <button class="mcc-thumb-promote" onclick="event.stopPropagation();_missionPromote('${id}','world')" title="Promote World to stage">&#x2922;</button>
-  </div>`;
-}
-
 // ── top-level view builder (called from missionRenderDetail via 570's hook) ──
 function _missionTrajViewHTML(m) {
   const id = m.missionId;
@@ -997,21 +969,10 @@ function _missionTrajViewHTML(m) {
   const zoom = _trajZoomFromCam(cam);
   const focus = cam.anchorBody;
 
-  // WORKFLOW PASS 2 deliverable B1: the planetary-body row (formerly a
-  // button+flyout bar, _trajToggleFlyout/_trajFlyoutOpenFor/traj-flyout-* CSS
-  // left in place but no longer wired here) is now a single compact anchor
-  // dropdown, sibling to the reference-frame select — same camera-context
-  // pairing, both live on the WORLD stage surface itself (camera control, not
-  // toolbar chrome). Reuses the EXACT same handler (trajSetFocus) the old
-  // tabs called, so anchoring behavior is unchanged.
-  const groups = _trajFocusGroups();
-  const focusOptsHTML = groups.map(g => {
-    const sceneId = g.scene.id, label = g.scene.label;
-    const opts = [`<option value="${sceneId}"${focus === sceneId ? ' selected' : ''}>${label}</option>`];
-    g.moons.forEach(mo => opts.push(`<option value="${mo.name}"${focus === mo.name ? ' selected' : ''}>&nbsp;&nbsp;${mo.name}</option>`));
-    return opts.join('');
-  }).join('');
-  const anchorSelectHTML = `<select class="traj-anchor-select" title="Camera anchor body" onchange="trajSetFocus('${id}',this.value)">${focusOptsHTML}</select>`;
+  // §12 U3: the anchor/frame camera-context selects are now built by
+  // _trajCamToolbarHTML (this file) and rendered into the World view's
+  // docked panel by 570-mission-lifecycle.js — no longer embedded in this
+  // function's own markup (killed the last floating stage chrome).
 
   // WORLD-layer geometry (resets + fills the label registry as a side effect;
   // overlay resolution happens after mount in _missionTrajAfterRender, once
@@ -1038,15 +999,6 @@ function _missionTrajViewHTML(m) {
 
   return `
     <div class="traj-wrap" data-mid="${id}">
-      <div class="traj-toolbar">
-        <div class="traj-cam-context">
-          ${anchorSelectHTML}
-          <select class="traj-frame-select" title="Reference frame (MISSION_MODEL_V2 §17 N3)" onchange="trajSetFrame('${id}',this.value)">
-            ${_TRAJ_FRAME_KINDS.map(f => `<option value="${f.id}"${_trajFrame(id) === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
-          </select>
-        </div>
-        <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan/orientation (top-down)">&#x21BA; Reset</button>
-      </div>
       <div class="traj-canvas" onwheel="trajWheelZoom(event,'${id}')"
            onmousedown="trajPanStart(event,'${id}')" onmousemove="trajPanMove(event)"
            onmouseup="trajPanEnd()" onmouseleave="trajPanEnd()" oncontextmenu="return false">
@@ -1061,9 +1013,36 @@ function _missionTrajViewHTML(m) {
         </svg>
         <svg class="traj-overlay" data-mid="${id}" preserveAspectRatio="none"></svg>
       </div>
-      ${(typeof _ttdDockHTML === 'function') ? _ttdDockHTML(m, id) : _trajScrubberHTML(m, id)}
       <div class="traj-footer">${_trajFooterHTML(cam)}</div>
     </div>`;
+}
+
+// MISSION_MODEL_V2 §12 U3: the World panel — camera/frame anchor selects,
+// moved OFF the floating stage toolbar (the last floating chrome, per the
+// brief) and into the docked per-view panel under the map. Same handlers
+// (trajSetFocus/trajSetFrame/trajResetView) as before — only the location
+// changed. Kept as a standalone function (rather than reusing state stashed
+// during _missionTrajViewHTML) so it works regardless of render order.
+function _trajCamToolbarHTML(m, id) {
+  let cam = _trajCamByMission[id];
+  if (!cam) { cam = { anchorBody: 'Earth', relOffsetKm: { x: 0, y: 0 }, wKm: _trajFitWKmForBody('Earth', m) }; _trajCamByMission[id] = cam; }
+  const focus = cam.anchorBody;
+  const groups = _trajFocusGroups();
+  const focusOptsHTML = groups.map(g => {
+    const sceneId = g.scene.id, label = g.scene.label;
+    const opts = [`<option value="${sceneId}"${focus === sceneId ? ' selected' : ''}>${label}</option>`];
+    g.moons.forEach(mo => opts.push(`<option value="${mo.name}"${focus === mo.name ? ' selected' : ''}>&nbsp;&nbsp;${mo.name}</option>`));
+    return opts.join('');
+  }).join('');
+  return `<div class="traj-toolbar">
+    <div class="traj-cam-context">
+      <select class="traj-anchor-select" title="Camera anchor body" onchange="trajSetFocus('${id}',this.value)">${focusOptsHTML}</select>
+      <select class="traj-frame-select" title="Reference frame (MISSION_MODEL_V2 §17 N3)" onchange="trajSetFrame('${id}',this.value)">
+        ${_TRAJ_FRAME_KINDS.map(f => `<option value="${f.id}"${_trajFrame(id) === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
+      </select>
+    </div>
+    <button class="act-btn" onclick="trajResetView('${id}')" title="Reset zoom/pan/orientation (top-down)">&#x21BA; Reset</button>
+  </div>`;
 }
 
 // ── scrubbable MET (backlog item 3) ─────────────────────────────────────────

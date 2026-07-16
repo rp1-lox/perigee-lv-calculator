@@ -293,15 +293,6 @@ function _trajApplyCam(id, cam) {
         const t = va.querySelector('.traj-scrub-track');
         if (t) t.focus();
       }
-      // Timeline dock lanes: cheap-only refresh (dim-past-viewT segment opacity)
-      // in step with the scrub track, without a full missionRenderDetail() pass.
-      if (typeof _ttdLanesHTML === 'function') {
-        const lanesEl = va.querySelector('.ttd-lanes');
-        if (lanesEl) {
-          const fresh = _ttdLanesHTML(mm, id);
-          if (fresh) lanesEl.outerHTML = fresh;
-        }
-      }
     }
   }
 }

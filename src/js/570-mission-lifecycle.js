@@ -59,65 +59,22 @@ function missionRenderList() {
     </div>`).join('');
 }
 
-// MISSION_MODEL_V2 §12 U2: promotion mechanics. Which surface is the stage,
-// per mission. Promoting swaps it with the stage; the demoted surface docks
-// where the promoted one lived. Nothing unmounts — the world surface always
-// re-renders (full or thumb) on every missionRenderDetail() pass, so camera
-// (_trajCamByMission), selection (log entries' _expanded / _trajSelectedAuthIdx),
-// and view time (_trajViewTime / _missionBandScrub) — none of which are keyed
-// to a view mode — survive every swap untouched.
-function _missionStageOf(id) {
-  return _missionStageSurface[id] || 'world';
-}
-function _missionPromote(id, surface) {
-  const prev = _missionStageOf(id);
-  if (prev === surface) return;
-  // Leaving World as the stage: drop its cached starfield size (mirrors the
-  // old missionSetView's leave-traj behavior) so a later re-promotion
-  // re-measures instead of trusting a size cached while off-stage — the
-  // thumbnail render skips the starfield entirely (cost cap), so the cache
-  // would otherwise go stale silently.
-  if (prev === 'world' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
-  _missionStageSurface[id] = surface;
-  _missionBridgeMode = false;
-  _missionBridgeFrom = null;
-  // legacy mirror — see 570-mission-core-state.js comment on _missionViewMode
-  _missionViewMode = surface === 'plan' ? 'nodemap' : surface === 'timeline' ? 'band' : 'traj';
-  missionRenderDetail();
-}
-
-function _missionStateCardHTML(m) {
-  const id = m.missionId;
-  if (!m.vehicleId || typeof _missionMultiVehicleHTML !== 'function') return '';
-  const inner = _missionMultiVehicleHTML(m);
-  if (!inner) return '';
-  if (_missionStateCardCollapsed[id]) {
-    return `<div class="mcc-state-card collapsed"><button class="mcc-state-card-toggle" onclick="_missionStateCardToggle('${id}')" title="Expand Vehicles &amp; Mission State">&#x25B8;</button></div>`;
-  }
-  return `<div class="mcc-state-card">
-    <button class="mcc-state-card-toggle" onclick="_missionStateCardToggle('${id}')" title="Collapse Vehicles &amp; Mission State">&#x25BE;</button>
-    ${inner}
-  </div>`;
-}
-function _missionStateCardToggle(id) {
-  _missionStateCardCollapsed[id] = !_missionStateCardCollapsed[id];
-  if (typeof _missionRenderPreserveNm === 'function') _missionRenderPreserveNm(id);
-  else missionRenderDetail();
-}
-
 function missionRenderDetail() {
   const cc = document.getElementById('mission-cc');
   if (!cc) return;
   const m = _missionGet(_missionSel);
   if (!m) { cc.innerHTML = '<div class="placeholder-msg">Select or create a mission</div>'; return; }
   const id = m.missionId;
-  const stageSurf = _missionStageOf(id);
+  // MISSION_MODEL_V2 §12 U3: _missionViewMode is real state again — the
+  // authoritative view ('traj'|'band'|'nodemap'), not a mirror of a
+  // promotion surface. See 570-mission-core-state.js.
+  const viewMode = _missionViewMode;
 
   // ── events log (with group blocks + repetition) ──
   const grpSel = _missionGroupMode;
-  // event filter: by type and/or vehicle. When Plan is staged (full node map)
+  // event filter: by type and/or vehicle. When Node map is the active view
   // the type is forced to MANEUVER (it's the only event the map is about).
-  const effType = (stageSurf === 'plan') ? 'MANEUVER' : (_missionEvtFilter.type || 'ALL');
+  const effType = (viewMode === 'nodemap') ? 'MANEUVER' : (_missionEvtFilter.type || 'ALL');
   const effVeh  = _missionEvtFilter.veh || 'ALL';
   const matchEvt = e => (effType === 'ALL' || e.type === effType) && (effVeh === 'ALL' || e.vehicleId === effVeh);
   const card = (e, i) => {
@@ -182,7 +139,7 @@ function missionRenderDetail() {
   const distinctTypes = [...new Set(m.log.map(e => e.type))];
   const vehIds = [...new Set(m.log.map(e => e.vehicleId).filter(Boolean))];
   const _fsel = 'class="mcc-evt-filter"';
-  const typeSel = (stageSurf === 'plan')
+  const typeSel = (viewMode === 'nodemap')
     ? `<span style="font-family:var(--mono);font-size:9px;color:var(--accent3);align-self:center;white-space:nowrap;">▸ Maneuvers only</span>`
     : `<select ${_fsel} onchange="missionSetEvtFilter('${id}','type',this.value)"><option value="ALL"${effType==='ALL'?' selected':''}>All types</option>${distinctTypes.map(t => `<option value="${t}"${effType===t?' selected':''}>${t}</option>`).join('')}</select>`;
   const vehSelF = `<select ${_fsel} onchange="missionSetEvtFilter('${id}','veh',this.value)"><option value="ALL"${effVeh==='ALL'?' selected':''}>All vehicles</option>${vehIds.map(v => `<option value="${v}"${effVeh===v?' selected':''}>${_vehName(v)}</option>`).join('')}</select>`;
@@ -190,84 +147,60 @@ function missionRenderDetail() {
     ? `<div class="mcc-evt-filterbar">${typeSel}${vehIds.length > 1 || effVeh !== 'ALL' ? vehSelF : ''}</div>`
     : '';
 
-  // ── MISSION_MODEL_V2 §12 U2: three promotable surfaces, one stage + two
-  // docked rails. Nothing unmounts: whichever surfaces are NOT staged still
-  // render every pass (full rail/dock rendering, or — for World — a cheap
-  // live thumbnail, see _missionWorldThumbHTML), so camera/selection/view-time
-  // survive every promote. ──
-  const worldFullHTML = (typeof _missionTrajViewHTML === 'function') ? _missionTrajViewHTML(m) : '';
-  const planFullHTML = _missionNodeMapHTML(m);
-  const timelineFullHTML = _missionBandViewHTML(m);
-  const planRailSlotHTML = (typeof _planRailHTML === 'function') ? _planRailHTML(m) : '';
-  const timelineDockSlotHTML = (typeof _ttdDockHTML === 'function') ? _ttdDockHTML(m, id) : '';
-
-  // WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (previously host
-  // to the retired Vehicles & Mission State / Flight Readiness panels) is gone.
-  // Its one still-live occupant — the ORBITS catalog shown while Plan is staged
-  // — is re-homed into the rail slot, stacked above the demoted World thumbnail,
-  // so it stays reachable in the same rail-width column adjacent to the stage.
-  let stageHTML, leftSlotHTML, bottomSlotHTML = '';
-  if (stageSurf === 'plan') {
-    stageHTML = planFullHTML;
-    const worldThumb = (typeof _missionWorldThumbHTML === 'function') ? _missionWorldThumbHTML(m, { slot: 'rail' }) : '';
-    leftSlotHTML = `<div class="mcc-plan-orbit-rail"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div>${worldThumb}</div>`;
-    bottomSlotHTML = timelineDockSlotHTML;
-  } else if (stageSurf === 'timeline') {
-    stageHTML = timelineFullHTML;
-    leftSlotHTML = planRailSlotHTML;
-    bottomSlotHTML = (typeof _missionWorldThumbHTML === 'function') ? _missionWorldThumbHTML(m, { slot: 'corner' }) : '';
-  } else { // 'world' — the trajectory view embeds its own timeline dock
-    // internally (U1 wiring, unchanged), so that IS the bottom-dock slot's
-    // content here; no separate sibling is rendered to avoid duplicating it.
-    stageHTML = worldFullHTML;
-    leftSlotHTML = planRailSlotHTML;
+  // ── MISSION_MODEL_V2 §12 U3: switchable CENTER region. Exactly one of the
+  // three renderers fills the stage; its own docked assistive panel renders
+  // directly underneath as one unit (option A, uniform across all three
+  // views). The renderers themselves (_missionTrajViewHTML/_missionBandViewHTML/
+  // _missionNodeMapHTML) are UNCHANGED — this is chrome, not map rendering. ──
+  let stageHTML, viewPanelHTML;
+  if (viewMode === 'nodemap') {
+    stageHTML = _missionNodeMapHTML(m);
+    // Node map panel = the ORBITS catalog — its natural home (was the dying
+    // Plan-rail's one live occupant).
+    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div></div>`;
+  } else if (viewMode === 'band') {
+    stageHTML = _missionBandViewHTML(m);
+    // Timeline panel: blank scaffold for now (user: "leave them blank").
+    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-timeline"></div>`;
+  } else { // 'traj' — World
+    stageHTML = (typeof _missionTrajViewHTML === 'function') ? _missionTrajViewHTML(m) : '';
+    // World panel = the camera/frame/anchor selects, moved off the floating
+    // stage toolbar into the docked panel — the last floating chrome killed.
+    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-world">${(typeof _trajCamToolbarHTML === 'function') ? _trajCamToolbarHTML(m, id) : ''}</div>`;
   }
-  // WORKFLOW PASS 1 deliverable B: the corner .mcc-state-card is retired in
-  // favor of a thin HUD strip docked across the top of the stage (570-mission-panel.js).
-  const hudStripHTML = (typeof _missionHudStripHTML === 'function') ? _missionHudStripHTML(m) : '';
 
-  // ── mission/program name now live in the File ▾ menu, moved to the GLOBAL
-  // header in WORKFLOW PASS 2 deliverable B2 (see _globalFileMenuHTML in
-  // 570-mission-manager.js) — it's program-level, not mission-level. The
-  // Band|Orbit Map|Trajectory toggle that used to live here is RETIRED per
-  // §12 U2 — promotion (⤢ on each rail/dock/thumb, plus the World/Timeline/Plan
-  // selector buttons, pass 2 deliverable B3) replaces it; missionSetView(id,mode)
-  // survives as a thin alias, see 570-mission-panel.js) ──
+  // Left column: the Vehicles & Mission State panel RETURNS to its pre-§12
+  // home, full per-vehicle state, event-aware (unchanged data path).
+  const leftColHTML = (typeof _missionMultiVehicleHTML === 'function') ? _missionMultiVehicleHTML(m) : '';
 
-  // WORKFLOW PASS 2 deliverable A: the setup hint that used to live in the
-  // retired far-left column (shown before any vehicle has been launched) is
-  // re-homed above the events list, in the right column it's guiding the user
-  // toward.
-  const setupHintHTML = (!m.vehicleId && stageSurf !== 'plan')
+  // Top universal strip: MET/date + minimal scrubber + active vehicle name +
+  // readiness chip — identical across all three views (570-mission-panel.js).
+  const topStripHTML = (typeof _missionTopStripHTML === 'function') ? _missionTopStripHTML(m) : '';
+
+  // Visible tri-toggle at the top of the center region — the primary,
+  // exclusive view switch (570-mission-panel.js).
+  const viewToggleHTML = (typeof _missionViewToggleHTML === 'function') ? _missionViewToggleHTML(m) : '';
+
+  // The setup hint (shown before any vehicle has been launched) lives above
+  // the events list, in the right column it's guiding the user toward.
+  const setupHintHTML = (!m.vehicleId && viewMode !== 'nodemap')
     ? `<div class="mcc-panel-pad" style="border-bottom:1px solid var(--border);"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);line-height:1.7;">
         Use <b style="color:var(--text-bright)">＋ Add Event → Launch</b> (or Place in Orbit) below to bring a vehicle into the mission.
       </div></div>`
     : '';
 
-  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
-  // undo/redo used to live here as a floating .mcc-view-toggle-float that
-  // occluded the stage — moved into the HUD strip (_missionHudStripHTML,
-  // 570-mission-panel.js), which is the mission's one docked control bar now.
-  // Nothing floats over the stage except the camera-context selects on the
-  // world surface.
-
   cc.innerHTML = `
+    ${topStripHTML}
     <!-- BODY -->
     <div class="mcc-body">
-      <!-- CENTER COLUMN — stage + rails (§12 U2). WORKFLOW PASS 2 deliverable A:
-           the old far-left .mcc-left-col is gone; this column now claims the
-           freed width. -->
+      <!-- LEFT COLUMN — Vehicles & Mission State (§12 U3: back home) -->
+      <div class="mcc-left-col">${leftColHTML}</div>
+
+      <!-- CENTER COLUMN — tri-toggle + switchable stage + per-view panel -->
       <div class="mcc-center-col">
-        <div class="mcc-view-row">
-          ${leftSlotHTML}
-          <div class="mcc-view-area">
-            ${hudStripHTML}
-            <div class="mcc-stage-col">
-              <div class="mcc-stage-fill">${stageHTML}</div>
-              ${bottomSlotHTML ? `<div class="mcc-dock-slot">${bottomSlotHTML}</div>` : ''}
-            </div>
-          </div>
-        </div>
+        ${viewToggleHTML}
+        <div class="mcc-view-area">${stageHTML}</div>
+        ${viewPanelHTML}
       </div>
 
       <!-- RIGHT COLUMN — events (list on top, Add Event docked at the bottom) -->
@@ -285,10 +218,10 @@ function missionRenderDetail() {
     </div>
   `;
   if (m.vehicleId) setTimeout(() => missionBurnPreview(m.missionId), 0);
-  if (stageSurf === 'plan') _missionCenterNmEarth();
-  if (stageSurf === 'world' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
-  // WORKFLOW PASS 2 deliverable B2: keep the header's File menu (program/mission
-  // name fields, Reset visibility) in sync with every mission mutation.
+  if (viewMode === 'nodemap') _missionCenterNmEarth();
+  if (viewMode === 'traj' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
+  // keep the header's File menu (program/mission name fields, Reset
+  // visibility) in sync with every mission mutation.
   if (typeof _globalFileMenuRender === 'function') _globalFileMenuRender();
 }
 

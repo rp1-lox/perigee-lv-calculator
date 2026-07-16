@@ -197,54 +197,40 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-export-sep{height:1px;background:var(--border);margin:2px 0;}
 .mcc-export-danger{color:var(--accent2);}
 .mcc-export-danger:hover{background:rgba(198,160,87,.12);color:var(--accent2);}
+/* ── MISSION_MODEL_V2 §12 U3: persistent frame + switchable center region ───
+   Top universal strip (MET/date/scrubber/active-vehicle/readiness — same
+   across all three views) sits above the three-column body: left = Vehicles
+   & Mission State (back in its pre-§12 home), center = tri-toggle + the
+   active view's map + its docked per-view panel, right = events (untouched). */
+.mcc-top-strip{display:flex;align-items:center;gap:10px;flex-shrink:0;min-height:32px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--border-bright);font-family:var(--mono);font-size:10px;color:var(--text-dim);overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
+.mcc-top-met{color:var(--text-bright);font-weight:600;flex-shrink:0;}
+.mcc-top-date{flex-shrink:0;}
+.mcc-top-scrub{flex:1;min-width:80px;max-width:360px;}
+.mcc-top-scrub .traj-scrubber{margin:0;}
+.mcc-top-veh{flex-shrink:0;color:var(--text-bright);}
+.mcc-top-right{margin-left:auto;flex-shrink:0;display:flex;align-items:center;}
 .mcc-body{display:flex;flex:1;min-height:0;overflow:hidden;}
-/* WORKFLOW PASS 3: the floating .mcc-view-toggle-float toolbar is retired —
-   its contents (stage selectors + undo/redo) moved into the HUD strip
-   (.mcc-hud-strip); these two utility classes are reused there. */
 .mcc-toolbar-sep{width:1px;height:16px;background:var(--border);flex-shrink:0;}
-/* WORKFLOW PASS 2 deliverable A: the far-left .mcc-left-col (Vehicles &
-   Mission State / Flight Readiness, both retired pass 1) and its unused
-   .mcc-left-budget sticky footer are removed — .mcc-center-col now claims
-   the freed width directly. */
+/* Left column: Vehicles & Mission State, event-aware, back in its pre-§12
+   home (§12 U3 2-2). Reuses the .mcc-box card the panel always rendered. */
+.mcc-left-col{width:280px;min-width:220px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;overflow-x:hidden;background:var(--panel);}
+.mcc-veh-swatch{width:10px;height:10px;padding:0;border:1px solid var(--border-bright);border-radius:2px;cursor:pointer;background:none;flex-shrink:0;}
+.mcc-veh-swatch::-webkit-color-swatch-wrapper{padding:0;}
+.mcc-veh-swatch::-webkit-color-swatch{border:none;border-radius:1px;}
 .mcc-center-col{flex:1;min-width:0;position:relative;overflow:hidden;border-right:1px solid var(--border);display:flex;flex-direction:column;}
-/* Plan-staged rail slot: ORBITS catalog stacked above the demoted World
-   thumbnail, same rail width/border as .mcc-plan-rail (pass 2 deliverable A). */
-.mcc-plan-orbit-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;}
-/* Primary stage-switching affordance (pass 2 deliverable B3), now docked at
-   the left end of the HUD strip; active state matches the old Band|Orbit-Map
-   toggle. */
-.mcc-stagesel-seg{display:flex;gap:2px;}
-.mcc-stagesel-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
+/* The visible tri-toggle (World | Timeline | Node map) — the primary,
+   exclusive view switch, at the top of the center region. */
+.mcc-view-toggle{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:6px 10px;border-bottom:1px solid var(--border);}
+.mcc-viewtgl-seg{display:flex;gap:2px;}
+.mcc-viewtgl-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
 .mcc-view-area{flex:1;min-width:0;overflow:auto;min-height:0;padding:0 10px;position:relative;display:flex;flex-direction:column;}
-/* U1 (§12 Plan rail): a vertical strip beside the stage in traj/band modes,
-   compressed rendering of the node/edge skeleton. Chrome — var(--) only. */
-.mcc-view-row{flex:1;min-height:0;min-width:0;display:flex;flex-direction:row;}
-.mcc-view-row .mcc-view-area{padding:0 10px;}
-.mcc-plan-rail{flex:0 0 200px;width:200px;min-width:0;overflow-y:auto;overflow-x:hidden;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;transition:flex-basis .15s ease,width .15s ease;}
-.mcc-plan-rail.collapsed{flex:0 0 20px;width:20px;overflow:hidden;}
-.pr-toggle{flex-shrink:0;width:100%;background:var(--input);border:none;border-bottom:1px solid var(--border);color:var(--text-dim);cursor:pointer;font-family:var(--mono);font-size:11px;padding:4px 0;text-align:center;}
-.pr-toggle:hover{color:var(--text-bright);background:var(--accent-tint-faint);}
-.pr-body{flex:1;min-height:0;overflow-y:auto;padding:6px 6px 14px;}
-.pr-zone-hdr{font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--text-dim);margin:10px 0 4px;padding-left:2px;}
-.pr-zone-hdr:first-child{margin-top:2px;}
-.pr-node{border:1.5px solid var(--border-bright);border-radius:4px;padding:4px 7px;margin-bottom:5px;cursor:pointer;background:var(--input);}
-.pr-node:hover{border-color:var(--accent);background:var(--accent-tint-faint);}
-.pr-node.pr-active{border-color:var(--accent);background:var(--accent-tint-soft);}
-.pr-node.pr-from{border-color:var(--accent2);}
-.pr-node-label{font-family:var(--mono);font-size:10px;color:var(--text-bright);display:flex;align-items:center;gap:4px;}
-.pr-node-sub{font-family:var(--mono);font-size:8.5px;color:var(--text-dim);margin-top:1px;}
-.pr-ref-marker{color:var(--accent3);}
-/* U2 (§12 promotion): header row holds collapse + promote side by side. */
-.pr-headerbar{display:flex;flex-shrink:0;}
-.pr-headerbar .pr-toggle{flex:1;border-bottom:1px solid var(--border);}
-.pr-promote-btn{flex-shrink:0;width:26px;background:var(--input);border:none;border-bottom:1px solid var(--border);border-left:1px solid var(--border);color:var(--text-dim);cursor:pointer;font-size:12px;padding:0;}
-.pr-promote-btn:hover{color:var(--text-bright);background:var(--accent-tint-faint);}
-.pr-edge{display:flex;flex-direction:column;align-items:center;gap:1px;margin:1px 0 5px;cursor:pointer;}
-.pr-edge-line{width:2px;height:14px;background:var(--accent);opacity:.7;}
-.pr-edge-chip{font-family:var(--mono);font-size:8px;color:var(--accent);border:1px solid var(--accent);border-radius:8px;padding:1px 6px;background:var(--bg);white-space:nowrap;}
-.pr-edge:hover .pr-edge-chip{background:var(--accent-tint-faint);}
-.pr-edge:hover .pr-edge-line{opacity:1;}
-.pr-empty{font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:8px 4px;}
+/* Per-view assistive panel, docked directly under the map (option A —
+   uniform horizontal slot across all three views). */
+.mcc-view-panel{flex-shrink:0;border-top:1px solid var(--border);background:var(--panel);}
+.mcc-view-panel:empty{display:none;}
+.mcc-view-panel-world .traj-toolbar{padding:6px 10px;}
+.mcc-view-panel-nodemap{display:flex;flex-direction:column;max-height:180px;}
+.mcc-view-panel-nodemap .mcc-orbit-cat .nm-orbit-scroll{max-height:140px;}
 /* node map root is pinned to the view area so the (potentially huge) SVG can
    never grow the box — .nm-scroll always has a bounded size and scrolls. */
 .nm-root{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;min-width:0;}
@@ -284,31 +270,8 @@ td.ghost-cell input{color:var(--border)!important;background:transparent!importa
 .mcc-check-detail{font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:2px;line-height:1.4;word-break:break-word;}
 .mcc-check-more{font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;padding:6px 0 2px;border-top:1px solid var(--border);}
 .mcc-check-more:hover{color:var(--text-bright);}
-/* WORKFLOW PASS 1 deliverable A: badge dots re-homed onto event cards / the
-   timeline dock / the plan rail (the standalone panel above is retired). */
+/* Badge dots on event cards (572-mission-checks.js). */
 .mcc-check-dot{font-size:8px;line-height:1;margin-left:2px;}
-.ttd-burn-dot{position:absolute;top:-2px;right:-4px;width:5px;height:5px;border-radius:50%;display:block;}
-.pr-check-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block;}
-
-/* WORKFLOW PASS 1 deliverable B: HUD strip (replaces .mcc-state-card). One
-   thin row docked across the top of the stage — chips are data (per-vehicle
-   accent may be a user-picked lane color, see _missionVehicleColor), the
-   strip chrome itself is all var(--). */
-.mcc-hud-strip{display:flex;align-items:center;gap:8px;flex-shrink:0;min-height:30px;margin:0 -10px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--border-bright);overflow-x:auto;overflow-y:hidden;white-space:nowrap;}
-.mcc-hud-strip.collapsed{min-height:16px;padding:0 4px;}
-.mcc-hud-toggle{flex-shrink:0;background:transparent;border:none;color:var(--text-dim);cursor:pointer;font-size:10px;padding:2px 4px;}
-.mcc-hud-toggle:hover{color:var(--text-bright);}
-.mcc-hud-label{flex-shrink:0;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);}
-.mcc-hud-ctx{color:var(--accent3);text-transform:none;letter-spacing:normal;margin-left:2px;}
-.mcc-hud-chips{display:flex;align-items:center;gap:6px;overflow-x:auto;min-width:0;}
-.mcc-hud-chip{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:3px 8px;border:1px solid var(--border);border-left:3px solid var(--border-bright);background:var(--input);font-family:var(--mono);font-size:9px;color:var(--text-dim);cursor:pointer;}
-.mcc-hud-chip.active{border-color:var(--accent);color:var(--text-bright);}
-.mcc-hud-chip-name{color:var(--text-bright);font-weight:600;}
-.mcc-hud-swatch{width:10px;height:10px;padding:0;border:1px solid var(--border-bright);border-radius:2px;cursor:pointer;background:none;flex-shrink:0;}
-.mcc-hud-swatch::-webkit-color-swatch-wrapper{padding:0;}
-.mcc-hud-swatch::-webkit-color-swatch{border:none;border-radius:1px;}
-.mcc-hud-totals{cursor:default;border-left-color:var(--accent3);}
-.mcc-hud-right{margin-left:auto;flex-shrink:0;display:flex;align-items:center;}
 .mcc-check-chip{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:4px 9px;border:1px solid var(--border-bright);background:transparent;white-space:nowrap;}
 /* Force EVERY <select> (and its OS-drawn option popup + hover highlight) to dark mode so
    none ever opens with a white option list / invisible text — anywhere in the app. */
@@ -430,59 +393,7 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .traj-hint-chip{position:absolute;top:8px;right:8px;z-index:2;font-family:var(--mono);font-size:9px;color:var(--accent);background:var(--accent-tint-strong);border:1px solid var(--accent);padding:4px 9px;border-radius:3px;cursor:pointer;user-select:none;}
 .traj-hint-chip:hover{background:var(--accent-tint-strongest);}
 
-/* Timeline dock (MISSION_MODEL_V2 §12) — Band lanes merged onto the scrubber's
-   shared MET axis, docked below the trajectory canvas. Lanes and the scrub
-   track below them share the exact same %-left mapping over [0,maxMet], so a
-   burn tick lines up with its lane marker at any collapsed/expanded height. */
-.traj-timeline-dock{display:flex;align-items:stretch;gap:4px;flex-shrink:0;padding:6px 2px 0;}
-.ttd-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
-.ttd-lanes{position:relative;display:flex;flex-direction:column;gap:2px;max-height:132px;overflow-y:auto;}
-.ttd-lanes.expanded{max-height:220px;}
-.ttd-lane-row{display:flex;align-items:center;gap:6px;}
-.ttd-lane-label{flex-shrink:0;width:8.5em;font-family:var(--mono);font-size:8px;color:var(--text-dim);border-left:3px solid var(--border);padding-left:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ttd-lane-track{position:relative;flex:1;background:var(--input);border:1px solid var(--border);border-radius:2px;overflow:visible;}
-.ttd-seg{position:absolute;top:0;bottom:0;border-top:2px solid transparent;cursor:pointer;}
-.ttd-seg:hover{filter:brightness(1.25);}
-.ttd-burn{position:absolute;top:-7px;transform:translateX(-50%);font-size:7px;line-height:1;color:var(--accent2);cursor:pointer;user-select:none;}
-.ttd-burn:hover{color:var(--accent);}
-.ttd-more-row .ttd-more-track{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:7.5px;color:var(--text-dim);background:transparent;border-style:dashed;cursor:default;}
-/* 5b R4 (MISSION_MODEL_V2 §15): dock timing links — thin verticals joining a
-   RENDEZVOUS/DOCK event's two lanes at its MET. Overlay is offset to align
-   exactly with the lane-track column (past the fixed-width label) so its
-   left% matches segs/burns' own %-of-track-width positioning. */
-.ttd-link-overlay{position:absolute;left:calc(8.5em + 6px);right:0;top:0;bottom:0;pointer-events:none;}
-.ttd-link{position:absolute;width:0;border-left:1.5px solid var(--border-bright);pointer-events:auto;cursor:pointer;}
-.ttd-link:hover{filter:brightness(1.35);}
-.ttd-link-end{position:absolute;left:-3px;width:6px;height:6px;border-radius:50%;pointer-events:none;}
-.ttd-expand-btn{flex-shrink:0;align-self:center;width:16px;height:16px;line-height:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-dim);background:var(--input);border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:0;}
-.ttd-expand-btn:hover{color:var(--text-bright);border-color:var(--border-bright);}
-/* U2 (§12 promotion) */
-.ttd-promote-btn{flex-shrink:0;align-self:center;width:16px;height:16px;line-height:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text-dim);background:var(--input);border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:0;}
-.ttd-promote-btn:hover{color:var(--text-bright);border-color:var(--border-bright);}
 
-/* ── MISSION_MODEL_V2 §12 U2: promotable-surface layout ─────────────────────
-   One stage (.mcc-stage-fill) + two rails: the left rail slot (Plan rail or,
-   when Plan is staged, the World thumbnail) and the bottom dock slot (Timeline
-   dock or, when Timeline is staged, the World thumbnail pinned to a corner).
-   The state-inspector card is pinned to the stage's top-left corner
-   regardless of which surface is staged (.mcc-view-area is already
-   position:relative, so it anchors there for free). */
-.mcc-stage-col{display:flex;flex-direction:column;flex:1;min-height:0;}
-.mcc-stage-fill{flex:1;min-height:0;overflow:auto;position:relative;}
-.mcc-dock-slot{flex-shrink:0;}
-.mcc-world-thumb{position:relative;overflow:hidden;cursor:pointer;background:var(--panel);}
-.mcc-world-thumb:hover{outline:1px solid var(--accent);}
-.mcc-world-thumb .traj-svg-thumb{width:100%;height:100%;display:block;}
-.mcc-world-thumb-rail{flex:0 0 200px;width:200px;border-right:1px solid var(--border);}
-.mcc-world-thumb-corner{position:absolute;right:8px;bottom:8px;width:160px;height:110px;z-index:14;border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);}
-.mcc-thumb-promote{position:absolute;top:4px;right:4px;width:18px;height:18px;line-height:16px;text-align:center;font-size:11px;background:var(--input);border:1px solid var(--border-bright);color:var(--text-dim);cursor:pointer;padding:0;border-radius:3px;z-index:1;}
-.mcc-thumb-promote:hover{color:var(--text-bright);}
-.mcc-state-card{position:absolute;top:8px;left:8px;z-index:15;max-width:340px;max-height:60%;overflow-y:auto;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);}
-.mcc-state-card .mcc-box{margin:0;border:none;padding:20px 10px 8px;}
-.mcc-state-card-toggle{position:absolute;top:2px;right:2px;width:18px;height:18px;line-height:16px;text-align:center;font-size:10px;background:var(--input);border:1px solid var(--border);color:var(--text-dim);cursor:pointer;padding:0;border-radius:3px;z-index:1;}
-.mcc-state-card-toggle:hover{color:var(--text-bright);}
-.mcc-state-card.collapsed{max-width:none;background:transparent;border:none;box-shadow:none;}
-.mcc-state-card.collapsed .mcc-state-card-toggle{position:static;background:var(--panel);border:1px solid var(--border-bright);box-shadow:0 4px 12px rgba(0,0,0,.35);width:auto;padding:2px 8px;}
 
 /* R3.4 gizmo node menu (+1/-1 orbit, delete, close) — plain HTML div positioned
    canvas-relative (canvas is position:relative; _trajWorldToScreen returns

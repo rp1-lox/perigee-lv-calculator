@@ -27,6 +27,17 @@
 // scrub position (_missionBandScrub only moves the scrub marker + expands the
 // matching event card — it never rewinds vehicle state), so this preserves that
 // semantic unchanged.
+// §12 U3: the vehicle-assigned color swatch, formerly on the HUD chip, moves
+// here (the left panel is the swatch's one home now). Same write path as
+// before — missionSetLaneColorForVehicle/missionResetLaneColorForVehicle —
+// the band-legend picker stays the single write path per the brief.
+function _missionVehSwatchHTML(m, id, vehicleKey) {
+  if (!vehicleKey) return '';
+  const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, vehicleKey, null) : null;
+  const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, vehicleKey) : (accent || '#888');
+  return `<input type="color" class="mcc-veh-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${vehicleKey}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${vehicleKey}')">`;
+}
+
 function _missionMultiVehicleHTML(m) {
   const id = m.missionId;
   const sel = _missionSelectedEventSnapshotEntry(m);   // non-null = show state AS OF that event
@@ -41,12 +52,14 @@ function _missionMultiVehicleHTML(m) {
       const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
       const expended = v.status === 'EXPENDED';
       const os = v.orbit || null;
+      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
       const orbitLine = os
         ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
-      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
+      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
           <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
+          ${_missionVehSwatchHTML(m, id, v.vehicleId)}
           <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${v.name}</span>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${(v.stages || []).length} stages</span>
           ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">${v.status}</span>` : ''}
@@ -103,13 +116,15 @@ function _missionMultiVehicleHTML(m) {
     const os = fv.orbitState || null;
     const remDv = Math.round(_missionVehicleRemainingDv(fv));
     const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
+    const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
     const orbitLine = os
       ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
       : '';
     // whole row is clickable to make this the active vehicle; active = green
-    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${isActive ? 'var(--accent)' : 'var(--border)'};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
+    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
         <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
+        ${_missionVehSwatchHTML(m, id, fv.vehicleId)}
         <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${_missionVehicleDisplayName(fv)}</span>
         <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${fv.stages.length} stages</span>
         ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">EXPENDED</span>' : ''}
@@ -145,159 +160,61 @@ function _missionMultiVehicleHTML(m) {
     </div>`;
 }
 
-// WORKFLOW PASS 1 deliverable B: thin horizontal HUD strip docked across the
-// top of the stage, replacing the old corner .mcc-state-card. Reuses the SAME
-// data path _missionMultiVehicleHTML uses (event-aware: as-of-selected-event
-// vs. live) — this function only changes the PRESENTATION (compact chips
-// instead of stacked cards), so the numbers are byte-identical to what the
-// old panel showed for the same selection. No camera fly-to on chip click
-// (explicitly deferred by the user) — clicking a vehicle chip just sets it
-// active via the existing missionSetActiveVehicle selection semantics.
-function _missionHudStripHTML(m) {
+// MISSION_MODEL_V2 §12 U3: top universal strip, identical across all three
+// views. Minimal by decree: MET + calendar date + a minimal scrubber
+// (reuses the UNCHANGED _trajScrubberHTML — the same scrub track/thumb/ticks
+// used everywhere else, so drag/click/arrow-key behavior is byte-identical),
+// the active-vehicle name, and — right end — the readiness counts chip.
+function _missionTopStripHTML(m) {
   const id = m.missionId;
-  const collapsed = !!_missionStateCardCollapsed[id];
-  const chevron = `<button class="mcc-hud-toggle" onclick="_missionStateCardToggle('${id}')" title="${collapsed ? 'Expand' : 'Collapse'} Vehicles &amp; Mission State">${collapsed ? '&#9656;' : '&#9662;'}</button>`;
+  const vt = (typeof _trajViewTime === 'function') ? _trajViewTime(m) : (m._metTotal || 0);
+  const dateStr = (typeof progMissionTimeToDate === 'function')
+    ? progMissionTimeToDate(vt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
+    : '';
+  const scrubHTML = (typeof _trajScrubberHTML === 'function') ? _trajScrubberHTML(m, id) : '';
+  const activeFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+  const activeName = activeFv ? _missionVehicleDisplayName(activeFv) : '—';
+  const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
+  return `<div class="mcc-top-strip">
+    <span class="mcc-top-met">T+${_metFmt(vt)}</span>
+    <span class="mcc-top-date">${dateStr}</span>
+    <div class="mcc-top-scrub">${scrubHTML}</div>
+    <span class="mcc-top-veh" title="Active vehicle">${_mcEscape ? _mcEscape(activeName) : activeName}</span>
+    <div class="mcc-top-right">${readinessChip}</div>
+  </div>`;
+}
 
-  // WORKFLOW PASS 3: the stage-switching selectors (World|Timeline|Plan) and
-  // undo/redo, formerly a floating .mcc-view-toggle-float that occluded the
-  // stage, now live docked in the HUD strip — left end (before the context
-  // label) for the stage selectors, right end (next to the readiness chip)
-  // for undo/redo. Shown even when the strip is collapsed, since these are
-  // the mission's primary navigation controls and must never be hidden.
-  const stageSurf = (typeof _missionStageOf === 'function') ? _missionStageOf(id) : 'world';
-  const stageBtn = (surf, label) => `<button class="act-btn mcc-stagesel-btn${stageSurf === surf ? ' active' : ''}" onclick="_missionPromote('${id}','${surf}')" title="Show ${label}">${label}</button>`;
-  const stageSelHTML = `<div class="mcc-stagesel-seg">${stageBtn('world', 'World')}${stageBtn('timeline', 'Timeline')}${stageBtn('plan', 'Plan')}</div>`;
-  const undoRedoHTML = `<div class="mcc-topbar-undoredo">
+// MISSION_MODEL_V2 §12 U3: the visible tri-toggle at the top of the center
+// region — the primary, exclusive view switch. Replaces the U1/U2 promotion
+// selectors (which drove _missionStageSurface via _missionPromote); this one
+// drives the real _missionViewMode directly via missionSetView. Undo/redo
+// docked at the right end (the mission's one control bar, same spot the
+// old floating toolbar / HUD strip held them).
+function _missionViewToggleHTML(m) {
+  const id = m.missionId;
+  const mode = _missionViewMode;
+  const btn = (val, label) => `<button class="act-btn mcc-viewtgl-btn${mode === val ? ' active' : ''}" onclick="missionSetView('${id}','${val}')" title="Show ${label}">${label}</button>`;
+  return `<div class="mcc-view-toggle">
+    <div class="mcc-viewtgl-seg">${btn('traj', 'World')}${btn('band', 'Timeline')}${btn('nodemap', 'Node map')}</div>
+    <div class="mcc-toolbar-sep"></div>
+    <div class="mcc-topbar-undoredo">
       <button class="act-btn" onclick="missionUndo()" title="Undo (Ctrl+Z)"${(typeof _missionUndoCanUndo === 'function' && _missionUndoCanUndo()) ? '' : ' disabled'}>&#x21B6;</button>
       <button class="act-btn" onclick="missionRedo()" title="Redo (Ctrl+Y)"${(typeof _missionUndoCanRedo === 'function' && _missionUndoCanRedo()) ? '' : ' disabled'}>&#x21B7;</button>
-    </div>`;
-
-  if (collapsed) return `<div class="mcc-hud-strip collapsed">${chevron}${stageSelHTML}<div class="mcc-toolbar-sep"></div>${undoRedoHTML}</div>`;
-
-  const sel = (typeof _missionSelectedEventSnapshotEntry === 'function') ? _missionSelectedEventSnapshotEntry(m) : null;
-  const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
-  const orbitTxt = os => os
-    ? (os.propagated ? (os.body || 'Moon') + ' NRHO' : os.surface ? (os.body || 'Earth') + ' surface'
-        : `${os.body || 'Earth'} ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()}km`)
-    : '—';
-  // 5b R1 (MATH.md §7ad): compact "Δφ 2h41m · 8,910 km" HUD readout for a
-  // vehicle that is co-orbital with ANOTHER vehicle in this same chip list
-  // (shares propagated+refId — the Gateway/NRHO case; see 567-phase-truth.js).
-  // Neutral styling (information, not alarm) — reuses the chip's own default
-  // --text-dim color like the other secondary chip spans, no --warn/--danger.
-  // Returns '' when there's no other co-orbital vehicle to compare against, or
-  // phaseTruthBetween can't measure a phase (disjoint/non-propagated orbits).
-  const phaseChipHTML = (osList, i, metNow) => {
-    if (typeof phaseTruthBetween !== 'function' || typeof _phaseChipText !== 'function') return '';
-    const osA = osList[i];
-    if (!osA || !osA.propagated || !osA.refId) return '';
-    for (let j = 0; j < osList.length; j++) {
-      if (j === i) continue;
-      const osB = osList[j];
-      if (!osB || !osB.propagated || osB.refId !== osA.refId) continue;
-      const phase = phaseTruthBetween(osA, osB, metNow);
-      if (phase) return `<span class="mcc-hud-chip-phase" title="Phase offset vs. co-orbital vehicle">${_phaseChipText(phase)}</span>`;
-    }
-    return '';
-  };
-
-  let contextLabel = '', vehChips = '', totalsChip = '';
-
-  if (sel) {
-    const entry = sel.entry;
-    const snap = entry.snapshot || [];
-    if (!snap.length) return '';
-    const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
-    contextLabel = `<span class="mcc-hud-ctx">— at ${_mcEscape ? _mcEscape(evLabel) : evLabel}</span>`;
-    const snapOsList = snap.map(v => v.orbit);
-    const snapMetNow = entry.metStart != null ? entry.metStart : (m._metTotal || 0);
-    vehChips = snap.map((v, vi) => {
-      const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
-      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
-      const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, v.vehicleId) : (accent || '#888');
-      const swatchHTML = `<input type="color" class="mcc-hud-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${v.vehicleId}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${v.vehicleId}')">`;
-      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" title="${v.name}">
-        ${swatchHTML}
-        <span class="mcc-hud-chip-name">${v.name}</span>
-        <span class="mcc-hud-chip-orbit">${orbitTxt(v.orbit)}</span>
-        ${phaseChipHTML(snapOsList, vi, snapMetNow)}
-        <span class="mcc-hud-chip-dv">${Math.round(v.remDv).toLocaleString()} m/s</span>
-        <span class="mcc-hud-chip-prop">${Math.round(v.remProp).toLocaleString()} kg</span>
-      </div>`;
-    }).join('');
-    const authIdx = entry._authIdx != null ? entry._authIdx : sel.index;
-    let dvExpended = 0, propConsumed = 0, payloadMass = 0;
-    for (let i = 0; i <= authIdx && i < m.log.length; i++) {
-      const e = m.log[i];
-      if (e.type === 'LAUNCH') {
-        const sr = e.stagingResult || {};
-        dvExpended += sr.dvDelivered || 0;
-        propConsumed += (sr.stages || []).reduce((s, st) => s + (st.propBurned || 0), 0);
-        payloadMass = e.payloadMass || payloadMass;
-      } else if (e.type === 'BURN' || e.type === 'MNODE') {
-        dvExpended += e.dv_actual || 0;
-        propConsumed += e.prop_consumed || 0;
-      }
-    }
-    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
-      <span>&Delta;V exp ${Math.round(dvExpended).toLocaleString()}</span>
-      <span>prop ${Math.round(propConsumed).toLocaleString()}kg</span>
-      <span>pay ${Math.round(payloadMass).toLocaleString()}kg</span>
-    </div>`;
-  } else {
-    const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
-    if (!live.length) return '';
-    contextLabel = `<span class="mcc-hud-ctx">— current</span>`;
-    const liveOsList = live.map(({ fv }) => fv.orbitState);
-    const liveMetNow = m._metTotal || 0;
-    vehChips = live.map(({ id: vid, fv }, vi) => {
-      const isActive = vid === m.vehicleId;
-      const remDv = Math.round(_missionVehicleRemainingDv(fv));
-      const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
-      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
-      const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, fv.vehicleId) : (accent || '#888');
-      const swatchHTML = `<input type="color" class="mcc-hud-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${fv.vehicleId}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${fv.vehicleId}')">`;
-      return `<div class="mcc-hud-chip${isActive ? ' active' : ''}" style="${accent ? `border-left-color:${accent};` : ''}" onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active">
-        ${swatchHTML}
-        <span class="mcc-hud-chip-name">${_missionVehicleDisplayName(fv)}</span>
-        <span class="mcc-hud-chip-orbit">${orbitTxt(fv.orbitState)}</span>
-        ${phaseChipHTML(liveOsList, vi, liveMetNow)}
-        <span class="mcc-hud-chip-dv">${remDv.toLocaleString()} m/s</span>
-        <span class="mcc-hud-chip-prop">${remProp.toLocaleString()} kg</span>
-      </div>`;
-    }).join('');
-    const b = missionBudget(m);
-    totalsChip = `<div class="mcc-hud-chip mcc-hud-totals">
-      <span>&Delta;V exp ${b.dvExpended.toLocaleString()}</span>
-      <span>pay ${b.payloadMass.toLocaleString()}kg</span>
-      <span>dur ${_metFmt(m._metTotal)}</span>
-    </div>`;
-  }
-
-  return `<div class="mcc-hud-strip">
-    ${chevron}
-    ${stageSelHTML}
-    <div class="mcc-toolbar-sep"></div>
-    <span class="mcc-hud-label">Vehicles &amp; Mission State ${contextLabel}</span>
-    <div class="mcc-hud-chips">${vehChips}${totalsChip}</div>
-    <div class="mcc-hud-right">${undoRedoHTML}${readinessChip}</div>
+    </div>
   </div>`;
 }
 
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
-// MISSION_MODEL_V2 §12 U2: the Band|Orbit Map|Trajectory toggle is RETIRED —
-// promotion (⤢ on each rail/dock/thumb, see 570-mission-lifecycle.js
-// _missionPromote) replaced it. missionSetView(id, mode) survives as a thin
-// alias so external callers that still hold the old three-mode contract
-// (devSeedApolloMission/devSeedGatewayMission-driven browser verification,
-// this file's own orientation-map note) keep working unchanged:
-// 'traj' -> promote 'world', 'band' -> promote 'timeline', 'nodemap' -> promote 'plan'.
+// MISSION_MODEL_V2 §12 U3: the real, authoritative view switch. Sets
+// _missionViewMode directly and re-renders — NOT an alias onto a promotion
+// surface (U1/U2's _missionPromote/_missionStageSurface are retired).
+// Dev-seed/eval compatibility: callers keep invoking
+// missionSetView(id,'traj'|'band'|'nodemap') exactly as before.
 function missionSetView(id, mode) {
-  const surface = mode === 'nodemap' ? 'plan' : mode === 'band' ? 'timeline' : 'world';
-  if (typeof _missionPromote === 'function') { _missionPromote(id, surface); return; }
-  // fallback (should be unreachable — _missionPromote is defined unconditionally
-  // in 570-mission-lifecycle.js, which always loads): preserves pre-U2 behavior.
+  // Leaving World: drop its cached starfield size so a later switch back
+  // re-measures instead of trusting a stale cache (same behavior the old
+  // pre-U2 missionSetView had).
   if (_missionViewMode === 'traj' && mode !== 'traj' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
   _missionViewMode  = mode;
   _missionBridgeMode = false;
@@ -310,18 +227,15 @@ function missionSetView(id, mode) {
 function _missionSaveScroll() {
   const nm  = document.querySelector('.mcc-view-area .nm-scroll');
   const va  = document.querySelector('.mcc-view-area');
-  const pr  = document.querySelector('.mcc-plan-rail .pr-body');   // U1: Plan rail (5749)
   const doc = document.scrollingElement || document.documentElement;
   return { nmL: nm ? nm.scrollLeft : 0, nmT: nm ? nm.scrollTop : 0,
            vaL: va ? va.scrollLeft : 0, vaT: va ? va.scrollTop : 0,
-           prT: pr ? pr.scrollTop : 0,
            docT: doc ? doc.scrollTop : 0, docL: doc ? doc.scrollLeft : 0 };
 }
 function _missionRestoreScroll(s) {
   if (!s) return;
   const nm  = document.querySelector('.mcc-view-area .nm-scroll'); if (nm) { nm.scrollLeft = s.nmL; nm.scrollTop = s.nmT; }
   const va  = document.querySelector('.mcc-view-area'); if (va) { va.scrollLeft = s.vaL; va.scrollTop = s.vaT; }
-  const pr  = document.querySelector('.mcc-plan-rail .pr-body'); if (pr) pr.scrollTop = s.prT || 0;
   const doc = document.scrollingElement || document.documentElement; if (doc) { doc.scrollTop = s.docT; doc.scrollLeft = s.docL; }
 }
 
