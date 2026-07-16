@@ -97,9 +97,14 @@ function v2BuildShadow(m) {
           const bodyMeta = PROG_BODIES[os.body];
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
+          // §20: os.inclination/os.lan are authored in os.body's EQUATOR frame;
+          // rotate into world before physElementsToState (which is world-frame).
+          const _w20 = (typeof progEqToWorldElements === 'function')
+            ? progEqToWorldElements(os.body, os.inclination || 0, os.lan || 0)
+            : { inc_deg: os.inclination || 0, lan_deg: os.lan || 0 };
           const st0 = physElementsToState({
-            a: bodyMeta.R + (alt || 0), e: 0, i: (os.inclination || 0) * Math.PI / 180,
-            raan: (os.lan || 0) * Math.PI / 180, argp: 0, nu: 0,
+            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.inc_deg * Math.PI / 180,
+            raan: _w20.lan_deg * Math.PI / 180, argp: 0, nu: 0,
           }, bodyMeta.mu);
           if (st0) { r = st0.r; v = st0.v; frame = os.body; }
           else note = 'elements->state reconstruction returned null';

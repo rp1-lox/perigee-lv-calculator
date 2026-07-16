@@ -129,13 +129,15 @@ const {
   progDvTLI,
   physThrustDir, physThrustLawKnown,
   _tsOnOrbitDVEscapeC3,
+  physBodyPoleAt, physEqBasis, physNormalFromIncLan, physIncLanFromNormal,
+  progEqToWorldElements, progWorldToEqElements, _trajRingPlaneBasis,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
 // vm.runInContext like the other module-scope consts (orientation map).
 const PHYS_THRUST_REVS_RESOLUTION = vm.runInContext('PHYS_THRUST_REVS_RESOLUTION', sandbox);
-const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM } =
-  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM })', sandbox);
+const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM, PROG_BODY_POLES } =
+  vm.runInContext('({ G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_ORBITS, PROG_BODY_ELEMENTS, PROG_MOON_ELEMENTS, PROG_DEFAULT_EPOCH_JD, PROG_J2000_JD, PROG_AU_KM, PROG_BODY_POLES })', sandbox);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // parseMathExpression
@@ -2610,38 +2612,54 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 // ═══════════════════════════════════════════════════════════════════════════
 
 {
-  // DLA: a vInf purely in the ecliptic plane (z=0) -> dla ~ 0.
-  const flat = progIdealParkingOrbit({ vInfVec: [3, 4, 0], siteLatDeg: 28.5, altKm: 185 });
-  approx('progIdealParkingOrbit: in-plane vInf -> dla ~ 0', flat.dla_deg, 0, 1e-9);
+  // §20 OBLIQUITY (2026-07-16): progIdealParkingOrbit's dla_deg/inc_deg/lan_deg
+  // are now EARTH-EQUATOR-frame quantities (physEqBasis/progEqToWorldElements,
+  // 385), not ecliptic — vInfVec (world/ecliptic, from progDepartVinf) is
+  // rotated into Earth's equator frame internally before the DLA/LAN algebra.
+  // These golden vectors are re-expressed accordingly; see MATH.md §7al for
+  // the re-derivation and re-pin cause.
+  const EARTH_EPS = 23.44 * Math.PI / 180;
+  // world-frame vector whose EQUATORIAL-frame representation is [x,y,z]
+  // (Earth, node=0: xEq=[1,0,0], yEq=[0,cosE,sinE], zEq=[0,-sinE,cosE]).
+  const eqToWorldVec = ([x, y, z]) => [
+    x,
+    y * Math.cos(EARTH_EPS) - z * Math.sin(EARTH_EPS),
+    y * Math.sin(EARTH_EPS) + z * Math.cos(EARTH_EPS),
+  ];
 
-  // DLA: a tilted vInf -> dla = asin(z/|v|) exactly.
-  const tiltedVec = [3, 4, 2];
+  // DLA: a vInf purely in EARTH'S EQUATOR plane (z_eq=0) -> dla ~ 0.
+  const flat = progIdealParkingOrbit({ vInfVec: eqToWorldVec([3, 4, 0]), siteLatDeg: 28.5, altKm: 185 });
+  approx('progIdealParkingOrbit: in-equator-plane vInf -> dla ~ 0', flat.dla_deg, 0, 1e-9);
+
+  // DLA: a tilted (in equator frame) vInf -> dla = asin(z_eq/|v|) exactly.
+  const tiltedEq = [3, 4, 2];
   const tiltedMag = Math.sqrt(3 * 3 + 4 * 4 + 2 * 2);
   const expectedDla = Math.asin(2 / tiltedMag) * 180 / Math.PI;
-  const tilted = progIdealParkingOrbit({ vInfVec: tiltedVec, siteLatDeg: 28.5, altKm: 185 });
-  approx('progIdealParkingOrbit: tilted vInf -> dla = asin(z/|v|) exactly', tilted.dla_deg, expectedDla, 1e-9);
+  const tilted = progIdealParkingOrbit({ vInfVec: eqToWorldVec(tiltedEq), siteLatDeg: 28.5, altKm: 185 });
+  approx('progIdealParkingOrbit: tilted vInf -> dla = asin(z_eq/|v|) exactly', tilted.dla_deg, expectedDla, 1e-9);
 
-  // ideal inc = max(|dla|, siteLat): dla 23 deg, site 28.5 deg -> inc 28.5 (penalty 5.5).
+  // ideal inc = max(|dla|, siteLat): dla 23 deg (equator frame), site 28.5 -> inc 28.5 (penalty 5.5).
   {
     const dlaR = 23 * Math.PI / 180;
-    const v = [Math.cos(dlaR), 0, Math.sin(dlaR)]; // alpha=0, dla=23deg
+    const v = eqToWorldVec([Math.cos(dlaR), 0, Math.sin(dlaR)]); // alpha=0, dla=23deg IN EQUATOR FRAME
     const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: 28.5, altKm: 185 });
     approx('progIdealParkingOrbit: dla=23 site=28.5 -> inc=28.5', r.inc_deg, 28.5, 1e-6);
     approx('progIdealParkingOrbit: dla=23 site=28.5 -> planePenalty=5.5', r.planePenalty, 5.5, 1e-6);
   }
-  // dla 40 deg, site 28.5 deg -> inc 40 (penalty 0).
+  // dla 40 deg (equator frame), site 28.5 deg -> inc 40 (penalty 0).
   {
     const dlaR = 40 * Math.PI / 180;
-    const v = [Math.cos(dlaR), 0, Math.sin(dlaR)];
+    const v = eqToWorldVec([Math.cos(dlaR), 0, Math.sin(dlaR)]);
     const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: 28.5, altKm: 185 });
     approx('progIdealParkingOrbit: dla=40 site=28.5 -> inc=40', r.inc_deg, 40, 1e-6);
     approx('progIdealParkingOrbit: dla=40 site=28.5 -> planePenalty=0', r.planePenalty, 0, 1e-9);
   }
 
-  // Plane-contains-vInf invariant: for computed {inc, lan}, the orbit-plane
-  // normal n(inc, lan) = [sin(lan)sin(inc), -cos(lan)sin(inc), cos(inc)] must
-  // be perpendicular to vInf (n . vInf ~ 0) -- the plane truly contains the
-  // asymptote. Tested across several vInf directions / site latitudes.
+  // Plane-contains-vInf invariant: for computed {inc, lan} (EQUATOR frame),
+  // rotate into WORLD via progEqToWorldElements before building the plane
+  // normal n(inc, lan) = [sin(lan)sin(inc), -cos(lan)sin(inc), cos(inc)] --
+  // it must be perpendicular to the ORIGINAL world-frame vInf (n . vInf ~ 0).
+  // Tested across several vInf directions / site latitudes.
   const testVecs = [
     [3, 4, 2], [1, 0, 0.3], [-2, 5, -1.2], [0.5, -0.8, 0.9], [4, -3, -2.5],
   ];
@@ -2649,11 +2667,12 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   for (const v of testVecs) {
     for (const lat of testLats) {
       const r = progIdealParkingOrbit({ vInfVec: v, siteLatDeg: lat, altKm: 185 });
-      const incR = r.inc_deg * Math.PI / 180, lanR = r.lan_deg * Math.PI / 180;
+      const w = progEqToWorldElements('Earth', r.inc_deg, r.lan_deg);
+      const incR = w.inc_deg * Math.PI / 180, lanR = w.lan_deg * Math.PI / 180;
       const n = [Math.sin(lanR) * Math.sin(incR), -Math.cos(lanR) * Math.sin(incR), Math.cos(incR)];
       const vMag = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
       const residual = (n[0] * v[0] + n[1] * v[1] + n[2] * v[2]) / vMag;
-      approx(`progIdealParkingOrbit: plane contains vInf [${v}] @ lat ${lat} (n.vInf/|v| residual)`, residual, 0, 1e-6);
+      approx(`progIdealParkingOrbit: plane contains vInf [${v}] @ lat ${lat} (n.vInf/|v| residual, world-frame)`, residual, 0, 1e-6);
     }
   }
 
@@ -2680,7 +2699,8 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
       ok('progOptimalDeparture(Earth,Mars): TOF in a sane band (~150-350 d, approximate)', tof >= 150 && tof <= 350);
 
       const parking = progIdealParkingOrbit({ vInfVec: opt.vInfVec, siteLatDeg: 28.5, altKm: 185 });
-      const incR = parking.inc_deg * Math.PI / 180, lanR = parking.lan_deg * Math.PI / 180;
+      const w = progEqToWorldElements('Earth', parking.inc_deg, parking.lan_deg);
+      const incR = w.inc_deg * Math.PI / 180, lanR = w.lan_deg * Math.PI / 180;
       const n = [Math.sin(lanR) * Math.sin(incR), -Math.cos(lanR) * Math.sin(incR), Math.cos(incR)];
       const vMag = Math.sqrt(opt.vInfVec[0] ** 2 + opt.vInfVec[1] ** 2 + opt.vInfVec[2] ** 2);
       const residual = (n[0] * opt.vInfVec[0] + n[1] * opt.vInfVec[1] + n[2] * opt.vInfVec[2]) / vMag;
@@ -2708,16 +2728,106 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('progPlanLaunchToDestination: Moon dvDepart ~ TLI dv (progDvTLI(185))', Math.abs(plan.dvDepart - progDvTLI(185)) < 1e-6);
   }
 
-  // progMoonPlaneAt: instantaneous Moon orbital-plane inc/lan from r x v —
-  // sanity range check against the ~5.14deg inclination to the ecliptic
-  // PLUS whatever the site/ecliptic frame conventions add (this program's
-  // Moon elements are referenced to the ecliptic, so inc should track near
-  // the Moon's ~18-29 deg oscillation band once combined with obliquity-free
-  // frame, i.e. same range as above).
+  // progMoonPlaneAt: instantaneous Moon orbital-plane inclination TO EARTH'S
+  // EQUATOR (§20 — was ecliptic pre-fix). The real figure oscillates
+  // ~18.3-28.6 deg (5.145 deg Moon-orbit-to-ecliptic inclination combined
+  // with Earth's 23.44 deg obliquity, node-phase dependent) — reachable from
+  // a 28.5N site most of the time, which is the whole point of this section.
   {
     const p = progMoonPlaneAt(PROG_DEFAULT_EPOCH_JD, 0);
     ok('progMoonPlaneAt: inc_deg finite and in [0,90]', isFinite(p.inc_deg) && p.inc_deg >= 0 && p.inc_deg <= 90);
     ok('progMoonPlaneAt: lan_deg finite and in [0,360)', isFinite(p.lan_deg) && p.lan_deg >= 0 && p.lan_deg < 360);
+  }
+
+  // §20 gate: Moon inc-to-EQUATOR across a saros-scale (~19yr) epoch sweep
+  // must land in the real oscillation band [18.3, 28.6] deg -- this IS the
+  // reported-bug fix (was reporting the ~5.15deg ecliptic inclination,
+  // compared against a 28.5deg equator-referenced site latitude, hence the
+  // false UNREACHABLE reading). Sampled monthly-ish over 19 years so the
+  // ~18.6yr nodal regression cycle is fully traversed.
+  {
+    let lo = Infinity, hi = -Infinity, nSamples = 0, nOutOfBand = 0;
+    const SAMPLES = 76; // ~19 years / 76 -> ~3-month spacing
+    for (let k = 0; k < SAMPLES; k++) {
+      const t_s = k * (19 * 365.25 * 86400 / SAMPLES);
+      const p = progMoonPlaneAt(PROG_DEFAULT_EPOCH_JD, t_s);
+      nSamples++;
+      if (p.inc_deg < lo) lo = p.inc_deg;
+      if (p.inc_deg > hi) hi = p.inc_deg;
+      if (p.inc_deg < 18.0 || p.inc_deg > 28.8) nOutOfBand++;
+    }
+    console.log(`[S20] Moon inc-to-equator over 19y saros sweep (${nSamples} samples): min=${lo.toFixed(2)} max=${hi.toFixed(2)} deg, out-of-band=${nOutOfBand}`);
+    ok('S20: Moon inc-to-equator saros sweep stays within [18.0, 28.8] deg', nOutOfBand === 0);
+  }
+
+  // §20 gate: plane-match-from-28.5N reachable at SOME sampled epochs, and
+  // the penalty when "unreachable" is a real, small, launch-window-scale
+  // dogleg (single-digit degrees) rather than the pre-fix ~23 deg gap
+  // (28.5 - ~5.15 ecliptic) that made it read impossible on every date.
+  // NOTE (honest, not "majority" — see MATH.md §7al): exact coplanar match
+  // with the Moon's instantaneous plane is a genuine once-per-nodal-cycle
+  // launch-window constraint in real cislunar mission planning (this is WHY
+  // Apollo had monthly launch windows, not daily ones) — a strict "lat <=
+  // inc" coplanar test is reachable only during the ~upper fraction of the
+  // Moon's [18.3,28.6] equator-inclination oscillation, not a majority of
+  // all dates. The bug this section fixes is "reads unreachable on EVERY
+  // date, with a ~23 deg penalty" (ecliptic-frame bug) -> "reads reachable
+  // on the dates real missions actually launch, with a modest penalty on
+  // the rest" (equator-frame fix) — verified below.
+  {
+    let reachable = 0, total = 0, maxPenalty = 0, sumPenalty = 0;
+    const SAMPLES = 76;
+    for (let k = 0; k < SAMPLES; k++) {
+      const t_s = k * (19 * 365.25 * 86400 / SAMPLES);
+      const res = progResolvePlaneTarget('Moon', PROG_DEFAULT_EPOCH_JD, t_s, 28.5);
+      total++;
+      if (!res.unreachable) reachable++;
+      else { maxPenalty = Math.max(maxPenalty, res.penalty_deg); sumPenalty += res.penalty_deg; }
+    }
+    const avgPenalty = sumPenalty / Math.max(1, total - reachable);
+    console.log(`[S20] plane-match-from-28.5N reachable in ${reachable}/${total} sampled epochs; when unreachable, avg penalty=${avgPenalty.toFixed(2)} deg, max=${maxPenalty.toFixed(2)} deg`);
+    ok('S20: plane-match-from-28.5N is reachable at SOME sampled epochs (was ~0/76 pre-fix)', reachable > 0);
+    ok('S20: when unreachable, the dogleg penalty is small (< 12 deg, not the pre-fix ~23 deg gap)', maxPenalty < 12);
+  }
+
+  // §20 gate: progEqToWorldElements/progWorldToEqElements round-trip to
+  // identity (pure change of orthonormal basis) across several (inc, lan)
+  // pairs, for a real tilted body (Earth) and an untilted one (identity
+  // transform check, Jupiter -- absent from PROG_BODY_POLES).
+  {
+    const pairs = [[0, 0], [28.5, 0], [51.6, 45], [90, 200], [5, 300], [23.44, 0], [63.4, 120]];
+    for (const [inc, lan] of pairs) {
+      const w = progEqToWorldElements('Earth', inc, lan);
+      const back = progWorldToEqElements('Earth', w.inc_deg, w.lan_deg);
+      approx(`S20: Earth eq<->world round-trip inc=${inc} lan=${lan} (inc)`, back.inc_deg, inc, 1e-6);
+      // lan is degenerate (meaningless) at inc~0/180 -- skip the lan check there.
+      if (inc > 1e-6 && inc < 180 - 1e-6) {
+        const lanDiff = ((back.lan_deg - lan + 540) % 360) - 180; // wrap to [-180,180)
+        approx(`S20: Earth eq<->world round-trip inc=${inc} lan=${lan} (lan)`, lanDiff, 0, 1e-6);
+      }
+    }
+    // untilted body: identity transform.
+    const idW = progEqToWorldElements('Jupiter', 28.5, 120);
+    approx('S20: untilted-body (Jupiter) eq->world is identity (inc)', idW.inc_deg, 28.5, 1e-9);
+    approx('S20: untilted-body (Jupiter) eq->world is identity (lan)', idW.lan_deg, 120, 1e-9);
+  }
+
+  // §20 gate: ring-tilt table consistency -- _trajRingPlaneBasis(Saturn)'s
+  // in-plane basis must be orthonormal and its cross product (the ring
+  // plane's normal) must equal physBodyPoleAt('Saturn') exactly (same table,
+  // same convention, mechanically unified per the spec).
+  {
+    const basis = _trajRingPlaneBasis('Saturn');
+    ok('S20: _trajRingPlaneBasis(Saturn) returns a basis', !!basis);
+    if (basis) {
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const n = cross(basis.e1, basis.e2);
+      const pole = physBodyPoleAt('Saturn');
+      approx('S20: Saturn ring-plane normal == physBodyPoleAt (x)', n[0], pole[0], 1e-9);
+      approx('S20: Saturn ring-plane normal == physBodyPoleAt (y)', n[1], pole[1], 1e-9);
+      approx('S20: Saturn ring-plane normal == physBodyPoleAt (z)', n[2], pole[2], 1e-9);
+    }
+    ok('S20: _trajRingPlaneBasis(Jupiter) [no table entry] returns null', _trajRingPlaneBasis('Jupiter') === null);
   }
 
   // progResolvePlaneTarget: Moon target matches progMoonPlaneAt directly;

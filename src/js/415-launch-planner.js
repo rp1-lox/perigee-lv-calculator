@@ -202,21 +202,27 @@ function progOptimalDeparture(fromBody, destBody, epochJD, opts) {
  * the given departure v-infinity vector, for a site at siteLatDeg.
  * Returns { inc_deg, lan_deg, dla_deg, azimuthDeg, planePenalty, alt_km, note }.
  *
- * DLA (declination of the launch asymptote) is computed in the ECLIPTIC
- * frame — i.e. treating the ecliptic plane as if it were the launch body's
- * equatorial plane. This is the SAME approximation already documented for
- * the surface/spin renderer (MATH.md critiques 54/55: no axial tilt
- * modeled anywhere in the program; Earth's real ecliptic-vs-equatorial
- * obliquity is 23.4 deg). See critique 57 appended below for this module's
- * specific instance of that gap.
+ * §20 OBLIQUITY: DLA (declination of the launch asymptote) and the returned
+ * inc/lan are all EQUATOR-frame quantities (the user-facing authoring
+ * convention every other launch/orbit inclination in the program uses) —
+ * `vInfVec` (world/ecliptic frame, from progDepartVinf) is rotated into
+ * `fromBody`'s equator frame via physEqBasis (385) FIRST, then the rest of
+ * this function's algebra is untouched: it always operated correctly in
+ * "whatever frame vInfVec's components are in," it just used to be handed
+ * the ecliptic frame directly (the pre-§20 approximation — MATH.md
+ * critiques 54/55/57 — now retired: real obliquity via PROG_BODY_POLES).
  */
 function progIdealParkingOrbit(args) {
-  const { vInfVec, siteLatDeg, altKm } = args || {};
+  const { vInfVec, siteLatDeg, altKm, fromBody } = args || {};
   const alt_km = isFinite(altKm) ? altKm : 185;
-  const vInfMag = physMag(vInfVec || [0, 0, 0]);
+  const body = fromBody || 'Earth';
+  const worldVec = vInfVec || [0, 0, 0];
+  const eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  const vInfEq = [physDot(worldVec, eqB.xEq), physDot(worldVec, eqB.yEq), physDot(worldVec, eqB.zEq)];
+  const vInfMag = physMag(vInfEq);
 
   const dla_deg = vInfMag > 1e-9
-    ? Math.asin(Math.max(-1, Math.min(1, vInfVec[2] / vInfMag))) * 180 / Math.PI
+    ? Math.asin(Math.max(-1, Math.min(1, vInfEq[2] / vInfMag))) * 180 / Math.PI
     : 0;
 
   const lat = Math.abs(siteLatDeg || 0);
@@ -227,12 +233,11 @@ function progIdealParkingOrbit(args) {
   let lan_deg = 0;
   let note = null;
   if (inc_deg < 1e-9) {
-    // Equatorial (ecliptic-plane) parking orbit: the ascending node is
-    // undefined (the plane IS the reference plane) -- LAN is meaningless
-    // here, pinned to 0 by convention.
+    // Equatorial parking orbit: the ascending node is undefined (the plane
+    // IS the reference plane) -- LAN is meaningless here, pinned to 0.
     note = 'inc~0: LAN undefined for an equatorial parking plane, pinned to 0 by convention';
   } else {
-    const alphaDeg = Math.atan2(vInfVec[1], vInfVec[0]) * 180 / Math.PI;
+    const alphaDeg = Math.atan2(vInfEq[1], vInfEq[0]) * 180 / Math.PI;
     const dlaR = dla_deg * Math.PI / 180, incR = inc_deg * Math.PI / 180;
     const tanInc = Math.tan(incR);
     const arg = Math.abs(tanInc) > 1e-9 ? Math.max(-1, Math.min(1, Math.tan(dlaR) / tanInc)) : 0;
@@ -336,28 +341,34 @@ function progPlanLaunchToDestination(args) {
 }
 
 /**
- * Moon's instantaneous orbital-plane inclination/LAN (deg, ecliptic frame --
- * the same reference frame every other body position resolves in) at
- * mission time t_s, derived from the orbit-normal vector h = r x v of the
- * Moon's GEOCENTRIC state (progBodyLocalEphemState, 360 -- the parent-
- * relative state BEFORE Earth's own heliocentric position is added back in,
- * i.e. already Earth-centered).
- * inc = acos(h_z/|h|); LAN = atan2(h_x, -h_y) (node vector N = k x h).
+ * Moon's instantaneous orbital-plane inclination/LAN TO EARTH'S EQUATOR
+ * (§20 OBLIQUITY — this is the fix for the reported bug: plane-matching a
+ * KSC launch, which is equator-referenced, against an ECLIPTIC-frame Moon
+ * plane compared a 28.5 deg site against a ~5.15 deg ecliptic target and
+ * read UNREACHABLE; the real, equator-referenced figure oscillates ~18.3-
+ * 28.6 deg with the node phase and is reachable from 28.5N most epochs),
+ * derived from the orbit-normal vector h = r x v of the Moon's GEOCENTRIC
+ * state (progBodyLocalEphemState, 360 -- the parent-relative state BEFORE
+ * Earth's own heliocentric position is added back in, i.e. already
+ * Earth-centered; that state is WORLD/ecliptic frame, rotated into Earth's
+ * equator frame here via progWorldToEqElements/physEqBasis, 385).
  * CRITIQUE: this is the INSTANTANEOUS osculating plane, not the Moon's mean
  * orbital plane -- it nutates with the ~18.6yr regression of nodes baked
  * into PROG_MOON_ELEMENTS.OmDot, which is physically correct for "the
  * plane at this exact epoch" but will drift over a long mission if reused
  * without recomputing at the new epoch. See MATH.md §7p critique 58.
- * Returns { inc_deg, lan_deg }.
+ * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since §20).
  */
 function progMoonPlaneAt(epochJD, t_s) {
   const st = progBodyLocalEphemState('Moon', t_s || 0);
   const h = physCross(st.r, st.v);
   const hMag = physMag(h);
   if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };
-  const inc_deg = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
-  const lan_deg = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
-  return { inc_deg, lan_deg };
+  const inc_ecl = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
+  const lan_ecl = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
+  if (typeof progWorldToEqElements !== 'function') return { inc_deg: inc_ecl, lan_deg: lan_ecl };
+  const eq = progWorldToEqElements('Earth', inc_ecl, lan_ecl);
+  return { inc_deg: eq.inc_deg, lan_deg: eq.lan_deg };
 }
 
 /**

@@ -242,7 +242,27 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   if (!burn0 || (burn0.kind !== 'moon' && burn0.kind !== 'interplanetary')) return null;
   const dest = burn0.dest, fromBody = burn0.center;
   const r1 = physMag(burn0.state.r);
+  // §20 OBLIQUITY seam: fromOrbit.inclination/.lan_deg are AUTHORED in
+  // fromBody's EQUATOR frame (user convention unchanged). incRad stays
+  // equatorial for the whole function (it's the ring's inclination
+  // MAGNITUDE, frame-invariant under a pure re-basing, and the RAAN-solve
+  // cone-axis equation just below is deliberately done IN the equatorial
+  // basis to match it). Only at the point a ring is actually turned into a
+  // world-frame state (physAimBurnState -> physElementsToState) does the
+  // equatorial (inc, raan) pair get rotated into world/ecliptic via
+  // progEqToWorldElements — see aimBurnEq below. This is the ONE seam
+  // application for this function; MATH.md §7al lists it in the audit.
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  function toWorldPlane(iEqRad, raanEqRad) {
+    if (typeof progEqToWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
+    const w = progEqToWorldElements(fromBody, iEqRad * 180 / Math.PI, raanEqRad * 180 / Math.PI);
+    return { inc: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180 };
+  }
+  function aimBurnEq(bodyName, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
+    const w = toWorldPlane(iEqRad, raanEqRad);
+    return physAimBurnState(bodyName, r1v, theta, pitch, dvv, w.inc, yaw, w.raan);
+  }
   // in-plane anomaly of the analytic seed (physSolveNodeBurn placed it at ν=theta)
   let theta0 = physPhaseBurnAngle(progBodyAngleAt(dest, tDepart_s + burn0.coastTof_s));
   // N1: encounter length scale — explicit km constant (numerically the old
@@ -290,7 +310,14 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
     if (mMag > 0) {
-      const mHat = physScale(mSt.r, 1 / mMag);
+      const mHatWorld = physScale(mSt.r, 1 / mMag);
+      // §20: this cone-axis equation (n·m̂=0) assumes m̂'s components are
+      // already in the frame whose z-axis is the ring's inclination cone
+      // axis. incRad is EQUATORIAL, so m̂ must be rotated into the equatorial
+      // basis here too (not left in world/ecliptic) — otherwise the solved
+      // raan0 would target a cone around world-z instead of fromBody's pole,
+      // which is exactly the pre-§20 bug for this solver.
+      const mHat = [physDot(mHatWorld, _eqBasis.xEq), physDot(mHatWorld, _eqBasis.yEq), physDot(mHatWorld, _eqBasis.zEq)];
       const a = mHat[0] * Math.sin(incRad), b = -mHat[1] * Math.sin(incRad), c = -mHat[2] * Math.cos(incRad);
       const R = Math.hypot(a, b);
       if (R > 1e-12 && Math.abs(c) <= R) {
@@ -316,7 +343,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     for (const rn of raanRoots) {
       for (let k = 0; k < 16; k++) {
         const th = theta0 + (2 * Math.PI * k) / 16;
-        const st = physAimBurnState(fromBody, r1, th, 0, dv_kms, incRad, 0, rn);
+        const st = aimBurnEq(fromBody, r1, th, 0, dv_kms, incRad, 0, rn);
         const res = cheapProp(st);
         const miss = Math.abs(physClosestApproachKm(res, dest, overrides).dKm - targetR);
         if (miss < bestMiss) { bestMiss = miss; bestTheta = th; raan0 = rn; }
@@ -334,8 +361,17 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // SOI-scale radial/timing misses already in the vector, so no single
   // component dominates the Newton step. Documented here per the plan's
   // "document the constant as hand-tuned" instruction.
+  // §20: toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
+  // (same convention as fromOrbit) — rotate into world before comparing
+  // against the world-frame osculating arrival elements below.
   const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
-    ? { i: (toOrbit.inclination * Math.PI) / 180, raan: (toOrbit.lan_deg * Math.PI) / 180 } : null;
+    ? (() => {
+        const w = (typeof progEqToWorldElements === 'function')
+          ? progEqToWorldElements(dest, toOrbit.inclination, toOrbit.lan_deg)
+          : { inc_deg: toOrbit.inclination, lan_deg: toOrbit.lan_deg };
+        return { i: (w.inc_deg * Math.PI) / 180, raan: (w.lan_deg * Math.PI) / 180 };
+      })()
+    : null;
   const planeMissKm = res => {
     if (!toAuthoredPlane) return 0;
     const muDest = PROG_BODIES[dest] && PROG_BODIES[dest].mu;
@@ -351,7 +387,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // this stage (no yaw DOF to satisfy it yet) — skip its early-converged
   // return so the ladder always escalates to the plane-aware 3-DOF stage.
   const sol1 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
+    x => aimBurnEq(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
     res => [physClosestApproachKm(res, dest, overrides).dKm - targetR],
     [theta0], { propagate, tolKm, eps: [1e-3], maxIter: opts.maxIter || 12, maxProps: 12 });
   if (sol1.converged && !toAuthoredPlane) {
@@ -361,7 +397,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // closest-approach TIME to the schematic arrival (seconds -> km at a
   // transfer-speed scale, 0.5 km/s) so the 2x2 Jacobian is full-rank.
   const sol2 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, 0, raan0),
+    x => aimBurnEq(fromBody, r1, x[0], x[1], dv_kms, incRad, 0, raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
       return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9]; // seconds × 0.5 km/s → km scale
@@ -376,7 +412,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // authored its own plane (R3.2), in which case that component becomes the
   // plane-alignment residual above — same DOF, same slot, different target.
   const sol3 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
+    x => aimBurnEq(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
       const thirdMiss = toAuthoredPlane ? planeMissKm(res) : (ca.dz || 0);

@@ -129,6 +129,68 @@ function physStateToElements(r, v, mu) {
   };
 }
 
+// ── §20 OBLIQUITY seam: equator-frame <-> world(ecliptic)-frame elements ─────
+// Authored launch/orbit inclinations remain EQUATOR-referenced by user-facing
+// convention (28.5 means 28.5-from-equator); physElementsToState/
+// physStateToElements above are WORLD (ecliptic) frame. These two functions
+// are the ONE pair of transforms between the two, driven by physBodyPoleAt
+// (360). Only (inc, lan/raan) are rotated — argp/nu are measured from the
+// orbit's own ascending node, a direction intrinsic to the orbit plane, so
+// they are frame-invariant under a pure re-basing of (i, raan) and are left
+// untouched by design (see MATH.md §7al). See MISSION_MODEL_V2.md §20 / the
+// audited call-site list in MATH.md §7al for where this must be applied.
+
+/** Orthonormal basis of `body`'s EQUATOR frame, expressed in WORLD (ecliptic)
+ *  coordinates: zEq = the body's pole; xEq = the ascending node of the
+ *  equator on the ecliptic (ẑ_world × zEq, normalized — falls back to world
+ *  +x when the pole is parallel to world z, i.e. an untilted body, which
+ *  makes the whole seam an identity transform for such bodies); yEq
+ *  completes the right-handed set. */
+function physEqBasis(body) {
+  const zEq = (typeof physBodyPoleAt === 'function') ? physBodyPoleAt(body) : [0, 0, 1];
+  let xEq = physCross([0, 0, 1], zEq);
+  const xMag = physMag(xEq);
+  xEq = xMag > 1e-9 ? physScale(xEq, 1 / xMag) : [1, 0, 0];
+  const yEq = physCross(zEq, xEq);
+  return { xEq, yEq, zEq };
+}
+/** Orbit-normal unit vector from (inc, raan) using the SAME convention as
+ *  565's RAAN-solve normal (n = [sin(raan)sin(i), -cos(raan)sin(i), cos(i)]),
+ *  in whatever frame the caller's (inc, raan) are already expressed. */
+function physNormalFromIncLan(inc_deg, lan_deg) {
+  const i = inc_deg * Math.PI / 180, raan = lan_deg * Math.PI / 180;
+  return [Math.sin(raan) * Math.sin(i), -Math.cos(raan) * Math.sin(i), Math.cos(i)];
+}
+/** Inverse of physNormalFromIncLan: recover (inc, raan) deg from a normal
+ *  vector (need not be pre-normalized). */
+function physIncLanFromNormal(h) {
+  const hMag = physMag(h);
+  if (!(hMag > 1e-12)) return { inc_deg: 0, lan_deg: 0 };
+  const hz = h[2] / hMag;
+  const i = Math.acos(Math.max(-1, Math.min(1, hz)));
+  let raan = Math.atan2(h[0], -h[1]);
+  if (raan < 0) raan += 2 * Math.PI;
+  return { inc_deg: i * 180 / Math.PI, lan_deg: raan * 180 / Math.PI };
+}
+/** Rotate an orbit-normal (inc_deg, lan_deg) AUTHORED in `body`'s EQUATOR
+ *  frame into the WORLD (ecliptic) frame physElementsToState propagates in.
+ *  Pure. Identity for a body absent from PROG_BODY_POLES (untilted). */
+function progEqToWorldElements(body, inc_deg, lan_deg) {
+  const b = physEqBasis(body);
+  const hEqComp = physNormalFromIncLan(inc_deg, lan_deg); // components IN the eq basis
+  const hWorld = physAdd(physAdd(physScale(b.xEq, hEqComp[0]), physScale(b.yEq, hEqComp[1])), physScale(b.zEq, hEqComp[2]));
+  return physIncLanFromNormal(hWorld);
+}
+/** Inverse of progEqToWorldElements: WORLD-frame (inc_deg, lan_deg) ->
+ *  `body`'s EQUATOR frame. Round-trips progEqToWorldElements exactly (pure
+ *  change of orthonormal basis) — pinned in the gate (§20). */
+function progWorldToEqElements(body, inc_deg, lan_deg) {
+  const b = physEqBasis(body);
+  const hWorld = physNormalFromIncLan(inc_deg, lan_deg);
+  const comp = [physDot(hWorld, b.xEq), physDot(hWorld, b.yEq), physDot(hWorld, b.zEq)];
+  return physIncLanFromNormal(comp);
+}
+
 // ── universal-variable Kepler propagation ────────────────────────────────────
 // One code path for ellipse / parabola / hyperbola. Curtis, "Orbital Mechanics
 // for Engineering Students", Alg. 3.4 (chi iteration) + f/g functions.

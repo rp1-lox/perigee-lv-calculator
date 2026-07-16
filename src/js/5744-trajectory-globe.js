@@ -869,12 +869,23 @@ function _trajReconcileGlobeLayer(svgEl) {
 // rotated by the same tilt) — together an orthonormal basis for the ring
 // plane, so a point at ring-plane angle phi and radius r (km) is
 // r*(cos(phi)*e1 + sin(phi)*e2) in WORLD-frame km, ready for _trajProjectVec.
-const _TRAJ_RING_OBLIQUITY_DEG = { Saturn: 26.73 };
+// §20 OBLIQUITY: ring tilt now SOURCED from PROG_BODY_POLES (360) instead of
+// a local constant — unifies with physBodyPoleAt's pole table (a ring's
+// plane IS the body's equatorial plane). e1/e2 below are an orthonormal
+// in-plane basis consistent with physBodyPoleAt's own convention (pole =
+// e1 x e2): e1 = [cos(node), sin(node), 0] (world-frame direction of the
+// equator's ascending node on the ecliptic), e2 = that direction tilted by
+// `obliquity` about the node line. Reduces to the pre-§20 formula exactly
+// when node=0 (Saturn's only table entry, v1) — mechanical, zero behavior
+// change for Saturn.
 function _trajRingPlaneBasis(body) {
-  const deg = _TRAJ_RING_OBLIQUITY_DEG[body];
-  if (deg == null) return null;
-  const th = deg * _PROG_D2R;
-  return { e1: [1, 0, 0], e2: [0, Math.cos(th), Math.sin(th)] };
+  const p = (typeof PROG_BODY_POLES !== 'undefined') ? PROG_BODY_POLES[body] : null;
+  if (!p) return null;
+  const th = p.obliquity_deg * _PROG_D2R;
+  const om = (p.node_deg || 0) * _PROG_D2R;
+  const e1 = [Math.cos(om), Math.sin(om), 0];
+  const e2 = [-Math.sin(om) * Math.cos(th), Math.cos(om) * Math.cos(th), Math.sin(th)];
+  return { e1, e2 };
 }
 // Sample the ring plane's UNIT circle (radius-independent — see note below)
 // into contiguous front/back runs by projected-depth sign, exactly like

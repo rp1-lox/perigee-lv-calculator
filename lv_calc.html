@@ -11326,6 +11326,39 @@ const PROG_HELIO_R      = {                  // km — mean orbital radii
 };
 const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centre
 
+// ── Spin axes (§20 OBLIQUITY, v1 — static, no precession) ───────────────────
+// Per-body obliquity-to-ecliptic + ascending-node-of-equator-on-ecliptic
+// azimuth (deg). Convention matches the orbit-normal formula used all over
+// this codebase (e.g. 565's RAAN solve): pole = [sin(node)*sin(obliquity),
+// -cos(node)*sin(obliquity), cos(obliquity)] in the WORLD (ecliptic) frame —
+// i.e. "obliquity" plays the role of an orbital inclination of the body's
+// equator against the ecliptic, "node" the role of that equator's RAAN.
+// v1: node=0 for every entry (each body's equinox direction is taken to
+// coincide with the ecliptic +x reference direction — true by construction
+// for Earth/J2000; an approximation, undocumented real value, for the
+// others, same "hand-tuned constant" category as other MATH.md critiques).
+// Moon: 6.68 deg is the figure this project is using for the lunar pole's
+// obliquity TO THE ECLIPTIC (not to Earth's equator, and not the ~5.14 deg
+// inclination of the Moon's ORBIT to the ecliptic — a different angle from a
+// different vector). The real lunar pole precesses on an 18.6-year cycle
+// (Cassini's laws); this is a STATIC v1 value — see MATH.md §7al.
+const PROG_BODY_POLES = {
+  Earth:  { obliquity_deg: 23.44, node_deg: 0 },
+  Mars:   { obliquity_deg: 25.19, node_deg: 0 },
+  Saturn: { obliquity_deg: 26.73, node_deg: 0 },
+  Moon:   { obliquity_deg: 6.68,  node_deg: 0 },
+};
+/** Unit pole vector (world/ecliptic frame) for `body`. Bodies absent from
+ *  PROG_BODY_POLES fall back to the untilted pole (world +z) — i.e. the
+ *  pre-§20 behavior — so callers never need a null-guard. Static v1: no
+ *  precession (documented in MATH.md §7al). */
+function physBodyPoleAt(body) {
+  const p = PROG_BODY_POLES[body];
+  if (!p) return [0, 0, 1];
+  const eps = p.obliquity_deg * Math.PI / 180, om = (p.node_deg || 0) * Math.PI / 180;
+  return [Math.sin(om) * Math.sin(eps), -Math.cos(om) * Math.sin(eps), Math.cos(eps)];
+}
+
 // Moon-type bodies orbiting a planet rather than the Sun (for trajectory scenes
 // and any future local-orbit math). Keyed by body name; `parent` must exist in
 // PROG_BODIES, `r` is mean orbital radius (km) from parent centre.
@@ -12566,6 +12599,68 @@ function physStateToElements(r, v, mu) {
     rp, ra, energy, hVec: h,
     period: (e < 1 && a > 0 && isFinite(a)) ? physOrbitPeriod(a, mu) : NaN,
   };
+}
+
+// ── §20 OBLIQUITY seam: equator-frame <-> world(ecliptic)-frame elements ─────
+// Authored launch/orbit inclinations remain EQUATOR-referenced by user-facing
+// convention (28.5 means 28.5-from-equator); physElementsToState/
+// physStateToElements above are WORLD (ecliptic) frame. These two functions
+// are the ONE pair of transforms between the two, driven by physBodyPoleAt
+// (360). Only (inc, lan/raan) are rotated — argp/nu are measured from the
+// orbit's own ascending node, a direction intrinsic to the orbit plane, so
+// they are frame-invariant under a pure re-basing of (i, raan) and are left
+// untouched by design (see MATH.md §7al). See MISSION_MODEL_V2.md §20 / the
+// audited call-site list in MATH.md §7al for where this must be applied.
+
+/** Orthonormal basis of `body`'s EQUATOR frame, expressed in WORLD (ecliptic)
+ *  coordinates: zEq = the body's pole; xEq = the ascending node of the
+ *  equator on the ecliptic (ẑ_world × zEq, normalized — falls back to world
+ *  +x when the pole is parallel to world z, i.e. an untilted body, which
+ *  makes the whole seam an identity transform for such bodies); yEq
+ *  completes the right-handed set. */
+function physEqBasis(body) {
+  const zEq = (typeof physBodyPoleAt === 'function') ? physBodyPoleAt(body) : [0, 0, 1];
+  let xEq = physCross([0, 0, 1], zEq);
+  const xMag = physMag(xEq);
+  xEq = xMag > 1e-9 ? physScale(xEq, 1 / xMag) : [1, 0, 0];
+  const yEq = physCross(zEq, xEq);
+  return { xEq, yEq, zEq };
+}
+/** Orbit-normal unit vector from (inc, raan) using the SAME convention as
+ *  565's RAAN-solve normal (n = [sin(raan)sin(i), -cos(raan)sin(i), cos(i)]),
+ *  in whatever frame the caller's (inc, raan) are already expressed. */
+function physNormalFromIncLan(inc_deg, lan_deg) {
+  const i = inc_deg * Math.PI / 180, raan = lan_deg * Math.PI / 180;
+  return [Math.sin(raan) * Math.sin(i), -Math.cos(raan) * Math.sin(i), Math.cos(i)];
+}
+/** Inverse of physNormalFromIncLan: recover (inc, raan) deg from a normal
+ *  vector (need not be pre-normalized). */
+function physIncLanFromNormal(h) {
+  const hMag = physMag(h);
+  if (!(hMag > 1e-12)) return { inc_deg: 0, lan_deg: 0 };
+  const hz = h[2] / hMag;
+  const i = Math.acos(Math.max(-1, Math.min(1, hz)));
+  let raan = Math.atan2(h[0], -h[1]);
+  if (raan < 0) raan += 2 * Math.PI;
+  return { inc_deg: i * 180 / Math.PI, lan_deg: raan * 180 / Math.PI };
+}
+/** Rotate an orbit-normal (inc_deg, lan_deg) AUTHORED in `body`'s EQUATOR
+ *  frame into the WORLD (ecliptic) frame physElementsToState propagates in.
+ *  Pure. Identity for a body absent from PROG_BODY_POLES (untilted). */
+function progEqToWorldElements(body, inc_deg, lan_deg) {
+  const b = physEqBasis(body);
+  const hEqComp = physNormalFromIncLan(inc_deg, lan_deg); // components IN the eq basis
+  const hWorld = physAdd(physAdd(physScale(b.xEq, hEqComp[0]), physScale(b.yEq, hEqComp[1])), physScale(b.zEq, hEqComp[2]));
+  return physIncLanFromNormal(hWorld);
+}
+/** Inverse of progEqToWorldElements: WORLD-frame (inc_deg, lan_deg) ->
+ *  `body`'s EQUATOR frame. Round-trips progEqToWorldElements exactly (pure
+ *  change of orthonormal basis) — pinned in the gate (§20). */
+function progWorldToEqElements(body, inc_deg, lan_deg) {
+  const b = physEqBasis(body);
+  const hWorld = physNormalFromIncLan(inc_deg, lan_deg);
+  const comp = [physDot(hWorld, b.xEq), physDot(hWorld, b.yEq), physDot(hWorld, b.zEq)];
+  return physIncLanFromNormal(comp);
 }
 
 // ── universal-variable Kepler propagation ────────────────────────────────────
@@ -14336,21 +14431,27 @@ function progOptimalDeparture(fromBody, destBody, epochJD, opts) {
  * the given departure v-infinity vector, for a site at siteLatDeg.
  * Returns { inc_deg, lan_deg, dla_deg, azimuthDeg, planePenalty, alt_km, note }.
  *
- * DLA (declination of the launch asymptote) is computed in the ECLIPTIC
- * frame — i.e. treating the ecliptic plane as if it were the launch body's
- * equatorial plane. This is the SAME approximation already documented for
- * the surface/spin renderer (MATH.md critiques 54/55: no axial tilt
- * modeled anywhere in the program; Earth's real ecliptic-vs-equatorial
- * obliquity is 23.4 deg). See critique 57 appended below for this module's
- * specific instance of that gap.
+ * §20 OBLIQUITY: DLA (declination of the launch asymptote) and the returned
+ * inc/lan are all EQUATOR-frame quantities (the user-facing authoring
+ * convention every other launch/orbit inclination in the program uses) —
+ * `vInfVec` (world/ecliptic frame, from progDepartVinf) is rotated into
+ * `fromBody`'s equator frame via physEqBasis (385) FIRST, then the rest of
+ * this function's algebra is untouched: it always operated correctly in
+ * "whatever frame vInfVec's components are in," it just used to be handed
+ * the ecliptic frame directly (the pre-§20 approximation — MATH.md
+ * critiques 54/55/57 — now retired: real obliquity via PROG_BODY_POLES).
  */
 function progIdealParkingOrbit(args) {
-  const { vInfVec, siteLatDeg, altKm } = args || {};
+  const { vInfVec, siteLatDeg, altKm, fromBody } = args || {};
   const alt_km = isFinite(altKm) ? altKm : 185;
-  const vInfMag = physMag(vInfVec || [0, 0, 0]);
+  const body = fromBody || 'Earth';
+  const worldVec = vInfVec || [0, 0, 0];
+  const eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  const vInfEq = [physDot(worldVec, eqB.xEq), physDot(worldVec, eqB.yEq), physDot(worldVec, eqB.zEq)];
+  const vInfMag = physMag(vInfEq);
 
   const dla_deg = vInfMag > 1e-9
-    ? Math.asin(Math.max(-1, Math.min(1, vInfVec[2] / vInfMag))) * 180 / Math.PI
+    ? Math.asin(Math.max(-1, Math.min(1, vInfEq[2] / vInfMag))) * 180 / Math.PI
     : 0;
 
   const lat = Math.abs(siteLatDeg || 0);
@@ -14361,12 +14462,11 @@ function progIdealParkingOrbit(args) {
   let lan_deg = 0;
   let note = null;
   if (inc_deg < 1e-9) {
-    // Equatorial (ecliptic-plane) parking orbit: the ascending node is
-    // undefined (the plane IS the reference plane) -- LAN is meaningless
-    // here, pinned to 0 by convention.
+    // Equatorial parking orbit: the ascending node is undefined (the plane
+    // IS the reference plane) -- LAN is meaningless here, pinned to 0.
     note = 'inc~0: LAN undefined for an equatorial parking plane, pinned to 0 by convention';
   } else {
-    const alphaDeg = Math.atan2(vInfVec[1], vInfVec[0]) * 180 / Math.PI;
+    const alphaDeg = Math.atan2(vInfEq[1], vInfEq[0]) * 180 / Math.PI;
     const dlaR = dla_deg * Math.PI / 180, incR = inc_deg * Math.PI / 180;
     const tanInc = Math.tan(incR);
     const arg = Math.abs(tanInc) > 1e-9 ? Math.max(-1, Math.min(1, Math.tan(dlaR) / tanInc)) : 0;
@@ -14470,28 +14570,34 @@ function progPlanLaunchToDestination(args) {
 }
 
 /**
- * Moon's instantaneous orbital-plane inclination/LAN (deg, ecliptic frame --
- * the same reference frame every other body position resolves in) at
- * mission time t_s, derived from the orbit-normal vector h = r x v of the
- * Moon's GEOCENTRIC state (progBodyLocalEphemState, 360 -- the parent-
- * relative state BEFORE Earth's own heliocentric position is added back in,
- * i.e. already Earth-centered).
- * inc = acos(h_z/|h|); LAN = atan2(h_x, -h_y) (node vector N = k x h).
+ * Moon's instantaneous orbital-plane inclination/LAN TO EARTH'S EQUATOR
+ * (§20 OBLIQUITY — this is the fix for the reported bug: plane-matching a
+ * KSC launch, which is equator-referenced, against an ECLIPTIC-frame Moon
+ * plane compared a 28.5 deg site against a ~5.15 deg ecliptic target and
+ * read UNREACHABLE; the real, equator-referenced figure oscillates ~18.3-
+ * 28.6 deg with the node phase and is reachable from 28.5N most epochs),
+ * derived from the orbit-normal vector h = r x v of the Moon's GEOCENTRIC
+ * state (progBodyLocalEphemState, 360 -- the parent-relative state BEFORE
+ * Earth's own heliocentric position is added back in, i.e. already
+ * Earth-centered; that state is WORLD/ecliptic frame, rotated into Earth's
+ * equator frame here via progWorldToEqElements/physEqBasis, 385).
  * CRITIQUE: this is the INSTANTANEOUS osculating plane, not the Moon's mean
  * orbital plane -- it nutates with the ~18.6yr regression of nodes baked
  * into PROG_MOON_ELEMENTS.OmDot, which is physically correct for "the
  * plane at this exact epoch" but will drift over a long mission if reused
  * without recomputing at the new epoch. See MATH.md §7p critique 58.
- * Returns { inc_deg, lan_deg }.
+ * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since §20).
  */
 function progMoonPlaneAt(epochJD, t_s) {
   const st = progBodyLocalEphemState('Moon', t_s || 0);
   const h = physCross(st.r, st.v);
   const hMag = physMag(h);
   if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };
-  const inc_deg = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
-  const lan_deg = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
-  return { inc_deg, lan_deg };
+  const inc_ecl = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
+  const lan_ecl = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
+  if (typeof progWorldToEqElements !== 'function') return { inc_deg: inc_ecl, lan_deg: lan_ecl };
+  const eq = progWorldToEqElements('Earth', inc_ecl, lan_ecl);
+  return { inc_deg: eq.inc_deg, lan_deg: eq.lan_deg };
 }
 
 /**
@@ -19341,7 +19447,27 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   if (!burn0 || (burn0.kind !== 'moon' && burn0.kind !== 'interplanetary')) return null;
   const dest = burn0.dest, fromBody = burn0.center;
   const r1 = physMag(burn0.state.r);
+  // §20 OBLIQUITY seam: fromOrbit.inclination/.lan_deg are AUTHORED in
+  // fromBody's EQUATOR frame (user convention unchanged). incRad stays
+  // equatorial for the whole function (it's the ring's inclination
+  // MAGNITUDE, frame-invariant under a pure re-basing, and the RAAN-solve
+  // cone-axis equation just below is deliberately done IN the equatorial
+  // basis to match it). Only at the point a ring is actually turned into a
+  // world-frame state (physAimBurnState -> physElementsToState) does the
+  // equatorial (inc, raan) pair get rotated into world/ecliptic via
+  // progEqToWorldElements — see aimBurnEq below. This is the ONE seam
+  // application for this function; MATH.md §7al lists it in the audit.
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  function toWorldPlane(iEqRad, raanEqRad) {
+    if (typeof progEqToWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
+    const w = progEqToWorldElements(fromBody, iEqRad * 180 / Math.PI, raanEqRad * 180 / Math.PI);
+    return { inc: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180 };
+  }
+  function aimBurnEq(bodyName, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
+    const w = toWorldPlane(iEqRad, raanEqRad);
+    return physAimBurnState(bodyName, r1v, theta, pitch, dvv, w.inc, yaw, w.raan);
+  }
   // in-plane anomaly of the analytic seed (physSolveNodeBurn placed it at ν=theta)
   let theta0 = physPhaseBurnAngle(progBodyAngleAt(dest, tDepart_s + burn0.coastTof_s));
   // N1: encounter length scale — explicit km constant (numerically the old
@@ -19389,7 +19515,14 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
     if (mMag > 0) {
-      const mHat = physScale(mSt.r, 1 / mMag);
+      const mHatWorld = physScale(mSt.r, 1 / mMag);
+      // §20: this cone-axis equation (n·m̂=0) assumes m̂'s components are
+      // already in the frame whose z-axis is the ring's inclination cone
+      // axis. incRad is EQUATORIAL, so m̂ must be rotated into the equatorial
+      // basis here too (not left in world/ecliptic) — otherwise the solved
+      // raan0 would target a cone around world-z instead of fromBody's pole,
+      // which is exactly the pre-§20 bug for this solver.
+      const mHat = [physDot(mHatWorld, _eqBasis.xEq), physDot(mHatWorld, _eqBasis.yEq), physDot(mHatWorld, _eqBasis.zEq)];
       const a = mHat[0] * Math.sin(incRad), b = -mHat[1] * Math.sin(incRad), c = -mHat[2] * Math.cos(incRad);
       const R = Math.hypot(a, b);
       if (R > 1e-12 && Math.abs(c) <= R) {
@@ -19415,7 +19548,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     for (const rn of raanRoots) {
       for (let k = 0; k < 16; k++) {
         const th = theta0 + (2 * Math.PI * k) / 16;
-        const st = physAimBurnState(fromBody, r1, th, 0, dv_kms, incRad, 0, rn);
+        const st = aimBurnEq(fromBody, r1, th, 0, dv_kms, incRad, 0, rn);
         const res = cheapProp(st);
         const miss = Math.abs(physClosestApproachKm(res, dest, overrides).dKm - targetR);
         if (miss < bestMiss) { bestMiss = miss; bestTheta = th; raan0 = rn; }
@@ -19433,8 +19566,17 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // SOI-scale radial/timing misses already in the vector, so no single
   // component dominates the Newton step. Documented here per the plan's
   // "document the constant as hand-tuned" instruction.
+  // §20: toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
+  // (same convention as fromOrbit) — rotate into world before comparing
+  // against the world-frame osculating arrival elements below.
   const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
-    ? { i: (toOrbit.inclination * Math.PI) / 180, raan: (toOrbit.lan_deg * Math.PI) / 180 } : null;
+    ? (() => {
+        const w = (typeof progEqToWorldElements === 'function')
+          ? progEqToWorldElements(dest, toOrbit.inclination, toOrbit.lan_deg)
+          : { inc_deg: toOrbit.inclination, lan_deg: toOrbit.lan_deg };
+        return { i: (w.inc_deg * Math.PI) / 180, raan: (w.lan_deg * Math.PI) / 180 };
+      })()
+    : null;
   const planeMissKm = res => {
     if (!toAuthoredPlane) return 0;
     const muDest = PROG_BODIES[dest] && PROG_BODIES[dest].mu;
@@ -19450,7 +19592,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // this stage (no yaw DOF to satisfy it yet) — skip its early-converged
   // return so the ladder always escalates to the plane-aware 3-DOF stage.
   const sol1 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
+    x => aimBurnEq(fromBody, r1, x[0], 0, dv_kms, incRad, 0, raan0),
     res => [physClosestApproachKm(res, dest, overrides).dKm - targetR],
     [theta0], { propagate, tolKm, eps: [1e-3], maxIter: opts.maxIter || 12, maxProps: 12 });
   if (sol1.converged && !toAuthoredPlane) {
@@ -19460,7 +19602,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // closest-approach TIME to the schematic arrival (seconds -> km at a
   // transfer-speed scale, 0.5 km/s) so the 2x2 Jacobian is full-rank.
   const sol2 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, 0, raan0),
+    x => aimBurnEq(fromBody, r1, x[0], x[1], dv_kms, incRad, 0, raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
       return [ca.dKm - targetR, ca.t != null ? (ca.t - tArrSched) * 0.5 : 1e9]; // seconds × 0.5 km/s → km scale
@@ -19475,7 +19617,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // authored its own plane (R3.2), in which case that component becomes the
   // plane-alignment residual above — same DOF, same slot, different target.
   const sol3 = physShootToTarget(
-    x => physAimBurnState(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
+    x => aimBurnEq(fromBody, r1, x[0], x[1], dv_kms, incRad, x[2], raan0),
     res => {
       const ca = physClosestApproachKm(res, dest, overrides);
       const thirdMiss = toAuthoredPlane ? planeMissKm(res) : (ca.dz || 0);
@@ -19607,9 +19749,14 @@ function v2BuildShadow(m) {
           const bodyMeta = PROG_BODIES[os.body];
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
+          // §20: os.inclination/os.lan are authored in os.body's EQUATOR frame;
+          // rotate into world before physElementsToState (which is world-frame).
+          const _w20 = (typeof progEqToWorldElements === 'function')
+            ? progEqToWorldElements(os.body, os.inclination || 0, os.lan || 0)
+            : { inc_deg: os.inclination || 0, lan_deg: os.lan || 0 };
           const st0 = physElementsToState({
-            a: bodyMeta.R + (alt || 0), e: 0, i: (os.inclination || 0) * Math.PI / 180,
-            raan: (os.lan || 0) * Math.PI / 180, argp: 0, nu: 0,
+            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.inc_deg * Math.PI / 180,
+            raan: _w20.lan_deg * Math.PI / 180, argp: 0, nu: 0,
           }, bodyMeta.mu);
           if (st0) { r = st0.r; v = st0.v; frame = os.body; }
           else note = 'elements->state reconstruction returned null';
@@ -32155,12 +32302,23 @@ function _trajReconcileGlobeLayer(svgEl) {
 // rotated by the same tilt) — together an orthonormal basis for the ring
 // plane, so a point at ring-plane angle phi and radius r (km) is
 // r*(cos(phi)*e1 + sin(phi)*e2) in WORLD-frame km, ready for _trajProjectVec.
-const _TRAJ_RING_OBLIQUITY_DEG = { Saturn: 26.73 };
+// §20 OBLIQUITY: ring tilt now SOURCED from PROG_BODY_POLES (360) instead of
+// a local constant — unifies with physBodyPoleAt's pole table (a ring's
+// plane IS the body's equatorial plane). e1/e2 below are an orthonormal
+// in-plane basis consistent with physBodyPoleAt's own convention (pole =
+// e1 x e2): e1 = [cos(node), sin(node), 0] (world-frame direction of the
+// equator's ascending node on the ecliptic), e2 = that direction tilted by
+// `obliquity` about the node line. Reduces to the pre-§20 formula exactly
+// when node=0 (Saturn's only table entry, v1) — mechanical, zero behavior
+// change for Saturn.
 function _trajRingPlaneBasis(body) {
-  const deg = _TRAJ_RING_OBLIQUITY_DEG[body];
-  if (deg == null) return null;
-  const th = deg * _PROG_D2R;
-  return { e1: [1, 0, 0], e2: [0, Math.cos(th), Math.sin(th)] };
+  const p = (typeof PROG_BODY_POLES !== 'undefined') ? PROG_BODY_POLES[body] : null;
+  if (!p) return null;
+  const th = p.obliquity_deg * _PROG_D2R;
+  const om = (p.node_deg || 0) * _PROG_D2R;
+  const e1 = [Math.cos(om), Math.sin(om), 0];
+  const e2 = [-Math.sin(om) * Math.cos(th), Math.cos(om) * Math.cos(th), Math.sin(th)];
+  return { e1, e2 };
 }
 // Sample the ring plane's UNIT circle (radius-independent — see note below)
 // into contiguous front/back runs by projected-depth sign, exactly like

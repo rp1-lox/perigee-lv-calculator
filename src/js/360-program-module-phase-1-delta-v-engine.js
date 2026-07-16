@@ -30,6 +30,39 @@ const PROG_HELIO_R      = {                  // km — mean orbital radii
 };
 const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centre
 
+// ── Spin axes (§20 OBLIQUITY, v1 — static, no precession) ───────────────────
+// Per-body obliquity-to-ecliptic + ascending-node-of-equator-on-ecliptic
+// azimuth (deg). Convention matches the orbit-normal formula used all over
+// this codebase (e.g. 565's RAAN solve): pole = [sin(node)*sin(obliquity),
+// -cos(node)*sin(obliquity), cos(obliquity)] in the WORLD (ecliptic) frame —
+// i.e. "obliquity" plays the role of an orbital inclination of the body's
+// equator against the ecliptic, "node" the role of that equator's RAAN.
+// v1: node=0 for every entry (each body's equinox direction is taken to
+// coincide with the ecliptic +x reference direction — true by construction
+// for Earth/J2000; an approximation, undocumented real value, for the
+// others, same "hand-tuned constant" category as other MATH.md critiques).
+// Moon: 6.68 deg is the figure this project is using for the lunar pole's
+// obliquity TO THE ECLIPTIC (not to Earth's equator, and not the ~5.14 deg
+// inclination of the Moon's ORBIT to the ecliptic — a different angle from a
+// different vector). The real lunar pole precesses on an 18.6-year cycle
+// (Cassini's laws); this is a STATIC v1 value — see MATH.md §7al.
+const PROG_BODY_POLES = {
+  Earth:  { obliquity_deg: 23.44, node_deg: 0 },
+  Mars:   { obliquity_deg: 25.19, node_deg: 0 },
+  Saturn: { obliquity_deg: 26.73, node_deg: 0 },
+  Moon:   { obliquity_deg: 6.68,  node_deg: 0 },
+};
+/** Unit pole vector (world/ecliptic frame) for `body`. Bodies absent from
+ *  PROG_BODY_POLES fall back to the untilted pole (world +z) — i.e. the
+ *  pre-§20 behavior — so callers never need a null-guard. Static v1: no
+ *  precession (documented in MATH.md §7al). */
+function physBodyPoleAt(body) {
+  const p = PROG_BODY_POLES[body];
+  if (!p) return [0, 0, 1];
+  const eps = p.obliquity_deg * Math.PI / 180, om = (p.node_deg || 0) * Math.PI / 180;
+  return [Math.sin(om) * Math.sin(eps), -Math.cos(om) * Math.sin(eps), Math.cos(eps)];
+}
+
 // Moon-type bodies orbiting a planet rather than the Sun (for trajectory scenes
 // and any future local-orbit math). Keyed by body name; `parent` must exist in
 // PROG_BODIES, `r` is mean orbital radius (km) from parent centre.
