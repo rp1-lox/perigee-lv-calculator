@@ -167,4 +167,5 @@ function loadPreset(p,key){
   if(typeof libSeedTagHolder==='function') libSeedTagHolder(_lvTagHolder, p.tags, [{dim:'era'},{dim:'origin'}], 'veh');
   buildPresets();
   buildStageComposition();
+  if(typeof lvEditingIndicatorRefresh==='function') lvEditingIndicatorRefresh();
 }

@@ -72,17 +72,26 @@ function libMakeVehicleCard(p,key,isUser){
     // user LVs load directly (same as old preset list); built-ins open the detail modal
     if(isUser) loadPreset(p,key); else if(typeof openVehicleModal==='function') openVehicleModal(p); else loadPreset(p,key);
   });
-  // My-Vehicles-only: overwrite this saved entry with whatever's currently in the worksheet.
-  // Builtins never get this (isUser guards it here; libOverwriteVehicleCard refuses too).
+  // My-Vehicles-only affordances: edit (load into worksheet for editing), overwrite
+  // (replace saved entry with current worksheet), delete. Builtins never get any of
+  // these (isUser guards here; the handlers refuse non-user_ keys too as a second gate).
   if(isUser){
-    const ov=document.createElement('button');
-    ov.className='lib-vcard-overwrite';
-    ov.textContent='⟲';
-    ov.title='Overwrite "'+(p.name||'Unnamed LV')+'" with the current worksheet configuration (replaces its saved stages/config)';
-    ov.style.cssText='position:absolute;top:4px;right:4px;background:var(--panel);border:1px solid var(--border);color:var(--text-dim);font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;border-radius:2px;';
-    ov.onclick=e=>{e.stopPropagation();if(typeof libOverwriteVehicleCard==='function')libOverwriteVehicleCard(key);};
     card.style.position='relative';
-    card.appendChild(ov);
+    card.classList.add('lib-vcard-actionable');
+    const mkBtn=(cls,glyph,title,onclick,right)=>{
+      const b=document.createElement('button');
+      b.className=cls; b.textContent=glyph; b.title=title;
+      b.style.cssText='position:absolute;top:4px;right:'+right+'px;background:var(--panel);border:1px solid var(--border);color:var(--text-dim);font-size:11px;line-height:1;padding:2px 5px;cursor:pointer;border-radius:2px;';
+      b.onclick=onclick;
+      return b;
+    };
+    const del=mkBtn('lib-vcard-delete','✕','Delete "'+(p.name||'Unnamed LV')+'" from your library',
+      e=>{e.stopPropagation();if(typeof libDeleteVehicleCard==='function')libDeleteVehicleCard(key);},4);
+    const ov=mkBtn('lib-vcard-overwrite','⟲','Overwrite "'+(p.name||'Unnamed LV')+'" with the current worksheet configuration (replaces its saved stages/config)',
+      e=>{e.stopPropagation();if(typeof libOverwriteVehicleCard==='function')libOverwriteVehicleCard(key);},26);
+    const ed=mkBtn('lib-vcard-edit','✎','Edit "'+(p.name||'Unnamed LV')+'" — load into the worksheet (saves will Update this entry in place)',
+      e=>{e.stopPropagation();loadPreset(p,key);},48);
+    card.appendChild(del); card.appendChild(ov); card.appendChild(ed);
   }
   return card;
 }

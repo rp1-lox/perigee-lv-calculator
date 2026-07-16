@@ -33,16 +33,44 @@ function _lvUpdateSourceIdx(){
   return userLVs.findIndex(lv=>lv._sessionId===_worksheetLoadedFromLvId);
 }
 // Show/hide + label the "Update ..." button in the Save LV modal based on provenance.
+// When provenance exists, Update is the PRIMARY (accent) action and Save becomes the
+// secondary "Save as new" — editing an existing saved vehicle should never force the
+// user through save-as-new (see 2026-07-16 library-management rework).
 function refreshLVUpdateButton(){
   const btn=document.getElementById('lv-update-btn');
+  const saveBtn=document.getElementById('lv-save-btn');
   if(!btn)return;
   const idx=_lvUpdateSourceIdx();
   if(idx>=0){
     btn.style.display='';
     btn.textContent='Update "'+(userLVs[idx].name||'Unnamed LV')+'"';
+    btn.classList.add('primary');
+    if(saveBtn){saveBtn.classList.remove('primary');saveBtn.textContent='Save as New';}
   } else {
     btn.style.display='none';
+    btn.classList.remove('primary');
+    if(saveBtn){saveBtn.classList.add('primary');saveBtn.textContent='Save to Library';}
   }
+}
+// Small "editing: <name> ✕" chip shown above Stage Composition whenever the worksheet
+// carries overwrite provenance (loaded from a user library vehicle). The ✕ detaches
+// provenance without touching the worksheet's current values — next save then defaults
+// to save-as-new. Call after anything that sets/clears _worksheetLoadedFromLvId.
+function lvEditingIndicatorRefresh(){
+  const wrap=document.getElementById('lv-editing-indicator');
+  const txt=document.getElementById('lv-editing-indicator-text');
+  if(!wrap||!txt)return;
+  const idx=_lvUpdateSourceIdx();
+  if(idx>=0){
+    wrap.style.display='inline-flex';
+    txt.textContent='editing: '+(userLVs[idx].name||'Unnamed LV');
+  } else {
+    wrap.style.display='none';
+  }
+}
+function lvDetachEditing(){
+  _worksheetLoadedFromLvId=null;
+  lvEditingIndicatorRefresh();
 }
 // Replaces userLVs[idx] in place with a freshly-collected worksheet snapshot, preserving
 // the entry's _sessionId (identity) so anything keyed off it stays valid. Reused by both
@@ -91,6 +119,28 @@ function libOverwriteVehicleCard(key){
       const obj=_replaceUserLVAt(idx,entry.name,entry.note||'');
       showAlert('Overwrote "'+obj.name+'" with the current worksheet.','Vehicle Updated');
     },'Overwrite');
+}
+// Per-card "✕ delete" action in the library browser (221). Builtins are never deletable
+// (key guard here + no button rendered for them at all). Deleting does NOT touch any
+// mission fleet snapshot already taken from this vehicle — _fleetVehicleSpecFromLib (560)
+// deep-copies stage/booster/site data into the fleet entry at snapshot time, so existing
+// missions/fleet entries have no live reference back into userLVs[] and replay unaffected.
+function libDeleteVehicleCard(key){
+  if(!key||key.indexOf('user_')!==0)return; // builtin/other keys refused
+  const idx=parseInt(key.slice(5),10);
+  const entry=userLVs[idx];
+  if(!entry)return;
+  showConfirm('Delete Saved Vehicle',
+    'Delete "'+(entry.name||'Unnamed LV')+'" from your library? This cannot be undone. Missions already built from it are unaffected (they hold their own copy).',
+    ()=>{
+      const wasEditing=_lvUpdateSourceIdx()===idx;
+      userLVs.splice(idx,1);
+      if(activePresetKey===key)activePresetKey=null;
+      if(wasEditing)_worksheetLoadedFromLvId=null;
+      buildPresets();
+      lvEditingIndicatorRefresh();
+      if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
+    },'Delete');
 }
 // "Saving: N stages · boosters: M×/none · launch site: <name> (<lat>°)" — refreshed each open.
 function refreshLVSaveSummary(){
@@ -145,6 +195,11 @@ function doSaveLV(){
   const note=document.getElementById('lv-save-note').value.trim();
   const obj=buildLVObject(name,note);
   obj._sessionId=Date.now();userLVs.push(obj);buildPresets();closeModal('modal-save-lv');
+  // Newly-saved vehicle becomes the worksheet's overwrite target, same as if it had been
+  // loaded from the library — so an immediate next edit defaults to Update, not save-as-new.
+  _worksheetLoadedFromLvId=obj._sessionId;
+  activePresetKey='user_'+(userLVs.length-1);
+  lvEditingIndicatorRefresh();
   if(typeof autosaveScheduleSave==='function')autosaveScheduleSave();
   showAlert('Saved "'+obj.name+'" to your library (My Stuff).','Vehicle Saved');
 }
@@ -254,6 +309,7 @@ function applyLVObject(obj){
   else{const panel=document.getElementById('results-panel');if(panel)panel.innerHTML=`<div class="placeholder-msg">// ${obj.name||'LV'} loaded — no performance cases yet. Calculate to add one.</div>`;}
   loadedVehicleName=obj.name||'';
   if(typeof libSeedTagHolder==='function') libSeedTagHolder(_lvTagHolder, obj.tags, [{dim:'era'},{dim:'origin'}], 'veh');
+  if(typeof lvEditingIndicatorRefresh==='function') lvEditingIndicatorRefresh();
 }
 function openJSONModal(){const obj=collectVehicle();if(lastResult)obj.performanceResults=lastResult;document.getElementById('json-editor').value=JSON.stringify(obj,null,2);document.getElementById('json-error').style.display='none';openModal('modal-json');}
 function applyJSON(){const txt=document.getElementById('json-editor').value;try{const obj=JSON.parse(txt);applyLVObject(obj);closeModal('modal-json');}catch(e){const err=document.getElementById('json-error');err.textContent='// JSON parse error: '+e.message;err.style.display='block';}}

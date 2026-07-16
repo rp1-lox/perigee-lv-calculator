@@ -76,6 +76,10 @@
     <div class="lib-panel" style="margin-top:0;min-width:0;display:flex;flex-direction:column;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <div class="sl" style="margin-bottom:0;flex:1;">Stage Composition</div>
+        <span id="lv-editing-indicator" style="display:none;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:var(--accent3);letter-spacing:.03em;">
+          <span id="lv-editing-indicator-text"></span>
+          <span onclick="lvDetachEditing()" title="Stop editing this saved vehicle (next save will save as new)" style="cursor:pointer;color:var(--text-dim);padding:0 2px;">✕</span>
+        </span>
         <button class="act-btn green" onclick="openSaveLVModal()">SAVE LV</button>
       </div>
 
@@ -521,7 +525,7 @@
     <div class="modal-footer">
       <button class="modal-btn" onclick="closeModal('modal-save-lv')">Cancel</button>
       <button class="modal-btn" id="lv-update-btn" style="display:none" onclick="doUpdateLV()" title="Replace the saved library entry this vehicle was loaded from, in place">Update</button>
-      <button class="modal-btn primary" onclick="doSaveLV()">Save to Library</button>
+      <button class="modal-btn primary" id="lv-save-btn" onclick="doSaveLV()">Save to Library</button>
     </div>
   </div>
 </div>
