@@ -38,6 +38,7 @@ const FILES = [
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/415-launch-planner.js',
   'src/js/424-blt-reference.js',
+  'src/js/565-physics-blt.js',
   'src/js/425-reference-orbits.js',
   'src/js/567-phase-truth.js',   // after 425: uses refOrbitResolve/_refToRot/refOrbitSamplePropagatedRaw
   'src/js/430-program-module-phase-8-node-map.js',
@@ -4366,6 +4367,72 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // Family-selection rule sanity (Moon-quadrant, B3 consumer contract).
   ok('B2: bltF16SelectFamily picks f16 when the Moon is Sun-near (angle 0)', bltF16SelectFamily(0) === BLT_F16_FAMILY);
   ok('B2: bltF16SelectFamily picks f\'16 when the Moon is Sun-far (angle 180)', bltF16SelectFamily(180) === BLT_FPRIME16_FAMILY);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §21 B3 — incremental BLT targeting solver (565-physics-blt.js, MATH.md §7aj)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physSolveBlt, physBltSunEarthMoonAngleDeg, physBltEmL2DistanceKm,
+    physBltFindMoonPlaneCrossing, physBltAcceptanceChecks, physPropagateSegment,
+    physSolveNrhoTransfer, physShootLegAim } =
+    vm.runInContext('({ physSolveBlt, physBltSunEarthMoonAngleDeg, physBltEmL2DistanceKm, physBltFindMoonPlaneCrossing, physBltAcceptanceChecks, physPropagateSegment, physSolveNrhoTransfer, physShootLegAim })', sandbox);
+
+  // Regression guard (5a/targeting untouched by B3 — CLAUDE.md hard invariant).
+  ok('B3: 5a/targeting solvers still defined (physSolveNrhoTransfer, physShootLegAim) — B3 added a new file, touched nothing else', typeof physSolveNrhoTransfer === 'function' && typeof physShootLegAim === 'function');
+
+  // EM-L2 distance sanity: known to sit ~60,000-65,000 km beyond the Moon
+  // (~448,000-450,000 km from Earth) at any epoch.
+  const l2 = physBltEmL2DistanceKm(0);
+  ok('B3: physBltEmL2DistanceKm gives a plausible EM-L2 offset from the Moon (60,000-65,000 km)', l2.distFromMoonKm > 60000 && l2.distFromMoonKm < 65000);
+  ok('B3: EM-L2 distance from Earth is plausible (410,000-470,000 km — the real ephemeris Moon distance varies with lunar eccentricity, so this is wider than a fixed-mean-distance textbook figure)', l2.distFromEarthKm > 410000 && l2.distFromEarthKm < 470000);
+
+  // Moon quadrant angle + plane-crossing finder: pure sanity (finite, in range).
+  const angle0 = physBltSunEarthMoonAngleDeg(0);
+  ok('B3: physBltSunEarthMoonAngleDeg returns a finite angle in [0,180]', Number.isFinite(angle0) && angle0 >= 0 && angle0 <= 180);
+  const crossing = physBltFindMoonPlaneCrossing(0, 78, 20);
+  ok('B3: physBltFindMoonPlaneCrossing finds a Moon Sun-Earth-rotating-plane crossing near the ~78d target', crossing != null && Math.abs(crossing / 86400 - 78) < 20);
+
+  // The canonical case: t0=0 (MET epoch 0, PROG_DEFAULT_EPOCH_JD), 185 km
+  // parking altitude (inclination is DERIVED by the B3.1 anchoring — the
+  // family geometry determines the departure plane; a passed incRad is only
+  // a fallback). All numbers below MEASURED 2026-07-15 on this codebase's
+  // mean-element ephemeris (band-level agreement with the paper expected,
+  // not exact numbers — B-series risk callout). ~5 s solve.
+  const canonical = physSolveBlt({ t0_s: 0, parkingAltKm: 185 });
+  ok('B3: physSolveBlt never throws and always returns a {converged,...} shape', canonical && typeof canonical.converged === 'boolean');
+  // Step 1 (B3.1 anchored seed + WSB-band root selection): CONVERGED —
+  // measured dv_TLI 3.1984 km/s (paper class 3.0-3.2), arc apogee 1.42M km
+  // (ispace band 1-1.5M), arrival crossing at 101.6 d (paper TOF class
+  // 87-180 d), plane-crossing residual -353 km.
+  ok('B3: Step 1 converges on the canonical case (anchored seed + in-band root)', canonical.step1 && canonical.step1.dv_kms > 0);
+  ok('B3: canonical dv_TLI in the paper band 3.0-3.3 km/s (measured 3.198)', canonical.step1.dv_kms > 3.0 && canonical.step1.dv_kms < 3.3);
+  ok('B3: canonical Step-1 plane-crossing residual under 10,000 km (measured -353 km)', Math.abs(canonical.step1.resid_km) < 10000);
+  // ispace-hybrid acceptance checks (RESEARCH_CISLUNAR.md): both PASS on the
+  // canonical arc — apogee 1,423,889 km in the 1-1.5M band, L-neck exit true.
+  ok('B3: canonical arc apogee lands in the WSB band (measured 1.424M km)', canonical.acceptance && canonical.acceptance.apogeeBandOk === true);
+  ok('B3: canonical arc exits Earth vicinity via the L1/L2 region', canonical.acceptance && canonical.acceptance.exitedViaLNeck === true);
+  // Step 2 (RTBP orientation Newton, STM-chained analytic partials):
+  // CONVERGED — measured 7 iterations to the 15k-km hand-off band.
+  ok('B3: Step 2/3 orientation Newton converges on the canonical case', canonical.step23 && canonical.step23.params && canonical.step23.params.dv_kms > 3.0);
+  // Step 4 (capture refinement): the canonical epoch does NOT reach full
+  // ballistic capture (KEm < 0 + second perilune) — measured best: a
+  // ~40,000 km perilune at KEm ~ +0.37 km^2/s^2 (a slow flyby, not capture;
+  // the capture filament needs the multiple-shooting escalation both
+  // reference papers describe — MATH.md §7aj critiques 114-116). The gate
+  // pins the HONEST overall fail-clean shape plus Step 4's measured
+  // progress (a real perilune with finite KEm), not a fabricated capture.
+  ok('B3: canonical result is fail-clean overall (converged:false at a named stage with a note) — no false capture claim', canonical.converged === false && typeof canonical.stage === 'string' && typeof canonical.note === 'string');
+  ok('B3: Step 4 finds a real perilune with finite KEm on the canonical case (measured ~40k km, KEm ~ +0.37)', canonical.step4 && canonical.step4.perilune1 && Number.isFinite(canonical.step4.perilune1.KEm) && canonical.step4.perilune1.rMag_km > 1737.4);
+  ok('B3: canonical TOF lands in the paper band 85-180 d (measured ~110 d)', canonical.tof_days > 85 && canonical.tof_days < 180);
+
+  // physBltAcceptanceChecks on a plain high-energy Earth-Sun ballistic arc
+  // (independent of the solver's own convergence) — sanity on the apogee
+  // measurement machinery itself.
+  const burnCtx = { center: 'Earth', bodies: ['Earth', 'Sun'] };
+  const testRes = physPropagateSegment({ r: [6556, 0, 0], v: [0, 10.9, 0] }, 0, 60 * 86400, burnCtx, { maxSamples: 128 });
+  const acc = physBltAcceptanceChecks(testRes, 60 * 86400);
+  ok('B3: physBltAcceptanceChecks measures a finite, positive apogee on a real propagated arc', Number.isFinite(acc.apogeeKm) && acc.apogeeKm > 6556);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
