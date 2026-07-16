@@ -911,7 +911,7 @@ function _trajLaunchSiteAndAscentSVG(m, cx, cy, rPx, viewT, viewportDiagPx) {
   const lodAlpha = _trajLodOpacity(rPx, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
   if (lodAlpha <= 0) return '';
   const spinNow = _trajBodySpinAngle('Earth', viewT);
-  const nowPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinNow), cx, cy, rPx);
+  const nowPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinNow, 'Earth'), cx, cy, rPx);
   let svg = '';
   if (nowPt.depth >= 0) { // hemisphere cull — same convention as the coastline paths
     svg += `<circle cx="${nowPt.x.toFixed(2)}" cy="${nowPt.y.toFixed(2)}" r="3" fill="none" stroke="var(--accent3)" stroke-width="1.3" opacity="${lodAlpha.toFixed(3)}"/>`;

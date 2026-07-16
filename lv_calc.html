@@ -28823,7 +28823,7 @@ function _trajLaunchSiteAndAscentSVG(m, cx, cy, rPx, viewT, viewportDiagPx) {
   const lodAlpha = _trajLodOpacity(rPx, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
   if (lodAlpha <= 0) return '';
   const spinNow = _trajBodySpinAngle('Earth', viewT);
-  const nowPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinNow), cx, cy, rPx);
+  const nowPt = _trajSurfacePoint(_trajSpinRotate(_trajLatLonUnit(site.lat, site.lon), spinNow, 'Earth'), cx, cy, rPx);
   let svg = '';
   if (nowPt.depth >= 0) { // hemisphere cull — same convention as the coastline paths
     svg += `<circle cx="${nowPt.x.toFixed(2)}" cy="${nowPt.y.toFixed(2)}" r="3" fill="none" stroke="var(--accent3)" stroke-width="1.3" opacity="${lodAlpha.toFixed(3)}"/>`;
@@ -31588,11 +31588,32 @@ function _trajLatLonUnit(latDeg, lonDeg) {
   const cl = Math.cos(lat);
   return [cl * Math.cos(lon), cl * Math.sin(lon), Math.sin(lat)];
 }
-// Rotate a unit-sphere body-frame point by spin angle (rad) about the +z
-// (ecliptic-normal) axis, giving its WORLD-frame direction.
-function _trajSpinRotate(pt, spinRad) {
+// Rotate a unit-sphere body-frame point by spin angle (rad) about the body's
+// OWN spin axis, then (§20 O2) tilt the result from the body's equatorial
+// frame into the WORLD (ecliptic) frame via `physEqBasis(body)` — the same
+// basis 385's physics seam and the ring-plane basis above already use, so
+// coastlines/craters/cloud-bands agree with the ring tilt and the physics
+// pole exactly. Spin still happens FIRST, about equatorial-frame +z (the
+// body's own axis) — only the already-spun equatorial vector gets tilted
+// into world coordinates, matching the forward composition documented in
+// MATH.md §7al O2 (R_tilt . R_z(spin), NOT the other order). `body` is
+// optional (older/degenerate callers): omitting it, or a body absent from
+// PROG_BODY_POLES, falls back to `physEqBasis`'s own identity default
+// (xEq=[1,0,0], yEq=[0,1,0], zEq=[0,0,1]) — i.e. exactly the pre-§20-O2
+// untilted behavior, so this is a mechanical, zero-behavior-change
+// generalization for every body not in the pole table.
+function _trajSpinRotate(pt, spinRad, body) {
   const c = Math.cos(spinRad), s = Math.sin(spinRad);
-  return [pt[0] * c - pt[1] * s, pt[0] * s + pt[1] * c, pt[2]];
+  const ex = pt[0] * c - pt[1] * s, ey = pt[0] * s + pt[1] * c, ez = pt[2];
+  if (body && typeof physEqBasis === 'function') {
+    const B = physEqBasis(body);
+    return [
+      ex * B.xEq[0] + ey * B.yEq[0] + ez * B.zEq[0],
+      ex * B.xEq[1] + ey * B.yEq[1] + ez * B.zEq[1],
+      ex * B.xEq[2] + ey * B.yEq[2] + ez * B.zEq[2],
+    ];
+  }
+  return [ex, ey, ez];
 }
 // Body spin angle (rad) at mission time viewT_s. Earth/Mars: sidereal
 // rotation from viewT with a fixed (uncalibrated — display flavor only, not
@@ -31631,7 +31652,26 @@ function _trajFrameBasisAt(frameKind, body, t) {
   if (frameKind === 'body-fixed') {
     const a = (typeof _trajBodySpinAngle === 'function') ? _trajBodySpinAngle(body, t) : 0;
     const c = Math.cos(a), s = Math.sin(a);
-    return { xh: [c, s, 0], yh: [-s, c, 0], zh: [0, 0, 1] };
+    // §20 O2: a surface direction's world position is now
+    // Tilt(body) . Rz(a) . bodyLocal (see _trajSpinRotate) instead of
+    // Rz(a) . bodyLocal — so cancelling it back to a constant body-local
+    // direction needs B = Tilt(body) . Rz(a), not Rz(a) alone. Columns of
+    // that product (xh/yh/zh are read as columns by _trajFrameTransform,
+    // which computes q = pRel . xh / pRel . yh / pRel . zh, i.e. q = M^T
+    // pRel for M's rows == xh/yh/zh as WRITTEN — verified against the
+    // pre-§20-O2 identity-tilt case: xh=[c,s,0] etc. is exactly Tilt=I's
+    // Rz(a) columns) are Tilt applied to Rz(a)'s own columns [c,s,0],
+    // [-s,c,0], [0,0,1]: xh = c*xEq + s*yEq, yh = -s*xEq + c*yEq, zh = zEq.
+    // Falls back to the untilted identity basis for bodies absent from
+    // PROG_BODY_POLES (physEqBasis's own default), so this is a mechanical,
+    // zero-behavior-change generalization for non-tilted anchors.
+    const eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : null;
+    const xEq = eqB ? eqB.xEq : [1, 0, 0], yEq = eqB ? eqB.yEq : [0, 1, 0], zEq = eqB ? eqB.zEq : [0, 0, 1];
+    return {
+      xh: [c * xEq[0] + s * yEq[0], c * xEq[1] + s * yEq[1], c * xEq[2] + s * yEq[2]],
+      yh: [-s * xEq[0] + c * yEq[0], -s * xEq[1] + c * yEq[1], -s * xEq[2] + c * yEq[2]],
+      zh: zEq,
+    };
   }
   if (frameKind === 'earth-moon-rotating' && typeof _refRotBasisPair === 'function') {
     return _refRotBasisPair('Earth', 'Moon', t);
@@ -31781,16 +31821,16 @@ function _trajClippedRunsToPath(clip, cx, cy, rPx) {
 }
 // Flat [lon0,lat0,lon1,lat1,...] TENTHS-of-degree polygon (PROG_GEO_EARTH) ->
 // an SVG path `d` string, hemisphere-clipped and limb-closed (item defect1).
-function _trajGeoPolyPath(lonLatTenths, spinAngle, cx, cy, rPx) {
+function _trajGeoPolyPath(lonLatTenths, spinAngle, cx, cy, rPx, body) {
   const dirs = [];
   for (let i = 0; i < lonLatTenths.length; i += 2) {
-    dirs.push(_trajSpinRotate(_trajLatLonUnit(lonLatTenths[i + 1] / 10, lonLatTenths[i] / 10), spinAngle));
+    dirs.push(_trajSpinRotate(_trajLatLonUnit(lonLatTenths[i + 1] / 10, lonLatTenths[i] / 10), spinAngle, body));
   }
   return _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
 }
 // PROG_GEO_FEATURES ellipse {lat,lon,rLat,rLon} -> sampled SVG path `d`
 // string, same hemisphere-clip/limb-close treatment as the coastline path.
-function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx) {
+function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx, body) {
   const n = 20;
   const lonScale = Math.max(0.15, Math.cos(feat.lat * _PROG_D2R)); // lon degrees compress toward the poles
   const dirs = [];
@@ -31798,7 +31838,7 @@ function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx) {
     const a = 2 * Math.PI * k / n;
     const lat = feat.lat + feat.rLat * Math.sin(a);
     const lon = feat.lon + (feat.rLon * Math.cos(a)) / lonScale;
-    dirs.push(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle));
+    dirs.push(_trajSpinRotate(_trajLatLonUnit(lat, lon), spinAngle, body));
   }
   return _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
 }
@@ -31919,18 +31959,18 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDia
   if (!skipGeometry) {
     if (body === 'Earth' && typeof PROG_GEO_EARTH !== 'undefined') {
       PROG_GEO_EARTH.forEach(poly => {
-        const d = _trajGeoPolyPath(poly, spinAngle, cx, cy, rPx);
+        const d = _trajGeoPolyPath(poly, spinAngle, cx, cy, rPx, body);
         if (d) features += `<path d="${d}" fill="${style.land || '#3f7a42'}" stroke="none"/>`;
       });
     } else if (body === 'Moon' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Moon || []).forEach(f => {
-        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
+        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx, body);
         const fill = style[f.kind] || style.mare || '#7d7566';
         if (d) features += `<path d="${d}" fill="${fill}" stroke="none"/>`;
       });
     } else if (body === 'Mars' && typeof PROG_GEO_FEATURES !== 'undefined') {
       (PROG_GEO_FEATURES.Mars || []).forEach(f => {
-        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx);
+        const d = _trajGeoEllipsePath(f, spinAngle, cx, cy, rPx, body);
         const fill = style[f.kind] || style.base;
         if (d) features += `<path d="${d}" fill="${fill}" stroke="none"/>`;
       });
@@ -31941,11 +31981,11 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDia
         const dirs = [];
         for (let k = 0; k <= nSeg; k++) {
           const lon = -180 + (360 * k) / nSeg;
-          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat1, lon), spinAngle));
+          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat1, lon), spinAngle, body));
         }
         for (let k = nSeg; k >= 0; k--) {
           const lon = -180 + (360 * k) / nSeg;
-          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat0, lon), spinAngle));
+          dirs.push(_trajSpinRotate(_trajLatLonUnit(lat0, lon), spinAngle, body));
         }
         const d = _trajClippedRunsToPath(_trajHemiClipRuns(dirs), cx, cy, rPx);
         if (d) features += `<path d="${d}" fill="${bands[b]}" stroke="none" opacity="0.85"/>`;
@@ -32090,6 +32130,19 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
   const ca = Math.cos(az || 0), sa = Math.sin(az || 0), ct = Math.cos(t), st = Math.sin(t);
   const spc = Math.cos(spinAngle || 0), sps = Math.sin(spinAngle || 0);
+  // §20 O2: the same body-equatorial basis _trajSpinRotate composes on the
+  // forward (vector-feature) path, used here in its INVERSE sense — this
+  // pixel loop reconstructs the WORLD-frame surface normal (x,y,z) from the
+  // screen ray first (un-tilt/un-azimuth below, unrelated to obliquity),
+  // then must rotate THAT into the body's EQUATORIAL frame (ex,ey,ez) before
+  // un-spinning to recover lat/lon — the mirror-image step of the forward
+  // spin-then-tilt composition. physEqBasis is orthonormal, so its inverse
+  // is its transpose: eq = worldVec . (xEq | yEq | zEq) column-wise, i.e.
+  // dot the world vector with each basis vector. Falls back to identity for
+  // bodies absent from PROG_BODY_POLES (physEqBasis's own default), so this
+  // is a no-op for every body this raster path already rendered correctly.
+  const _eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : null;
+  const eqX = _eqB ? _eqB.xEq : [1, 0, 0], eqY = _eqB ? _eqB.yEq : [0, 1, 0], eqZ = _eqB ? _eqB.zEq : [0, 0, 1];
   const iw = tex.w, ih = tex.h, id = tex.imgData;
   const ciw = cloudActive ? cloudTex.w : 0, cih = cloudActive ? cloudTex.h : 0, cid = cloudActive ? cloudTex.imgData : null;
   const R = size / 2;
@@ -32111,10 +32164,15 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
       // un-azimuth: (x,y) = R(-az) * (xa,ya)
       const x = xa * ca + ya * sa;
       const y = u * sa + ya * ca; // == -xa*sa + ya*ca
-      // un-spin: body-frame = R(-spin) * (x,y)
-      const bx = x * spc + y * sps;
-      const by = -x * sps + y * spc;
-      const bz = z;
+      // un-tilt into the body's EQUATORIAL frame (§20 O2 — inverse of the
+      // forward Tilt applied by _trajSpinRotate; identity for untilted
+      // bodies), THEN un-spin: body-frame = R(-spin) * (ex,ey)
+      const ex = x * eqX[0] + y * eqX[1] + z * eqX[2];
+      const ey = x * eqY[0] + y * eqY[1] + z * eqY[2];
+      const ez = x * eqZ[0] + y * eqZ[1] + z * eqZ[2];
+      const bx = ex * spc + ey * sps;
+      const by = -ex * sps + ey * spc;
+      const bz = ez;
       const lat = Math.asin(Math.max(-1, Math.min(1, bz)));
       const lon = Math.atan2(by, bx);
       const fx = ((lon + Math.PI) / (2 * Math.PI)) * iw;
@@ -32122,10 +32180,10 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
       const rgb = _trajBilinearSample(id, iw, ih, fx, fy);
       if (cloudActive) {
         // Independent longitude for the cloud layer: re-un-spin the SAME
-        // pre-spin world direction (x,y,z) with cloudSpin instead of the
-        // body's own spinAngle. Latitude is spin-invariant (z unchanged).
-        const ccx = x * cspc + y * csps;
-        const ccy = -x * csps + y * cspc;
+        // pre-spin equatorial-frame direction (ex,ey,ez) with cloudSpin
+        // instead of the body's own spinAngle. Latitude is spin-invariant.
+        const ccx = ex * cspc + ey * csps;
+        const ccy = -ex * csps + ey * cspc;
         const clon = Math.atan2(ccy, ccx);
         const cfx = ((clon + Math.PI) / (2 * Math.PI)) * ciw;
         const cfy = fy * (cih / ih); // same latitude fraction, cloud texture's own height
