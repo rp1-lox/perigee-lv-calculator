@@ -250,6 +250,44 @@ function missionRunChecks(m) {
     }
   }
 
+  // ── §22 TRANSFER CHAINS — group-level checks (flyby / staleness) ──────────
+  // Evaluated regardless of suspendAt: these describe the AUTHORED chain
+  // itself (structure + inputs), not a replay failure downstream of it, so
+  // they stay meaningful even if a later event in the log went red.
+  Object.keys(m.groups || {}).forEach(gid => {
+    const g = m.groups[gid];
+    if (!g || g.kind !== 'transfer') return;
+    const members = (m.log || []).map((e, i) => ({ e, i })).filter(x => x.e.groupId === gid);
+    if (!members.length) return;
+    const anchorIdx = members[0].i;
+    // C1: flyby — this chain USED to author an injection member (g.hadInject)
+    // but no longer has one in the log (user deleted it) — the vehicle
+    // honestly continues past the target on the transfer leg; INFO, not a
+    // failure (a legitimate architecture, not a broken plan).
+    if (g.hadInject && !members.some(x => x.e.chainRole === 'inject')) {
+      push('chain-flyby', 'info', 'No insertion — flyby',
+        `${_mcEscape(g.name || 'This transfer')}'s injection burn was removed — the vehicle continues past the target on the transfer leg instead of arriving into its destination orbit.`,
+        anchorIdx);
+    }
+    // C2: staleness — the schematic ΔV requirement or the depart member's own
+    // MET has moved since this chain was last (re-)solved, and nobody has
+    // clicked ↻ yet. Detail deliberately loose (destination orbit / upstream
+    // MET edits both move one of these two signals) — see docs/MATH.md §7ak
+    // for the documented scope (vehicle-mass-only changes are NOT detected,
+    // a known gap).
+    if (g.solved && g.route) {
+      const depart = members.find(x => x.e.chainRole === 'depart') || members.find(x => x.e.chainRole === 'inject');
+      const curDv = (typeof progNmComputeEdgeDv === 'function') ? progNmComputeEdgeDv(g.route.fromNode, g.route.toNode) : null;
+      const dvMoved = curDv && g.solved.dv != null && Math.abs(curDv.dv - g.solved.dv) > 1;
+      const metMoved = depart && depart.e.metStart != null && g.solved.departMet != null && Math.abs(depart.e.metStart - g.solved.departMet) > 1;
+      if (dvMoved || metMoved) {
+        push('chain-stale', 'amber', 'Chain inputs changed since solve',
+          `${_mcEscape(g.name || 'This transfer')}'s ${dvMoved ? 'required &Delta;V' : 'departure time'} has changed since it was last solved — click &#8635; Re-solve on the group header to rewrite the departure/MCC/injection burns for the current inputs.`,
+          anchorIdx);
+      }
+    }
+  });
+
   // ── End-state checks (5, 6, 8, 9) — evaluated once, from live vehicles ──
   // Skipped entirely if a red already suspended the scan (devil b): end-state is
   // unreliable once an earlier event already broke the plan.

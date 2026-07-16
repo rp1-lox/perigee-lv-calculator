@@ -117,6 +117,29 @@ function missionRenderDetail() {
         const g = m.groups[gid];
         let inner = ''; for (let k = i; k < j; k++) inner += card(m.log[k], k);
         if (!inner) { i = j; continue; }   // whole group filtered out
+        if (g.kind === 'transfer') {
+          // §22 TRANSFER CHAINS: header shows the route + summed member ΔV +
+          // a ↻ re-solve control instead of the Loop repeat UI. Total is the
+          // SUM of each member's own charged dv (depart auto/override + mcc
+          // burnParam + inject dv/dvOverride) — never re-derived here.
+          let totalDv = 0;
+          for (let k = i; k < j; k++) {
+            const e = m.log[k];
+            if (e.type === 'BURN') totalDv += (e.burnParam || 0);
+            else if (e.type === 'MNODE') totalDv += (e.dvOverride != null ? e.dvOverride : (e.dvRequired || 0));
+          }
+          logHTML += `<div class="mcc-group mcc-group-transfer">
+            <div class="mcc-group-hdr">
+              <span class="mcc-group-name">⊞ ${_tsEsc ? _tsEsc(g.name || 'Transfer') : (g.name || 'Transfer')}</span>
+              <span class="mcc-group-rep" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">Σ&Delta;V ${Math.round(totalDv).toLocaleString()} m/s</span>
+              <button class="act-btn mevt-ctl" onclick="missionChainResolve('${id}','${gid}')" title="Re-solve this transfer with current inputs">↻ Re-solve</button>
+              <button class="act-btn mevt-ctl" onclick="missionUngroup('${id}','${gid}')" title="Ungroup">⊟</button>
+            </div>
+            <div class="mcc-group-body">${inner}</div>
+          </div>`;
+          i = j;
+          continue;
+        }
         logHTML += `<div class="mcc-group">
           <div class="mcc-group-hdr">
             <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Loop'}</span>

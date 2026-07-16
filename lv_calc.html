@@ -13108,6 +13108,30 @@ function physFindEventTime(f, tLo, tHi, tol) {
  */
 function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   opts = opts || {};
+  // ── N1c (MATH.md §7u / §7ak critique 117): backward propagation ───────────
+  // The main loop is forward-only (`while (t < tMax)`), so a tMax < t0 call
+  // iterates zero times and would SILENTLY return state0 stamped at tMax —
+  // indistinguishable from a successful propagation. That silent no-op fed
+  // garbage backward-seeded nodes to the B3.2 corrector and cost a full
+  // debugging round (tests/mshoot_harness.js HISTORY). Two explicit behaviors,
+  // never a silent one:
+  //   • default            -> an error result ({error:'backward propagation
+  //                           unsupported'}, stateF:null) the caller must handle.
+  //   • opts.backward:true  -> real backward integration by time reversal
+  //                           (gravity is velocity-independent): integrate
+  //                           (r,-v) FORWARD in tau=-t with rails read at the
+  //                           true epoch -tau, then negate the final velocity.
+  //                           Proven in tests/mshoot_harness.js (round-trip
+  //                           0.067 km / 0.0001 m/s).
+  // tMax === t0 stays a valid zero-duration FORWARD call (returns state0) — the
+  // guard is strict `<`, so no existing forward caller changes behavior.
+  if (tMax < t0) {
+    if (opts.backward !== true) {
+      return { error: 'backward propagation unsupported', t0: t0, tMax: tMax,
+               stateF: null, tF: t0, frame: ctx.center, samples: [], events: [], steps: 0 };
+    }
+    return _physPropagateBackward(state0, t0, tMax, ctx, opts);
+  }
   const maxSamples = opts.maxSamples || 256;
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
@@ -13256,6 +13280,59 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     if (stmNote) result.stmNote = stmNote;
   }
   return result;
+}
+
+// ── N1c backward-propagation helper (physPropagateSegment opts.backward:true) ─
+// tMax < t0. Time reversal: integrate (r, -v) FORWARD in tau = -t with the body
+// rails read at the physical epoch -tau, then negate the final velocity. Gravity
+// (including the non-inertial center-frame indirect terms) is velocity-
+// independent, so the reversed arc retraces the physical one exactly; frame
+// patching stays consistent under handoffs because the wrapped rail negates the
+// body velocity too (same sign flip as the vessel). ALL propagation still flows
+// through physPropagateSegment — no ad-hoc integrator (hard invariant). Lifted
+// verbatim-in-spirit from tests/mshoot_harness.js's propHelioBack, which pins
+// this exact reversal with a 0.067 km / 0.0001 m/s round-trip self-check.
+// Ballistic-only: thrust would "un-burn" mass and Phi is not coordinate-
+// invariant under reversal, so both are refused explicitly rather than answered
+// wrongly (the E1/B1 "never mislead" discipline).
+function _physPropagateBackward(state0, t0, tMax, ctx, opts) {
+  if (ctx.thrust) {
+    return { error: 'backward propagation unsupported with ctx.thrust', t0: t0, tMax: tMax,
+             stateF: null, tF: t0, frame: ctx.center, samples: [], events: [], steps: 0 };
+  }
+  const baseRail = ctx.railFn || physBodyStateAt;
+  const railRev = function (body, t, ov) {
+    const st = baseRail(body, -t, ov);
+    return { r: st.r, v: physScale(st.v, -1) }; // body-velocity sign flips with time reversal
+  };
+  const ctxRev = Object.assign({}, ctx, { railFn: railRev });
+  const fwdOpts = Object.assign({}, opts, { backward: false, stm: false });
+  // tMax < t0  =>  -tMax > -t0, so the recursive call runs FORWARD in tau.
+  const res = physPropagateSegment(
+    { r: state0.r.slice(), v: physScale(state0.v, -1) }, -t0, -tMax, ctxRev, fwdOpts);
+  // Un-reverse into physical time: negate the final velocity, flip sample/event
+  // epochs, and swap the apsis sense (r·v changes sign with v -> -v). Sample
+  // order already runs start->end in physical time (tau ascending == t
+  // descending, and start is at tau=-t0).
+  const out = {
+    stateF: { r: res.stateF.r.slice(), v: physScale(res.stateF.v, -1) },
+    tF: -res.tF,
+    frame: res.frame,
+    samples: res.samples.map(function (s) { return { t: -s.t, r: s.r.slice(), frame: s.frame }; }),
+    events: res.events.map(function (e) {
+      const o = Object.assign({}, e, { t: -e.t });
+      if (e.type === 'periapsis') o.type = 'apoapsis';
+      else if (e.type === 'apoapsis') o.type = 'periapsis';
+      return o;
+    }),
+    steps: res.steps,
+    backward: true,
+  };
+  if (opts.stm) {
+    out.stmF = null;
+    out.stmNote = 'N1c: opts.stm ignored on a backward-propagation call (Phi is not coordinate-invariant under time reversal) — stmF is null.';
+  }
+  return out;
 }
 
 // ─── PROGRAM MODULE — Phase 4: Interaction & Transfer Events ─────────────────
@@ -23580,6 +23657,29 @@ function missionRenderDetail() {
         const g = m.groups[gid];
         let inner = ''; for (let k = i; k < j; k++) inner += card(m.log[k], k);
         if (!inner) { i = j; continue; }   // whole group filtered out
+        if (g.kind === 'transfer') {
+          // §22 TRANSFER CHAINS: header shows the route + summed member ΔV +
+          // a ↻ re-solve control instead of the Loop repeat UI. Total is the
+          // SUM of each member's own charged dv (depart auto/override + mcc
+          // burnParam + inject dv/dvOverride) — never re-derived here.
+          let totalDv = 0;
+          for (let k = i; k < j; k++) {
+            const e = m.log[k];
+            if (e.type === 'BURN') totalDv += (e.burnParam || 0);
+            else if (e.type === 'MNODE') totalDv += (e.dvOverride != null ? e.dvOverride : (e.dvRequired || 0));
+          }
+          logHTML += `<div class="mcc-group mcc-group-transfer">
+            <div class="mcc-group-hdr">
+              <span class="mcc-group-name">⊞ ${_tsEsc ? _tsEsc(g.name || 'Transfer') : (g.name || 'Transfer')}</span>
+              <span class="mcc-group-rep" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">Σ&Delta;V ${Math.round(totalDv).toLocaleString()} m/s</span>
+              <button class="act-btn mevt-ctl" onclick="missionChainResolve('${id}','${gid}')" title="Re-solve this transfer with current inputs">↻ Re-solve</button>
+              <button class="act-btn mevt-ctl" onclick="missionUngroup('${id}','${gid}')" title="Ungroup">⊟</button>
+            </div>
+            <div class="mcc-group-body">${inner}</div>
+          </div>`;
+          i = j;
+          continue;
+        }
         logHTML += `<div class="mcc-group">
           <div class="mcc-group-hdr">
             <span class="mcc-group-name" style="cursor:pointer" title="Click to rename / change repeat" onclick="missionOpenGroupModal('${id}',${i},${j-1},'${gid}')">⊞ ${g.name || 'Loop'}</span>
@@ -25836,6 +25936,59 @@ function _missionMvBuilderHTML(id, token) {
     </div>${ltBtn}`;
 }
 
+// §22 TRANSFER CHAINS: |vec|*1000 (km/s vector -> m/s magnitude) — the SAME
+// convention the 5a gate (tests/math.test.js) already uses to read
+// mccBurn/insertionBurn off physSolveNrhoTransfer. Pure, no mutation.
+function _missionChainVecMs(vec) {
+  return (vec && vec.length >= 3 && isFinite(vec[0])) ? Math.hypot(vec[0], vec[1], vec[2]) * 1000 : 0;
+}
+
+// §22 C1/C2: split the solver's mid-course-correction + injection components
+// out of the two-hop corridor pattern (entry edge solved via
+// physSolveNrhoTransfer, exit edge is the schematic 'arrival' wrapper around
+// the SAME solve — see 565's lastTransit machinery) into their own log
+// entries, in place. One-source rule: every dv/timing value comes from what
+// 565 ALREADY solved (entryLeg.mccBurn / thisLeg.arrivalBurn) — never
+// recomputed here. Scope (documented, MATH.md §7ak): only fires for the
+// two-hop corridor pattern (entryEntry present + thisLeg.kind==='arrival');
+// a direct one-hop solved edge (no transit hop) stays a single 'inject'
+// member, unchanged from today's accounting. Returns the mcc entry's
+// inserted index, or -1 if no mcc was produced/applicable.
+function _missionChainSplitInject(m, gid, entryIdx, injectIdx) {
+  if (entryIdx == null || entryIdx < 0 || injectIdx == null || injectIdx < 0) return -1;
+  if (typeof physMissionLeg !== 'function') return -1;
+  const entryEntry = m.log[entryIdx], injectEntry = m.log[injectIdx];
+  if (!entryEntry || !injectEntry) return -1;
+  const entryLeg = physMissionLeg(m.missionId, entryIdx);
+  const thisLeg = physMissionLeg(m.missionId, injectIdx);
+  if (!thisLeg || thisLeg.kind !== 'arrival') return -1;
+  const arrivalMet = entryLeg ? (entryLeg.met + (entryLeg.tof_s || 0)) : null;
+  let mccInsertedAt = -1;
+  if (entryLeg && entryLeg.mccBurn && entryEntry.metStart != null) {
+    const departMet = entryEntry.metStart;
+    const mccGap = Math.max(0, (entryLeg.mccBurn.t != null ? entryLeg.mccBurn.t : departMet) - departMet);
+    const mccDvMs = _missionChainVecMs(entryLeg.mccBurn.dvVec);
+    m.log.splice(injectIdx, 0, {
+      type: 'BURN', burnType: 'CUSTOM', burnParam: Math.round(mccDvMs),
+      chainRole: 'mcc', groupId: gid,
+      activeKey: entryEntry.activeKey, activeName: entryEntry.activeName,
+      durationOverride: mccGap,
+      note: `Mid-course correction — solved by the ${entryEntry.fromLabel || entryEntry.fromNode} → ${injectEntry.toLabel || injectEntry.toNode} transfer (MATH.md §7ak)`,
+    });
+    mccInsertedAt = injectIdx;
+    if (arrivalMet != null) injectEntry.durationOverride = Math.max(0, arrivalMet - entryLeg.mccBurn.t);
+  }
+  // Stamp the injection burn's OWN physics-solved magnitude (leg.arrivalBurn)
+  // in place of the schematic patched-conic estimate — safe here because an
+  // 'arrival'-kind leg's physics solve never reads dv_ms (it rides the entry
+  // leg's already-flown trajectory; see 565's fromO.type==='transit' branch),
+  // so overriding it AFTER the solve cannot feed back into the physics.
+  if (thisLeg.arrivalBurn && thisLeg.arrivalBurn.dvVec) {
+    injectEntry.dvOverride = Math.round(_missionChainVecMs(thisLeg.arrivalBurn.dvVec));
+  }
+  return mccInsertedAt;
+}
+
 function missionExecManeuver(id, fromId, toId) {
   const m = _missionGet(id);
   if (!m || !fromId || !toId || fromId === toId) return;
@@ -25845,13 +25998,36 @@ function missionExecManeuver(id, fromId, toId) {
   // copy the draft step program (if any) onto the new maneuver; empty → legacy single burn
   const steps = (_missionAddMv && Array.isArray(_missionAddMv.steps) && _missionAddMv.steps.length)
     ? _missionAddMv.steps.map(s => ({ ...s })) : undefined;
-  // R6.2' Phase B (3a): the node-map bridge now authors the UNIFIED schema
-  // directly — MNODE(mode:'solved', target) — instead of the legacy MANEUVER
-  // literal. fromNode/toNode/fromLabel/toLabel stay mirrored at the top level
-  // (every existing consumer that reads them directly, e.g. the maneuver
-  // card/band label/node-map path builder, keeps working unchanged); dv
-  // components start at 0 and are refreshed from the solved leg on the very
-  // next recompute (display-only mirror, see physRebuildMissionTrajectories).
+
+  // §22 TRANSFER CHAINS C3 (docs/MISSION_MODEL_V2.md §22): the solved from->to
+  // single-node MNODE authoring path is REPLACED by a GROUPED CHAIN bound
+  // through m.groups (new kind:'transfer'). Two-hop corridor pattern (LEO->
+  // TLC then TLC->destination, the shape both dev seeds already author):
+  // does THIS edge CLOSE an already-open corridor-entry chain? Scan backward
+  // for a still-open 'depart' member targeting this edge's fromNode.
+  let entryIdx = -1, entryEntry = null;
+  for (let k = m.log.length - 1; k >= 0; k--) {
+    const cand = m.log[k];
+    const g = cand.groupId && m.groups && m.groups[cand.groupId];
+    if (g && g.kind === 'transfer' && cand.chainRole === 'depart' && cand.toNode === fromId && !g.hadInject) {
+      entryIdx = k; entryEntry = cand; break;
+    }
+  }
+  const toNodeObj = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(toId) : null;
+  const toIsTransit = !!(toNodeObj && toNodeObj.orbit && toNodeObj.orbit.type === 'transit');
+  // depart = a corridor-entry edge with no closing hop authored yet (expects
+  // one later); inject = closes an open chain, OR a direct edge straight to a
+  // real destination (single-member chain — nothing to separate, it both
+  // departs and arrives in the same impulse, same as today).
+  const chainRole = entryEntry ? 'inject' : (toIsTransit ? 'depart' : 'inject');
+  const gid = entryEntry ? entryEntry.groupId : ('gxfer' + progUUID().slice(0, 8));
+
+  const idx0 = m.log.length;
+  // R6.2' Phase B (3a), preserved: the node-map bridge authors the UNIFIED
+  // schema — MNODE(mode:'solved', target) — dv components start at 0 and are
+  // refreshed from the solved leg on the very next recompute (display-only
+  // mirror, see physRebuildMissionTrajectories). chainRole/groupId are new
+  // (§22) metadata only — the exec/replay path is byte-identical to before.
   m.log.push({
     type: 'MNODE', mode: 'solved',
     target: { fromNode: fromId, toNode: toId },
@@ -25863,14 +26039,85 @@ function missionExecManeuver(id, fromId, toId) {
     activeName: actFv ? _missionVehicleDisplayName(actFv) : null,
     note: res ? res.note : 'No transfer model for this pair',
     method: res ? res.method : null,
+    chainRole, groupId: gid,
   });
   _missionBridgeMode = false;
   _missionBridgeFrom = null;
   _missionAddEvt = null;
   _missionAddMv = { from: null, to: null, steps: [] };
   _missionExpandLast(m);
+  // PASS 1 — solve the edge (populates the physics leg the split below reads).
+  // Suppressed from undo history (reuses the existing _missionUndoRestoring
+  // guard 575 already respects) so the whole authoring action lands as ONE
+  // undo step, same contract as missionAddPhasingBurns.
+  _missionUndoRestoring = true;
+  try { missionRecompute(m); } finally { _missionUndoRestoring = false; }
+
+  if (chainRole === 'inject' && entryEntry) _missionChainSplitInject(m, gid, entryIdx, idx0);
+
+  m.groups = m.groups || {};
+  if (entryEntry) {
+    const g = m.groups[gid];
+    g.name = `${entryEntry.fromLabel || entryEntry.fromNode} → ${lbl(toId, 'to')}`;
+    g.route = { fromNode: entryEntry.fromNode, toNode: toId };
+    g.hadInject = true;
+  } else {
+    m.groups[gid] = {
+      kind: 'transfer',
+      name: `${lbl(fromId, 'from')} → ${lbl(toId, 'to')}`,
+      route: { fromNode: fromId, toNode: toId },
+      hadInject: (chainRole === 'inject'),
+    };
+  }
+  // §22 C2 staleness signature — re-checked every recompute (572), rewritten
+  // by the group header's ↻ re-solve control. IMPORTANT: computed from the
+  // group's OVERALL route (leo->nrho for a two-hop chain), NOT `res` (which
+  // is only THIS edge's own endpoints, e.g. tlc->nrho on the closing hop) —
+  // using `res` here would compare apples to oranges against the staleness
+  // check's own progNmComputeEdgeDv(g.route...) read and false-positive on
+  // every fresh authoring.
+  {
+    const finalG = m.groups[gid];
+    const routeDv = (finalG.route && typeof progNmComputeEdgeDv === 'function')
+      ? progNmComputeEdgeDv(finalG.route.fromNode, finalG.route.toNode) : res;
+    const departMember = m.log.find(e => e.groupId === gid && e.chainRole === 'depart') || m.log[idx0];
+    finalG.solved = { dv: routeDv ? routeDv.dv : 0, departMet: departMember ? departMember.metStart : null };
+  }
+
+  // PASS 2 — final settle with the mcc member (if any) + dvOverride in place.
   missionRecompute(m);
   _missionRenderPreserveNm(id);
+}
+
+// §22 C2: group-header ↻ re-solve — re-run the transfer solve with CURRENT
+// authored inputs (departure MET, destination, vehicle state at entry) and
+// rewrite the member events in place. ONE undo capture (never implicit).
+function missionChainResolve(id, gid) {
+  const m = _missionGet(id); if (!m || !m.groups || !m.groups[gid]) return;
+  const g = m.groups[gid];
+  if (g.kind !== 'transfer') return;
+  let dIdx = -1, iIdx = -1, mIdx = -1;
+  m.log.forEach((e, i) => {
+    if (e.groupId !== gid) return;
+    if (e.chainRole === 'depart') dIdx = i;
+    else if (e.chainRole === 'inject') iIdx = i;
+    else if (e.chainRole === 'mcc') mIdx = i;
+  });
+  if (dIdx < 0 && iIdx < 0) return;
+  // Strip the transient mcc member + stamped overrides so the re-solve below
+  // re-derives everything from current conditions, not stale cached numbers.
+  if (mIdx >= 0) { m.log.splice(mIdx, 1); if (iIdx > mIdx) iIdx--; if (dIdx > mIdx) dIdx--; }
+  if (iIdx >= 0) { delete m.log[iIdx].dvOverride; delete m.log[iIdx].durationOverride; }
+  _missionUndoRestoring = true;
+  try { missionRecompute(m); } finally { _missionUndoRestoring = false; }
+
+  if (dIdx >= 0 && iIdx >= 0) _missionChainSplitInject(m, gid, dIdx, iIdx);
+
+  const res = (g.route && typeof progNmComputeEdgeDv === 'function') ? progNmComputeEdgeDv(g.route.fromNode, g.route.toNode) : null;
+  g.solved = { dv: res ? res.dv : 0, departMet: (dIdx >= 0 && m.log[dIdx]) ? m.log[dIdx].metStart : (iIdx >= 0 && m.log[iIdx] ? m.log[iIdx].metStart : null) };
+
+  missionRecompute(m);
+  missionRenderDetail();
 }
 
 function missionNodeClick(id, nodeId) {
@@ -27045,6 +27292,44 @@ function missionRunChecks(m) {
       }
     }
   }
+
+  // ── §22 TRANSFER CHAINS — group-level checks (flyby / staleness) ──────────
+  // Evaluated regardless of suspendAt: these describe the AUTHORED chain
+  // itself (structure + inputs), not a replay failure downstream of it, so
+  // they stay meaningful even if a later event in the log went red.
+  Object.keys(m.groups || {}).forEach(gid => {
+    const g = m.groups[gid];
+    if (!g || g.kind !== 'transfer') return;
+    const members = (m.log || []).map((e, i) => ({ e, i })).filter(x => x.e.groupId === gid);
+    if (!members.length) return;
+    const anchorIdx = members[0].i;
+    // C1: flyby — this chain USED to author an injection member (g.hadInject)
+    // but no longer has one in the log (user deleted it) — the vehicle
+    // honestly continues past the target on the transfer leg; INFO, not a
+    // failure (a legitimate architecture, not a broken plan).
+    if (g.hadInject && !members.some(x => x.e.chainRole === 'inject')) {
+      push('chain-flyby', 'info', 'No insertion — flyby',
+        `${_mcEscape(g.name || 'This transfer')}'s injection burn was removed — the vehicle continues past the target on the transfer leg instead of arriving into its destination orbit.`,
+        anchorIdx);
+    }
+    // C2: staleness — the schematic ΔV requirement or the depart member's own
+    // MET has moved since this chain was last (re-)solved, and nobody has
+    // clicked ↻ yet. Detail deliberately loose (destination orbit / upstream
+    // MET edits both move one of these two signals) — see docs/MATH.md §7ak
+    // for the documented scope (vehicle-mass-only changes are NOT detected,
+    // a known gap).
+    if (g.solved && g.route) {
+      const depart = members.find(x => x.e.chainRole === 'depart') || members.find(x => x.e.chainRole === 'inject');
+      const curDv = (typeof progNmComputeEdgeDv === 'function') ? progNmComputeEdgeDv(g.route.fromNode, g.route.toNode) : null;
+      const dvMoved = curDv && g.solved.dv != null && Math.abs(curDv.dv - g.solved.dv) > 1;
+      const metMoved = depart && depart.e.metStart != null && g.solved.departMet != null && Math.abs(depart.e.metStart - g.solved.departMet) > 1;
+      if (dvMoved || metMoved) {
+        push('chain-stale', 'amber', 'Chain inputs changed since solve',
+          `${_mcEscape(g.name || 'This transfer')}'s ${dvMoved ? 'required &Delta;V' : 'departure time'} has changed since it was last solved — click &#8635; Re-solve on the group header to rewrite the departure/MCC/injection burns for the current inputs.`,
+          anchorIdx);
+      }
+    }
+  });
 
   // ── End-state checks (5, 6, 8, 9) — evaluated once, from live vehicles ──
   // Skipped entirely if a red already suspended the scan (devil b): end-state is

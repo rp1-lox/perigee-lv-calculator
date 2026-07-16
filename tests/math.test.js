@@ -2381,6 +2381,95 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §22 — TRANSFER CHAINS: _missionChainVecMs (pure) +
+// _missionChainSplitInject (leg-record extraction, see docs/MATH.md §7ak).
+// Synthetic legs mirror the shapes 565-physics-mission.js actually produces
+// (entry leg kind:'nrho' with mccBurn; exit leg kind:'arrival' with
+// arrivalBurn) — this is the two-hop corridor pattern both dev seeds author
+// (LEO->TLC then TLC->destination). Values chosen to echo the 5a canonical
+// case's order of magnitude (mcc ~183 m/s, insertion ~996 m/s class) without
+// depending on the expensive physSolveNrhoTransfer solve itself.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { _missionChainVecMs, _missionChainSplitInject, _physTrajByMission } =
+    vm.runInContext('({ _missionChainVecMs, _missionChainSplitInject, _physTrajByMission })', sandbox);
+
+  approx('§22 _missionChainVecMs: km/s vector -> m/s magnitude', _missionChainVecMs([0.183, 0, 0]), 183, 1e-9);
+  ok('§22 _missionChainVecMs: null-safe', _missionChainVecMs(null) === 0);
+  ok('§22 _missionChainVecMs: non-finite-safe', _missionChainVecMs([NaN, 0, 0]) === 0);
+
+  const missionId = 'test-chain-mid';
+  const gid = 'gtest1';
+  const entryIdx = 0, injectIdx = 1;
+  const departMet = 1000, mccT = 1000 + 200000, arriveMet = 1000 + 400000;
+  const m = {
+    missionId,
+    groups: { [gid]: { kind: 'transfer', route: { fromNode: 'leo', toNode: 'nrho' } } },
+    log: [
+      { type: 'MNODE', mode: 'solved', chainRole: 'depart', groupId: gid,
+        fromNode: 'leo', toNode: 'tlc', fromLabel: 'LEO', toLabel: 'TLC',
+        activeKey: 'k1', activeName: 'Vehicle', metStart: departMet },
+      { type: 'MNODE', mode: 'solved', chainRole: 'inject', groupId: gid,
+        fromNode: 'tlc', toNode: 'nrho', fromLabel: 'TLC', toLabel: 'NRHO',
+        activeKey: 'k1', activeName: 'Vehicle' },
+    ],
+  };
+  _physTrajByMission[missionId] = {
+    legs: [
+      { authIdx: entryIdx, kind: 'nrho', met: departMet, tof_s: arriveMet - departMet,
+        mccBurn: { t: mccT, dvVec: [0.183, 0, 0] } },   // 183 m/s class MCC
+      { authIdx: injectIdx, kind: 'arrival', met: mccT,
+        arrivalBurn: { dvVec: [0, 0.996, 0] } },        // 996 m/s class insertion
+    ],
+  };
+  const mccInsertedAt = _missionChainSplitInject(m, gid, entryIdx, injectIdx);
+  ok('§22 split: reports the mcc member was inserted', mccInsertedAt === injectIdx);
+  ok('§22 split: log grows by exactly one member (the mcc burn)', m.log.length === 3);
+  const mccMember = m.log[injectIdx];
+  const injectMember = m.log[injectIdx + 1];
+  ok('§22 split: mcc member is a plain CUSTOM burn tagged chainRole+groupId (reuses existing BURN machinery — no parallel exec path)',
+    mccMember.type === 'BURN' && mccMember.burnType === 'CUSTOM' && mccMember.chainRole === 'mcc' && mccMember.groupId === gid);
+  approx('§22 split: mcc dv comes from leg.mccBurn (one-source rule)', mccMember.burnParam, 183, 1);
+  approx('§22 split: mcc own MET spacing = mccBurn.t - departMet', mccMember.durationOverride, mccT - departMet, 1e-6);
+  ok('§22 split: injection member stays the ORIGINAL solved MNODE (chainRole preserved, no new exec path)',
+    injectMember.type === 'MNODE' && injectMember.mode === 'solved' && injectMember.chainRole === 'inject');
+  approx('§22 split: injection dv comes from leg.arrivalBurn (one-source rule), replacing the schematic estimate',
+    injectMember.dvOverride, 996, 1);
+  approx('§22 split: injection own MET spacing = arrival - mccBurn.t (remaining coast after MCC)',
+    injectMember.durationOverride, arriveMet - mccT, 1e-6);
+  // Component-sum sanity (deliverable 8): depart + mcc + inject reconstructs
+  // the leg's own total coast/arrival timing exactly (no dropped/duplicated
+  // time), and neither component is silently zeroed.
+  approx('§22 split: mcc + inject durations sum to the entry leg\'s own tof_s (no gap/overlap introduced)',
+    mccMember.durationOverride + injectMember.durationOverride, arriveMet - departMet, 1e-6);
+  ok('§22 split: both components are strictly positive (nothing dropped)', mccMember.burnParam > 0 && injectMember.dvOverride > 0);
+
+  // No-mcc case: exit leg has an arrivalBurn but the entry leg produced no
+  // mccBurn (converged on the first pass) — only the injection dv should be
+  // stamped; no mcc member inserted; injection's duration untouched (still
+  // auto, matching today's behavior for that case).
+  const m2 = {
+    missionId, groups: { [gid]: { kind: 'transfer', route: { fromNode: 'leo', toNode: 'nrho' } } },
+    log: [
+      { type: 'MNODE', mode: 'solved', chainRole: 'depart', groupId: gid, fromNode: 'leo', toNode: 'tlc', metStart: 0 },
+      { type: 'MNODE', mode: 'solved', chainRole: 'inject', groupId: gid, fromNode: 'tlc', toNode: 'nrho' },
+    ],
+  };
+  _physTrajByMission[missionId] = {
+    legs: [
+      { authIdx: 0, kind: 'nrho', met: 0, tof_s: 300000, mccBurn: null },
+      { authIdx: 1, kind: 'arrival', met: 0, arrivalBurn: { dvVec: [1.0, 0, 0] } },
+    ],
+  };
+  const noMcc = _missionChainSplitInject(m2, gid, 0, 1);
+  ok('§22 split: no mccBurn on the entry leg -> no mcc member inserted', noMcc === -1 && m2.log.length === 2);
+  approx('§22 split: injection dv still stamped from arrivalBurn even with no mcc', m2.log[1].dvOverride, 1000, 1);
+  ok('§22 split: injection duration untouched with no mcc (falls back to auto, same as today)', m2.log[1].durationOverride === undefined);
+
+  delete _physTrajByMission[missionId];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // R6.2' Phase C — node-map closure: _nmMatchOrbitToNode / _nmClassifySettledOrbit
 // (430's pure classifiers for manual-MNODE settled-orbit matching). Dated 2026-07-10.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3813,6 +3902,76 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   console.log(`  B1 chaotic-arc (TLC) STM vs FD: max relErr = ${maxRelErrTlc.toExponential(3)} (smooth-arc was ${maxRelErrSmooth.toExponential(3)}, ratio ${(maxRelErrTlc / maxRelErrSmooth).toFixed(0)}x)`);
   ok(`B1: FD visibly diverges from STM on the chaotic arc, orders of magnitude beyond the smooth-arc agreement (measured ${maxRelErrTlc.toExponential(2)} vs ${maxRelErrSmooth.toExponential(2)}, ratio ${(maxRelErrTlc / maxRelErrSmooth).toFixed(0)}x > 100x)`,
     maxRelErrTlc / maxRelErrSmooth > 100);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §21 B3.2 fix — physPropagateSegment backward propagation
+// (N1c, 386-physics-integrator.js). API hazard from MATH.md §7ak critique 117:
+// the forward-only loop (`while (t < tMax)`) SILENTLY no-oped on tMax < t0,
+// returning state0 as if propagation succeeded — garbage backward-seeded nodes
+// that looked valid (cost a full B3.2 debugging round). Two pins: the explicit-
+// error shape (default) and a backward round-trip self-check (opt-in).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { physPropagateSegment, physMag, physSub, PROG_BODIES } =
+    vm.runInContext('({ physPropagateSegment, physMag, physSub, PROG_BODIES })', sandbox);
+  const muE_bk = PROG_BODIES.Earth.mu;
+  const ctxBk = { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] };
+  // near-circular 100,000 km arc (Moon+Sun perturbed, slight out-of-plane) —
+  // slowly-varying |r| keeps the variable-step leapfrog near-exactly time-
+  // reversible, so the round-trip closes to float-noise scale (an eccentric
+  // perigee-region arc reverses to ~km because dt swings across the ladder;
+  // that is still correct backward propagation, just a looser tolerance).
+  const r0_bk = 100000;
+  const st0 = { r: [r0_bk, 0, 0], v: [0, Math.sqrt(muE_bk / r0_bk), 0.15] };
+  const tA = 0, tB = 2 * 86400;
+
+  // ── (1) default (no opts.backward): tMax < t0 returns an explicit error, NOT
+  // a silent no-op returning state0 — the whole point of critique 117. ──
+  const bad = physPropagateSegment(st0, tB, tA, ctxBk, { singleFrame: true });
+  ok('N1c: tMax < t0 without opts.backward returns {error:"backward propagation unsupported"} (no silent no-op)',
+    bad && bad.error === 'backward propagation unsupported' && bad.stateF === null);
+
+  // ── (2) tMax === t0 stays a valid zero-duration FORWARD call (returns
+  // state0, no error): the guard is strict `<`, so no forward caller changes
+  // behavior (ballistic byte-identity preserved). ──
+  const zero = physPropagateSegment(st0, 5, 5, ctxBk, { singleFrame: true });
+  ok('N1c: tMax === t0 is still a valid forward zero-duration call (state0 back, no error)',
+    zero && !zero.error && zero.stateF && physMag(physSub(zero.stateF.r, st0.r)) === 0);
+
+  // ── (3) backward round-trip (opts.backward:true, singleFrame): forward the
+  // arc, backward the SAME span, recover the start to integrator tolerance —
+  // the exact self-check tests/mshoot_harness.js pins (there 0.067 km / 0.0001
+  // m/s on its far-field trunk segment). ──
+  const fwd = physPropagateSegment(st0, tA, tB, ctxBk, { singleFrame: true, maxSamples: 24 });
+  const back = physPropagateSegment(fwd.stateF, tB, tA, ctxBk, { backward: true, singleFrame: true, maxSamples: 24 });
+  const dR = physMag(physSub(back.stateF.r, st0.r));
+  const dV = physMag(physSub(back.stateF.v, st0.v));
+  console.log(`  N1c backward round-trip (100k km, 2d, EMS, singleFrame): dR=${dR.toFixed(4)} km, dV=${(dV * 1000).toFixed(5)} m/s, steps fwd/back=${fwd.steps}/${back.steps}`);
+  ok(`N1c: backward round-trip recovers the start position (measured ${dR.toFixed(4)} km < 1 km)`, dR < 1);
+  ok(`N1c: backward round-trip recovers the start velocity (measured ${(dV * 1000).toFixed(5)} m/s < 0.01 m/s)`, dV < 1e-5);
+  ok('N1c: backward call lands at the requested physical epoch (tF === span start)', Math.abs(back.tF - tA) < 1e-6);
+  ok('N1c: backward result is flagged (backward:true) and carries no error', back.backward === true && !back.error);
+
+  // ── (4) backward round-trip on the DEFAULT (non-singleFrame) path — Earth-
+  // only so no frame handoff occurs, exercising the ordinary integrator loop
+  // through the reversal wrapper. ──
+  const ctxE = { center: 'Earth', bodies: ['Earth'] };
+  const fwdE = physPropagateSegment(st0, tA, tB, ctxE, { maxSamples: 24 });
+  const backE = physPropagateSegment(fwdE.stateF, tB, tA, ctxE, { backward: true, maxSamples: 24 });
+  const dRE = physMag(physSub(backE.stateF.r, st0.r)), dVE = physMag(physSub(backE.stateF.v, st0.v));
+  ok(`N1c: backward round-trip closes on the default (non-singleFrame) path too (dR ${dRE.toFixed(4)} km < 1 km, dV ${(dVE * 1000).toFixed(5)} m/s < 0.01 m/s)`,
+    dRE < 1 && dVE < 1e-5);
+
+  // ── (5) thrust + backward: refused explicitly (mass would un-burn), never a
+  // throw and never a wrong answer (E1/B1 "never mislead" discipline). ──
+  let bkThrew = false, bkThrust = null;
+  const ctxThrustBk = { center: 'Earth', bodies: ['Earth'], thrust: { thrust_N: 5, isp_s: 2000, m0_kg: 500, law: 'prograde' } };
+  try { bkThrust = physPropagateSegment(st0, tB, tA, ctxThrustBk, { backward: true }); }
+  catch (e) { bkThrew = true; }
+  ok('N1c: backward + ctx.thrust never throws', !bkThrew);
+  ok('N1c: backward + ctx.thrust returns an explicit error (unsupported), stateF null',
+    bkThrust && typeof bkThrust.error === 'string' && bkThrust.stateF === null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

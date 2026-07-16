@@ -382,6 +382,30 @@ function physFindEventTime(f, tLo, tHi, tol) {
  */
 function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   opts = opts || {};
+  // ── N1c (MATH.md §7u / §7ak critique 117): backward propagation ───────────
+  // The main loop is forward-only (`while (t < tMax)`), so a tMax < t0 call
+  // iterates zero times and would SILENTLY return state0 stamped at tMax —
+  // indistinguishable from a successful propagation. That silent no-op fed
+  // garbage backward-seeded nodes to the B3.2 corrector and cost a full
+  // debugging round (tests/mshoot_harness.js HISTORY). Two explicit behaviors,
+  // never a silent one:
+  //   • default            -> an error result ({error:'backward propagation
+  //                           unsupported'}, stateF:null) the caller must handle.
+  //   • opts.backward:true  -> real backward integration by time reversal
+  //                           (gravity is velocity-independent): integrate
+  //                           (r,-v) FORWARD in tau=-t with rails read at the
+  //                           true epoch -tau, then negate the final velocity.
+  //                           Proven in tests/mshoot_harness.js (round-trip
+  //                           0.067 km / 0.0001 m/s).
+  // tMax === t0 stays a valid zero-duration FORWARD call (returns state0) — the
+  // guard is strict `<`, so no existing forward caller changes behavior.
+  if (tMax < t0) {
+    if (opts.backward !== true) {
+      return { error: 'backward propagation unsupported', t0: t0, tMax: tMax,
+               stateF: null, tF: t0, frame: ctx.center, samples: [], events: [], steps: 0 };
+    }
+    return _physPropagateBackward(state0, t0, tMax, ctx, opts);
+  }
   const maxSamples = opts.maxSamples || 256;
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
@@ -530,4 +554,57 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     if (stmNote) result.stmNote = stmNote;
   }
   return result;
+}
+
+// ── N1c backward-propagation helper (physPropagateSegment opts.backward:true) ─
+// tMax < t0. Time reversal: integrate (r, -v) FORWARD in tau = -t with the body
+// rails read at the physical epoch -tau, then negate the final velocity. Gravity
+// (including the non-inertial center-frame indirect terms) is velocity-
+// independent, so the reversed arc retraces the physical one exactly; frame
+// patching stays consistent under handoffs because the wrapped rail negates the
+// body velocity too (same sign flip as the vessel). ALL propagation still flows
+// through physPropagateSegment — no ad-hoc integrator (hard invariant). Lifted
+// verbatim-in-spirit from tests/mshoot_harness.js's propHelioBack, which pins
+// this exact reversal with a 0.067 km / 0.0001 m/s round-trip self-check.
+// Ballistic-only: thrust would "un-burn" mass and Phi is not coordinate-
+// invariant under reversal, so both are refused explicitly rather than answered
+// wrongly (the E1/B1 "never mislead" discipline).
+function _physPropagateBackward(state0, t0, tMax, ctx, opts) {
+  if (ctx.thrust) {
+    return { error: 'backward propagation unsupported with ctx.thrust', t0: t0, tMax: tMax,
+             stateF: null, tF: t0, frame: ctx.center, samples: [], events: [], steps: 0 };
+  }
+  const baseRail = ctx.railFn || physBodyStateAt;
+  const railRev = function (body, t, ov) {
+    const st = baseRail(body, -t, ov);
+    return { r: st.r, v: physScale(st.v, -1) }; // body-velocity sign flips with time reversal
+  };
+  const ctxRev = Object.assign({}, ctx, { railFn: railRev });
+  const fwdOpts = Object.assign({}, opts, { backward: false, stm: false });
+  // tMax < t0  =>  -tMax > -t0, so the recursive call runs FORWARD in tau.
+  const res = physPropagateSegment(
+    { r: state0.r.slice(), v: physScale(state0.v, -1) }, -t0, -tMax, ctxRev, fwdOpts);
+  // Un-reverse into physical time: negate the final velocity, flip sample/event
+  // epochs, and swap the apsis sense (r·v changes sign with v -> -v). Sample
+  // order already runs start->end in physical time (tau ascending == t
+  // descending, and start is at tau=-t0).
+  const out = {
+    stateF: { r: res.stateF.r.slice(), v: physScale(res.stateF.v, -1) },
+    tF: -res.tF,
+    frame: res.frame,
+    samples: res.samples.map(function (s) { return { t: -s.t, r: s.r.slice(), frame: s.frame }; }),
+    events: res.events.map(function (e) {
+      const o = Object.assign({}, e, { t: -e.t });
+      if (e.type === 'periapsis') o.type = 'apoapsis';
+      else if (e.type === 'apoapsis') o.type = 'periapsis';
+      return o;
+    }),
+    steps: res.steps,
+    backward: true,
+  };
+  if (opts.stm) {
+    out.stmF = null;
+    out.stmNote = 'N1c: opts.stm ignored on a backward-propagation call (Phi is not coordinate-invariant under time reversal) — stmF is null.';
+  }
+  return out;
 }
