@@ -17,6 +17,26 @@
 // _physShootCache above).
 const _physNrhoShootCache = {};
 
+// ── §20 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ────
+// physAimBurnState feeds physElementsToState directly (385's convention:
+// ecliptic/world reference plane), but every (incRad, raan) pair THIS module
+// solves for or accepts is AUTHORED in Earth's EQUATOR frame (fromOrbit.
+// inclination/.lan_deg, or physFreeReturnSolve's incDeg parking-orbit arg) —
+// same authoring convention as physShootLegAim's fromOrbit (565-physics-
+// targeting.js, §7al site 2). This wrapper is the ONE place a ring actually
+// becomes a state in this module: it rotates the equatorial pair to world via
+// progEqToWorldElements right before the physElementsToState call, exactly
+// physShootLegAim's aimBurnEq pattern, no new math. All ~11 physAimBurnState
+// call sites in this file (both physSolveNrhoTransfer/_nrhoSolveFixedTArr and
+// physFreeReturnSolve) route through this — see MATH.md §7al's O1b audit for
+// the site-by-site trace proving each one previously fed already-equatorial
+// (incRad, raan) values straight into physAimBurnState as if they were world.
+function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
+  if (typeof progEqToWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
+  const w = progEqToWorldElements(fromBody, (iEqRad || 0) * 180 / Math.PI, (raanEqRad || 0) * 180 / Math.PI);
+  return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.inc_deg * Math.PI / 180, yaw, w.lan_deg * Math.PI / 180);
+}
+
 /**
  * Solve a LEO (or other Earth-centered fromOrbit) -> lunar NRHO direct
  * transfer: an Artemis-class TLI-like departure, ballistic Earth-Moon coast,
@@ -151,11 +171,22 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // TARGET's Earth-frame direction (Stage-1 fix — the first attempt used the
   // Moon's center here; near perilune the two nearly coincide, but solving
   // against the actual aim point keeps the plane exact). Authored plane wins.
+  // §20 O1b: this cone-axis equation (n(Ω)·m̂=0) is the "known trap" the O1
+  // spec flagged — it mirrors physShootLegAim's R3.0.1 raan-solve (565-
+  // physics-targeting.js), which assumes m̂'s components are already in the
+  // frame whose z-axis is the ring's inclination-cone axis. incRad here is
+  // EQUATORIAL (fromOrbit.inclination), so m̂ (targetEarthDirAt's Earth-
+  // centered WORLD/ecliptic direction to the NRHO target sample) must be
+  // rotated into Earth's equatorial basis FIRST, exactly as site 2 does for
+  // the Moon-center direction — otherwise the solved raan targets a cone
+  // around world-z instead of Earth's real pole (MATH.md §7al O1b audit).
   const raanRootsFor = tArr => {
     if (raanAuthored) return [raanAuthoredRad];
     if (incRad <= 1e-6) return [0];
-    const mHat = targetEarthDirAt(tArr);
-    if (!mHat) return [0];
+    const mHatWorld = targetEarthDirAt(tArr);
+    if (!mHatWorld) return [0];
+    const eqB = (typeof physEqBasis === 'function') ? physEqBasis('Earth') : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+    const mHat = [physDot(mHatWorld, eqB.xEq), physDot(mHatWorld, eqB.yEq), physDot(mHatWorld, eqB.zEq)];
     const a = mHat[0] * Math.sin(incRad), b = -mHat[1] * Math.sin(incRad), c = -mHat[2] * Math.cos(incRad);
     const R = Math.hypot(a, b);
     if (R <= 1e-12 || Math.abs(c) > R) return [0];
@@ -176,7 +207,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   function _nrhoSolveFixedTArr(tArrFixed) {
     try {
       const cheapF = (th, pitch, rn) => {
-        const st = physAimBurnState('Earth', r1, th, pitch, dv_kms, incRad, 0, rn);
+        const st = physAimBurnStateEq('Earth', r1, th, pitch, dv_kms, incRad, 0, rn);
         const res = physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, tArrFixed,
           Object.assign({}, propCtx, { stepsPerOrbit: 90 }), { maxSamples: 4 });
         if (!res || !res.stateF) return Infinity;
@@ -209,20 +240,20 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
         return [a2.r[0] - tgtN.r[0], a2.r[1] - tgtN.r[1], a2.r[2] - tgtN.r[2]];
       };
       const sol2 = physShootToTarget(
-        x => physAimBurnState('Earth', r1, x[0], x[1], dv_kms, incRad, 0, best.rn),
+        x => physAimBurnStateEq('Earth', r1, x[0], x[1], dv_kms, incRad, 0, best.rn),
         res => { const m = missFull(res); return m ? [m[0], m[1]] : null; },
         [best.th, 0], { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3], maxIter: 14, maxProps: 30 });
-      const bs2 = physAimBurnState('Earth', r1, sol2.x[0], sol2.x[1], dv_kms, incRad, 0, best.rn);
+      const bs2 = physAimBurnStateEq('Earth', r1, sol2.x[0], sol2.x[1], dv_kms, incRad, 0, best.rn);
       const m2s = missFull(propTo(bs2));
       let x = [sol2.x[0], sol2.x[1], 0], missBest = m2s ? Math.hypot(m2s[0], m2s[1], m2s[2]) : Infinity, raanUsed = best.rn;
       if (missBest > ACCEPT_KM) {
         const sol3 = physShootToTarget(
-          xx => physAimBurnState('Earth', r1, xx[0], xx[1], dv_kms, incRad, xx[2], best.rn),
+          xx => physAimBurnStateEq('Earth', r1, xx[0], xx[1], dv_kms, incRad, xx[2], best.rn),
           res => missFull(res),
           x, { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3, 1e-3], maxIter: 10, maxProps: 30 });
         if (sol3.missKm < missBest) { x = sol3.x; missBest = sol3.missKm; }
       }
-      const bsF = physAimBurnState('Earth', r1, x[0], x[1] || 0, dv_kms, incRad, x[2] || 0, raanUsed);
+      const bsF = physAimBurnStateEq('Earth', r1, x[0], x[1] || 0, dv_kms, incRad, x[2] || 0, raanUsed);
       const finalRes = physPropagateSegment({ r: bsF.r, v: bsF.v }, tDepart_s, tArrFixed, propCtx, { maxSamples: 128 });
       const tgt = tgtN;
       if (!finalRes || !finalRes.stateF || !tgt) return { converged: false, tof_s: tArrFixed - tDepart_s, missKm: Infinity };
@@ -282,7 +313,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
       // roots x a 24-point θ grid, scored by the full 3D miss to the FIXED
       // target point (cheap propagations — endpoint only).
       const cheap = (th, pitch, rn, tArr) => {
-        const st = physAimBurnState('Earth', r1, th, pitch, dv_kms, incRad, 0, rn);
+        const st = physAimBurnStateEq('Earth', r1, th, pitch, dv_kms, incRad, 0, rn);
         const res = physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, tArr,
           Object.assign({}, propCtx, { stepsPerOrbit: 90 }), { maxSamples: 4 });
         if (!res || !res.stateF) return Infinity;
@@ -325,10 +356,10 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
         return [a2.r[0] - tgtN.r[0], a2.r[1] - tgtN.r[1], a2.r[2] - tgtN.r[2]];
       };
       const sol2 = physShootToTarget(
-        x => physAimBurnState('Earth', r1, x[0], x[1], dv_kms, incRad, 0, best.rn),
+        x => physAimBurnStateEq('Earth', r1, x[0], x[1], dv_kms, incRad, 0, best.rn),
         res => { const m = missFull(res); return m ? [m[0], m[1]] : null; },
         [best.th, 0], { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3], maxIter: 14, maxProps: 30 });
-      const bs2 = physAimBurnState('Earth', r1, sol2.x[0], sol2.x[1], dv_kms, incRad, 0, best.rn);
+      const bs2 = physAimBurnStateEq('Earth', r1, sol2.x[0], sol2.x[1], dv_kms, incRad, 0, best.rn);
       const m2 = missFull(propTo(bs2));
       const miss2Full = m2 ? Math.hypot(m2[0], m2[1], m2[2]) : Infinity;
       let x = [sol2.x[0], sol2.x[1], 0], missBest = miss2Full,
@@ -337,7 +368,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
         // 3-DOF escalation [θ, pitch, yaw] against the full 3D miss —
         // seeded from the 2-DOF result so steps stay in the linear regime.
         const sol3 = physShootToTarget(
-          xx => physAimBurnState('Earth', r1, xx[0], xx[1], dv_kms, incRad, xx[2], best.rn),
+          xx => physAimBurnStateEq('Earth', r1, xx[0], xx[1], dv_kms, incRad, xx[2], best.rn),
           res => missFull(res),
           x, { propagate: propTo, tolKm: 500, eps: [1e-3, 1e-3, 1e-3], maxIter: 10, maxProps: 30 });
         iters += sol3.iters; props += sol3.propagations;
@@ -350,7 +381,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
     }
     _physNrhoShootCache[sig] = sol;
   }
-  const burnSolveFn = x => physAimBurnState('Earth', r1, x[0], x[1] || 0, dv_kms, incRad, x[2] || 0, sol.raan);
+  const burnSolveFn = x => physAimBurnStateEq('Earth', r1, x[0], x[1] || 0, dv_kms, incRad, x[2] || 0, sol.raan);
   const bs = burnSolveFn(sol.x);
   const tArr = sol.tArr;
   const TOFf = tArr - tDepart_s;
@@ -560,7 +591,7 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   const twoPi = 2 * Math.PI;
   const ctx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const mkState = x => {
-    const bs = physAimBurnState('Earth', rp, (x[0] * nMean) % twoPi, 0, x[1], incRad, 0);
+    const bs = physAimBurnStateEq('Earth', rp, (x[0] * nMean) % twoPi, 0, x[1], incRad, 0);
     return { r: bs.r, v: bs.v, met: x[0] };
   };
   const propagate = st => physPropagateSegment({ r: st.r, v: st.v }, st.met, st.met + 12 * 86400, ctx, { maxSamples: 128 });
