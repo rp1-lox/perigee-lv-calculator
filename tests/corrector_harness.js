@@ -7,7 +7,7 @@
 // (same escape hatch as Phase 4 U4).
 //
 // Run:  node tests/corrector_harness.js            (all cases)
-//       node tests/corrector_harness.js nrho       (one case: nrho|eml2|eml1|lyap|blt)
+//       node tests/corrector_harness.js nrho       (one case: nrho|eml2|eml1|lyap|blt|f16)
 //
 // Method (upgrade over the Phase-4 offline corrector, which measured closure
 // in the INERTIAL Moon frame — adequate for a 4.71d high-eccentricity loop
@@ -304,4 +304,157 @@ if (which === 'all' || which === 'blt') {
       `  E: sun=${pa.energy.toFixed(4)} / noSun=${pb.energy.toFixed(4)} km2/s2` +
       `  tF ok=${pa.tF >= TOF - 1} steps=${pa.steps}`);
   }
+}
+
+// ── CASE 6: MISSION_MODEL_V2 §21 B2 — Markellos f16/f'16 reference family ───
+// Sun-(Earth+Moon) planar CRTBP SCRATCH dynamics (self-contained: NOT
+// physPropagateSegment, NOT the vm-loaded app physics above — this is the
+// design-stage-only model RESEARCH_CISLUNAR.md says to keep local to this
+// harness). Nondim rotating-frame planar CRTBP (Griesemer NTRS 20090016184,
+// Eq. 2), RK4 with a CONTINUOUS state-dependent step (a fraction of the local
+// two-body period about the secondary, capped at 2000 s far away — continuous
+// in the state, so there is no dt-ladder switching noise and the fixed-model
+// FD/bisection below is trustworthy, unlike the app integrator's adaptive
+// ladder where FD Jacobians are noise-dominated, MATH.md §7u/§7ah).
+//
+// Construction (the paper's own, verified against its text): start AT the
+// nearest perigee rp on the x-axis, velocity perpendicular at NEAR-ESCAPE
+// energy (Jacobi C ~ 3.00085 — "an initial velocity that yields an
+// appropriate Jacobi constant"); propagate to the 5th x-axis crossing;
+// correct so that crossing is also perpendicular (vx=0). Two perpendicular
+// crossings => exactly periodic (Miele/Szebehely symmetry theorem). The
+// orbit is a 5-periodic orbit of the second kind: 5 perigees per period,
+// p2/p3 raised ~30x by the solar perturbation, p4/p5 mirroring p3/p2.
+//
+// WHY CONTINUATION (measured, kept as the honest finding): cold-starting the
+// vy0 Newton from a bound-ellipse guess at LEO-scale rp collapses onto the
+// TRIVIAL near-circular two-body family (no raising) — the f16 root lives
+// within ~2e-5 in C of the escape boundary, in a band where most nearby ICs
+// never complete 5 crossings. The working method: parametrize by Jacobi C,
+// scan a narrow C window for a sign change of vx@5th ON THE FAR BRANCH
+// (5th crossing > 1M km — the guard that rejects the trivial family), then
+// bisect C to |vx| < ~1e-11 nondim. Each rp seeds the next rp's C window
+// (family continuation); every member is FULLY converged.
+if (which === 'all' || which === 'f16') {
+  const MU_SS = 3.040364489e-6;      // Sun-(Earth+Moon) mass ratio
+  const DU_KM = 149598023;           // Sun-EM barycenter distance (~1 AU)
+  const YEAR_D = 365.256898;         // sidereal year
+  const TU_S = YEAR_D * 86400 / (2 * Math.PI);
+
+  function crtbpAccel(x, y, vx, vy) {
+    const r1 = Math.hypot(x + MU_SS, y);
+    const r2 = Math.hypot(x - (1 - MU_SS), y);
+    const ax = 2 * vy + x - (1 - MU_SS) * (x + MU_SS) / (r1 * r1 * r1) - MU_SS * (x - (1 - MU_SS)) / (r2 * r2 * r2);
+    const ay = -2 * vx + y - (1 - MU_SS) * y / (r1 * r1 * r1) - MU_SS * y / (r2 * r2 * r2);
+    return [ax, ay];
+  }
+  function crtbpDeriv(s) { const [x, y, vx, vy] = s; const [ax, ay] = crtbpAccel(x, y, vx, vy); return [vx, vy, ax, ay]; }
+  function crtbpRk4(s, dt) {
+    const add = (a, b, f) => a.map((v, i) => v + b[i] * f);
+    const k1 = crtbpDeriv(s), k2 = crtbpDeriv(add(s, k1, dt / 2));
+    const k3 = crtbpDeriv(add(s, k2, dt / 2)), k4 = crtbpDeriv(add(s, k3, dt));
+    return s.map((v, i) => v + (dt / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]));
+  }
+  function crtbpR2(s) { return Math.hypot(s[0] - (1 - MU_SS), s[1]); }
+  function omega2(x0) { // 2*Omega on the x-axis
+    const r1 = Math.abs(x0 + MU_SS), r2 = Math.abs(x0 - (1 - MU_SS));
+    return x0 * x0 + 2 * (1 - MU_SS) / r1 + 2 * MU_SS / r2 + MU_SS * (1 - MU_SS);
+  }
+  function crtbpJacobiC(s) {
+    const [x, y, vx, vy] = s;
+    const r1 = Math.hypot(x + MU_SS, y), r2 = Math.hypot(x - (1 - MU_SS), y);
+    const om = 0.5 * (x * x + y * y) + (1 - MU_SS) / r1 + MU_SS / r2 + 0.5 * MU_SS * (1 - MU_SS);
+    return 2 * om - (vx * vx + vy * vy);
+  }
+  const DT_MAX = 2000 / TU_S, DT_FRAC = 0.002;
+  function stepSize(s) {
+    const r2 = crtbpR2(s);
+    return Math.min(DT_MAX, DT_FRAC * 2 * Math.PI * Math.sqrt(r2 * r2 * r2 / MU_SS));
+  }
+  function crtbpRun(x0, vy, nWant, collect) {
+    let s = [x0, 0, 0, vy], t = 0, steps = 0;
+    const crossings = [], extrema = [];
+    let rA = crtbpR2(s), rB = null, tPrev = 0;
+    while (crossings.length < nWant && t < 4 * 2 * Math.PI) {
+      const dt = stepSize(s); const sN = crtbpRk4(s, dt); steps++;
+      const rN = crtbpR2(sN);
+      if (steps > 1 && ((s[1] < 0) !== (sN[1] < 0))) {
+        const frac = s[1] / (s[1] - sN[1]);
+        const cs = s.map((v, k) => v + frac * (sN[k] - v));
+        crossings.push({ t: t + frac * dt, state: cs, r2: crtbpR2(cs) });
+      }
+      if (collect && rB !== null) {
+        if (rA < rB && rA < rN) extrema.push({ t: tPrev, r2: rA, kind: 'peri' });
+        if (rA > rB && rA > rN) extrema.push({ t: tPrev, r2: rA, kind: 'apo' });
+      }
+      rB = rA; rA = rN; tPrev = t;
+      s = sN; t += dt;
+    }
+    return { crossings, extrema };
+  }
+  // residual of the perpendicularity condition at the 5th crossing, as a
+  // function of Jacobi C on a given branch; the far-branch guard rejects the
+  // trivial near-circular family (whose 5th crossing stays near the secondary).
+  function residAtC(x0, C, vySign) {
+    const v2 = omega2(x0) - C;
+    if (v2 <= 0) return null;
+    const out = crtbpRun(x0, vySign * Math.sqrt(v2), 5, false);
+    if (out.crossings.length < 5) return null;
+    return { vx: out.crossings[4].state[2], far: out.crossings[4].r2 * DU_KM > 1e6 };
+  }
+  function solveMemberByC(rp_km, side, vySign, Cguess) {
+    const x0 = (1 - MU_SS) + side * (rp_km / DU_KM);
+    const W = 6e-5, ST = 2e-6;
+    let prev = null, lo = null, hi = null;
+    for (let C = Cguess + W; C >= Cguess - W; C -= ST) {
+      const r = residAtC(x0, C, vySign);
+      if (r === null || !r.far) { prev = null; continue; }
+      if (prev && (prev.vx < 0) !== (r.vx < 0)) { lo = prev.C; hi = C; break; }
+      prev = { C, vx: r.vx };
+    }
+    if (lo === null) return null;
+    let flo = residAtC(x0, lo, vySign).vx;
+    for (let i = 0; i < 70; i++) {
+      const mid = (lo + hi) / 2, rm = residAtC(x0, mid, vySign);
+      if (rm === null || !rm.far) { hi = mid; continue; }
+      if ((rm.vx < 0) === (flo < 0)) { lo = mid; flo = rm.vx; } else hi = mid;
+      if (Math.abs(hi - lo) < 1e-14) break;
+    }
+    const C = (lo + hi) / 2;
+    const vy = vySign * Math.sqrt(omega2(x0) - C);
+    const out = crtbpRun(x0, vy, 5, true);
+    const peris = out.extrema.filter(e => e.kind === 'peri');
+    return {
+      rp_km, x0, vy0: vy, jacobiC: crtbpJacobiC([x0, 0, 0, vy]),
+      P_days: 2 * out.crossings[4].t * TU_S / 86400,
+      farKm: out.crossings[4].r2 * DU_KM,
+      vxResid: residAtC(x0, C, vySign).vx,
+      p2: peris[0] ? { km: peris[0].r2 * DU_KM, d: peris[0].t * TU_S / 86400 } : null,
+      p3: peris[1] ? { km: peris[1].r2 * DU_KM, d: peris[1].t * TU_S / 86400 } : null,
+    };
+  }
+
+  const rpWalk = [7200, 7000, 6900, 6700, 6563, 7400, 7500]; // anchor first, then continue outward
+  console.log("\n=== B2: Markellos f16/f'16 reference family (Sun-(Earth+Moon) planar CRTBP) ===");
+  console.log('mu=', MU_SS, ' DU_KM=', DU_KM, ' TU_S=', TU_S.toFixed(1));
+  for (const fam of [
+    { label: 'f16 (anti-Sun start; reproduces Griesemer Table 1)', side: +1, vySign: +1 },
+    { label: "f'16 (Sun-side start; near-mirror)", side: -1, vySign: -1 },
+  ]) {
+    console.log('\n-- ' + fam.label + ' --');
+    let C = 3.000853977; // measured anchor (rp=7200); the scan window finds the branch from here
+    for (const rp of rpWalk) {
+      const m = solveMemberByC(rp, fam.side, fam.vySign, C);
+      if (!m) { console.log('rp=' + rp + ': FAILED (widen the C window)'); continue; }
+      C = m.jacobiC;
+      console.log('rp=' + rp + '  x0=' + m.x0.toPrecision(12) + '  vy0=' + m.vy0.toPrecision(12) +
+        '  C=' + m.jacobiC.toPrecision(11) + '  P=' + m.P_days.toFixed(2) + 'd' +
+        '  p2=' + (m.p2 ? m.p2.km.toFixed(0) : '?') + 'km@' + (m.p2 ? m.p2.d.toFixed(1) : '?') + 'd' +
+        '  p3=' + (m.p3 ? m.p3.km.toFixed(0) : '?') + 'km@' + (m.p3 ? m.p3.d.toFixed(1) : '?') + 'd' +
+        '  raise=' + (m.p2 ? (m.p2.km / rp).toFixed(1) : '?') + 'x' +
+        '  far=' + (m.farKm / 1e6).toFixed(3) + 'Mkm  |vx5|=' + Math.abs(m.vxResid).toExponential(1));
+    }
+  }
+  console.log("\nSee src/js/424-blt-reference.js (BLT_F16_FAMILY / BLT_FPRIME16_FAMILY) for the pinned table" +
+    ' and docs/MATH.md §7ai for the derivation + verification against the paper.');
 }

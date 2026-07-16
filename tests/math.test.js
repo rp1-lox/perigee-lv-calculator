@@ -37,6 +37,7 @@ const FILES = [
   'src/js/440-program-module-phase-9-spacecraft-defini.js',
   'src/js/410-program-module-phase-6-pork-chop-plotter.js',
   'src/js/415-launch-planner.js',
+  'src/js/424-blt-reference.js',
   'src/js/425-reference-orbits.js',
   'src/js/567-phase-truth.js',   // after 425: uses refOrbitResolve/_refToRot/refOrbitSamplePropagatedRaw
   'src/js/430-program-module-phase-8-node-map.js',
@@ -4292,6 +4293,79 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('5b R3: NRHO perilune-approx dv is positive and finite', !!r3.nrhoA && r3.nrhoA.dvPerBurn_ms > 0 && isFinite(r3.nrhoA.dvPerBurn_ms));
   ok('5b R3: NRHO perilune-approx dv scales ~linearly with ΔP for small ΔP (2x dtPhase -> ~2x dv, within 20%)',
     r3.nrhoRatio != null && r3.nrhoRatio > 1.6 && r3.nrhoRatio < 2.4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MISSION_MODEL_V2 §21 B2 — Markellos f16/f'16 reference family (424, MATH.md §7ai)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const { BLT_F16_FAMILY, BLT_FPRIME16_FAMILY, BLT_F16_SCALE, bltNdToKm, bltKmToNd, bltF16SelectFamily } =
+    vm.runInContext('({ BLT_F16_FAMILY, BLT_FPRIME16_FAMILY, BLT_F16_SCALE, bltNdToKm, bltKmToNd, bltF16SelectFamily })', sandbox);
+
+  ok('B2: BLT_F16_FAMILY has the expected member count (7, LEO-class 6563-7500km band)', BLT_F16_FAMILY.length === 7);
+  ok('B2: BLT_FPRIME16_FAMILY has the same member count', BLT_FPRIME16_FAMILY.length === BLT_F16_FAMILY.length);
+
+  let wellFormed = true, monotoneC = true, prevC = null;
+  let ratiosOk = true, periodsOk = true, farOk = true;
+  for (const fam of [BLT_F16_FAMILY, BLT_FPRIME16_FAMILY]) {
+    prevC = null;
+    for (const m of fam) {
+      for (const k of ['rp_km', 'x0_nd', 'vy0_nd', 'jacobiC', 'perigee1_km', 'perigee2_km', 'perigee3_km', 't_p2_days', 't_p3_days', 'period_days', 'far_km']) {
+        if (typeof m[k] !== 'number' || !Number.isFinite(m[k])) wellFormed = false;
+      }
+      if (m.perigee1_km !== m.rp_km) wellFormed = false; // p1 IS the family parameter
+      if (prevC !== null && !(m.jacobiC > prevC)) monotoneC = false; // C increases with rp_km (measured, both branches)
+      prevC = m.jacobiC;
+      const raise2 = m.perigee2_km / m.perigee1_km, raise3 = m.perigee3_km / m.perigee1_km;
+      if (!(raise2 > 25 && raise2 < 40)) ratiosOk = false;   // measured 28.8-34.5x (paper's 7200 member: 32.0x)
+      if (!(raise3 > 15 && raise3 < 25)) ratiosOk = false;   // measured 17.1-19.6x
+      if (!(m.period_days > 360 && m.period_days < 390)) periodsOk = false; // measured 371.8-378.1 d
+      if (!(m.far_km > 1.4e6 && m.far_km < 1.6e6)) farOk = false; // WSB-scale far point, measured ~1.505-1.510M km
+    }
+  }
+  ok('B2: every family member is well-formed (all fields finite, perigee1 == rp)', wellFormed);
+  ok('B2: Jacobi constant is monotone (increasing) along both families as rp_km increases', monotoneC);
+  ok('B2: perigee-raising ratios in the paper band (p2/p1 in 25-40x, measured 28.8-34.5x; p3/p1 in 15-25x)', ratiosOk);
+  ok('B2: periods in the measured band (360-390 d)', periodsOk);
+  ok('B2: far perpendicular crossing is WSB-scale (1.4-1.6M km)', farOk);
+
+  // Paper anchor (Griesemer NTRS 20090016184 Table 1, rp=7200): p2=230,434,
+  // p3=132,580 km. Our f16 member: 231,007 / 132,854 (0.25% / 0.21%). Pin at 1%.
+  const m72 = BLT_F16_FAMILY.find(m => m.rp_km === 7200);
+  ok('B2: f16 rp=7200 reproduces the paper Table-1 perigee 2 within 1% (measured 0.25%: 231,007 vs 230,434 km)',
+    !!m72 && Math.abs(m72.perigee2_km / 230434 - 1) < 0.01);
+  ok('B2: f16 rp=7200 reproduces the paper Table-1 perigee 3 within 1% (measured 0.21%: 132,854 vs 132,580 km)',
+    !!m72 && Math.abs(m72.perigee3_km / 132580 - 1) < 0.01);
+  ok('B2: f16 rp=7200 Jacobi constant matches the paper within 1e-5 (measured 3.0008551 vs 3.000850893)',
+    !!m72 && Math.abs(m72.jacobiC - 3.000850893) < 1e-5);
+
+  // f'16 is the NEAR-mirror of f16 (the Sun's finite distance breaks exact
+  // symmetry — perigee 2 differs by ~7%, a real physical asymmetry): opposite
+  // vy0 sign and x0 side, |vy0| within 1e-4 relative, C within 5e-6, period
+  // within 2% — each branch independently continued and converged.
+  let mirrorOk = true;
+  for (let i = 0; i < BLT_F16_FAMILY.length; i++) {
+    const a = BLT_F16_FAMILY[i], b = BLT_FPRIME16_FAMILY[i];
+    if (a.rp_km !== b.rp_km) mirrorOk = false;
+    if (!(a.vy0_nd > 0 && b.vy0_nd < 0)) mirrorOk = false;
+    if (Math.abs(Math.abs(b.vy0_nd) / a.vy0_nd - 1) > 1e-4) mirrorOk = false;
+    if (Math.abs(a.jacobiC - b.jacobiC) > 5e-6) mirrorOk = false;
+    if (Math.abs(a.period_days / b.period_days - 1) > 0.02) mirrorOk = false;
+    if (!((a.x0_nd - 1) > 0 && (b.x0_nd - 1) < 0)) mirrorOk = false; // opposite sides of the secondary
+  }
+  ok("B2: f'16 near-mirrors f16 (opposite vy0/x0 side, C within 5e-6, period within 2%)", mirrorOk);
+
+  // Scaling-chain round-trip: nondim -> km -> nondim is an identity.
+  let scaleRoundTrip = true;
+  for (const x of [1e-5, 4.8e-5, 0.5, 1.0000450886]) {
+    if (Math.abs(bltKmToNd(bltNdToKm(x)) - x) > 1e-12) scaleRoundTrip = false;
+  }
+  ok('B2: scaling chain (nondim -> km -> nondim) round-trips to float precision', scaleRoundTrip);
+  approx('B2: DU_KM/TU_S/VU_KMS are internally consistent', BLT_F16_SCALE.VU_KMS, BLT_F16_SCALE.DU_KM / BLT_F16_SCALE.TU_S, 1e-9);
+
+  // Family-selection rule sanity (Moon-quadrant, B3 consumer contract).
+  ok('B2: bltF16SelectFamily picks f16 when the Moon is Sun-near (angle 0)', bltF16SelectFamily(0) === BLT_F16_FAMILY);
+  ok('B2: bltF16SelectFamily picks f\'16 when the Moon is Sun-far (angle 180)', bltF16SelectFamily(180) === BLT_FPRIME16_FAMILY);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
