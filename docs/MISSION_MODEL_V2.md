@@ -619,3 +619,32 @@ O1 first (the seam + Earth only — fixes the reported bug), O2 with it or immed
 
 ### Sequencing
 After 5b (user-approved order). B1 standalone-committable; B2 offline harness; B3 the solver; B4 UI. Risks: our mean-element ephemeris vs DE405 (expect band-level agreement, not their exact numbers - pin OUR numbers); step-4 minimization method choice (measure first).
+
+---
+
+## 22. TRANSFER CHAINS — injection separated from destination (user go 2026-07-16)
+
+**The complaint (user, 2026-07-15/16):** departure and injection are two burns but are folded into one node, because the model over-focuses on "get to a specific orbit" — "what we are not focused on enough is being able to have a destination set up without having it all in one node."
+
+**Decisions (user, 2026-07-16):** NO legacy support — breakage fine, replace outright (no split-button migration path; dev seeds updated in the same change). Chain ownership = LOOSE-WITH-RESOLVE: the solver writes the chain ONCE at authoring; thereafter the events are user-owned like any others; the group header carries a re-solve button that rewrites members (one undo capture); staleness surfaces through the existing readiness machinery, never auto-overwrites.
+
+### C1 — the chain model
+- Authoring a transfer to a destination (node-map edge insert, Add Event maneuver flow, launch-planner handoff) produces a GROUPED CHAIN of real log entries bound by the existing m.groups machinery (new group kind 'transfer', header shows route + total dv + the re-solve control):
+  - BURN departure ("TLI"-class) at the departure MET
+  - BURN "MCC" ONLY when the solver actually produced one (5a Stage-2; BLT small-DSM when B4 lands)
+  - BURN injection ("<dest> injection") at the arrival MET
+- **One-source rule preserved:** each chain members solved magnitude comes from the leg records existing components (departure split, leg.mccBurn, leg.arrivalBurn) — exec/replay never recomputes physics. The node maps schematic edge pricing (progNmComputeEdgeDv) stays untouched as the requires readout.
+- **Budget honesty (D6):** each burn charges dv + prop AT ITS OWN MET — the prop-mass timeline becomes physically truthful (today the whole transfer charges at departure). Totals unchanged within tolerance; any golden asserting single-event charging re-pins with cause.
+- **Flybys fall out free:** deleting the injection member = the vehicle honestly continues past the target on the transfer leg. Readiness notes it as an INFO-level "no insertion — flyby" line (not a warning; it is a legitimate architecture).
+
+### C2 — re-solve + staleness semantics
+- Group-header re-solve: re-runs the transfer solve with the CURRENT authored inputs (departure event MET, destination orbit, vehicle state at entry) and rewrites the member events in place (one undo capture). Never triggered implicitly.
+- Staleness: editing the destination orbit, the departure time, or upstream mass WITHOUT re-solving flags the chain amber via the existing checks pattern ("chain inputs changed since solve"); members individually editable (they are just burns — manual overrides live like any dvOverride).
+- 5b phasing pairs and (later) B4 BLT DSMs author INTO the chain as members — same grouping, same rules.
+
+### C3 — replacement scope (no legacy)
+- The combined-maneuver authoring paths (node-map edge insert, maneuver Add Event with from/to) author chains instead. The old single-node MNODE remains valid ONLY as a plain manual burn / detached maneuver (mode:'manual' unaffected); the SOLVED from-to maneuver becomes the chain form.
+- devSeedApolloMission / devSeedGatewayMission updated to author chains; all goldens that count events or assert single-node dv re-pin in the same commit (D6, documented cause).
+- Gate: chain authoring produces the expected members with component dvs summing to the previous combined total (tolerance); per-MET budget charging; flyby-on-delete; re-solve rewrite; staleness flag.
+
+Sequencing: single Sonnet build pass (C1-C3 together — they are one coherent change), gate + browser verified; docs/MATH.md section on the accounting change in the same commit.
