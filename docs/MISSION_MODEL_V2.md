@@ -819,8 +819,46 @@ console errors.
 - orbitState state-vector dialect (`r`/`v`/`frame`/`propagated`/`surface`): **380** / `_physTrajByMission` (565) — these are the null-returning non-Keplerian shapes; renames here are only the peri/apo/inc/lan members, the state-vector members stay.
 - Persistence writers (450 `.program`, 455 autosave) still emit legacy field names — flip last, behind a version guard.
 
-### C3 — Collapse launchOrbit triplication (audit item 3, cost S)
+### C3 — Collapse launchOrbit triplication (audit item 3, cost S) — **DONE 2026-07-17**
 - `e.orbit` is the single authored source on a LAUNCH entry. `e.launchOrbit` deleted (replay reads e.orbit); `m.launchOrbit` becomes a seed-default only (used to prefill a NEW launch draft, never read by replay). Load-time migration for old logs.
+
+**As-built note (C3, 2026-07-17):** all `e.launchOrbit`/`entry.launchOrbit` stamps and reads
+removed; `e.orbit` is now the single authored source on LAUNCH (and DEPLOY, which shared the
+same pattern). Readers repointed: **570-mission-manager.js** `_missionApplyLaunch` (launchOrbit
+local now `e.orbit || {}`, no `m.launchOrbit` fallback) and `_missionApplyDeploy` (`o = e.orbit
+|| {}`, same); **570-mission-events.js** `missionLaunchRefPick` and `_missionLaunchSyncDraft`
+(the `e.launchOrbit = {...o}` stamps deleted — `o` already **is** `e.orbit`); **570-mission-
+replay.js** ref-resolution block (dropped the `e.launchOrbit`/`authEntry.launchOrbit` stamps,
+keeps only `authEntry.orbit`); **5746-orbit-inspector.js** `_oiCommitLaunch` (dropped the
+`e.launchOrbit` stamp; the `m.launchOrbit` write later in the same function is a legitimate
+seed-default sync, not a triplication read — see below); **5744-trajectory-eventnodes.js**
+`_trajEventNodeBody` and **5741-trajectory-scene-extract.js** (both now read `e.orbit.body`
+instead of `e.launchOrbit.body`). Writers that construct a NEW entry (`570-mission-band.js`
+`_missionPendingDraft`, `570-mission-manager.js` `missionExecLaunch`/`missionExecDeploy`,
+`573-dev-seed.js` DEPLOY push) now stamp `orbit` only, sourced from `m.launchOrbit` (the seed-
+default, its one sanctioned read besides `missionExecLaunch`'s own read) or — for
+`573-dev-seed.js`'s Gateway DEPLOY — the already-committed LAUNCH entry's `e.orbit` in
+preference to `m.launchOrbit`. Two render paths that read `m.launchOrbit` as a fallback were
+repointed to prefer the actual authored entry first: `570-mission-panel.js`
+`_missionNodeForLaunch` (now looks up the first LAUNCH/DEPLOY entry's `orbit`, falling back to
+`m.launchOrbit` only pre-authoring, i.e. before any LAUNCH/DEPLOY exists) and
+`577-mission-report.js`'s `missionReportHTML` (same pattern, keyed off the same `firstLaunch`
+lookup the report already computed for `stagingResult`). `m.launchOrbit` itself remains written
+by `missionSetOrbit` (570-mission-lifecycle.js) and captured/restored by mission undo/redo
+(575-mission-undo.js) — both legitimate seed-default/authored-mission-state uses, not part of
+the deleted triplication. **Migration rule** (`_missionMigrateLaunchOrbitEntry`/
+`_missionMigrateLaunchOrbitLog`, new in 450-program-module-phase-10-save-load-closur.js, called
+from `applyProgramObject` right after `_missions` is assigned — covers BOTH the `.program` load
+path and session/autosave restore, since `_applySessionObject` funnels through
+`applyProgramObject` too): an entry with legacy `launchOrbit` and no `orbit` gets it copied in;
+an entry with both gets `orbit` kept as-is (orbit wins) and `launchOrbit` deleted either way. A
+re-save then simply stops carrying `launchOrbit` since `buildProgramObject` serializes the log
+as-is. **Gate**: 946 -> 951 assertions (5 new: both-present-orbit-wins, launchOrbit-only-copied,
+no-launchOrbit-passthrough, non-LAUNCH-entry-type migrates too, whole-log migration), all
+pre-existing pins byte-stable. Browser smoke (`devSeedApolloMission`): payload mass 45,078 kg,
+5-stage Saturn V, LAUNCH entry has `orbit` and no `launchOrbit` key; legacy-shaped entry
+(`launchOrbit` only) through `_missionMigrateLaunchOrbitEntry` migrates correctly; a fresh
+LAUNCH draft (`_missionPendingDraft`) carries `orbit` only; zero console errors.
 
 ### C4 — StageMass unification (audit item 4, cost M, parallel-safe)
 - One stage-mass shape with `s15` as a nested object spread atomically (`{...stage, s15: {...}}`), so no assembler can drop the sextet field-by-field again (three shipped bugs). The three assemblers (worksheet/_tsCollectBase, _fleetExpandStages, _tsVehicleToBase) consume it; the S1.5 path-equality gate pin (926-assertion suite) guards the migration.

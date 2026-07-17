@@ -173,7 +173,6 @@ function _oiCommitLaunch(m, e, st, merged) {
   if (!e.orbitRefId) {
     const o = e.orbit || (e.orbit = {});
     o.body = st.body; o.alt_km = merged.peri; o.apo_km = merged.apo; o.inc_deg = merged.inc; o.lan_deg = merged.lan;
-    if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
   } else if (typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId)) {
     const base = (typeof refOrbitGet === 'function') ? refOrbitGet(e.orbitRefId) : null;
     const forked = (typeof refOrbitAdd === 'function') ? refOrbitAdd({

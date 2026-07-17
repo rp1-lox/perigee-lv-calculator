@@ -815,7 +815,6 @@ function missionLaunchRefPick(id, idx, refId) {
     const o = e.orbit || (e.orbit = {});
     o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
     if (res.lan != null) o.lan_deg = res.lan;
-    e.launchOrbit = { ...o };
     delete e._refNote;
   }
   missionRecompute(m);
@@ -968,7 +967,6 @@ function _missionLaunchSyncDraft(id, idx) {
       o._lanFromLaunchTime = false;
     }
   }
-  e.launchOrbit = { ...o };
   const targetEl = document.getElementById('edit-launch-target-' + id);
   if (targetEl) {
     const targetVal = targetEl.value || '';

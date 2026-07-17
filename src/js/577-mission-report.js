@@ -91,10 +91,11 @@ function missionReportHTML(m) {
   const payloadMass = (m.payloadScIds || []).reduce((s, scId) =>
     s + (typeof _fleetScMassById === 'function' ? _fleetScMassById(scId) : 0), 0);
 
-  const o = m.launchOrbit || {};
-
   const firstLaunch = log.find(e => e.type === 'LAUNCH' && e.stagingResult);
   const sr = firstLaunch ? firstLaunch.stagingResult : null;
+  // C3: read the actual authored LAUNCH entry's orbit; m.launchOrbit only as a
+  // pre-authoring fallback (no LAUNCH entry logged yet).
+  const o = (firstLaunch && firstLaunch.orbit) || m.launchOrbit || {};
 
   const budget = (typeof missionBudget === 'function') ? missionBudget(m) : null;
 

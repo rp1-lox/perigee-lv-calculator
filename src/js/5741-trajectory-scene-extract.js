@@ -198,7 +198,7 @@ function _trajExtractMission(m) {
   // ── surface events: LAUNCH / (REENTER-derived) LAND ──────────────────────
   log.forEach(e => {
     if (e.type === 'LAUNCH') {
-      const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+      const body = (e.orbit && e.orbit.body) || 'Earth';
       frameFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
     } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
       const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';

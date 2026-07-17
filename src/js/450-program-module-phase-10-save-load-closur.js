@@ -17,6 +17,25 @@ function _missionsSansPending() {
   return _missions.map(m => (m.log && m.log.some(e => e.pending)) ? { ...m, log: m.log.filter(e => !e.pending) } : m);
 }
 
+// C3 (2026-07-17, launchOrbit triplication collapse): `e.orbit` is now the
+// single authored source on a LAUNCH/DEPLOY entry — old saved logs may still
+// carry legacy `e.launchOrbit` (stamped alongside `orbit` by pre-C3 code).
+// Load-time migration only (in-memory): both present -> orbit wins (it was
+// always the more-authored field, kept current by every editing path);
+// launchOrbit-only -> copy into orbit. Either way launchOrbit is deleted, so
+// a re-save (autosave or .program export, both funnel through
+// buildProgramObject serializing the log as-is) simply stops carrying it.
+function _missionMigrateLaunchOrbitEntry(e) {
+  if (!e || !('launchOrbit' in e)) return e;
+  if (e.orbit == null) e.orbit = e.launchOrbit;
+  delete e.launchOrbit;
+  return e;
+}
+function _missionMigrateLaunchOrbitLog(m) {
+  if (m && Array.isArray(m.log)) m.log.forEach(_missionMigrateLaunchOrbitEntry);
+  return m;
+}
+
 function buildProgramObject() {
   return {
     kind: 'rocket-playground-program',
@@ -100,6 +119,7 @@ function applyProgramObject(obj) {
   }
   _fleetEntries = Array.isArray(obj.fleet)      ? obj.fleet      : [];
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
+  _missions.forEach(_missionMigrateLaunchOrbitLog);   // C3: legacy e.launchOrbit -> e.orbit, in memory only
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');

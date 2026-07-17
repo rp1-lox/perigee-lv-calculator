@@ -344,9 +344,8 @@ function missionRecompute(m) {
         o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
         if (res.lan != null) o.lan_deg = res.lan;
         delete o.propagated; delete o.refId;
-        if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
         delete e._refNote;
-        if (authEntry) { authEntry.orbit = { ...o }; if (e.type === 'LAUNCH') authEntry.launchOrbit = { ...o }; delete authEntry._refNote; }
+        if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
       } else {
         e._refNote = 'orbit ref unresolved — using cached values';
         if (authEntry) authEntry._refNote = e._refNote;

@@ -418,7 +418,7 @@ function _missionPendingDraft(m, dockType) {
     case 'launch':
       return { type: 'LAUNCH', pending: true, _commitLabel: label, label: m.name, fleetEntryId: null,
         payloadScIds: [...(m.payloadScIds || [])], payloadMass: 0,
-        orbit: { ...m.launchOrbit }, launchOrbit: { ...m.launchOrbit } };
+        orbit: { ...m.launchOrbit } };
     case 'deploy': {
       const sc = (_scEdSC || [])[0];
       return { type: 'DEPLOY', pending: true, _commitLabel: label, label: sc ? sc.name : '', spacecraftId: sc ? sc.spacecraftId : null,

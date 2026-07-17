@@ -16186,6 +16186,25 @@ function _missionsSansPending() {
   return _missions.map(m => (m.log && m.log.some(e => e.pending)) ? { ...m, log: m.log.filter(e => !e.pending) } : m);
 }
 
+// C3 (2026-07-17, launchOrbit triplication collapse): `e.orbit` is now the
+// single authored source on a LAUNCH/DEPLOY entry — old saved logs may still
+// carry legacy `e.launchOrbit` (stamped alongside `orbit` by pre-C3 code).
+// Load-time migration only (in-memory): both present -> orbit wins (it was
+// always the more-authored field, kept current by every editing path);
+// launchOrbit-only -> copy into orbit. Either way launchOrbit is deleted, so
+// a re-save (autosave or .program export, both funnel through
+// buildProgramObject serializing the log as-is) simply stops carrying it.
+function _missionMigrateLaunchOrbitEntry(e) {
+  if (!e || !('launchOrbit' in e)) return e;
+  if (e.orbit == null) e.orbit = e.launchOrbit;
+  delete e.launchOrbit;
+  return e;
+}
+function _missionMigrateLaunchOrbitLog(m) {
+  if (m && Array.isArray(m.log)) m.log.forEach(_missionMigrateLaunchOrbitEntry);
+  return m;
+}
+
 function buildProgramObject() {
   return {
     kind: 'rocket-playground-program',
@@ -16269,6 +16288,7 @@ function applyProgramObject(obj) {
   }
   _fleetEntries = Array.isArray(obj.fleet)      ? obj.fleet      : [];
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
+  _missions.forEach(_missionMigrateLaunchOrbitLog);   // C3: legacy e.launchOrbit -> e.orbit, in memory only
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
@@ -21379,7 +21399,7 @@ function _missionPendingDraft(m, dockType) {
     case 'launch':
       return { type: 'LAUNCH', pending: true, _commitLabel: label, label: m.name, fleetEntryId: null,
         payloadScIds: [...(m.payloadScIds || [])], payloadMass: 0,
-        orbit: { ...m.launchOrbit }, launchOrbit: { ...m.launchOrbit } };
+        orbit: { ...m.launchOrbit } };
     case 'deploy': {
       const sc = (_scEdSC || [])[0];
       return { type: 'DEPLOY', pending: true, _commitLabel: label, label: sc ? sc.name : '', spacecraftId: sc ? sc.spacecraftId : null,
@@ -23497,7 +23517,6 @@ function missionLaunchRefPick(id, idx, refId) {
     const o = e.orbit || (e.orbit = {});
     o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
     if (res.lan != null) o.lan_deg = res.lan;
-    e.launchOrbit = { ...o };
     delete e._refNote;
   }
   missionRecompute(m);
@@ -23650,7 +23669,6 @@ function _missionLaunchSyncDraft(id, idx) {
       o._lanFromLaunchTime = false;
     }
   }
-  e.launchOrbit = { ...o };
   const targetEl = document.getElementById('edit-launch-target-' + id);
   if (targetEl) {
     const targetVal = targetEl.value || '';
@@ -24820,7 +24838,7 @@ function _missionApplyLaunch(m, e) {
   }
 
   const allStages = [...lvStages, ...scStages];
-  const launchOrbit = e.launchOrbit || m.launchOrbit;
+  const launchOrbit = e.orbit || {};   // C3: e.orbit is the single authored source; replay never reads m.launchOrbit
   const ev = progMakeEvent('LAUNCH', {
     label:       m.name + ' — ' + entry.name,
     stages:      allStages,
@@ -24932,7 +24950,7 @@ function _missionApplyDeploy(m, e, metNow) {
   const allStages = progSpacecraftToLiveStages(sc);
   // Optionally deploy with EMPTY tanks (a dry depot to be filled by prop transfer later).
   if (e.emptyTanks) allStages.forEach(st => (st.tanks || []).forEach(t => { t.fill = 0; }));
-  const o = e.orbit || m.launchOrbit || {};
+  const o = e.orbit || {};   // C3: replay never reads m.launchOrbit
   let orbitState;
   if (o.propagated && o.refId) {
     // Phase 4 U3: deploy ON the propagated ref — sample it at the event's own
@@ -24966,7 +24984,7 @@ function missionExecLaunch(id, opts) {
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
   if (!entry) return;
-  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], launchOrbit: { ...m.launchOrbit }, orbit: { ...m.launchOrbit } });
+  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: { ...m.launchOrbit } });
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
@@ -26595,7 +26613,11 @@ function missionToggleBridgeMode(id) {
 
 // Map a mission's launch orbit to the nearest canonical node id.
 function _missionNodeForLaunch(m) {
-  const o = m.launchOrbit || {};
+  // C3: prefer the actual authored LAUNCH/DEPLOY entry's orbit (single source
+  // of truth); m.launchOrbit is only a fallback for the pre-authoring case
+  // (no LAUNCH/DEPLOY exists yet — nothing else to show a default node for).
+  const first = (m.log || []).find(e => e.type === 'LAUNCH' || e.type === 'DEPLOY');
+  const o = (first && first.orbit) || m.launchOrbit || {};
   return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.alt_km, apogee: o.alt_km } });
 }
 
@@ -27568,9 +27590,8 @@ function missionRecompute(m) {
         o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
         if (res.lan != null) o.lan_deg = res.lan;
         delete o.propagated; delete o.refId;
-        if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
         delete e._refNote;
-        if (authEntry) { authEntry.orbit = { ...o }; if (e.type === 'LAUNCH') authEntry.launchOrbit = { ...o }; delete authEntry._refNote; }
+        if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
       } else {
         e._refNote = 'orbit ref unresolved — using cached values';
         if (authEntry) authEntry._refNote = e._refNote;
@@ -28781,8 +28802,9 @@ function devSeedGatewayMission(opts) {
   // mid-log so it doesn't interfere with the crewed vehicle's own log index
   // lookups; bound to the NRHO ref via missionDeployRefPick (§14 U3 path,
   // the only ref-picker that accepts a propagated entry).
+  const gwLaunchEv = m.log.find(e => e.type === 'LAUNCH');
   m.log.push({ type: 'DEPLOY', label: gateway.name, spacecraftId: gateway.spacecraftId,
-    orbit: { ...(m.launchOrbit || {}) }, emptyTanks: false });
+    orbit: { ...((gwLaunchEv && gwLaunchEv.orbit) || m.launchOrbit || {}) }, emptyTanks: false });
   missionRecompute(m); missionRenderDetail();
   const deployIdx = m.log.length - 1;
   missionDeployRefPick(m.missionId, deployIdx, 'nrho-nominal');
@@ -30695,7 +30717,7 @@ function _trajExtractMission(m) {
   // ── surface events: LAUNCH / (REENTER-derived) LAND ──────────────────────
   log.forEach(e => {
     if (e.type === 'LAUNCH') {
-      const body = (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+      const body = (e.orbit && e.orbit.body) || 'Earth';
       frameFor(body).surface.push({ kind: 'launch', body, label: 'Launch', met: e.metStart });
     } else if (e.type === 'REENTER' || e.type === 'RECOVER') {
       const body = (e.orbitAfter && e.orbitAfter.body) || 'Earth';
@@ -32062,7 +32084,7 @@ function _trajEventNodeOrbitFor(m, idx, body) {
 function _trajEventNodeBody(m, idx) {
   const e = m && m.log && m.log[idx];
   if (!e) return null;
-  if (e.type === 'LAUNCH') return (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+  if (e.type === 'LAUNCH') return (e.orbit && e.orbit.body) || 'Earth';
   if (e.type === 'REENTER' || e.type === 'RECOVER') return (e.orbitAfter && e.orbitAfter.body) || 'Earth';
   if (e.snapshot) {
     for (const v of e.snapshot) {
@@ -35577,7 +35599,6 @@ function _oiCommitLaunch(m, e, st, merged) {
   if (!e.orbitRefId) {
     const o = e.orbit || (e.orbit = {});
     o.body = st.body; o.alt_km = merged.peri; o.apo_km = merged.apo; o.inc_deg = merged.inc; o.lan_deg = merged.lan;
-    if (e.type === 'LAUNCH') e.launchOrbit = { ...o };
   } else if (typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId)) {
     const base = (typeof refOrbitGet === 'function') ? refOrbitGet(e.orbitRefId) : null;
     const forked = (typeof refOrbitAdd === 'function') ? refOrbitAdd({
@@ -36340,10 +36361,11 @@ function missionReportHTML(m) {
   const payloadMass = (m.payloadScIds || []).reduce((s, scId) =>
     s + (typeof _fleetScMassById === 'function' ? _fleetScMassById(scId) : 0), 0);
 
-  const o = m.launchOrbit || {};
-
   const firstLaunch = log.find(e => e.type === 'LAUNCH' && e.stagingResult);
   const sr = firstLaunch ? firstLaunch.stagingResult : null;
+  // C3: read the actual authored LAUNCH entry's orbit; m.launchOrbit only as a
+  // pre-authoring fallback (no LAUNCH entry logged yet).
+  const o = (firstLaunch && firstLaunch.orbit) || m.launchOrbit || {};
 
   const budget = (typeof missionBudget === 'function') ? missionBudget(m) : null;
 

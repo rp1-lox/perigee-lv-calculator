@@ -134,6 +134,7 @@ const {
   progEqToWorldElements, progWorldToEqElements, _trajRingPlaneBasis,
   orbitWorldElements, orbitWorldState,
   orbitNormalize, orbitMeanRadiusKm, orbitPeriodS, orbitWorldNormal,
+  _missionMigrateLaunchOrbitEntry, _missionMigrateLaunchOrbitLog,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -5039,6 +5040,47 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   })());
   ok('orbitWorldNormal: null for propagated', orbitWorldNormal({ propagated: true, body: 'Moon' }) === null);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C3 (launchOrbit triplication collapse) — load-time migration pins
+// ═══════════════════════════════════════════════════════════════════════════
+
+ok('_missionMigrateLaunchOrbitEntry: both present -> orbit wins, launchOrbit deleted', (() => {
+  const e = { type: 'LAUNCH', orbit: { body: 'Earth', alt_km: 185 }, launchOrbit: { body: 'Earth', alt_km: 999 } };
+  _missionMigrateLaunchOrbitEntry(e);
+  return e.orbit.alt_km === 185 && !('launchOrbit' in e);
+})());
+
+ok('_missionMigrateLaunchOrbitEntry: launchOrbit-only -> copied into orbit, then deleted', (() => {
+  const e = { type: 'LAUNCH', launchOrbit: { body: 'Earth', alt_km: 185, inc_deg: 28.5 } };
+  _missionMigrateLaunchOrbitEntry(e);
+  return e.orbit && e.orbit.alt_km === 185 && e.orbit.inc_deg === 28.5 && !('launchOrbit' in e);
+})());
+
+ok('_missionMigrateLaunchOrbitEntry: no launchOrbit -> untouched (orbit passthrough)', (() => {
+  const e = { type: 'LAUNCH', orbit: { body: 'Earth', alt_km: 185 } };
+  const before = JSON.stringify(e);
+  _missionMigrateLaunchOrbitEntry(e);
+  return JSON.stringify(e) === before;
+})());
+
+ok('_missionMigrateLaunchOrbitEntry: non-LAUNCH entry with legacy launchOrbit still migrates (defensive, dialect-agnostic)', (() => {
+  const e = { type: 'DEPLOY', launchOrbit: { body: 'Earth', alt_km: 400 } };
+  _missionMigrateLaunchOrbitEntry(e);
+  return e.orbit && e.orbit.alt_km === 400 && !('launchOrbit' in e);
+})());
+
+ok('_missionMigrateLaunchOrbitLog: migrates every entry in a mission log', (() => {
+  const m = { log: [
+    { type: 'LAUNCH', launchOrbit: { body: 'Earth', alt_km: 185 } },
+    { type: 'MANEUVER', foo: 1 },
+    { type: 'DEPLOY', orbit: { body: 'Earth', alt_km: 400 }, launchOrbit: { body: 'Earth', alt_km: 401 } },
+  ] };
+  _missionMigrateLaunchOrbitLog(m);
+  return m.log[0].orbit.alt_km === 185 && !('launchOrbit' in m.log[0]) &&
+    m.log[1].foo === 1 &&
+    m.log[2].orbit.alt_km === 400 && !('launchOrbit' in m.log[2]);
+})());
 
 // ═══════════════════════════════════════════════════════════════════════════
 // summary

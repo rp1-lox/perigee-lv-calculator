@@ -375,7 +375,11 @@ function missionToggleBridgeMode(id) {
 
 // Map a mission's launch orbit to the nearest canonical node id.
 function _missionNodeForLaunch(m) {
-  const o = m.launchOrbit || {};
+  // C3: prefer the actual authored LAUNCH/DEPLOY entry's orbit (single source
+  // of truth); m.launchOrbit is only a fallback for the pre-authoring case
+  // (no LAUNCH/DEPLOY exists yet — nothing else to show a default node for).
+  const first = (m.log || []).find(e => e.type === 'LAUNCH' || e.type === 'DEPLOY');
+  const o = (first && first.orbit) || m.launchOrbit || {};
   return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.alt_km, apogee: o.alt_km } });
 }
 

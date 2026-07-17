@@ -98,7 +98,7 @@ function _missionApplyLaunch(m, e) {
   }
 
   const allStages = [...lvStages, ...scStages];
-  const launchOrbit = e.launchOrbit || m.launchOrbit;
+  const launchOrbit = e.orbit || {};   // C3: e.orbit is the single authored source; replay never reads m.launchOrbit
   const ev = progMakeEvent('LAUNCH', {
     label:       m.name + ' — ' + entry.name,
     stages:      allStages,
@@ -210,7 +210,7 @@ function _missionApplyDeploy(m, e, metNow) {
   const allStages = progSpacecraftToLiveStages(sc);
   // Optionally deploy with EMPTY tanks (a dry depot to be filled by prop transfer later).
   if (e.emptyTanks) allStages.forEach(st => (st.tanks || []).forEach(t => { t.fill = 0; }));
-  const o = e.orbit || m.launchOrbit || {};
+  const o = e.orbit || {};   // C3: replay never reads m.launchOrbit
   let orbitState;
   if (o.propagated && o.refId) {
     // Phase 4 U3: deploy ON the propagated ref — sample it at the event's own
@@ -244,7 +244,7 @@ function missionExecLaunch(id, opts) {
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
   if (!entry) return;
-  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], launchOrbit: { ...m.launchOrbit }, orbit: { ...m.launchOrbit } });
+  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: { ...m.launchOrbit } });
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();

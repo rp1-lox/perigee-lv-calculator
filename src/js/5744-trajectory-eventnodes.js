@@ -142,7 +142,7 @@ function _trajEventNodeOrbitFor(m, idx, body) {
 function _trajEventNodeBody(m, idx) {
   const e = m && m.log && m.log[idx];
   if (!e) return null;
-  if (e.type === 'LAUNCH') return (e.launchOrbit && e.launchOrbit.body) || 'Earth';
+  if (e.type === 'LAUNCH') return (e.orbit && e.orbit.body) || 'Earth';
   if (e.type === 'REENTER' || e.type === 'RECOVER') return (e.orbitAfter && e.orbitAfter.body) || 'Earth';
   if (e.snapshot) {
     for (const v of e.snapshot) {

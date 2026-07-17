@@ -36,11 +36,16 @@ concept. Migration cost S/M/L is engineering effort for the proposed unification
    radius: ~20 modules. Cost: **L**. This is the substrate that makes #1 dangerous —
    a canonical orbit object should carry its own frame tag.
 
-3. **`launchOrbit` triplicated** — `m.launchOrbit`, `e.orbit`, and `e.launchOrbit` all
+3. **`launchOrbit` triplicated** — **DONE 2026-07-17 (C3, see docs/MISSION_MODEL_V2.md §24).**
+   `m.launchOrbit`, `e.orbit`, and `e.launchOrbit` all
    hold the launch parking orbit, kept in sync by hand-spread copies
    (`e.launchOrbit = { ...o }` at 570-mission-events.js:726 and :879). Plus
    `e.orbitBefore`/`orbitAfter` on other event types. SHIPPED-adjacent (the launch-planner
    revert bug 364512b65 lived here). Blast radius: ~8 modules. Cost: **S**.
+   `e.orbit` is now the single authored source on LAUNCH/DEPLOY entries; `e.launchOrbit`
+   deleted from every writer/reader; `m.launchOrbit` demoted to a seed-default (new-draft
+   prefill + `missionExecLaunch`) with a load-time migration for old logs. `e.orbitBefore`/
+   `orbitAfter` were untouched (out of scope for this item).
 
 4. **Mass/propellant field dialects across the vehicle stack**, with S1.5 fields
    hand-forwarded. Worksheet `stageStore` uses `{dry, prop, res, thrust, isp}` as
