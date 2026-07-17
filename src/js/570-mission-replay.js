@@ -85,6 +85,7 @@ function _missionCaptureSnapshot(live, baseOf) {
         parent: st._parentName || '', parentKid: st._parentKid,
         prop: Math.round(progStageRemainingProp(st)),
         cap: Math.round(progStageTotalCapacity(st)),
+        dry: Math.round(st.dry_mass || 0),
         crew: st.crewAboard || 0,
       })),
     };

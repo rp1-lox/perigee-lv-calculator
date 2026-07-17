@@ -84,17 +84,11 @@ function _missionLogCardHTML(entry, id, idx) {
   const sr = entry.stagingResult || {};
   const sc = sr.status === 'SUCCESS' ? 'var(--accent3)' : 'var(--accent2)';
   const payStr = (entry.payloadNames || []).length ? entry.payloadNames.join(', ') : 'None';
-  const stageRows = (sr.stages || []).map(s => {
-    const statusCell = s.expended
-      ? `<td style="color:var(--text-dim);font-family:var(--mono);font-size:9px">EXPENDED</td>`
-      : `<td style="color:var(--accent);font-family:var(--mono);font-size:9px">INSERTION &nbsp;${s.propRemaining.toLocaleString()} kg remain</td>`;
-    return `<tr>
-      <td class="rl">${s.name}</td>
-      <td style="text-align:right">${s.propBurned.toLocaleString()}</td>
-      <td style="text-align:right;color:var(--accent3)">${s.dvContrib.toLocaleString()}</td>
-      ${statusCell}
-    </tr>`;
-  }).join('');
+  // Launch statistics (ΔV required/available/margin, per-stage prop/ΔV table)
+  // moved off this card per user feedback 2026-07-16 — that's mission STATE,
+  // not launch-event authoring, and now lives in the expandable HUD vehicle
+  // card (_missionVehStageRowsHTML, 570-mission-panel.js). This card keeps
+  // only the authored launch parameters + pass/fail badge.
   return `<div class="mission-log-card">
     <div class="mission-log-header">
       <span class="mission-log-type">LAUNCH</span>
@@ -109,18 +103,7 @@ function _missionLogCardHTML(entry, id, idx) {
       <div class="mission-state-kv"><span class="mission-state-key">Payload</span><span class="mission-state-val">${entry.payloadMass.toLocaleString()} kg</span></div>
       ${sr.maxPayload != null ? `<div class="mission-state-kv"><span class="mission-state-key">Max to this orbit</span><span class="mission-state-val" style="color:${entry.payloadMass <= sr.maxPayload ? 'var(--accent3)' : 'var(--accent2)'}">${sr.maxPayload.toLocaleString()} kg</span></div>` : ''}
     </div>
-    ${(entry.payloadNames || []).length ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">Payloads: ${payStr}</div>` : ''}
-    ${stageRows ? `<table class="sc-dv-tbl" style="width:100%"><thead><tr>
-      <th>Stage</th><th style="text-align:right">Prop Used (kg)</th><th style="text-align:right">&#916;V (m/s)</th><th>Ascent Status</th>
-    </tr></thead><tbody>${stageRows}</tbody></table>
-    <div style="display:flex;justify-content:flex-end;align-items:baseline;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);flex-wrap:wrap;">
-      <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;">Required &#916;V</span>
-      <span style="font-family:var(--mono);font-size:16px;color:var(--text-bright)">${(sr.dvRequired||0).toLocaleString()} m/s</span>
-      <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;">Available</span>
-      <span style="font-family:var(--mono);font-size:16px;color:${sc}">${(sr.dvAvailable != null ? sr.dvAvailable : sr.dvDelivered || 0).toLocaleString()} m/s</span>
-      ${sr.dvMargin != null ? `<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;">Margin</span>
-      <span style="font-family:var(--mono);font-size:16px;color:${sr.dvMargin >= 0 ? 'var(--accent3)' : 'var(--accent2)'}">${sr.dvMargin.toLocaleString()} m/s</span>` : ''}
-    </div>` : ''}
+    ${(entry.payloadNames || []).length ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">Payloads: ${payStr}</div>` : ''}
   </div>`;
 }
 

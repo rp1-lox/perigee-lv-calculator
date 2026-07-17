@@ -38,6 +38,63 @@ function _missionVehSwatchHTML(m, id, vehicleKey) {
   return `<input type="color" class="mcc-veh-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${vehicleKey}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${vehicleKey}')">`;
 }
 
+// HUD vehicle chips are click-expandable (user feedback 2026-07-16, item 3):
+// clicking a vehicle reveals a per-stage breakdown (name, propellant
+// remaining/capacity, dry mass). Transient UI state only (never persisted /
+// never touches m.log) — keyed by "missionId|vehicleKey" so each vehicle's
+// expansion is independent and survives a re-render.
+let _missionHudExpandVeh = {};
+function missionHudToggleVehExpand(id, vehicleKey, ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  const k = id + '|' + vehicleKey;
+  _missionHudExpandVeh[k] = !_missionHudExpandVeh[k];
+  missionRenderDetail();
+}
+
+// Per-stage breakdown rows for the expanded HUD vehicle card. `stages` is a
+// normalized array of {name, prop, cap, dry} (kg); works for both the live
+// path (fv.stages, via progStageRemainingProp/progStageTotalCapacity) and the
+// event-scoped snapshot path (entry.snapshot[].stages, which already carries
+// prop/cap/dry — see _missionCaptureSnapshot, 570-mission-replay.js).
+function _missionVehStageRowsHTML(stages) {
+  if (!stages || !stages.length) return `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);padding:4px 0;">// no stage data</div>`;
+  const rows = stages.map(s => {
+    const cap = s.cap || 0;
+    const frac = cap > 0 ? Math.max(0, Math.min(1, s.prop / cap)) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
+      <span style="flex:1 1 90px;min-width:0;color:var(--text-bright);white-space:normal;word-break:break-word;">${_mrEsc ? _mrEsc(s.name || '?') : (s.name || '?')}</span>
+      <span style="flex:0 0 90px;height:5px;background:var(--input);border:1px solid var(--border);position:relative;overflow:hidden;"><span style="position:absolute;inset:0;width:${Math.round(frac*100)}%;background:var(--accent-tint-strong);"></span></span>
+      <span style="flex:0 0 auto;text-align:right;">${Math.round(s.prop).toLocaleString()} / ${Math.round(cap).toLocaleString()} kg</span>
+      <span style="flex:0 0 auto;text-align:right;color:var(--text-dim);">dry ${Math.round(s.dry||0).toLocaleString()} kg</span>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);">${rows}</div>`;
+}
+
+// Live-vehicle adapter: normalize fv.stages -> the shape _missionVehStageRowsHTML expects.
+function _missionVehStageRowsFromLive(fv) {
+  const stages = (fv.stages || []).map(st => ({
+    name: (typeof _missionStageLabelById === 'function') ? _missionStageLabelById(st.stageDefinitionId) : (st.stageDefinitionId || '?'),
+    prop: progStageRemainingProp(st),
+    cap: progStageTotalCapacity(st),
+    dry: st.dry_mass || 0,
+  }));
+  return _missionVehStageRowsHTML(stages);
+}
+
+// "More statistics" disclosure (item 4): low-value headline metrics — chiefly
+// propellant consumed — demoted here instead of sitting on the mission totals
+// line at a glance. Plain <details> reuses native disclosure semantics (no
+// new expand-state plumbing needed) and is styled with theme vars only.
+function _missionMoreStatsHTML(propConsumed) {
+  return `<details style="margin-top:4px;">
+      <summary style="cursor:pointer;font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.05em;">More statistics</summary>
+      <div style="padding:4px 0 0 10px;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
+        <span>Prop consumed: <span style="color:var(--text-bright)">${Math.round(propConsumed).toLocaleString()} kg</span></span>
+      </div>
+    </details>`;
+}
+
 function _missionMultiVehicleHTML(m) {
   const id = m.missionId;
   const sel = _missionSelectedEventSnapshotEntry(m);   // non-null = show state AS OF that event
@@ -56,19 +113,23 @@ function _missionMultiVehicleHTML(m) {
       const orbitLine = os
         ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
-      return `<div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};${expended ? 'opacity:.6;' : ''}">
+      const expandKey = id + '|' + v.vehicleId;
+      const expanded = !!_missionHudExpandVeh[expandKey];
+      return `<div onclick="missionHudToggleVehExpand('${id}','${v.vehicleId}',event)" title="Click for per-stage detail" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;${expended ? 'opacity:.6;' : ''}">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
           <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
           ${_missionVehSwatchHTML(m, id, v.vehicleId)}
           <span style="font-family:var(--mono);font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-bright)'};font-weight:${isActive ? '600' : '400'};flex:1 1 100px;min-width:80px;white-space:normal;word-break:break-word;line-height:1.3;">${v.name}</span>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${(v.stages || []).length} stages</span>
           ${expended ? `<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">${v.status}</span>` : ''}
+          <span style="flex-shrink:0;font-size:9px;color:var(--text-dim);transform:rotate(${expanded?'90deg':'0deg'});transition:transform .1s;">&#9656;</span>
         </div>
         ${orbitLine ? `<div>${orbitLine}</div>` : ''}
         <div style="display:flex;gap:12px;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
           <span>&Delta;V left: <span style="color:${v.remDv > 0 ? 'var(--accent3)' : 'var(--accent2)'}">${v.remDv.toLocaleString()} m/s</span></span>
           <span>Prop left: <span style="color:var(--text-bright)">${v.remProp.toLocaleString()} kg</span></span>
         </div>
+        ${expanded ? _missionVehStageRowsHTML(v.stages || []) : ''}
       </div>`;
     }).join('');
 
@@ -93,10 +154,10 @@ function _missionMultiVehicleHTML(m) {
     const capColor = capRem > 0 ? 'var(--accent3)' : 'var(--accent2)';
     const totals = `<div style="display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:6px;margin-top:4px;border-top:1px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--text-dim);">
         <span>&Delta;V expended: <span style="color:var(--text-bright)">${Math.round(dvExpended).toLocaleString()} m/s</span></span>
-        <span>Prop consumed: <span style="color:var(--text-bright)">${Math.round(propConsumed).toLocaleString()} kg</span></span>
         <span>&Delta;V left (active): <span style="color:${capColor}">${Math.round(capRem).toLocaleString()} m/s</span></span>
         <span>Payload: <span style="color:var(--text-bright)">${Math.round(payloadMass).toLocaleString()} kg</span></span>
-      </div>`;
+      </div>
+      ${_missionMoreStatsHTML(propConsumed)}`;
 
     const evLabel = entry.type + (sel.index != null && m._expanded ? ' ' + (sel.index + 1) : '');
     const metSuffix = entry.metStart != null ? ` <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">&middot; ${_metFmt(entry.metStart)}</span>` : '';
@@ -120,8 +181,10 @@ function _missionMultiVehicleHTML(m) {
     const orbitLine = os
       ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
       : '';
-    // whole row is clickable to make this the active vehicle; active = green
-    return `<div onclick="missionSetActiveVehicle('${id}','${vid}')" title="Click to make active" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
+    // whole row is clickable to make this the active vehicle AND expand per-stage detail
+    const expandKey = id + '|' + vid;
+    const expanded = !!_missionHudExpandVeh[expandKey];
+    return `<div onclick="missionSetActiveVehicle('${id}','${vid}');missionHudToggleVehExpand('${id}','${vid}',event)" title="Click to make active / show per-stage detail" style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid ${isActive ? 'var(--accent)' : 'var(--border)'};border-left:3px solid ${accent || (isActive ? 'var(--accent)' : 'var(--border)')};margin-bottom:4px;background:${isActive ? 'var(--accent-tint-strongest)' : 'transparent'};cursor:pointer;">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
         <span style="flex-shrink:0;width:12px;font-size:11px;color:${isActive ? 'var(--accent3)' : 'var(--text-dim)'};">${isActive ? '●' : '○'}</span>
         ${_missionVehSwatchHTML(m, id, fv.vehicleId)}
@@ -130,12 +193,14 @@ function _missionMultiVehicleHTML(m) {
         ${expended ? '<span style="font-family:var(--mono);font-size:9px;color:var(--danger)">EXPENDED</span>' : ''}
         <button class="act-btn" style="padding:2px 6px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionRenameVehicle('${id}','${fv._originKey || ''}')" title="Rename this vehicle">✎</button>
         <button class="act-btn" style="padding:2px 8px;font-size:10px;flex-shrink:0;" onclick="event.stopPropagation();missionExecExpendVehicle('${id}','${vid}')"${expended ? ' disabled' : ''}>Expend</button>
+        <span style="flex-shrink:0;font-size:9px;color:var(--text-dim);transform:rotate(${expanded?'90deg':'0deg'});transition:transform .1s;">&#9656;</span>
       </div>
       ${orbitLine ? `<div>${orbitLine}</div>` : ''}
       <div style="display:flex;gap:12px;font-family:var(--mono);font-size:9px;color:var(--text-dim);">
         <span>&Delta;V left: <span style="color:${remDv > 0 ? 'var(--accent3)' : 'var(--accent2)'}">${remDv.toLocaleString()} m/s</span></span>
         <span>Prop left: <span style="color:var(--text-bright)">${remProp.toLocaleString()} kg</span></span>
       </div>
+      ${expanded ? _missionVehStageRowsFromLive(fv) : ''}
     </div>`;
   }).join('');
 
@@ -143,11 +208,11 @@ function _missionMultiVehicleHTML(m) {
   const capColor = b.dvCapacityRemaining > 0 ? 'var(--accent3)' : 'var(--accent2)';
   const totals = `<div style="display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:6px;margin-top:4px;border-top:1px solid var(--border);font-family:var(--mono);font-size:9px;color:var(--text-dim);">
       <span>&Delta;V expended: <span style="color:var(--text-bright)">${b.dvExpended.toLocaleString()} m/s</span></span>
-      <span>Prop consumed: <span style="color:var(--text-bright)">${b.propConsumed.toLocaleString()} kg</span></span>
       <span>&Delta;V left (active): <span style="color:${capColor}">${b.dvCapacityRemaining.toLocaleString()} m/s</span></span>
       <span>Payload: <span style="color:var(--text-bright)">${b.payloadMass.toLocaleString()} kg</span></span>
       <span>Duration: <span style="color:var(--text-bright)">${_metFmt(m._metTotal)}</span></span>
-    </div>`;
+    </div>
+    ${_missionMoreStatsHTML(b.propConsumed)}`;
 
   // Separate & Dock are done via ＋ Add Event; this panel is the vehicle list plus
   // per-vehicle + mission-wide state (formerly a separate sticky budget card).
@@ -185,12 +250,20 @@ function _missionTopStripHTML(m) {
   const activeFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeName = activeFv ? _missionVehicleDisplayName(activeFv) : '—';
   const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
+  // Calendar glyph: inline SVG (theme-var stroke), NOT an emoji — see
+  // 578-mission-epoch-picker.js header comment / user directive 2026-07-16.
+  const _calSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="display:block;" aria-hidden="true">
+      <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="1.5" y1="6" x2="14.5" y2="6" stroke="currentColor" stroke-width="1.2"/>
+      <line x1="4.5" y1="1" x2="4.5" y2="3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      <line x1="11.5" y1="1" x2="11.5" y2="3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+    </svg>`;
   const dateCell = `<span class="mcc-top-date" title="Click to change mission epoch (T+0), UTC"
       style="cursor:pointer;border-bottom:1px dashed var(--accent-tint-strong);"
       onclick="_missionEpochOpen(this)">${dateStr}</span><button type="button" class="act-btn mcc-epoch-btn"
       title="Change mission epoch (T+0)" aria-label="Change mission epoch (T+0)"
-      style="padding:1px 5px;font-size:11px;line-height:1;margin-left:3px;"
-      onclick="_missionEpochOpen(this)">&#128197;</button>`;
+      style="padding:1px 5px;line-height:1;margin-left:3px;color:var(--text-dim);display:inline-flex;align-items:center;"
+      onclick="_missionEpochOpen(this)">${_calSvg}</button>`;
   return `<div class="mcc-top-strip">
     <span class="mcc-top-met">T+${_metFmt(vt)}</span>
     ${dateCell}
