@@ -229,10 +229,10 @@ function physPhasingSolve(P_s, dtPhase_s, N, mu, rPeri_km) {
 // exactly (peri/apo are secondary, approximate labels on a 3-body orbit).
 function phasingPlanPropagated(refId, dtPhase_s, N, muBody) {
   const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
-  if (!res || res.kind !== 'propagated' || !res.period_s || !(res.peri > 0)) return null;
+  if (!res || res.kind !== 'propagated' || !res.period_s || !(res.periKm > 0)) return null;
   const mu = muBody || (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[res.body] && PROG_BODIES[res.body].mu);
   if (!mu) return null;
-  return physPhasingSolve(res.period_s, dtPhase_s, N, mu, res.peri);
+  return physPhasingSolve(res.period_s, dtPhase_s, N, mu, res.periKm);
 }
 
 // Keplerian construction: textbook, same physPhasingSolve, periapsis radius

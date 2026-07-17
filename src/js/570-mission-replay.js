@@ -339,10 +339,10 @@ function missionRecompute(m) {
         } else {
           e._refNote = 'a LAUNCH cannot target a propagated orbit — ref ignored';
         }
-      } else if (res && res.peri != null) {
+      } else if (res && res.periKm != null) {
         const o = e.orbit || (e.orbit = {});
-        o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
-        if (res.lan != null) o.lan_deg = res.lan;
+        o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
+        if (res.lanDeg != null) o.lan_deg = res.lanDeg;
         delete o.propagated; delete o.refId;
         delete e._refNote;
         if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }

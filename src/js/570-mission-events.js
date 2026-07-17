@@ -811,10 +811,10 @@ function missionLaunchRefPick(id, idx, refId) {
   if (!refId) { e.orbitRefId = null; missionRenderDetail(); return; }
   const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
   e.orbitRefId = refId;
-  if (res && res.peri != null) {
+  if (res && res.periKm != null) {
     const o = e.orbit || (e.orbit = {});
-    o.body = res.body; o.alt_km = res.peri; o.apo_km = res.apo; o.inc_deg = res.inc;
-    if (res.lan != null) o.lan_deg = res.lan;
+    o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
+    if (res.lanDeg != null) o.lan_deg = res.lanDeg;
     delete e._refNote;
   }
   missionRecompute(m);

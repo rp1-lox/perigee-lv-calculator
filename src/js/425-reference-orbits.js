@@ -119,49 +119,49 @@ const EML2_HALO_SEED = {
 
 const PROG_ORBIT_CATALOG_BUILTIN = [
   { id: 'leo-185',      name: 'LEO 185',        body: 'Earth', kind: 'keplerian',
-    peri: 185,   apo: 185,   inc: 28.5 },
+    periKm: 185,   apoKm: 185,   incDeg: 28.5 },
   { id: 'leo-400-51.6', name: 'Station',         body: 'Earth', kind: 'keplerian',
-    peri: 400,   apo: 400,   inc: 51.6 },
+    periKm: 400,   apoKm: 400,   incDeg: 51.6 },
   { id: 'sso-800',      name: 'SSO 800',         body: 'Earth', kind: 'keplerian',
-    peri: 800,   apo: 800,   inc: 98.6 },
+    periKm: 800,   apoKm: 800,   incDeg: 98.6 },
   { id: 'gto-185',      name: 'GTO',             body: 'Earth', kind: 'keplerian',
-    peri: 185,   apo: 35786, inc: 28.5 },
+    periKm: 185,   apoKm: 35786, incDeg: 28.5 },
   { id: 'geo',          name: 'GEO',             body: 'Earth', kind: 'keplerian',
-    peri: 35786, apo: 35786, inc: 0 },
+    periKm: 35786, apoKm: 35786, incDeg: 0 },
   { id: 'llo-100',      name: 'LLO 100 (polar)', body: 'Moon',  kind: 'keplerian',
-    peri: 100,   apo: 100,   inc: 90 },
+    periKm: 100,   apoKm: 100,   incDeg: 90 },
   { id: 'nrho-nominal', name: 'Lunar NRHO (true 9:2)', body: 'Moon', kind: 'propagated',
     frame: NRHO_NOMINAL_SEED.frame,
     seedState: { r: NRHO_NOMINAL_SEED.r_km.slice(), v: NRHO_NOMINAL_SEED.v_kms.slice() },
     period_s: NRHO_NOMINAL_SEED.period_s,
     // approximate peri/apo for label/culling purposes only — real shape comes
     // from refOrbitSamplePropagated; NOT authoritative Keplerian elements.
-    peri: 5544, apo: 71203, inc: null,
+    periKm: 5544, apoKm: 71203, incDeg: null,
     note: 'propagated — see NRHO_NOMINAL_SEED provenance comment above' },
   { id: 'eml1-lyapunov', name: 'EML1 Lyapunov', body: 'Moon', kind: 'propagated',
     frame: EML1_LYAPUNOV_SEED.frame,
     seedState: { r: EML1_LYAPUNOV_SEED.r_km.slice(), v: EML1_LYAPUNOV_SEED.v_kms.slice() },
     period_s: EML1_LYAPUNOV_SEED.period_s,
-    peri: 9812, apo: 41118, inc: null,
+    periKm: 9812, apoKm: 41118, incDeg: null,
     note: 'propagated — see EML1_LYAPUNOV_SEED provenance comment above' },
   { id: 'eml1-halo-s', name: 'EML1 Halo (southern)', body: 'Moon', kind: 'propagated',
     frame: EML1_HALO_SEED.frame,
     seedState: { r: EML1_HALO_SEED.r_km.slice(), v: EML1_HALO_SEED.v_kms.slice() },
     period_s: EML1_HALO_SEED.period_s,
-    peri: 51488, apo: 61496, inc: null,
+    periKm: 51488, apoKm: 61496, incDeg: null,
     note: 'propagated — see EML1_HALO_SEED provenance comment above' },
   { id: 'eml2-halo-s', name: 'EML2 Halo (southern)', body: 'Moon', kind: 'propagated',
     frame: EML2_HALO_SEED.frame,
     seedState: { r: EML2_HALO_SEED.r_km.slice(), v: EML2_HALO_SEED.v_kms.slice() },
     period_s: EML2_HALO_SEED.period_s,
-    peri: 48011, apo: 73856, inc: null,
+    periKm: 48011, apoKm: 73856, incDeg: null,
     note: 'propagated — see EML2_HALO_SEED provenance comment above' },
   // NOTE: builtin entries deliberately leave lan/argp UNSET — "free" per the
   // task's instruction ("builtins: lan/argp unset = free"): a binder resolves
   // whatever plane it needs; only a user one-off pins a specific lan/argp.
 ];
 
-let PROG_ORBIT_CATALOG_USER = []; // [{ id, name, body, kind, peri, apo, inc, lan?, argp? }, ...]
+let PROG_ORBIT_CATALOG_USER = []; // [{ id, name, body, kind, periKm, apoKm, incDeg, lanDeg?, argpDeg? }, ...]
 
 function _refOrbitAllEntries() {
   return PROG_ORBIT_CATALOG_BUILTIN.concat(PROG_ORBIT_CATALOG_USER);
@@ -184,10 +184,14 @@ function refOrbitAdd(spec) {
   const entry = {
     id, name: spec.name, body: spec.body,
     kind: spec.kind === 'propagated' ? 'propagated' : 'keplerian',
-    peri: spec.peri, apo: spec.apo, inc: spec.inc,
+    periKm: spec.periKm != null ? spec.periKm : spec.peri,
+    apoKm: spec.apoKm != null ? spec.apoKm : spec.apo,
+    incDeg: spec.incDeg != null ? spec.incDeg : spec.inc,
   };
-  if (spec.lan !== undefined) entry.lan = spec.lan;
-  if (spec.argp !== undefined) entry.argp = spec.argp;
+  const lanIn = spec.lanDeg !== undefined ? spec.lanDeg : spec.lan;
+  const argpIn = spec.argpDeg !== undefined ? spec.argpDeg : spec.argp;
+  if (lanIn !== undefined) entry.lanDeg = lanIn;
+  if (argpIn !== undefined) entry.argpDeg = argpIn;
   if (spec.seedState) entry.seedState = spec.seedState;
   if (spec.period !== undefined) entry.period = spec.period;
   if (spec.frame) entry.frame = spec.frame;
@@ -196,11 +200,22 @@ function refOrbitAdd(spec) {
 }
 
 // Builtins are immutable — update on a builtin id is a no-op (returns false).
+// Accepts either the canonical dialect (periKm/apoKm/incDeg/lanDeg/argpDeg) or
+// the legacy peri/apo/inc/lan/argp keys (translated in — the catalog store
+// itself is canonical-only since the C2b rename).
 function refOrbitUpdate(id, patch) {
   if (!id || refOrbitIsBuiltin(id)) return false;
   const entry = PROG_ORBIT_CATALOG_USER.find(o => o.id === id);
   if (!entry) return false;
-  Object.assign(entry, patch || {});
+  patch = patch || {};
+  const norm = { ...patch };
+  if (norm.peri !== undefined) { norm.periKm = norm.peri; delete norm.peri; }
+  if (norm.apo !== undefined) { norm.apoKm = norm.apo; delete norm.apo; }
+  if (norm.inc !== undefined) { norm.incDeg = norm.inc; delete norm.inc; }
+  if (norm.lan !== undefined) { norm.lanDeg = norm.lan; delete norm.lan; }
+  if (norm.argp !== undefined) { norm.argpDeg = norm.argp; delete norm.argp; }
+  patch = norm;
+  Object.assign(entry, patch);
   return true;
 }
 
@@ -216,24 +231,26 @@ function refOrbitDelete(id) {
 // should throw on that). A SEEDED propagated entry (Phase 4) resolves with
 // its seedState/period_s so a DEPLOY/ring consumer can sample it — peri/apo
 // are approximate (measured, not Keplerian truth; see refOrbitSamplePropagated).
+// Returns the canonical dialect ({body, periKm, apoKm, incDeg, lanDeg?, argpDeg?})
+// plus 'propagated'-only extras (kind, frame, seedState, period_s, note).
 function refOrbitResolve(id) {
   const o = refOrbitGet(id);
   if (!o) return null;
   if (o.kind === 'propagated' && !o.seedState) {
-    return { body: o.body, peri: null, apo: null, inc: null, kind: 'propagated', note: 'seeded in Phase 4' };
+    return { body: o.body, periKm: null, apoKm: null, incDeg: null, kind: 'propagated', note: 'seeded in Phase 4' };
   }
   if (o.kind === 'propagated') {
     return {
       body: o.body, kind: 'propagated', frame: o.frame || o.body,
       seedState: o.seedState, period_s: o.period_s,
-      peri: o.peri != null ? o.peri : null, apo: o.apo != null ? o.apo : null, inc: null,
+      periKm: o.periKm != null ? o.periKm : null, apoKm: o.apoKm != null ? o.apoKm : null, incDeg: null,
       note: o.note || null,
     };
   }
   return {
     body: o.body,
-    peri: o.peri, apo: o.apo, inc: o.inc,
-    lan: o.lan, argp: o.argp,
+    periKm: o.periKm, apoKm: o.apoKm, incDeg: o.incDeg,
+    lanDeg: o.lanDeg, argpDeg: o.argpDeg,
     kind: o.kind,
   };
 }

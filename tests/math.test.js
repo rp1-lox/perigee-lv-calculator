@@ -3135,21 +3135,21 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // ── builtins present with the documented canon ──
   ok('T1: builtin leo-185 present', !!refOrbitGet('leo-185'));
   const leo185 = refOrbitResolve('leo-185');
-  ok('T1: leo-185 resolves to 185x185 @28.5', leo185 && leo185.peri === 185 && leo185.apo === 185 && leo185.inc === 28.5);
+  ok('T1: leo-185 resolves to 185x185 @28.5', leo185 && leo185.periKm === 185 && leo185.apoKm === 185 && leo185.incDeg === 28.5);
   ok('T1: Station (leo-400-51.6) is 400x400 @51.6', (() => {
-    const r = refOrbitResolve('leo-400-51.6'); return r && r.peri === 400 && r.apo === 400 && r.inc === 51.6;
+    const r = refOrbitResolve('leo-400-51.6'); return r && r.periKm === 400 && r.apoKm === 400 && r.incDeg === 51.6;
   })());
   ok('T1: SSO 800 is 800x800 @98.6', (() => {
-    const r = refOrbitResolve('sso-800'); return r && r.peri === 800 && r.apo === 800 && r.inc === 98.6;
+    const r = refOrbitResolve('sso-800'); return r && r.periKm === 800 && r.apoKm === 800 && r.incDeg === 98.6;
   })());
   ok('T1: GTO is 185x35786 @28.5', (() => {
-    const r = refOrbitResolve('gto-185'); return r && r.peri === 185 && r.apo === 35786 && r.inc === 28.5;
+    const r = refOrbitResolve('gto-185'); return r && r.periKm === 185 && r.apoKm === 35786 && r.incDeg === 28.5;
   })());
   ok('T1: GEO is 35786x35786 @0', (() => {
-    const r = refOrbitResolve('geo'); return r && r.peri === 35786 && r.apo === 35786 && r.inc === 0;
+    const r = refOrbitResolve('geo'); return r && r.periKm === 35786 && r.apoKm === 35786 && r.incDeg === 0;
   })());
   ok('T1: LLO 100 is polar (inc 90) on Moon', (() => {
-    const r = refOrbitResolve('llo-100'); return r && r.body === 'Moon' && r.peri === 100 && r.apo === 100 && r.inc === 90;
+    const r = refOrbitResolve('llo-100'); return r && r.body === 'Moon' && r.periKm === 100 && r.apoKm === 100 && r.incDeg === 90;
   })());
 
   // ── propagated entry: nrho-nominal — SEEDED as of Phase 4 (see the U4 test
@@ -3159,23 +3159,25 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('T1: nrho-nominal exists as kind:propagated', !!nrho && nrho.kind === 'propagated');
   const nrhoResolved = refOrbitResolve('nrho-nominal');
   ok('T1: (Phase 4) propagated entry resolves with its seedState, inc null (no Kepler elements)',
-    nrhoResolved && nrhoResolved.inc === null && !!nrhoResolved.seedState);
+    nrhoResolved && nrhoResolved.incDeg === null && !!nrhoResolved.seedState);
 
   // ── builtin immutability ──
   ok('T1: refOrbitIsBuiltin true for a builtin id', refOrbitIsBuiltin('leo-185') === true);
   ok('T1: refOrbitUpdate on a builtin id is a no-op (returns false)', refOrbitUpdate('leo-185', { inc: 99 }) === false);
-  ok('T1: builtin leo-185 unchanged after the rejected update', refOrbitResolve('leo-185').inc === 28.5);
+  ok('T1: builtin leo-185 unchanged after the rejected update', refOrbitResolve('leo-185').incDeg === 28.5);
   ok('T1: refOrbitDelete on a builtin id is a no-op (returns false)', refOrbitDelete('leo-185') === false);
 
-  // ── user-tier CRUD ──
+  // ── user-tier CRUD (refOrbitAdd/refOrbitUpdate still accept the legacy
+  // peri/apo/inc keys as input — translated to the canonical periKm/apoKm/
+  // incDeg storage internally; resolve() always returns canonical). ──
   const created = refOrbitAdd({ name: 'My Test Orbit', body: 'Earth', peri: 300, apo: 300, inc: 45 });
   ok('T1: refOrbitAdd returns an entry with a fresh (non-builtin-style) id', !!created && !!created.id && created.id !== 'leo-185');
   ok('T1: refOrbitIsBuiltin false for the new user entry', refOrbitIsBuiltin(created.id) === false);
   ok('T1: created entry resolves with the authored elements', (() => {
-    const r = refOrbitResolve(created.id); return r && r.peri === 300 && r.apo === 300 && r.inc === 45;
+    const r = refOrbitResolve(created.id); return r && r.periKm === 300 && r.apoKm === 300 && r.incDeg === 45;
   })());
   ok('T1: refOrbitUpdate mutates a user entry', refOrbitUpdate(created.id, { inc: 60 }) === true);
-  ok('T1: updated user entry reflects the new value on resolve', refOrbitResolve(created.id).inc === 60);
+  ok('T1: updated user entry reflects the new value on resolve', refOrbitResolve(created.id).incDeg === 60);
   ok('T1: refOrbitCatalogList includes the user entry with builtin:false', (() => {
     const found = refOrbitCatalogList().find(e => e.id === created.id);
     return !!found && found.builtin === false;
@@ -3189,7 +3191,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('T1: deleted user entry no longer resolves', refOrbitResolve(created.id) === null);
   _refOrbitSessionRestore(saved);
   ok('T1: session-restore round-trips the deleted entry back', (() => {
-    const r = refOrbitResolve(created.id); return r && r.peri === 300 && r.apo === 300 && r.inc === 60;
+    const r = refOrbitResolve(created.id); return r && r.periKm === 300 && r.apoKm === 300 && r.incDeg === 60;
   })());
   // Clean up so later tests in this file see the same catalog state they'd
   // see on a fresh load (this module's globals persist for the rest of the run).
@@ -3343,7 +3345,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
       hasSeed: !!(entry && entry.seedState), periodDays: entry ? entry.period_s / 86400 : null,
       closureRotKm, nSamples: samples.length,
       bboxW: maxX - minX, bboxH: maxZ - minZ, ringGapKm, wrapR,
-      periKm: entry ? entry.peri : null, apoKm: entry ? entry.apo : null,
+      periKm: entry ? entry.periKm : null, apoKm: entry ? entry.apoKm : null,
     };
   })()`, sandbox);
 

@@ -819,6 +819,46 @@ console errors.
 - orbitState state-vector dialect (`r`/`v`/`frame`/`propagated`/`surface`): **380** / `_physTrajByMission` (565) — these are the null-returning non-Keplerian shapes; renames here are only the peri/apo/inc/lan members, the state-vector members stay.
 - Persistence writers (450 `.program`, 455 autosave) still emit legacy field names — flip last, behind a version guard.
 
+**C2b rename-phase progress note (2026-07-17, PARTIAL — one module done, rest of checklist remains):**
+Migrated **425-reference-orbits.js** (the "refOrbitResolve dialect" checklist row) to
+canonical field names as the module's OWN storage/return shape: `PROG_ORBIT_CATALOG_BUILTIN`
+entries now store `periKm`/`apoKm`/`incDeg` (was `peri`/`apo`/`inc`); `refOrbitResolve(id)`
+now returns `{body, periKm, apoKm, incDeg, lanDeg?, argpDeg?, kind, ...}` (was
+`peri`/`apo`/`inc`/`lan`/`argp`). `refOrbitAdd(spec)` and `refOrbitUpdate(id, patch)` still
+ACCEPT the legacy `peri`/`apo`/`inc`/`lan`/`argp` keys as input (translated to canonical on
+write) so existing callers that construct add/update specs with legacy names keep working —
+only the module's stored shape and its resolve() output are canonical-only now. Local readers
+inside 425 needed no changes (none read the renamed fields outside the functions above).
+Three cross-module readers of `refOrbitResolve()`'s return value were NOT adapter-tolerant
+(direct `res.peri`/`res.apo`/`res.inc`/`res.lan` property access, not routed through
+`orbitNormalize`) and were updated in lockstep to avoid breaking them:
+**570-mission-events.js** `missionLaunchRefPick` (~814-817), **570-mission-replay.js**'s T2
+ref-resolution block (~342-345), **567-phase-truth.js** `phasingPlanPropagated` (~232/235).
+`565-physics-nrho.js`:108 and `567-phase-truth.js`:72/231's other `refOrbitResolve` call only
+read `.kind`/`.seedState`/`.period_s`, unaffected. Consumers that call `refOrbitGet(id)`
+(raw catalog entry, not `resolve()`) were checked too — `5746-orbit-inspector.js`,
+`570-mission-panel.js`, `5741-trajectory-scene-extract.js` only read `.name`/`.kind`/
+`.period_s`/`.frame` off the raw entry, none read peri/apo/inc, so no changes needed there;
+`5746-orbit-inspector.js`'s `_oiCommitLaunch` still calls `refOrbitAdd`/`refOrbitUpdate` with
+legacy `{peri, apo, inc, lan}` specs, which is why the legacy-input tolerance in
+`refOrbitAdd`/`refOrbitUpdate` was kept rather than migrating that call site too (out of
+scope for this pass).
+**Gate**: `tests/math.test.js`'s T1 CRUD block and the NRHO N2 rotating-frame-wrap block
+(`entry.peri`/`entry.apo` direct catalog-entry reads) were updated to the canonical field
+names; all 951 assertions pass byte-stable (no pinned number moved). Browser smoke: fresh
+`refOrbitResolve('leo-185')` returns `{periKm:185, apoKm:185, incDeg:28.5, body:'Earth',
+kind:'keplerian'}`; `devSeedApolloMission({force:true})` replays (3-entry log: LAUNCH + 2
+MNODE, payload vehicle bound); zero console errors.
+**Remaining checklist (NOT done this pass — next agent should pick up here)**:
+event dialect writers in **570-mission-events.js** (`_missionLaunchSyncDraft`, the
+`alt_km`/`apo_km`/`inc_deg`/`lan_deg` field names throughout) and launch-planner `plan.*`
+objects (415/570); **570-mission-band.js** `_missionPendingDraft`; **060-orbit-categories.js**
+builtin catalog dialect; **430-...-node-map.js** `perigee`/`apogee`/`inclination`/`lan` sites;
+**380** vehicle `orbitState` writers (consumed by 566); **573-dev-seed.js** orbit-object
+construction. Persistence (450/455) flip not attempted — still emits legacy names, which
+`orbitNormalize` already handles on load (per rule 2, this is optional and explicitly
+deferred, not a gap).
+
 ### C3 — Collapse launchOrbit triplication (audit item 3, cost S) — **DONE 2026-07-17**
 - `e.orbit` is the single authored source on a LAUNCH entry. `e.launchOrbit` deleted (replay reads e.orbit); `m.launchOrbit` becomes a seed-default only (used to prefill a NEW launch draft, never read by replay). Load-time migration for old logs.
 
