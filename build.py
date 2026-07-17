@@ -63,14 +63,16 @@ else:
         except OSError:
             pass
 
-    # (b) run the pure-math regression tests
-    math_test = os.path.join(TESTS, 'math.test.js')
-    if not os.path.isfile(math_test):
-        print('[build] WARNING: tests/math.test.js not found — skipping math regression tests.')
+    # (b) run the pure-math regression tests via the parallel suite runner
+    # (tests/run.js forks one process per tests/suites/*.js file; see
+    # docs/dev_notes.md "Test suite layout" for how to add a new suite).
+    test_runner = os.path.join(TESTS, 'run.js')
+    if not os.path.isfile(test_runner):
+        print('[build] WARNING: tests/run.js not found — skipping math regression tests.')
     else:
-        result = subprocess.run([node, math_test], capture_output=True, text=True, cwd=ROOT)
+        result = subprocess.run([node, test_runner], capture_output=True, text=True, cwd=ROOT)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
         if result.returncode != 0:
-            raise SystemExit('[build] ABORT: math regression tests failed (tests/math.test.js).')
+            raise SystemExit('[build] ABORT: math regression tests failed (tests/run.js).')
         print('[build] math regression tests passed.')
