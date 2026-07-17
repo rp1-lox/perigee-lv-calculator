@@ -4,7 +4,7 @@ function _missionMake(name) {
     name:          name || 'New Mission',
     fleetEntryId:  null,
     payloadScIds:  [],
-    launchOrbit:   { body: 'Earth', alt_km: 185, apo_km: 185, inc_deg: 28.5, lan_deg: 0 },
+    launchOrbit:   { body: 'Earth', periKm: 185, apoKm: 185, incDeg: 28.5, lanDeg: 0 },
     log:           [],
     vehicleId:     null,
     vehicleIds:    [],

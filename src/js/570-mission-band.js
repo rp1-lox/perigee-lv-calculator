@@ -409,15 +409,14 @@ const _MISSION_APPLY_BY_TYPE = {
 // lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
 // resolves to the CURRENT live mission state — exactly like the old dock
 // forms computed their defaults, with zero new plumbing.
-// C2b boundary: m.launchOrbit (seed-default, OUT OF SCOPE) still carries the
-// legacy alt_km/apo_km/inc_deg/lan_deg dialect. A fresh LAUNCH/DEPLOY draft's
-// e.orbit is canonical (periKm/apoKm/incDeg/lanDeg) — convert here, at read
-// time, rather than renaming m.launchOrbit itself.
+// C2b item 1 (2026-07-17): m.launchOrbit is now canonical (periKm/apoKm/incDeg/
+// lanDeg) — same dialect as a fresh LAUNCH/DEPLOY draft's e.orbit — so this is
+// now a plain defensive copy. Kept as a named helper because many draft/report
+// call sites reference it; legacy-shaped m.launchOrbit blobs are renamed to
+// canonical at load time (450 _missionMigrateOrbitFieldNames) before any draft
+// is built, so no per-read conversion is needed here.
 function _missionLaunchOrbitDraft(lo) {
-  lo = lo || {};
-  const o = { ...lo, periKm: lo.alt_km, apoKm: (lo.apo_km ?? lo.alt_km), incDeg: lo.inc_deg, lanDeg: lo.lan_deg };
-  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
-  return o;
+  return { ...(lo || {}) };
 }
 function _missionPendingDraft(m, dockType) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;

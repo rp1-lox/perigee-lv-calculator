@@ -230,6 +230,17 @@ ok('_missionMigrateLaunchOrbitEntry: legacy-shaped e.orbit field-renamed to cano
     !('alt_km' in e.orbit) && !('apo_km' in e.orbit) && !('inc_deg' in e.orbit) && !('lan_deg' in e.orbit);
 })());
 
+// C2b item 1 (m.launchOrbit seed-default rename): the log migration ALSO
+// field-renames a legacy-shaped m.launchOrbit (alt_km/apo_km/inc_deg/lan_deg)
+// to canonical (periKm/apoKm/incDeg/lanDeg) in place, so old blobs feed the
+// launch-orbit UI / draft builders canonical field names.
+ok('_missionMigrateLaunchOrbitLog: legacy m.launchOrbit field-renamed to canonical', (() => {
+  const m = { log: [], launchOrbit: { body: 'Earth', alt_km: 185, apo_km: 220, inc_deg: 51.6, lan_deg: 30 } };
+  _missionMigrateLaunchOrbitLog(m);
+  return m.launchOrbit.periKm === 185 && m.launchOrbit.apoKm === 220 && m.launchOrbit.incDeg === 51.6 && m.launchOrbit.lanDeg === 30 &&
+    !('alt_km' in m.launchOrbit) && !('apo_km' in m.launchOrbit) && !('inc_deg' in m.launchOrbit) && !('lan_deg' in m.launchOrbit);
+})());
+
 // ═══════════════════════════════════════════════════════════════════════════
 // C4 — atomic S1.5 (stage-and-a-half) carriage (MISSION_MODEL_V2.md §24 C4,
 // UNIFICATION_AUDIT item 4)

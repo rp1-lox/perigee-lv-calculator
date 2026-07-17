@@ -7,13 +7,13 @@ function _missionOrbitFieldsHTML(m) {
     <div class="cfg-item"><label class="cfg-label">Body</label>
       <select style="${selStyle}" onchange="missionSetOrbit('${id}','body',this.value)">${bodyOpts}</select></div>
     <div class="cfg-item"><label class="cfg-label">Perigee (km)</label>
-      <input type="number" class="field" value="${m.launchOrbit.alt_km}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','alt_km',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.periKm}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','periKm',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">Apogee (km)</label>
-      <input type="number" class="field" value="${m.launchOrbit.apo_km ?? m.launchOrbit.alt_km}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','apo_km',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.apoKm ?? m.launchOrbit.periKm}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','apoKm',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">Inc (deg)</label>
-      <input type="number" class="field" value="${m.launchOrbit.inc_deg}" min="0" max="180" style="width:80px;" oninput="missionSetOrbit('${id}','inc_deg',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.incDeg}" min="0" max="180" style="width:80px;" oninput="missionSetOrbit('${id}','incDeg',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">LAN (deg)</label>
-      <input type="number" class="field" value="${m.launchOrbit.lan_deg}" min="0" max="360" style="width:80px;" oninput="missionSetOrbit('${id}','lan_deg',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.lanDeg}" min="0" max="360" style="width:80px;" oninput="missionSetOrbit('${id}','lanDeg',+this.value)"></div>
   </div>`;
 }
 

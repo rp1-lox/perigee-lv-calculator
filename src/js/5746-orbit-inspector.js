@@ -171,17 +171,19 @@ document.addEventListener('keydown', _oiKeydown);
 // mutate in place; unbound -> edit the event's inline orbit fields.
 function _oiCommitLaunch(m, e, st, merged) {
   if (!e.orbitRefId) {
+    // e.orbit is canonical (C2b pass 2a): write canonical field names.
     const o = e.orbit || (e.orbit = {});
-    o.body = st.body; o.alt_km = merged.peri; o.apo_km = merged.apo; o.inc_deg = merged.inc; o.lan_deg = merged.lan;
+    o.body = st.body; o.periKm = merged.peri; o.apoKm = merged.apo; o.incDeg = merged.inc; o.lanDeg = merged.lan;
   } else if (typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId)) {
     const base = (typeof refOrbitGet === 'function') ? refOrbitGet(e.orbitRefId) : null;
+    // refOrbitAdd stores/returns canonical (C2b pass 1): feed it canonical specs.
     const forked = (typeof refOrbitAdd === 'function') ? refOrbitAdd({
       name: (base ? base.name : 'orbit') + ' (copy)', body: st.body,
-      peri: merged.peri, apo: merged.apo, inc: merged.inc, lan: merged.lan,
+      periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan,
     }) : null;
     if (forked) e.orbitRefId = forked.id;
   } else {
-    if (typeof refOrbitUpdate === 'function') refOrbitUpdate(e.orbitRefId, { peri: merged.peri, apo: merged.apo, inc: merged.inc, lan: merged.lan });
+    if (typeof refOrbitUpdate === 'function') refOrbitUpdate(e.orbitRefId, { periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan });
   }
   // D1 origin-moved case: if a solved maneuver's fromNode represents this
   // launch's dwell (matched via the launch-card default orbit, the existing
@@ -191,7 +193,7 @@ function _oiCommitLaunch(m, e, st, merged) {
   // bound to e.orbitRefId.
   if (typeof _missionNodeForLaunch === 'function' && typeof _evIsSolvedManeuver === 'function') {
     const originId = _missionNodeForLaunch(m);
-    m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, alt_km: merged.peri, apo_km: merged.apo, inc_deg: merged.inc, lan_deg: merged.lan };
+    m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
     const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
     (m.log || []).forEach(e2 => {
       if (_evIsSolvedManeuver(e2) && e2.fromNode === originId) {

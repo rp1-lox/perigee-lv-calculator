@@ -290,26 +290,26 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
 
   // ── builtin immutability ──
   ok('T1: refOrbitIsBuiltin true for a builtin id', refOrbitIsBuiltin('leo-185') === true);
-  ok('T1: refOrbitUpdate on a builtin id is a no-op (returns false)', refOrbitUpdate('leo-185', { inc: 99 }) === false);
+  ok('T1: refOrbitUpdate on a builtin id is a no-op (returns false)', refOrbitUpdate('leo-185', { incDeg: 99 }) === false);
   ok('T1: builtin leo-185 unchanged after the rejected update', refOrbitResolve('leo-185').incDeg === 28.5);
   ok('T1: refOrbitDelete on a builtin id is a no-op (returns false)', refOrbitDelete('leo-185') === false);
 
-  // ── user-tier CRUD (refOrbitAdd/refOrbitUpdate still accept the legacy
-  // peri/apo/inc keys as input — translated to the canonical periKm/apoKm/
-  // incDeg storage internally; resolve() always returns canonical). ──
-  const created = refOrbitAdd({ name: 'My Test Orbit', body: 'Earth', peri: 300, apo: 300, inc: 45 });
+  // ── user-tier CRUD (refOrbitAdd/refOrbitUpdate take canonical periKm/apoKm/
+  // incDeg input since the C2b item-2 tolerance retirement; resolve() returns
+  // canonical too). ──
+  const created = refOrbitAdd({ name: 'My Test Orbit', body: 'Earth', periKm: 300, apoKm: 300, incDeg: 45 });
   ok('T1: refOrbitAdd returns an entry with a fresh (non-builtin-style) id', !!created && !!created.id && created.id !== 'leo-185');
   ok('T1: refOrbitIsBuiltin false for the new user entry', refOrbitIsBuiltin(created.id) === false);
   ok('T1: created entry resolves with the authored elements', (() => {
     const r = refOrbitResolve(created.id); return r && r.periKm === 300 && r.apoKm === 300 && r.incDeg === 45;
   })());
-  ok('T1: refOrbitUpdate mutates a user entry', refOrbitUpdate(created.id, { inc: 60 }) === true);
+  ok('T1: refOrbitUpdate mutates a user entry', refOrbitUpdate(created.id, { incDeg: 60 }) === true);
   ok('T1: updated user entry reflects the new value on resolve', refOrbitResolve(created.id).incDeg === 60);
   ok('T1: refOrbitCatalogList includes the user entry with builtin:false', (() => {
     const found = refOrbitCatalogList().find(e => e.id === created.id);
     return !!found && found.builtin === false;
   })());
-  ok('T1: refOrbitAdd rejects a spec missing name/body', refOrbitAdd({ peri: 100 }) === null);
+  ok('T1: refOrbitAdd rejects a spec missing name/body', refOrbitAdd({ periKm: 100 }) === null);
 
   // ── persistence round-trip (455/450 pattern) ──
   const saved = _refOrbitSessionSave();
@@ -339,13 +339,13 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
     "if (typeof PROG_ACTIVE_PROGRAM==='undefined') globalThis.PROG_ACTIVE_PROGRAM={vehicles:{}};" +
     "if (typeof _scEdSC==='undefined') globalThis._scEdSC=[];", sandbox);
   const t2 = vm.runInContext(`(function(){
-    const ref = refOrbitAdd({ name:'t2 gate ref', body:'Earth', kind:'keplerian', peri:250, apo:250, inc:45 });
+    const ref = refOrbitAdd({ name:'t2 gate ref', body:'Earth', kind:'keplerian', periKm:250, apoKm:250, incDeg:45 });
     const mk = () => ({ type:'DEPLOY', spacecraftId:'nope', orbit:{ body:'Earth', periKm:1, apoKm:1, incDeg:1 }, orbitRefId: ref.id });
     const m = { missionId:'t2gate', name:'t', log:[mk(), mk()], groups:{}, vehicleIds:[], vehicleId:null,
-                launchOrbit:{ body:'Earth', alt_km:185, apo_km:185, inc_deg:28.5, lan_deg:0 }, modelVersion:2 };
+                launchOrbit:{ body:'Earth', periKm:185, apoKm:185, incDeg:28.5, lanDeg:0 }, modelVersion:2 };
     missionRecompute(m);
     const boundBoth = m.log[0].orbit.periKm === 250 && m.log[0].orbit.incDeg === 45 && m.log[1].orbit.periKm === 250;
-    refOrbitUpdate(ref.id, { inc:60, peri:300, apo:300 });
+    refOrbitUpdate(ref.id, { incDeg:60, periKm:300, apoKm:300 });
     m.log[1].orbitRefId = null;                       // detach the second binder
     missionRecompute(m);
     const editMovesBound = m.log[0].orbit.incDeg === 60 && m.log[0].orbit.periKm === 300;

@@ -69,6 +69,9 @@ function _missionUndoApply(m, snapStr) {
   m.groups = data.groups;
   m.vehicleNames = data.vehicleNames;
   m.launchOrbit = data.launchOrbit;
+  // C2b item 1: a pre-rename snapshot's launchOrbit may carry the legacy
+  // seed-default dialect — canonicalize it the same way persistence does.
+  if (m.launchOrbit && typeof _missionMigrateOrbitFieldNames === 'function') _missionMigrateOrbitFieldNames(m.launchOrbit);
   m.name = data.name;
   m.fleetEntryId = data.fleetEntryId;
   m.payloadScIds = data.payloadScIds;

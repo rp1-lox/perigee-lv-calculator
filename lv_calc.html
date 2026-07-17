@@ -15405,14 +15405,12 @@ function refOrbitAdd(spec) {
   const entry = {
     id, name: spec.name, body: spec.body,
     kind: spec.kind === 'propagated' ? 'propagated' : 'keplerian',
-    periKm: spec.periKm != null ? spec.periKm : spec.peri,
-    apoKm: spec.apoKm != null ? spec.apoKm : spec.apo,
-    incDeg: spec.incDeg != null ? spec.incDeg : spec.inc,
+    periKm: spec.periKm,
+    apoKm: spec.apoKm,
+    incDeg: spec.incDeg,
   };
-  const lanIn = spec.lanDeg !== undefined ? spec.lanDeg : spec.lan;
-  const argpIn = spec.argpDeg !== undefined ? spec.argpDeg : spec.argp;
-  if (lanIn !== undefined) entry.lanDeg = lanIn;
-  if (argpIn !== undefined) entry.argpDeg = argpIn;
+  if (spec.lanDeg !== undefined) entry.lanDeg = spec.lanDeg;
+  if (spec.argpDeg !== undefined) entry.argpDeg = spec.argpDeg;
   if (spec.seedState) entry.seedState = spec.seedState;
   if (spec.period !== undefined) entry.period = spec.period;
   if (spec.frame) entry.frame = spec.frame;
@@ -15421,22 +15419,16 @@ function refOrbitAdd(spec) {
 }
 
 // Builtins are immutable — update on a builtin id is a no-op (returns false).
-// Accepts either the canonical dialect (periKm/apoKm/incDeg/lanDeg/argpDeg) or
-// the legacy peri/apo/inc/lan/argp keys (translated in — the catalog store
-// itself is canonical-only since the C2b rename).
+// Canonical-only input (periKm/apoKm/incDeg/lanDeg/argpDeg) since C2b item 2
+// (2026-07-17): the last legacy-spec caller (5746 orbit inspector) was migrated
+// to canonical, so the legacy peri/apo/inc/lan/argp input tolerance was retired
+// — the catalog store, its resolve() output, AND its add/update inputs are all
+// canonical now.
 function refOrbitUpdate(id, patch) {
   if (!id || refOrbitIsBuiltin(id)) return false;
   const entry = PROG_ORBIT_CATALOG_USER.find(o => o.id === id);
   if (!entry) return false;
-  patch = patch || {};
-  const norm = { ...patch };
-  if (norm.peri !== undefined) { norm.periKm = norm.peri; delete norm.peri; }
-  if (norm.apo !== undefined) { norm.apoKm = norm.apo; delete norm.apo; }
-  if (norm.inc !== undefined) { norm.incDeg = norm.inc; delete norm.inc; }
-  if (norm.lan !== undefined) { norm.lanDeg = norm.lan; delete norm.lan; }
-  if (norm.argp !== undefined) { norm.argpDeg = norm.argp; delete norm.argp; }
-  patch = norm;
-  Object.assign(entry, patch);
+  Object.assign(entry, patch || {});
   return true;
 }
 
@@ -16374,6 +16366,12 @@ function _missionMigrateLaunchOrbitEntry(e) {
 }
 function _missionMigrateLaunchOrbitLog(m) {
   if (m && Array.isArray(m.log)) m.log.forEach(_missionMigrateLaunchOrbitEntry);
+  // C2b item 1 (2026-07-17): m.launchOrbit is now the canonical dialect
+  // (periKm/apoKm/incDeg/lanDeg). Old blobs carry the legacy seed-default
+  // shape (alt_km/apo_km/inc_deg/lan_deg) — rename in place so the fields
+  // feeding _missionOrbitFieldsHTML / missionSetOrbit / _missionLaunchOrbitDraft
+  // are canonical before any UI or draft reads them.
+  if (m && m.launchOrbit) _missionMigrateOrbitFieldNames(m.launchOrbit);
   return m;
 }
 
@@ -21617,15 +21615,14 @@ const _MISSION_APPLY_BY_TYPE = {
 // lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
 // resolves to the CURRENT live mission state — exactly like the old dock
 // forms computed their defaults, with zero new plumbing.
-// C2b boundary: m.launchOrbit (seed-default, OUT OF SCOPE) still carries the
-// legacy alt_km/apo_km/inc_deg/lan_deg dialect. A fresh LAUNCH/DEPLOY draft's
-// e.orbit is canonical (periKm/apoKm/incDeg/lanDeg) — convert here, at read
-// time, rather than renaming m.launchOrbit itself.
+// C2b item 1 (2026-07-17): m.launchOrbit is now canonical (periKm/apoKm/incDeg/
+// lanDeg) — same dialect as a fresh LAUNCH/DEPLOY draft's e.orbit — so this is
+// now a plain defensive copy. Kept as a named helper because many draft/report
+// call sites reference it; legacy-shaped m.launchOrbit blobs are renamed to
+// canonical at load time (450 _missionMigrateOrbitFieldNames) before any draft
+// is built, so no per-read conversion is needed here.
 function _missionLaunchOrbitDraft(lo) {
-  lo = lo || {};
-  const o = { ...lo, periKm: lo.alt_km, apoKm: (lo.apo_km ?? lo.alt_km), incDeg: lo.inc_deg, lanDeg: lo.lan_deg };
-  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
-  return o;
+  return { ...(lo || {}) };
 }
 function _missionPendingDraft(m, dockType) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
@@ -24669,7 +24666,7 @@ function _missionMake(name) {
     name:          name || 'New Mission',
     fleetEntryId:  null,
     payloadScIds:  [],
-    launchOrbit:   { body: 'Earth', alt_km: 185, apo_km: 185, inc_deg: 28.5, lan_deg: 0 },
+    launchOrbit:   { body: 'Earth', periKm: 185, apoKm: 185, incDeg: 28.5, lanDeg: 0 },
     log:           [],
     vehicleId:     null,
     vehicleIds:    [],
@@ -24984,13 +24981,13 @@ function _missionOrbitFieldsHTML(m) {
     <div class="cfg-item"><label class="cfg-label">Body</label>
       <select style="${selStyle}" onchange="missionSetOrbit('${id}','body',this.value)">${bodyOpts}</select></div>
     <div class="cfg-item"><label class="cfg-label">Perigee (km)</label>
-      <input type="number" class="field" value="${m.launchOrbit.alt_km}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','alt_km',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.periKm}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','periKm',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">Apogee (km)</label>
-      <input type="number" class="field" value="${m.launchOrbit.apo_km ?? m.launchOrbit.alt_km}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','apo_km',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.apoKm ?? m.launchOrbit.periKm}" min="0" style="width:90px;" oninput="missionSetOrbit('${id}','apoKm',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">Inc (deg)</label>
-      <input type="number" class="field" value="${m.launchOrbit.inc_deg}" min="0" max="180" style="width:80px;" oninput="missionSetOrbit('${id}','inc_deg',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.incDeg}" min="0" max="180" style="width:80px;" oninput="missionSetOrbit('${id}','incDeg',+this.value)"></div>
     <div class="cfg-item"><label class="cfg-label">LAN (deg)</label>
-      <input type="number" class="field" value="${m.launchOrbit.lan_deg}" min="0" max="360" style="width:80px;" oninput="missionSetOrbit('${id}','lan_deg',+this.value)"></div>
+      <input type="number" class="field" value="${m.launchOrbit.lanDeg}" min="0" max="360" style="width:80px;" oninput="missionSetOrbit('${id}','lanDeg',+this.value)"></div>
   </div>`;
 }
 
@@ -35891,17 +35888,19 @@ document.addEventListener('keydown', _oiKeydown);
 // mutate in place; unbound -> edit the event's inline orbit fields.
 function _oiCommitLaunch(m, e, st, merged) {
   if (!e.orbitRefId) {
+    // e.orbit is canonical (C2b pass 2a): write canonical field names.
     const o = e.orbit || (e.orbit = {});
-    o.body = st.body; o.alt_km = merged.peri; o.apo_km = merged.apo; o.inc_deg = merged.inc; o.lan_deg = merged.lan;
+    o.body = st.body; o.periKm = merged.peri; o.apoKm = merged.apo; o.incDeg = merged.inc; o.lanDeg = merged.lan;
   } else if (typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId)) {
     const base = (typeof refOrbitGet === 'function') ? refOrbitGet(e.orbitRefId) : null;
+    // refOrbitAdd stores/returns canonical (C2b pass 1): feed it canonical specs.
     const forked = (typeof refOrbitAdd === 'function') ? refOrbitAdd({
       name: (base ? base.name : 'orbit') + ' (copy)', body: st.body,
-      peri: merged.peri, apo: merged.apo, inc: merged.inc, lan: merged.lan,
+      periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan,
     }) : null;
     if (forked) e.orbitRefId = forked.id;
   } else {
-    if (typeof refOrbitUpdate === 'function') refOrbitUpdate(e.orbitRefId, { peri: merged.peri, apo: merged.apo, inc: merged.inc, lan: merged.lan });
+    if (typeof refOrbitUpdate === 'function') refOrbitUpdate(e.orbitRefId, { periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan });
   }
   // D1 origin-moved case: if a solved maneuver's fromNode represents this
   // launch's dwell (matched via the launch-card default orbit, the existing
@@ -35911,7 +35910,7 @@ function _oiCommitLaunch(m, e, st, merged) {
   // bound to e.orbitRefId.
   if (typeof _missionNodeForLaunch === 'function' && typeof _evIsSolvedManeuver === 'function') {
     const originId = _missionNodeForLaunch(m);
-    m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, alt_km: merged.peri, apo_km: merged.apo, inc_deg: merged.inc, lan_deg: merged.lan };
+    m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
     const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
     (m.log || []).forEach(e2 => {
       if (_evIsSolvedManeuver(e2) && e2.fromNode === originId) {
@@ -36490,6 +36489,9 @@ function _missionUndoApply(m, snapStr) {
   m.groups = data.groups;
   m.vehicleNames = data.vehicleNames;
   m.launchOrbit = data.launchOrbit;
+  // C2b item 1: a pre-rename snapshot's launchOrbit may carry the legacy
+  // seed-default dialect — canonicalize it the same way persistence does.
+  if (m.launchOrbit && typeof _missionMigrateOrbitFieldNames === 'function') _missionMigrateOrbitFieldNames(m.launchOrbit);
   m.name = data.name;
   m.fleetEntryId = data.fleetEntryId;
   m.payloadScIds = data.payloadScIds;

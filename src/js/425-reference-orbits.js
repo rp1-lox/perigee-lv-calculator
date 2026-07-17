@@ -184,14 +184,12 @@ function refOrbitAdd(spec) {
   const entry = {
     id, name: spec.name, body: spec.body,
     kind: spec.kind === 'propagated' ? 'propagated' : 'keplerian',
-    periKm: spec.periKm != null ? spec.periKm : spec.peri,
-    apoKm: spec.apoKm != null ? spec.apoKm : spec.apo,
-    incDeg: spec.incDeg != null ? spec.incDeg : spec.inc,
+    periKm: spec.periKm,
+    apoKm: spec.apoKm,
+    incDeg: spec.incDeg,
   };
-  const lanIn = spec.lanDeg !== undefined ? spec.lanDeg : spec.lan;
-  const argpIn = spec.argpDeg !== undefined ? spec.argpDeg : spec.argp;
-  if (lanIn !== undefined) entry.lanDeg = lanIn;
-  if (argpIn !== undefined) entry.argpDeg = argpIn;
+  if (spec.lanDeg !== undefined) entry.lanDeg = spec.lanDeg;
+  if (spec.argpDeg !== undefined) entry.argpDeg = spec.argpDeg;
   if (spec.seedState) entry.seedState = spec.seedState;
   if (spec.period !== undefined) entry.period = spec.period;
   if (spec.frame) entry.frame = spec.frame;
@@ -200,22 +198,16 @@ function refOrbitAdd(spec) {
 }
 
 // Builtins are immutable — update on a builtin id is a no-op (returns false).
-// Accepts either the canonical dialect (periKm/apoKm/incDeg/lanDeg/argpDeg) or
-// the legacy peri/apo/inc/lan/argp keys (translated in — the catalog store
-// itself is canonical-only since the C2b rename).
+// Canonical-only input (periKm/apoKm/incDeg/lanDeg/argpDeg) since C2b item 2
+// (2026-07-17): the last legacy-spec caller (5746 orbit inspector) was migrated
+// to canonical, so the legacy peri/apo/inc/lan/argp input tolerance was retired
+// — the catalog store, its resolve() output, AND its add/update inputs are all
+// canonical now.
 function refOrbitUpdate(id, patch) {
   if (!id || refOrbitIsBuiltin(id)) return false;
   const entry = PROG_ORBIT_CATALOG_USER.find(o => o.id === id);
   if (!entry) return false;
-  patch = patch || {};
-  const norm = { ...patch };
-  if (norm.peri !== undefined) { norm.periKm = norm.peri; delete norm.peri; }
-  if (norm.apo !== undefined) { norm.apoKm = norm.apo; delete norm.apo; }
-  if (norm.inc !== undefined) { norm.incDeg = norm.inc; delete norm.inc; }
-  if (norm.lan !== undefined) { norm.lanDeg = norm.lan; delete norm.lan; }
-  if (norm.argp !== undefined) { norm.argpDeg = norm.argp; delete norm.argp; }
-  patch = norm;
-  Object.assign(entry, patch);
+  Object.assign(entry, patch || {});
   return true;
 }
 

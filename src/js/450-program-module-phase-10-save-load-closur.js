@@ -53,6 +53,12 @@ function _missionMigrateLaunchOrbitEntry(e) {
 }
 function _missionMigrateLaunchOrbitLog(m) {
   if (m && Array.isArray(m.log)) m.log.forEach(_missionMigrateLaunchOrbitEntry);
+  // C2b item 1 (2026-07-17): m.launchOrbit is now the canonical dialect
+  // (periKm/apoKm/incDeg/lanDeg). Old blobs carry the legacy seed-default
+  // shape (alt_km/apo_km/inc_deg/lan_deg) — rename in place so the fields
+  // feeding _missionOrbitFieldsHTML / missionSetOrbit / _missionLaunchOrbitDraft
+  // are canonical before any UI or draft reads them.
+  if (m && m.launchOrbit) _missionMigrateOrbitFieldNames(m.launchOrbit);
   return m;
 }
 
