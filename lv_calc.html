@@ -29545,9 +29545,33 @@ function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProj
 // subtracts this from world km to get floating-origin render coords.
 // z rides along (R2): the anchor body's real out-of-plane position keeps it
 // centered under tilt. `overrides` is a retired R1 vestige, ignored.
+//
+// Maneuver-gizmo camera-follow fix (2026-07-17, user-reported "node
+// disappears when I zoom in"): drag-pan is retired (R3.4) — relOffsetKm is
+// otherwise always {0,0}, so wheel-zoom always shrinks the view AROUND THE
+// ANCHOR BODY'S CENTER. A LEO maneuver node sits ~6,500+ km from Earth's
+// center; with _TRAJ_WKM_MIN = 200 km, the closest zoom-in is a 200km-wide
+// window still centered on the body — the node was NEVER reachable by
+// zooming, at any zoom level, because the center it zooms toward is wrong,
+// not because the node's own glyph/hit-target was too small (those are
+// already constant screen-px, see 5745-maneuver-gizmo.js). Fix: while a
+// gizmo is attached/pending on THIS mission and its node lives in the SAME
+// frame this camera is anchored on, recenter the WHOLE scene on the node
+// instead of the body — everything (rings, bodies, other markers) shifts
+// together through this one seam, so the node stays framed at any zoom
+// instead of walking off-screen, and nothing downstream needs a second
+// projection path.
+function _trajGizmoFollowOffsetKm(cam) {
+  if (typeof _trajGizmo === 'undefined') return null;
+  const g = _trajGizmo;
+  if (!g || !g.node || !g.node.r || !cam || cam.anchorBody !== g.node.body) return null;
+  return { x: g.node.r[0], y: g.node.r[1] };
+}
 function _trajCamCenterKm(cam, viewT, overrides) {
   const p = progBodyWorldPos(cam.anchorBody, viewT);
-  return { x: p.x + (cam.relOffsetKm ? cam.relOffsetKm.x : 0), y: p.y + (cam.relOffsetKm ? cam.relOffsetKm.y : 0), z: p.z || 0 };
+  const follow = _trajGizmoFollowOffsetKm(cam);
+  const off = follow || cam.relOffsetKm || { x: 0, y: 0 };
+  return { x: p.x + off.x, y: p.y + off.y, z: p.z || 0 };
 }
 
 // Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
