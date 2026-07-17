@@ -460,6 +460,8 @@ Three user-infuriating defects, mechanisms proven in code and fixed at the root:
 
 Also per user direction: the LAUNCH card's launch-time field now opens the SAME custom calendar popover as the program-epoch stamp (`missionLaunchTimeOpen` → `epochPickerOpen`, 578) instead of a native datetime-local — read-only text field + SVG calendar button (no emoji), Apply-only commit, `dataset.rawS`/value contract preserved so `missionLaunchGeoUpdate` is unchanged. Zero console errors across the full verification flow; gate 926/926.
 
+**Plane-match window solve (2026-07-17 follow-up).** Item 2 above still left a gap: `missionLaunchMatchPlane` wrote the matched inc/LAN into the DOM, but `missionLaunchGeoUpdate` independently recomputes LAN from site+launch-time (`progLaunchRaanFor`) on every geo-field change — since LAN is physically pinned to launch time, not a free field, the very next geo update silently clobbered the matched LAN back to whatever the CURRENT (usually unrelated) launch time reached. Fix: `missionLaunchMatchPlane` now solves the launch TIME too, reusing `missionLaunchPlanOptimize`'s exact recipe — `progLaunchRaanFor(site.lat, site.lon, res.inc_deg, 0, _missionEarthSpinRad)` to get the RAAN a t=0 launch would reach, then `progLaunchNextWindowS(rNow.raan, res.lan_deg, 86164.1)` for the next window that lands on the matched LAN — and writes that time into the launch-time field's `value`/`dataset.rawS` BEFORE calling `missionLaunchGeoUpdate`, so the geo recompute now derives the SAME LAN instead of overwriting it. New shared helper `_missionPlaneMatchTargetSpec(targetVal)` resolves a `plane:*` target value into the `{inc,lan,name}`/`'Moon'` shape `progResolvePlaneTarget` expects; used both here and for staleness detection. `launch-plan-readout` reports matched inc/LAN, the solved window countdown (h/m), and the penalty when the site latitude exceeds the target inclination (unreachable case: still solves the min-penalty window when `progLaunchRaanFor` allows it, honest about residual plane error). If the launch time is changed manually afterward, `missionLaunchGeoUpdate` re-resolves the entry's `e.planeMatchTarget` and compares its LAN against the site+time-derived LAN; a mismatch (>0.5 deg) relabels the LAN field "launch time changed — plane match ... stale, re-pick target to re-solve" rather than silently pretending the match still holds. Write-through (`_missionLaunchSyncDraft`) and committed-entry auto-apply from the prior fix are unchanged. Gate 926/926.
+
 ### T4 — Direct manipulation (the §12 payoff) — **DONE 2026-07-14** (measured evidence below)
 Selecting a dwell node (node map or plan-rail-precursor) flies the trajectory camera to it and opens the ORBIT INSPECTOR: sliders + numeric fields for alt(peri/apo)/inc/LAN (the user's requested representation), editing the bound reference orbit (or one-off) live: scrub → cheap re-render of the ring; release → recompute, and the UPSTREAM edge re-solves (D1) while downstream edges re-solve only from their moved origin. Solved edges follow; manual burns pinned (existing mode semantics). Undo = one step per slider release. Gate: pure re-solve-locality test (edit node N: edge N-1 re-solved, edge N+1 re-solved from new origin, edge N+2 UNTOUCHED). Browser: full flow on the seed.
 
@@ -755,3 +757,34 @@ Verified with real hit-tested input: `elementFromPoint` at the knob returns a gi
 - `missionUndo(missionId)` once reverted `dvPro_ms` back to 3143.0 exactly; a second `missionUndo` was a no-op (stack exhausted) — confirms the whole drag collapsed to exactly ONE undo step, not one per mousemove.
 - `read_console_messages({onlyErrors:true})` — empty at every checkpoint.
 - Gate: `python build.py` → 926/926 assertions, unchanged (no pure-math touched; this is a camera/rendering fix, no new goldens needed).
+
+## 24. COHERENCE REFACTOR SERIES (C-series) — spec, 2026-07-17, awaiting user review before implementation
+
+Driven by docs/UNIFICATION_AUDIT.md (commit 0e6757aae) and the user's direct feedback: "orbits aren't coherent... orbit definitions aren't consistently relative to one thing or another — there seem to be a thousand disjointed definitions." Five shipped bugs in one week were the same disease (frame conversion as a per-call-site obligation). This series retires the bug class structurally.
+
+### C1 — One frame boundary (audit item 1, cost M)
+- Every orbit-shaped object gains an explicit `frame` tag: `'eq'` (equator-authored, the authoring default) or `'world'` (ecliptic/world). Absent tag = `'eq'` (matches today's authoring convention; legacy blobs need no migration).
+- New single boundary in 385-physics-core.js: `orbitWorldElements(o)` -> `{incDeg, lanDeg}` in world frame (identity for `frame:'world'`, seam for `'eq'`), plus `orbitWorldState(o, theta)` wrapping physAimBurnState for consumers that need r/v.
+- ALL 8 seam call sites from the audit (566:102, 5741:145, 5742:234, 5744:192, 5745-hover:37, 565-nrho:36, 565-targeting:259/370, 415:370 inverse) route through the boundary; direct `progEqToWorldElements` calls outside 385 + tests become a gate violation (new test: grep-assert over the module sources, same style as the ghost-stage guard).
+- Acceptance: all existing pins byte-stable (plane-match 19.02/9.48 saros band, Gateway 3143/519/2762, ring-vs-physics <1e-4 deg, NRHO/BLT pins, 150,838 Saturn V).
+
+### C2 — Canonical orbit object + normalize shim (audit item 2, cost L, the keystone)
+- Canonical shape: `{ body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }`.
+- `orbitNormalize(anyDialect)` -> canonical: accepts every dialect in the audit table (event alt_km/apo_km/inc_deg/lan_deg; node-map perigee/apogee/inclination/lan; refOrbitResolve peri/apo/inc/lan; orbitState). Consumers migrate to reading through it; writers migrate per-module afterward (adapters first, renames second — each module its own commit so regressions bisect).
+- Persistence: legacy field names normalized on load (455/450 apply paths); saved blobs keep writing legacy names until the last consumer migrates, then flip with a version guard.
+- Mean-altitude/period derivations (re-derived inline in 3 spots per the audit) become canonical helpers.
+
+### C3 — Collapse launchOrbit triplication (audit item 3, cost S)
+- `e.orbit` is the single authored source on a LAUNCH entry. `e.launchOrbit` deleted (replay reads e.orbit); `m.launchOrbit` becomes a seed-default only (used to prefill a NEW launch draft, never read by replay). Load-time migration for old logs.
+
+### C4 — StageMass unification (audit item 4, cost M, parallel-safe)
+- One stage-mass shape with `s15` as a nested object spread atomically (`{...stage, s15: {...}}`), so no assembler can drop the sextet field-by-field again (three shipped bugs). The three assemblers (worksheet/_tsCollectBase, _fleetExpandStages, _tsVehicleToBase) consume it; the S1.5 path-equality gate pin (926-assertion suite) guards the migration.
+
+### Non-goals (explicit)
+- NO dv m/s <-> km/s auto-conversion (protects the byte-identical dv accounting invariant; naming hygiene only, later).
+- Body constants untouched (audit: already single-sourced).
+- LV-stage name-key -> UUID migration deferred (gate-guarded, low risk, high churn).
+- Frozen zones untouched: calculate()/evalAtPayload (160), destOnOrbitDV (145).
+
+### Execution order + risk containment
+C1 -> C2 (adapters) -> C3 -> C2 (renames, per-module) ; C4 parallel any time. Each step: own commit, gate green, golden numbers byte-stable, one browser smoke pass (lightweight-verification policy). Any step that moves a pinned number STOPS and reports rather than re-pinning silently.
