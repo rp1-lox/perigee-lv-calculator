@@ -398,30 +398,40 @@ function _missionLaunchLanFieldHTML(m, idx, e) {
   return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
     <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
 }
-// Merged Target control (unify pass, 2026-07-17 layout reorg): "match plane"
-// and "plan for destination" used to be two separate pickers that both, in
-// the end, set inc/LAN — plan-for-destination additionally solves alt +
-// launch time via its Optimize step. User feedback: "those don't really
-// make sense separate. Those need to be the same thing." One control now:
-// "— none —" (manual orbit, unchanged), a "Plan transfer to destination"
-// group (Moon/Mercury/Venus/Mars/Jupiter/Saturn/Uranus/Neptune — the old
-// plan-for-destination list, unchanged capability) that reveals the
-// Depart(JD)+Optimize affordance, and a "Match plane only" group (Moon's
-// current plane + any keplerian catalog ref orbit with a defined
-// inclination — the old match-plane list, unchanged capability) that
-// applies immediately on pick (no Optimize step — it's inc/LAN only).
-// Nothing here mutates m.log; missionApplyLaunchEdit persists
-// e.planDest/e.planDepJD (dest mode) or e.planeMatchTarget (plane mode).
+// Collapsed Target control (2026-07-17, second pass — user: "get rid of the
+// match plane only definition and just have the target thing be the
+// target"). The 2026-07-17 unify pass above merged two pickers into one
+// select with two optgroups ("Plan transfer to destination" / "Match plane
+// only"); now that plane-matching performs the COMPLETE solve (inc + LAN +
+// launch window, d3524ac65) there's no remaining reason to keep them
+// visually or semantically separate — picking ANY destination immediately
+// runs the best available solve, and Optimize (unchanged) refines
+// altitude/departure timing on top. One flat list: the 8 destination bodies,
+// Moon first. Moon routes through missionLaunchMatchPlane's full solve
+// immediately on pick (progResolvePlaneTarget supports 'Moon' natively); the
+// other 7 bodies have no standalone plane solve (progResolvePlaneTarget only
+// understands 'Moon' or a catalog ref-orbit object) so picking them reveals
+// Depart(JD)+Optimize same as before and the readout says the plane comes
+// from Optimize. The retired "Match plane only" catalog-ref use case lives
+// on as a CAPABILITY, not a Target option — the Ref Orbit picker on the card
+// (missionLaunchRefPick) now solves the launch window itself when the picked
+// ref has a defined LAN, so binding a ref IS matching its plane.
+// Nothing here mutates m.log; missionApplyLaunchEdit persists e.planDest
+// (+ e.planDepJD for the Optimize refinement). e.planeMatchTarget is legacy
+// (pre-collapse) state: still READ for display so old missions don't lose
+// their readout, never newly written — see the migration note below.
 function _missionLaunchTargetHTML(m, idx, e) {
   const id = m.missionId;
   const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
   const dests = ['Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
-  const catalog = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries() : [];
-  const planeEntries = catalog.filter(o => o.kind === 'keplerian' && isFinite(o.inc));
-  const cur = e.planDest ? ('dest:' + e.planDest) : (e.planeMatchTarget ? ('plane:' + e.planeMatchTarget) : '');
+  // Migration: a legacy entry authored under the old two-optgroup control with
+  // planeMatchTarget:'Moon' displays (and, on next pick, persists) as target
+  // Moon — trivial mapping, no data loss. A legacy planeMatchTarget pointing
+  // at a catalog ref has no Target-list equivalent (the ref picker is a
+  // separate field) — tolerate it read-only below rather than force a migration.
+  const legacyRefMatch = e.planeMatchTarget && e.planeMatchTarget !== 'Moon' ? e.planeMatchTarget : null;
+  const cur = e.planDest ? ('dest:' + e.planDest) : (e.planeMatchTarget === 'Moon' ? 'dest:Moon' : '');
   const destOpts = dests.map(d => `<option value="dest:${d}"${cur === 'dest:' + d ? ' selected' : ''}>${d}</option>`).join('');
-  const planeOpts = [`<option value="plane:Moon"${cur === 'plane:Moon' ? ' selected' : ''}>Moon (current plane)</option>`,
-    ...planeEntries.map(o => `<option value="plane:${_tsEsc(o.id)}"${cur === 'plane:' + o.id ? ' selected' : ''}>${_tsEsc(o.name)}${o.lan != null ? '' : ' (LAN free)'}</option>`)].join('');
   const isDest = cur.startsWith('dest:');
   const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
   // Committed LAUNCH entries auto-apply (missionRecompute + missionRenderDetail)
@@ -432,29 +442,30 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // the window countdown itself is transient (already applied to launchTime_s
   // by the time this re-render happens) so it's not reconstructed here.
   let initReadout;
-  if (e.planDest) {
-    initReadout = `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`;
-  } else if (e.planeMatchTarget) {
-    const spec = (typeof _missionPlaneMatchTargetSpec === 'function') ? _missionPlaneMatchTargetSpec(e.planeMatchTarget) : null;
+  if (e.planDest === 'Moon') {
     const site = _missionLaunchSiteFor(e);
     const siteLat = site ? site.lat : 28.5;
     const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
     const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
-    const res = (spec && typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget(spec, epochJD, t_s, siteLat) : null;
+    const res = (typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget('Moon', epochJD, t_s, siteLat) : null;
     initReadout = res
-      ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to ${_mrEsc(e.planeMatchTarget)}`)
+      ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to Moon`)
         + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
-      : `// plane matched to ${_mrEsc(e.planeMatchTarget)} &mdash; pick Target again to rematch`;
+        + ' &mdash; click Optimize to also refine parking altitude/departure timing'
+      : '// pick Target again to rematch';
+  } else if (e.planDest) {
+    initReadout = `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to compute the ideal parking orbit (this destination has no standalone plane solve, so the plane comes from Optimize)`;
+  } else if (legacyRefMatch) {
+    initReadout = `// legacy plane match to catalog ref ${_mrEsc(legacyRefMatch)} (this control was retired) &mdash; pick a Target above, or re-pick the Ref Orbit below to match a plane`;
   } else {
-    initReadout = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+    initReadout = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
   }
   return `
     <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;padding:8px;background:var(--accent-tint-faint);border-radius:3px;">
       <div class="cfg-item"><label class="cfg-label">Target</label>
         <select id="edit-launch-target-${id}" style="${_es}" onchange="missionLaunchTargetChange('${id}',${idx},this.value)">
           <option value=""${cur === '' ? ' selected' : ''}>&mdash; none (manual orbit) &mdash;</option>
-          <optgroup label="Plan transfer to destination">${destOpts}</optgroup>
-          <optgroup label="Match plane only">${planeOpts}</optgroup>
+          ${destOpts}
         </select></div>
       <div class="cfg-item" id="edit-launch-depjd-wrap-${id}" style="${isDest ? '' : 'display:none;'}">
         <label class="cfg-label">Depart (JD)</label>
@@ -463,21 +474,29 @@ function _missionLaunchTargetHTML(m, idx, e) {
     </div>
     <div id="launch-plan-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;line-height:1.5;">${initReadout}</div>`;
 }
-// Merged-control onchange: dest:* just reveals the Depart/Optimize affordance
-// (unchanged plan-for-destination flow — still a multi-field solve gated on
-// clicking Optimize); plane:* applies immediately (unchanged match-plane
-// flow — inc/LAN only, delegates to the existing missionLaunchMatchPlane).
+// Single-path onchange (post-collapse): every non-empty pick is a dest:*
+// value now. Reveal Depart/Optimize for any destination (unchanged
+// availability); Moon additionally gets the immediate full solve
+// (missionLaunchMatchPlane's inc+LAN+window recipe) since
+// progResolvePlaneTarget supports it directly — other bodies fall back to
+// the "click Optimize" readout, same as the pre-collapse dest: path.
 function missionLaunchTargetChange(id, idx, val) {
   const depWrap = document.getElementById('edit-launch-depjd-wrap-' + id);
   const optBtn = document.getElementById('edit-launch-optimize-' + id);
   const isDest = val.startsWith('dest:');
   if (depWrap) depWrap.style.display = isDest ? '' : 'none';
   if (optBtn) optBtn.style.display = isDest ? '' : 'none';
-  if (val.startsWith('plane:')) {
-    missionLaunchMatchPlane(id, idx, val.slice('plane:'.length));
-  } else if (!isDest) {
+  if (!isDest) {
     const out = document.getElementById('launch-plan-readout-' + id);
-    if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+    if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
+    return;
+  }
+  const dest = val.slice('dest:'.length);
+  if (dest === 'Moon') {
+    missionLaunchMatchPlane(id, idx, 'Moon');
+  } else {
+    const out = document.getElementById('launch-plan-readout-' + id);
+    if (out) out.innerHTML = `// planned for ${_mrEsc(dest)} &mdash; click Optimize to compute the ideal parking orbit (this destination has no standalone plane solve, so the plane comes from Optimize)`;
   }
 }
 // Resolves a plane:* target VALUE (as stored in the Target select / e.planeMatchTarget)
@@ -759,8 +778,13 @@ function missionLaunchGeoUpdate(id, idx) {
       // plane itself moved with epoch) — physically the match is broken, but
       // fields stay editable per the §12 design note; just say so.
       let staleTxt = '';
-      if (e.planeMatchTarget && typeof progResolvePlaneTarget === 'function' && typeof _missionPlaneMatchTargetSpec === 'function') {
-        const spec = _missionPlaneMatchTargetSpec(e.planeMatchTarget);
+      // Post-collapse (2026-07-17): Moon plane matches now live in
+      // e.planDest === 'Moon' (see the Target-control note above); legacy
+      // missions may still carry e.planeMatchTarget (Moon or a catalog ref) —
+      // check either so the staleness readout keeps working for both.
+      const matchTarget = e.planDest === 'Moon' ? 'Moon' : e.planeMatchTarget;
+      if (matchTarget && typeof progResolvePlaneTarget === 'function' && typeof _missionPlaneMatchTargetSpec === 'function') {
+        const spec = _missionPlaneMatchTargetSpec(matchTarget);
         const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
         const expected = spec ? progResolvePlaneTarget(spec, epochJD, t, site.lat) : null;
         if (expected) {
@@ -816,6 +840,21 @@ function missionLaunchRefPick(id, idx, refId) {
     o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
     if (res.lanDeg != null) o.lanDeg = res.lanDeg;
     delete e._refNote;
+    // Target-collapse follow-up (2026-07-17): a catalog ref with a PINNED LAN
+    // is the plane-target use case the retired "Match plane only" optgroup
+    // used to cover — solve the launch window that reaches it, same recipe
+    // as missionLaunchMatchPlane, so binding the ref alone reaches the
+    // intended plane without a separate Target pick. Earth-only (LAUNCH
+    // orbits are always Earth parking orbits; see the Body-selector note
+    // above); no-op if there's no site/lon to solve a window from yet.
+    if (res.body === 'Earth' && isFinite(res.incDeg) && res.lanDeg != null
+      && typeof progLaunchRaanFor === 'function' && typeof progLaunchNextWindowS === 'function') {
+      const site = _missionLaunchSiteFor(e);
+      if (site && site.lon != null) {
+        const rNow = progLaunchRaanFor(site.lat, site.lon, res.incDeg, 0, _missionEarthSpinRad);
+        if (!rNow.unreachable) e.launchTime_s = Math.round(progLaunchNextWindowS(rNow.raan, res.lanDeg, 86164.1));
+      }
+    }
   }
   missionRecompute(m);
   missionRenderDetail();

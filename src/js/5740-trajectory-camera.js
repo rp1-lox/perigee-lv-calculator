@@ -128,33 +128,20 @@ function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProj
 // own glyph/hit-target was too small (those are already constant screen-px,
 // see 5745-maneuver-gizmo.js). Recentering the WHOLE scene on the node every
 // render fixed reachability but cost the user their own framing/orientation
-// choice the moment a gizmo opened. Superseded below by CURSOR-ANCHORED
-// zoom (standard scroll-to-zoom UX, trajWheelZoom): zooming toward wherever
-// the cursor sits reaches the node the same way zooming toward any other
-// point on screen does, without ever moving the camera out from under the
-// user. relOffsetKm (retired to {0,0} in R3.4 when drag-pan was cut) is
-// reintroduced here ONLY as the cursor-zoom accumulator — see trajWheelZoom.
+// choice the moment a gizmo opened. CURSOR-ANCHORED zoom (standard
+// scroll-to-zoom UX) was tried next as a fix for the same reachability
+// problem, but drifted the camera off the anchor body onto an arbitrary
+// point in space, which the user also rejected ("the render should be
+// centered on a planet, not a random point in space") — RETIRED in turn on
+// 2026-07-17. trajWheelZoom is back to pure wKm contraction about the anchor
+// body's center; relOffsetKm is permanently {0,0} again (drag-pan stays cut,
+// same as R3.4). The original reachability problem is moot now that the
+// gizmo draws on top, on the real orbit plane, always clickable regardless
+// of zoom.
 function _trajCamCenterKm(cam, viewT, overrides) {
   const p = progBodyWorldPos(cam.anchorBody, viewT);
   const off = cam.relOffsetKm || { x: 0, y: 0 };
   return { x: p.x + off.x, y: p.y + off.y, z: p.z || 0 };
-}
-
-// Inverse of _trajProjectVec for a WORLD-PLANE (z=0) offset — recovers the
-// world-space (x,y) point a given PROJECTED (rx,ry) render-space vector came
-// from, at the camera's current az/el. Used by cursor-anchored wheel-zoom
-// (trajWheelZoom) to find the world point under the cursor before scaling.
-// Planar (z=0) is the same simplification the retired gizmo-follow used
-// (r[0],r[1] only) — depth isn't recoverable from a single projection anyway.
-// `ct` (cos of the tilt angle) is clamped away from 0 to avoid the edge-on
-// (el=0) singularity where a z=0 plane projects to a degenerate line.
-function _trajUnprojectPlanarOffset(rx, ry, az, el) {
-  const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
-  const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
-  let ct = Math.cos(t);
-  if (Math.abs(ct) < 0.05) ct = ct < 0 ? -0.05 : 0.05;
-  const xa = -rx, ya = ry / ct;
-  return { x: xa * ca + ya * sa, y: -xa * sa + ya * ca };
 }
 
 // Fit wKm (and zero the offset) to a sensible neighborhood of `body`:
@@ -339,37 +326,12 @@ function trajWheelZoom(ev, id) {
   const dir = ev.deltaY < 0 ? 1 : -1;
   const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
   if (nextW === cam.wKm) return;
-  // Cursor-anchored zoom (2026-07-17, replaces the retired gizmo-follow —
-  // see _trajCamCenterKm): keep the world point under the CURSOR fixed on
-  // screen while wKm changes, standard scroll-to-zoom UX. relOffsetKm was
-  // retired to a constant {0,0} in R3.4 when drag-pan was cut; reintroduced
-  // here purely as the zoom accumulator (no drag-pan revival). The math:
-  // unproject the cursor's render-space position at the OLD zoom into a
-  // world-plane offset from the OLD camera center, then since that
-  // unprojection is linear, the SAME offset at the NEW zoom is just scaled
-  // by (wKmNew/wKmOld) — so the new relOffsetKm that keeps the same world
-  // point under the cursor is the old offset plus the difference between
-  // the two scaled offsets (see 5740's module comment on the derivation).
-  const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
-  const rect = svgEl ? svgEl.getBoundingClientRect() : null;
-  let relOffsetKm = cam.relOffsetKm || { x: 0, y: 0 };
-  if (rect && rect.width > 0 && rect.height > 0 && ev.clientX != null) {
-    const aspect = rect.height / rect.width;
-    const vbH = _TRAJ_VB * aspect;
-    const rx = ((ev.clientX - rect.left) / rect.width) * _TRAJ_VB - _TRAJ_VB / 2;
-    const ry = ((ev.clientY - rect.top) / rect.height) * vbH - vbH / 2;
-    const zoomOld = _trajZoomFromCam(cam);
-    const cursorOffsetKm = _trajUnprojectPlanarOffset(rx / zoomOld, ry / zoomOld, cam.az || 0, cam.el != null ? cam.el : Math.PI / 2);
-    const ratio = 1 - nextW / cam.wKm;
-    relOffsetKm = { x: relOffsetKm.x + cursorOffsetKm.x * ratio, y: relOffsetKm.y + cursorOffsetKm.y * ratio };
-    // Clamp so the anchor body can never be lost entirely — a few multiples
-    // of the CURRENT (post-zoom) wKm is generous headroom for panning around
-    // near content while still guaranteeing the anchor stays reachable.
-    const cap = nextW * 4;
-    const mag = Math.hypot(relOffsetKm.x, relOffsetKm.y);
-    if (mag > cap && mag > 0) { const s = cap / mag; relOffsetKm = { x: relOffsetKm.x * s, y: relOffsetKm.y * s }; }
-  }
-  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm, wKm: nextW }));
+  // Strict body-centered zoom (restored 2026-07-17, see the module-header
+  // note above the retired cursor-anchored attempt): wKm contraction only,
+  // about the ANCHOR BODY's center. relOffsetKm stays permanently {0,0} —
+  // if a camera somehow carries a stale nonzero offset (e.g. from an older
+  // in-session state), snap it back here rather than propagating it.
+  _trajApplyCam(id, Object.assign({}, cam, { relOffsetKm: { x: 0, y: 0 }, wKm: nextW }));
 }
 
 let _trajDrag = null;
