@@ -379,8 +379,8 @@ function _missionNodeForLaunch(m) {
   // of truth); m.launchOrbit is only a fallback for the pre-authoring case
   // (no LAUNCH/DEPLOY exists yet — nothing else to show a default node for).
   const first = (m.log || []).find(e => e.type === 'LAUNCH' || e.type === 'DEPLOY');
-  const o = (first && first.orbit) || m.launchOrbit || {};
-  return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.alt_km, apogee: o.alt_km } });
+  const o = (first && first.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
+  return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.periKm, apogee: o.periKm } });
 }
 
 // Ordered list of node ids the mission traverses: launch node, then each MANEUVER destination.

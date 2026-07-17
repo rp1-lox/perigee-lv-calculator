@@ -3213,20 +3213,20 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     "if (typeof _scEdSC==='undefined') globalThis._scEdSC=[];", sandbox);
   const t2 = vm.runInContext(`(function(){
     const ref = refOrbitAdd({ name:'t2 gate ref', body:'Earth', kind:'keplerian', peri:250, apo:250, inc:45 });
-    const mk = () => ({ type:'DEPLOY', spacecraftId:'nope', orbit:{ body:'Earth', alt_km:1, apo_km:1, inc_deg:1 }, orbitRefId: ref.id });
+    const mk = () => ({ type:'DEPLOY', spacecraftId:'nope', orbit:{ body:'Earth', periKm:1, apoKm:1, incDeg:1 }, orbitRefId: ref.id });
     const m = { missionId:'t2gate', name:'t', log:[mk(), mk()], groups:{}, vehicleIds:[], vehicleId:null,
                 launchOrbit:{ body:'Earth', alt_km:185, apo_km:185, inc_deg:28.5, lan_deg:0 }, modelVersion:2 };
     missionRecompute(m);
-    const boundBoth = m.log[0].orbit.alt_km === 250 && m.log[0].orbit.inc_deg === 45 && m.log[1].orbit.alt_km === 250;
+    const boundBoth = m.log[0].orbit.periKm === 250 && m.log[0].orbit.incDeg === 45 && m.log[1].orbit.periKm === 250;
     refOrbitUpdate(ref.id, { inc:60, peri:300, apo:300 });
     m.log[1].orbitRefId = null;                       // detach the second binder
     missionRecompute(m);
-    const editMovesBound = m.log[0].orbit.inc_deg === 60 && m.log[0].orbit.alt_km === 300;
-    const detachIsolates = m.log[1].orbit.inc_deg === 45 && m.log[1].orbit.alt_km === 250;
+    const editMovesBound = m.log[0].orbit.incDeg === 60 && m.log[0].orbit.periKm === 300;
+    const detachIsolates = m.log[1].orbit.incDeg === 45 && m.log[1].orbit.periKm === 250;
     refOrbitDelete(ref.id);
     m.log[0].orbitRefId = ref.id;                     // now dangling
     missionRecompute(m);
-    const deletedKeepsCache = m.log[0]._refNote != null && m.log[0].orbit.alt_km === 300;
+    const deletedKeepsCache = m.log[0]._refNote != null && m.log[0].orbit.periKm === 300;
     return { boundBoth, editMovesBound, detachIsolates, deletedKeepsCache };
   })()`, sandbox);
   ok('T2: two events bound to one user ref resolve to its elements', t2.boundBoth);
@@ -5048,19 +5048,19 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 // ═══════════════════════════════════════════════════════════════════════════
 
 ok('_missionMigrateLaunchOrbitEntry: both present -> orbit wins, launchOrbit deleted', (() => {
-  const e = { type: 'LAUNCH', orbit: { body: 'Earth', alt_km: 185 }, launchOrbit: { body: 'Earth', alt_km: 999 } };
+  const e = { type: 'LAUNCH', orbit: { body: 'Earth', periKm: 185 }, launchOrbit: { body: 'Earth', alt_km: 999 } };
   _missionMigrateLaunchOrbitEntry(e);
-  return e.orbit.alt_km === 185 && !('launchOrbit' in e);
+  return e.orbit.periKm === 185 && !('launchOrbit' in e);
 })());
 
 ok('_missionMigrateLaunchOrbitEntry: launchOrbit-only -> copied into orbit, then deleted', (() => {
   const e = { type: 'LAUNCH', launchOrbit: { body: 'Earth', alt_km: 185, inc_deg: 28.5 } };
   _missionMigrateLaunchOrbitEntry(e);
-  return e.orbit && e.orbit.alt_km === 185 && e.orbit.inc_deg === 28.5 && !('launchOrbit' in e);
+  return e.orbit && e.orbit.periKm === 185 && e.orbit.incDeg === 28.5 && !('launchOrbit' in e);
 })());
 
-ok('_missionMigrateLaunchOrbitEntry: no launchOrbit -> untouched (orbit passthrough)', (() => {
-  const e = { type: 'LAUNCH', orbit: { body: 'Earth', alt_km: 185 } };
+ok('_missionMigrateLaunchOrbitEntry: already-canonical orbit, no launchOrbit -> untouched', (() => {
+  const e = { type: 'LAUNCH', orbit: { body: 'Earth', periKm: 185 } };
   const before = JSON.stringify(e);
   _missionMigrateLaunchOrbitEntry(e);
   return JSON.stringify(e) === before;
@@ -5069,19 +5069,30 @@ ok('_missionMigrateLaunchOrbitEntry: no launchOrbit -> untouched (orbit passthro
 ok('_missionMigrateLaunchOrbitEntry: non-LAUNCH entry with legacy launchOrbit still migrates (defensive, dialect-agnostic)', (() => {
   const e = { type: 'DEPLOY', launchOrbit: { body: 'Earth', alt_km: 400 } };
   _missionMigrateLaunchOrbitEntry(e);
-  return e.orbit && e.orbit.alt_km === 400 && !('launchOrbit' in e);
+  return e.orbit && e.orbit.periKm === 400 && !('launchOrbit' in e);
 })());
 
 ok('_missionMigrateLaunchOrbitLog: migrates every entry in a mission log', (() => {
   const m = { log: [
     { type: 'LAUNCH', launchOrbit: { body: 'Earth', alt_km: 185 } },
     { type: 'MANEUVER', foo: 1 },
-    { type: 'DEPLOY', orbit: { body: 'Earth', alt_km: 400 }, launchOrbit: { body: 'Earth', alt_km: 401 } },
+    { type: 'DEPLOY', orbit: { body: 'Earth', periKm: 400 }, launchOrbit: { body: 'Earth', alt_km: 401 } },
   ] };
   _missionMigrateLaunchOrbitLog(m);
-  return m.log[0].orbit.alt_km === 185 && !('launchOrbit' in m.log[0]) &&
+  return m.log[0].orbit.periKm === 185 && !('launchOrbit' in m.log[0]) &&
     m.log[1].foo === 1 &&
-    m.log[2].orbit.alt_km === 400 && !('launchOrbit' in m.log[2]);
+    m.log[2].orbit.periKm === 400 && !('launchOrbit' in m.log[2]);
+})());
+
+// C2b (event-orbit dialect rename): the SAME migration also field-renames a
+// legacy-shaped e.orbit (alt_km/apo_km/inc_deg/lan_deg) to canonical
+// (periKm/apoKm/incDeg/lanDeg) in place, so old autosaves/.program files with
+// no launchOrbit at all (already past C3) still land on canonical field names.
+ok('_missionMigrateLaunchOrbitEntry: legacy-shaped e.orbit field-renamed to canonical', (() => {
+  const e = { type: 'LAUNCH', orbit: { body: 'Earth', alt_km: 185, apo_km: 220, inc_deg: 51.6, lan_deg: 30 } };
+  _missionMigrateLaunchOrbitEntry(e);
+  return e.orbit.periKm === 185 && e.orbit.apoKm === 220 && e.orbit.incDeg === 51.6 && e.orbit.lanDeg === 30 &&
+    !('alt_km' in e.orbit) && !('apo_km' in e.orbit) && !('inc_deg' in e.orbit) && !('lan_deg' in e.orbit);
 })());
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -409,8 +409,12 @@ function physRebuildMissionTrajectories(m) {
   let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
-    if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.inc_deg != null) {
-      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.inc_deg, lan_deg: e.orbit.lan_deg ?? 0 };
+    // C2b: e.orbit's own field names are canonical (periKm/apoKm/incDeg/lanDeg)
+    // as of this pass; lastAuthoredPlane stays in 565's internal lan_deg
+    // convention (out of scope to rename — see docs/MISSION_MODEL_V2.md §24
+    // C2b), so the read off e.orbit is translated right here at the boundary.
+    if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.incDeg != null) {
+      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.incDeg, lan_deg: e.orbit.lanDeg ?? 0 };
     }
     // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
     // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point

@@ -57,6 +57,14 @@ function missionUndoCapture(m) {
 
 function _missionUndoApply(m, snapStr) {
   const data = JSON.parse(snapStr);
+  // C2b: in-session undo/redo snapshots serialize e.orbit verbatim — a
+  // snapshot captured before this pass's rename (or loaded from an old
+  // session) may still carry legacy alt_km/apo_km/inc_deg/lan_deg. Run it
+  // through the same load-time migration persistence uses (450) so restore
+  // always lands on canonical field names.
+  if (Array.isArray(data.log) && typeof _missionMigrateLaunchOrbitLog === 'function') {
+    _missionMigrateLaunchOrbitLog({ log: data.log });
+  }
   m.log = data.log;
   m.groups = data.groups;
   m.vehicleNames = data.vehicleNames;

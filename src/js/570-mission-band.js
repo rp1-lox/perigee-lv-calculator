@@ -409,6 +409,16 @@ const _MISSION_APPLY_BY_TYPE = {
 // lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
 // resolves to the CURRENT live mission state — exactly like the old dock
 // forms computed their defaults, with zero new plumbing.
+// C2b boundary: m.launchOrbit (seed-default, OUT OF SCOPE) still carries the
+// legacy alt_km/apo_km/inc_deg/lan_deg dialect. A fresh LAUNCH/DEPLOY draft's
+// e.orbit is canonical (periKm/apoKm/incDeg/lanDeg) — convert here, at read
+// time, rather than renaming m.launchOrbit itself.
+function _missionLaunchOrbitDraft(lo) {
+  lo = lo || {};
+  const o = { ...lo, periKm: lo.alt_km, apoKm: (lo.apo_km ?? lo.alt_km), incDeg: lo.inc_deg, lanDeg: lo.lan_deg };
+  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  return o;
+}
 function _missionPendingDraft(m, dockType) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeKey = fv ? fv._originKey : null;
@@ -418,11 +428,11 @@ function _missionPendingDraft(m, dockType) {
     case 'launch':
       return { type: 'LAUNCH', pending: true, _commitLabel: label, label: m.name, fleetEntryId: null,
         payloadScIds: [...(m.payloadScIds || [])], payloadMass: 0,
-        orbit: { ...m.launchOrbit } };
+        orbit: _missionLaunchOrbitDraft(m.launchOrbit) };
     case 'deploy': {
       const sc = (_scEdSC || [])[0];
       return { type: 'DEPLOY', pending: true, _commitLabel: label, label: sc ? sc.name : '', spacecraftId: sc ? sc.spacecraftId : null,
-        orbit: { ...m.launchOrbit }, emptyTanks: false };
+        orbit: _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: false };
     }
     case 'separate':
       return { type: 'SEPARATE', pending: true, _commitLabel: label, activeKey, parentVehicleId: m.vehicleId, sepIndex: 1 };

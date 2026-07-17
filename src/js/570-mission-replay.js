@@ -73,7 +73,7 @@ function _missionCaptureSnapshot(live, baseOf) {
       // default LAN. This is what lets a matched parking plane actually reach
       // the World-view ring (with the eq->world seam applied there).
       orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination,
-        lan_deg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
+        lanDeg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
         propagated: !!os.propagated, refId: os.refId || null } : null,
       alt,
       owners: [...new Set(v.stages.map(st => st._ownerKey || _missionStageOwnerKey(st.stageDefinitionId)))],
@@ -333,7 +333,7 @@ function missionRecompute(m) {
         if (e.type === 'DEPLOY') {
           const o = e.orbit || (e.orbit = {});
           o.body = res.body; o.propagated = true; o.refId = e.orbitRefId;
-          delete o.alt_km; delete o.apo_km; delete o.inc_deg;
+          delete o.periKm; delete o.apoKm; delete o.incDeg;
           delete e._refNote;
           if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
         } else {
@@ -341,8 +341,8 @@ function missionRecompute(m) {
         }
       } else if (res && res.periKm != null) {
         const o = e.orbit || (e.orbit = {});
-        o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
-        if (res.lanDeg != null) o.lan_deg = res.lanDeg;
+        o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
+        if (res.lanDeg != null) o.lanDeg = res.lanDeg;
         delete o.propagated; delete o.refId;
         delete e._refNote;
         if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }

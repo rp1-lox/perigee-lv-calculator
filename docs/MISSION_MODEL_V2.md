@@ -859,6 +859,60 @@ construction. Persistence (450/455) flip not attempted — still emits legacy na
 `orbitNormalize` already handles on load (per rule 2, this is optional and explicitly
 deferred, not a gap).
 
+**C2b pass 2a (2026-07-17, event dialect writers/readers on e.orbit — DONE for the bounded
+scope below):** `e.orbit`'s OWN field names (on LAUNCH/DEPLOY log entries) are now canonical
+`periKm/apoKm/incDeg/lanDeg` end to end. Migrated: **570-mission-events.js** (`_missionLaunchSyncDraft`
+writers, `missionLaunchRefPick`, `missionLaunchGeoUpdate`, `_missionLaunchLanFieldHTML`/`HTML` readers
+— the `_missionLaunchSyncDraft` field-rename was the bulk of the "remaining checklist" item above);
+**570-mission-band.js** `_missionPendingDraft` (new helper `_missionLaunchOrbitDraft(lo)` converts
+`m.launchOrbit`'s legacy dialect to canonical AT THE BOUNDARY — `m.launchOrbit` itself untouched, still
+legacy, per scope); **570-mission-manager.js** `_missionApplyLaunch`/`_missionApplyDeploy`'s `o = e.orbit`
+reads and `missionExecLaunch`/`missionExecDeploy`'s entry construction (now via `_missionLaunchOrbitDraft`);
+**570-mission-cards.js** card render + edit-field prefills; **570-mission-replay.js** T2 ref-resolution
+writes (336, 344-345) and the vehicle snapshot's own orbit shape (`_missionCaptureSnapshot`, `lan_deg`→`lanDeg`,
+consumed by 5741's `addOrbitRing`/`orbitWorldElements` call — updated in lockstep for consistency, dialect-tolerant
+either way); **577-mission-report.js** + **570-mission-panel.js** `_missionNodeForLaunch` (both fall back to
+`m.launchOrbit` pre-authoring — routed through `_missionLaunchOrbitDraft` so the fallback dialect matches);
+**5741-trajectory-scene-extract.js** `addOrbitRing`'s `lan_deg` param renamed `lanDeg` for consistency (its
+`orbitWorldElements` call already accepted either dialect); **573-dev-seed.js** Gateway DEPLOY's `m.launchOrbit`
+fallback; **450-program-module-phase-10-save-load-closur.js**: `_missionMigrateLaunchOrbitEntry` extended (new
+helper `_missionMigrateOrbitFieldNames`) to ALSO rename a legacy-shaped `e.orbit`'s own fields to canonical on
+load — covers old autosaves/.program files that predate this pass, in the SAME load-time pass that already
+merges `e.launchOrbit`; **575-mission-undo.js** `_missionUndoApply` now runs restored snapshots through
+`_missionMigrateLaunchOrbitLog` too (in-session undo/redo snapshots serialize `e.orbit` verbatim, so a
+pre-rename snapshot needs the same migration persistence gets).
+**orbitAtBurn decision**: `570-mission-replay.js`'s MNODE `e.orbitAtBurn = {...active.orbitState, lan_deg: ...}`
+(line ~665) was explicitly LEFT ALONE — it's consumed by 565-physics-mission.js/565-physics-nrho.js/
+565-physics-targeting.js's internal `lan_deg` convention (out of scope this pass), not by anything reading
+`e.orbit` itself, so renaming it would have broken a live consumer for no in-scope benefit.
+**One in-scope fix inside the excluded 565 file**: `565-physics-mission.js`'s `lastAuthoredPlane` tracker (line
+~412) reads `e.orbit.inc_deg`/`e.orbit.lan_deg` DIRECTLY off the LAUNCH entry's `e.orbit` — this is genuinely
+`e.orbit` (not a 565-internal dialect), so leaving it legacy would have silently broken plane-match propagation
+into solved maneuver legs the moment 570's writers went canonical. Fixed the read (`e.orbit.incDeg`/`.lanDeg`)
+while leaving `lastAuthoredPlane`'s OWN shape (`{body, inclination, lan_deg}`) and every other `fromOrbit`/`toOrbit`/
+`o` local in 565 untouched, per scope.
+**Not touched (confirmed out of scope, no live e.orbit reads found there)**: 566-mission-state-v2.js (already
+routes through `orbitNormalize`/`orbitWorldElements`, C1/C2 pre-adapted); 572-mission-checks.js (no `.orbit.alt_km`-
+style reads exist); 570-mission-nodemap.js's `orbit.lan_deg` (custom node-map dialect, unrelated object shape).
+**Gate**: 951 -> 952 assertions (1 new: legacy-shaped `e.orbit` field-rename pin on `_missionMigrateLaunchOrbitEntry`);
+the T2 ref-resolution block and the 5 `_missionMigrateLaunchOrbitEntry`/`Log` pins were updated in place to
+construct/expect canonical `e.orbit` field names (their assertion TEXT and intent are unchanged, only the
+literal dialect in the fixture) — no pinned NUMBER moved. Browser smoke (`devSeedApolloMission({force:true})`):
+payload mass 45,078 kg, 5 stages, LAUNCH `e.orbit` keys `[body,periKm,apoKm,incDeg,lanDeg]` (no `alt_km`/`inc_deg`),
+zero console errors. Fresh pending LAUNCH + plane-match to Moon: world-plane angle from the Moon's own world-frame
+normal = 0.00 deg (well under the 0.5 deg bar). Reload (autosave restore): log length + payload mass byte-identical
+(3 entries, 45,078 kg) — this session's blob was already canonical so it exercises the migration's no-op path, not
+a true legacy-blob round-trip; the dedicated unit pin above is what actually pins the legacy-rename behavior. Undo
+after a rename: restores cleanly.
+**Remaining checklist, updated**: launch-planner `plan.*` objects (415/570, e.g. `_missionLaunchOptimizeApply`'s
+`plan.alt_km`/`inc_deg`/`lan_deg` reads around 570-mission-events.js:641-704 — a DIFFERENT dialect than `e.orbit`,
+never in this pass's scope); **060-orbit-categories.js** builtin catalog dialect; **430-...-node-map.js**
+`perigee`/`apogee`/`inclination`/`lan` sites; **380** vehicle `orbitState` writers (consumed by 566); 565's
+internal `lan_deg`/`fromOrbit`/`toOrbit` convention (deliberately not touched beyond the one `e.orbit`-reading
+fix above); persistence WRITER flip (450/455 still SERIALIZE whatever's live in memory — now canonical by
+construction for anything authored through this pass's writers, so no additional flip is needed for e.orbit
+specifically; m.launchOrbit's own writer remains legacy, unflipped, by design).
+
 ### C3 — Collapse launchOrbit triplication (audit item 3, cost S) — **DONE 2026-07-17**
 - `e.orbit` is the single authored source on a LAUNCH entry. `e.launchOrbit` deleted (replay reads e.orbit); `m.launchOrbit` becomes a seed-default only (used to prefill a NEW launch draft, never read by replay). Load-time migration for old logs.
 

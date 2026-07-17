@@ -25,10 +25,30 @@ function _missionsSansPending() {
 // launchOrbit-only -> copy into orbit. Either way launchOrbit is deleted, so
 // a re-save (autosave or .program export, both funnel through
 // buildProgramObject serializing the log as-is) simply stops carrying it.
+// C2b (2026-07-17, event-orbit dialect rename): e.orbit's own field names
+// moved from the legacy alt_km/apo_km/inc_deg/lan_deg dialect to canonical
+// periKm/apoKm/incDeg/lanDeg (384-orbit-canonical.js shape). Old saved logs
+// (autosave blobs, .program files) may still carry the legacy names on
+// e.orbit — migrate them in place, in the SAME pass as the launchOrbit
+// merge above, so persistence stays untouched (writers keep emitting
+// whatever's live in memory; this is the one load-time boundary that makes
+// old blobs compatible). Canonical wins if somehow both are present.
+function _missionMigrateOrbitFieldNames(o) {
+  if (!o || typeof o !== 'object') return o;
+  if (o.periKm == null && o.alt_km != null) o.periKm = o.alt_km;
+  if (o.apoKm == null && o.apo_km != null) o.apoKm = o.apo_km;
+  if (o.incDeg == null && o.inc_deg != null) o.incDeg = o.inc_deg;
+  if (o.lanDeg == null && o.lan_deg != null) o.lanDeg = o.lan_deg;
+  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  return o;
+}
 function _missionMigrateLaunchOrbitEntry(e) {
-  if (!e || !('launchOrbit' in e)) return e;
-  if (e.orbit == null) e.orbit = e.launchOrbit;
-  delete e.launchOrbit;
+  if (!e) return e;
+  if ('launchOrbit' in e) {
+    if (e.orbit == null) e.orbit = e.launchOrbit;
+    delete e.launchOrbit;
+  }
+  if (e.orbit) _missionMigrateOrbitFieldNames(e.orbit);
   return e;
 }
 function _missionMigrateLaunchOrbitLog(m) {

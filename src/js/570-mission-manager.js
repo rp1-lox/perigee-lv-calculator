@@ -118,9 +118,9 @@ function _missionApplyLaunch(m, e) {
   // ΔV (perf.sDVs, boosters folded into stage 0) + ascent requirement, then map that
   // onto the live vehicle. Other bodies use the simpler circular-velocity estimate.
   const perf = (launchOrbit.body === 'Earth' && typeof lvPerformance === 'function' && entry.stageData && entry.stageData.length)
-    ? lvPerformance(entry.stageData, entry.boosterGroups || entry.boosterData || null, payloadMass, entry.fairingMass || 0, 0, launchOrbit.alt_km, 0, 28.5, 37, 112)
+    ? lvPerformance(entry.stageData, entry.boosterGroups || entry.boosterData || null, payloadMass, entry.fairingMass || 0, 0, launchOrbit.periKm, 0, 28.5, 37, 112)
     : null;
-  const dvRequired = perf ? perf.DVasc : _missionDvToOrbit(launchOrbit.body, launchOrbit.alt_km);
+  const dvRequired = perf ? perf.DVasc : _missionDvToOrbit(launchOrbit.body, launchOrbit.periKm);
   let dvRemaining = dvRequired;
   const stagingLog   = [];
   const stagesToDrop = [];
@@ -178,13 +178,13 @@ function _missionApplyLaunch(m, e) {
   }
 
   fv.stages = fv.stages.filter(s => !stagesToDrop.includes(s.stageDefinitionId));
-  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
+  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.periKm, apogee: (launchOrbit.apoKm ?? launchOrbit.periKm), inclination: launchOrbit.incDeg, lan: launchOrbit.lanDeg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
 
   // Verdict + capacity come straight from the LV calculator's math: feasibility is
   // its ΔV margin, and max payload is its binary search (lvMaxPayload), so the
   // program reports exactly what the calculator would for this vehicle + orbit.
   const maxPayload = perf
-    ? lvMaxPayload(entry.stageData, entry.boosterGroups || entry.boosterData || null, entry.fairingMass || 0, 0, launchOrbit.alt_km, 0, 28.5, 37, 112)
+    ? lvMaxPayload(entry.stageData, entry.boosterGroups || entry.boosterData || null, entry.fairingMass || 0, 0, launchOrbit.periKm, 0, 28.5, 37, 112)
     : null;
   const ok = perf ? (perf.margin >= 0) : (dvRemaining <= 0);
   const stagingResult = {
@@ -230,7 +230,7 @@ function _missionApplyDeploy(m, e, metNow) {
       perigee: null, apogee: null, inclination: null, lan: null, epoch: 0, surface: false,
     };
   } else {
-    orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
+    orbitState = { body: o.body, perigee: o.periKm, apogee: (o.apoKm ?? o.periKm), inclination: o.incDeg, lan: o.lanDeg, epoch: 0, surface: false };
   }
   const fv = progMakeFlightVehicle(sc.name, allStages, orbitState, '#e5c07b');
   fv.status = 'ORBIT';
@@ -244,7 +244,7 @@ function missionExecLaunch(id, opts) {
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
   if (!entry) return;
-  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: { ...m.launchOrbit } });
+  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: _missionLaunchOrbitDraft(m.launchOrbit) });
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
@@ -262,7 +262,7 @@ function missionExecDeploy(id, scId) {
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (!sc) return;
   const empty = !!document.getElementById('addev-deploy-empty-' + id)?.checked;
-  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit }, emptyTanks: empty });
+  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: empty });
   _missionAddEvt = null;
   _missionExpandLast(m);
   missionRecompute(m); missionRenderDetail();

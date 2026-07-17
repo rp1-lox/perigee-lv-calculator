@@ -108,7 +108,7 @@ function _trajExtractMission(m) {
     }
   });
 
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lanDeg, argp_deg) => {
     if (body == null || peri == null || apo == null) return null;
     if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
@@ -131,8 +131,8 @@ function _trajExtractMission(m) {
     // rec.elements when absent) can never override it. Precedence enforced by
     // write order: authored (here) -> flight-derived (§7i pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
-    if (!rec.elements && lan_deg != null) {
-      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are
+    if (!rec.elements && lanDeg != null) {
+      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lanDeg here are
       // AUTHORED, i.e. EQUATOR-referenced (os.inclination/os.lan — the
       // program's authoring convention). The ring is sampled + projected in
       // the WORLD (ecliptic) frame the tilted globe and the Moon are drawn
@@ -143,8 +143,8 @@ function _trajExtractMission(m) {
       // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
       // §7al assumed world==equator, which O2 retired).
       const _w20 = (typeof orbitWorldElements === 'function')
-        ? orbitWorldElements({ body, inc_deg: inc || 0, lan_deg })
-        : { incDeg: inc || 0, lanDeg: lan_deg };
+        ? orbitWorldElements({ body, incDeg: inc || 0, lanDeg })
+        : { incDeg: inc || 0, lanDeg };
       rec.elements = { i: _w20.incDeg * Math.PI / 180, raan: _w20.lanDeg * Math.PI / 180,
         argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
     }
@@ -191,7 +191,7 @@ function _trajExtractMission(m) {
       }
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lanDeg, o.argp_deg);
     });
   });
 

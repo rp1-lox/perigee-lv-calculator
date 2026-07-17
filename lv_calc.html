@@ -16211,10 +16211,30 @@ function _missionsSansPending() {
 // launchOrbit-only -> copy into orbit. Either way launchOrbit is deleted, so
 // a re-save (autosave or .program export, both funnel through
 // buildProgramObject serializing the log as-is) simply stops carrying it.
+// C2b (2026-07-17, event-orbit dialect rename): e.orbit's own field names
+// moved from the legacy alt_km/apo_km/inc_deg/lan_deg dialect to canonical
+// periKm/apoKm/incDeg/lanDeg (384-orbit-canonical.js shape). Old saved logs
+// (autosave blobs, .program files) may still carry the legacy names on
+// e.orbit — migrate them in place, in the SAME pass as the launchOrbit
+// merge above, so persistence stays untouched (writers keep emitting
+// whatever's live in memory; this is the one load-time boundary that makes
+// old blobs compatible). Canonical wins if somehow both are present.
+function _missionMigrateOrbitFieldNames(o) {
+  if (!o || typeof o !== 'object') return o;
+  if (o.periKm == null && o.alt_km != null) o.periKm = o.alt_km;
+  if (o.apoKm == null && o.apo_km != null) o.apoKm = o.apo_km;
+  if (o.incDeg == null && o.inc_deg != null) o.incDeg = o.inc_deg;
+  if (o.lanDeg == null && o.lan_deg != null) o.lanDeg = o.lan_deg;
+  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  return o;
+}
 function _missionMigrateLaunchOrbitEntry(e) {
-  if (!e || !('launchOrbit' in e)) return e;
-  if (e.orbit == null) e.orbit = e.launchOrbit;
-  delete e.launchOrbit;
+  if (!e) return e;
+  if ('launchOrbit' in e) {
+    if (e.orbit == null) e.orbit = e.launchOrbit;
+    delete e.launchOrbit;
+  }
+  if (e.orbit) _missionMigrateOrbitFieldNames(e.orbit);
   return e;
 }
 function _missionMigrateLaunchOrbitLog(m) {
@@ -18385,8 +18405,12 @@ function physRebuildMissionTrajectories(m) {
   let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
-    if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.inc_deg != null) {
-      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.inc_deg, lan_deg: e.orbit.lan_deg ?? 0 };
+    // C2b: e.orbit's own field names are canonical (periKm/apoKm/incDeg/lanDeg)
+    // as of this pass; lastAuthoredPlane stays in 565's internal lan_deg
+    // convention (out of scope to rename — see docs/MISSION_MODEL_V2.md §24
+    // C2b), so the read off e.orbit is translated right here at the boundary.
+    if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.incDeg != null) {
+      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.incDeg, lan_deg: e.orbit.lanDeg ?? 0 };
     }
     // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
     // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point
@@ -21407,6 +21431,16 @@ const _MISSION_APPLY_BY_TYPE = {
 // lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
 // resolves to the CURRENT live mission state — exactly like the old dock
 // forms computed their defaults, with zero new plumbing.
+// C2b boundary: m.launchOrbit (seed-default, OUT OF SCOPE) still carries the
+// legacy alt_km/apo_km/inc_deg/lan_deg dialect. A fresh LAUNCH/DEPLOY draft's
+// e.orbit is canonical (periKm/apoKm/incDeg/lanDeg) — convert here, at read
+// time, rather than renaming m.launchOrbit itself.
+function _missionLaunchOrbitDraft(lo) {
+  lo = lo || {};
+  const o = { ...lo, periKm: lo.alt_km, apoKm: (lo.apo_km ?? lo.alt_km), incDeg: lo.inc_deg, lanDeg: lo.lan_deg };
+  delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  return o;
+}
 function _missionPendingDraft(m, dockType) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeKey = fv ? fv._originKey : null;
@@ -21416,11 +21450,11 @@ function _missionPendingDraft(m, dockType) {
     case 'launch':
       return { type: 'LAUNCH', pending: true, _commitLabel: label, label: m.name, fleetEntryId: null,
         payloadScIds: [...(m.payloadScIds || [])], payloadMass: 0,
-        orbit: { ...m.launchOrbit } };
+        orbit: _missionLaunchOrbitDraft(m.launchOrbit) };
     case 'deploy': {
       const sc = (_scEdSC || [])[0];
       return { type: 'DEPLOY', pending: true, _commitLabel: label, label: sc ? sc.name : '', spacecraftId: sc ? sc.spacecraftId : null,
-        orbit: { ...m.launchOrbit }, emptyTanks: false };
+        orbit: _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: false };
     }
     case 'separate':
       return { type: 'SEPARATE', pending: true, _commitLabel: label, activeKey, parentVehicleId: m.vehicleId, sepIndex: 1 };
@@ -22087,10 +22121,10 @@ function _missionLogCardHTML(entry, id, idx) {
     ${entry.boiloffKg > 0 ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:2px;">boiloff &minus;${Math.round(entry.boiloffKg).toLocaleString()} kg</div>` : ''}
   </div>`;
   if (entry.type === 'DEPLOY') {
-    // §14 U3: propagated orbit (NRHO) has no alt_km/apo_km — honest label.
+    // §14 U3: propagated orbit (NRHO) has no periKm/apoKm — honest label.
     const orbitVal = (entry.orbit && entry.orbit.propagated)
       ? 'NRHO (propagated)'
-      : `${(entry.orbit&&entry.orbit.alt_km||0).toLocaleString()} km${entry.orbit&&entry.orbit.apo_km&&entry.orbit.apo_km!==entry.orbit.alt_km?' × '+entry.orbit.apo_km.toLocaleString():''}`;
+      : `${(entry.orbit&&entry.orbit.periKm||0).toLocaleString()} km${entry.orbit&&entry.orbit.apoKm&&entry.orbit.apoKm!==entry.orbit.periKm?' × '+entry.orbit.apoKm.toLocaleString():''}`;
     return `<div class="mission-log-card"><div class="mission-log-header"><span class="mission-log-type">DEPLOY</span><span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.label||''}</span></div><div class="mission-state-grid"><div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${orbitVal}</span></div><div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${entry.orbit&&entry.orbit.body||'Earth'}</span></div></div></div>`;
   }
   if (entry.type !== 'LAUNCH') return '';
@@ -22111,9 +22145,9 @@ function _missionLogCardHTML(entry, id, idx) {
     </div>
     <div class="mission-state-grid">
       <div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${o.body}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Altitude</span><span class="mission-state-val">${o.alt_km.toLocaleString()} km</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Inc</span><span class="mission-state-val">${o.inc_deg}&deg;</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">LAN</span><span class="mission-state-val">${o.lan_deg}&deg;</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Altitude</span><span class="mission-state-val">${o.periKm.toLocaleString()} km</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Inc</span><span class="mission-state-val">${o.incDeg}&deg;</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">LAN</span><span class="mission-state-val">${o.lanDeg}&deg;</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Payload</span><span class="mission-state-val">${entry.payloadMass.toLocaleString()} kg</span></div>
       ${sr.maxPayload != null ? `<div class="mission-state-kv"><span class="mission-state-key">Max to this orbit</span><span class="mission-state-val" style="color:${entry.payloadMass <= sr.maxPayload ? 'var(--accent3)' : 'var(--accent2)'}">${sr.maxPayload.toLocaleString()} kg</span></div>` : ''}
     </div>
@@ -22443,9 +22477,9 @@ function _missionEventEditFieldsHTML(m, idx) {
         ${payPickerHTML}
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
           ${refSelectHTML}
-          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
-          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
-          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.periKm ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apoKm ?? o.periKm ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.incDeg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
           ${_missionLaunchLanFieldHTML(m, idx, e)}
         </div>
         ${_missionLaunchTargetHTML(m, idx, e)}
@@ -23103,7 +23137,7 @@ function _missionLaunchGeoHTML(m, idx, e) {
       Program epoch: <span style="color:var(--text-bright);">${_mrEsc(epochDateTxt)}</span>
       ${launchDateTxt ? ` &middot; this launch: <span style="color:var(--text-bright);">${_mrEsc(launchDateTxt)}</span> (MET +${(+e.launchTime_s).toLocaleString()} s)` : ''}
     </div>
-    <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.inc_deg, e.launchTime_s, o.lan_deg)}</div>`;
+    <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.incDeg, e.launchTime_s, o.lanDeg)}</div>`;
 }
 // LAN field, relocated to sit alongside Inc (feedback item 4) instead of
 // buried in the separate launch-geo block. Always shows an effective value
@@ -23113,7 +23147,7 @@ function _missionLaunchLanFieldHTML(m, idx, e) {
   const id = m.missionId;
   const o = e.orbit || {};
   const lanDerived = !!(e.launchTime_s != null && e.launchTime_s !== '' && o._lanFromLaunchTime);
-  const lanVal = (o.lan_deg != null) ? o.lan_deg : 0;
+  const lanVal = (o.lanDeg != null) ? o.lanDeg : 0;
   return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
     <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
 }
@@ -23463,7 +23497,7 @@ function missionLaunchGeoUpdate(id, idx) {
     ? progDateToMissionTime(dtRaw + ':00Z') : null;
   if (timeField) timeField.dataset.rawS = (t != null) ? t : '';
   const incField = document.getElementById('edit-launch-inc-' + id);
-  const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.inc_deg) || 28.5;
+  const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.incDeg) || 28.5;
   const lanField = document.getElementById('edit-launch-lan-' + id);
   const lanLabel = lanField && lanField.closest('.cfg-item')?.querySelector('.cfg-label');
   if (site && t != null) {
@@ -23532,8 +23566,8 @@ function missionLaunchRefPick(id, idx, refId) {
   e.orbitRefId = refId;
   if (res && res.periKm != null) {
     const o = e.orbit || (e.orbit = {});
-    o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
-    if (res.lanDeg != null) o.lan_deg = res.lanDeg;
+    o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
+    if (res.lanDeg != null) o.lanDeg = res.lanDeg;
     delete e._refNote;
   }
   missionRecompute(m);
@@ -23660,11 +23694,11 @@ function _missionLaunchSyncDraft(id, idx) {
   // carries a body field (other event types do target other bodies).
   o.body = 'Earth';
   const altEl = document.getElementById('edit-launch-alt-' + id);
-  if (altEl) o.alt_km = +altEl.value || 0;
+  if (altEl) o.periKm = +altEl.value || 0;
   const apoEl = document.getElementById('edit-launch-apo-' + id);
-  if (apoEl) o.apo_km = +apoEl.value || o.alt_km;
+  if (apoEl) o.apoKm = +apoEl.value || o.periKm;
   const incEl = document.getElementById('edit-launch-inc-' + id);
-  if (incEl) o.inc_deg = +incEl.value || 0;
+  if (incEl) o.incDeg = +incEl.value || 0;
   const siteEl = document.getElementById('edit-launch-site-' + id);
   if (siteEl) {
     const siteShort = siteEl.value;
@@ -23679,10 +23713,10 @@ function _missionLaunchSyncDraft(id, idx) {
   if (lanEl) {
     const lanRaw = lanEl.value;
     if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
-      o.lan_deg = parseFloat(lanRaw);
+      o.lanDeg = parseFloat(lanRaw);
       o._lanFromLaunchTime = e.launchTime_s != null && !!e.site;
     } else {
-      delete o.lan_deg;
+      delete o.lanDeg;
       o._lanFromLaunchTime = false;
     }
   }
@@ -24875,9 +24909,9 @@ function _missionApplyLaunch(m, e) {
   // ΔV (perf.sDVs, boosters folded into stage 0) + ascent requirement, then map that
   // onto the live vehicle. Other bodies use the simpler circular-velocity estimate.
   const perf = (launchOrbit.body === 'Earth' && typeof lvPerformance === 'function' && entry.stageData && entry.stageData.length)
-    ? lvPerformance(entry.stageData, entry.boosterGroups || entry.boosterData || null, payloadMass, entry.fairingMass || 0, 0, launchOrbit.alt_km, 0, 28.5, 37, 112)
+    ? lvPerformance(entry.stageData, entry.boosterGroups || entry.boosterData || null, payloadMass, entry.fairingMass || 0, 0, launchOrbit.periKm, 0, 28.5, 37, 112)
     : null;
-  const dvRequired = perf ? perf.DVasc : _missionDvToOrbit(launchOrbit.body, launchOrbit.alt_km);
+  const dvRequired = perf ? perf.DVasc : _missionDvToOrbit(launchOrbit.body, launchOrbit.periKm);
   let dvRemaining = dvRequired;
   const stagingLog   = [];
   const stagesToDrop = [];
@@ -24935,13 +24969,13 @@ function _missionApplyLaunch(m, e) {
   }
 
   fv.stages = fv.stages.filter(s => !stagesToDrop.includes(s.stageDefinitionId));
-  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
+  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.periKm, apogee: (launchOrbit.apoKm ?? launchOrbit.periKm), inclination: launchOrbit.incDeg, lan: launchOrbit.lanDeg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
 
   // Verdict + capacity come straight from the LV calculator's math: feasibility is
   // its ΔV margin, and max payload is its binary search (lvMaxPayload), so the
   // program reports exactly what the calculator would for this vehicle + orbit.
   const maxPayload = perf
-    ? lvMaxPayload(entry.stageData, entry.boosterGroups || entry.boosterData || null, entry.fairingMass || 0, 0, launchOrbit.alt_km, 0, 28.5, 37, 112)
+    ? lvMaxPayload(entry.stageData, entry.boosterGroups || entry.boosterData || null, entry.fairingMass || 0, 0, launchOrbit.periKm, 0, 28.5, 37, 112)
     : null;
   const ok = perf ? (perf.margin >= 0) : (dvRemaining <= 0);
   const stagingResult = {
@@ -24987,7 +25021,7 @@ function _missionApplyDeploy(m, e, metNow) {
       perigee: null, apogee: null, inclination: null, lan: null, epoch: 0, surface: false,
     };
   } else {
-    orbitState = { body: o.body, perigee: o.alt_km, apogee: (o.apo_km ?? o.alt_km), inclination: o.inc_deg, lan: o.lan_deg, epoch: 0, surface: false };
+    orbitState = { body: o.body, perigee: o.periKm, apogee: (o.apoKm ?? o.periKm), inclination: o.incDeg, lan: o.lanDeg, epoch: 0, surface: false };
   }
   const fv = progMakeFlightVehicle(sc.name, allStages, orbitState, '#e5c07b');
   fv.status = 'ORBIT';
@@ -25001,7 +25035,7 @@ function missionExecLaunch(id, opts) {
   if (!m || !m.fleetEntryId) return;
   const entry = _fleetGet(m.fleetEntryId);
   if (!entry) return;
-  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: { ...m.launchOrbit } });
+  m.log.push({ type: 'LAUNCH', label: entry.name, fleetEntryId: m.fleetEntryId, payloadScIds: [...(m.payloadScIds||[])], orbit: _missionLaunchOrbitDraft(m.launchOrbit) });
   _missionAddEvt = null;  _missionExpandLast(m);
   missionRecompute(m);
   missionRenderDetail();
@@ -25019,7 +25053,7 @@ function missionExecDeploy(id, scId) {
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (!sc) return;
   const empty = !!document.getElementById('addev-deploy-empty-' + id)?.checked;
-  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: { ...m.launchOrbit }, emptyTanks: empty });
+  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: empty });
   _missionAddEvt = null;
   _missionExpandLast(m);
   missionRecompute(m); missionRenderDetail();
@@ -26634,8 +26668,8 @@ function _missionNodeForLaunch(m) {
   // of truth); m.launchOrbit is only a fallback for the pre-authoring case
   // (no LAUNCH/DEPLOY exists yet — nothing else to show a default node for).
   const first = (m.log || []).find(e => e.type === 'LAUNCH' || e.type === 'DEPLOY');
-  const o = (first && first.orbit) || m.launchOrbit || {};
-  return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.alt_km, apogee: o.alt_km } });
+  const o = (first && first.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
+  return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.periKm, apogee: o.periKm } });
 }
 
 // Ordered list of node ids the mission traverses: launch node, then each MANEUVER destination.
@@ -27336,7 +27370,7 @@ function _missionCaptureSnapshot(live, baseOf) {
       // default LAN. This is what lets a matched parking plane actually reach
       // the World-view ring (with the eq->world seam applied there).
       orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination,
-        lan_deg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
+        lanDeg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
         propagated: !!os.propagated, refId: os.refId || null } : null,
       alt,
       owners: [...new Set(v.stages.map(st => st._ownerKey || _missionStageOwnerKey(st.stageDefinitionId)))],
@@ -27596,7 +27630,7 @@ function missionRecompute(m) {
         if (e.type === 'DEPLOY') {
           const o = e.orbit || (e.orbit = {});
           o.body = res.body; o.propagated = true; o.refId = e.orbitRefId;
-          delete o.alt_km; delete o.apo_km; delete o.inc_deg;
+          delete o.periKm; delete o.apoKm; delete o.incDeg;
           delete e._refNote;
           if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
         } else {
@@ -27604,8 +27638,8 @@ function missionRecompute(m) {
         }
       } else if (res && res.periKm != null) {
         const o = e.orbit || (e.orbit = {});
-        o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
-        if (res.lanDeg != null) o.lan_deg = res.lanDeg;
+        o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
+        if (res.lanDeg != null) o.lanDeg = res.lanDeg;
         delete o.propagated; delete o.refId;
         delete e._refNote;
         if (authEntry) { authEntry.orbit = { ...o }; delete authEntry._refNote; }
@@ -28821,7 +28855,7 @@ function devSeedGatewayMission(opts) {
   // the only ref-picker that accepts a propagated entry).
   const gwLaunchEv = m.log.find(e => e.type === 'LAUNCH');
   m.log.push({ type: 'DEPLOY', label: gateway.name, spacecraftId: gateway.spacecraftId,
-    orbit: { ...((gwLaunchEv && gwLaunchEv.orbit) || m.launchOrbit || {}) }, emptyTanks: false });
+    orbit: (gwLaunchEv && gwLaunchEv.orbit) ? { ...gwLaunchEv.orbit } : _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: false });
   missionRecompute(m); missionRenderDetail();
   const deployIdx = m.log.length - 1;
   missionDeployRefPick(m.missionId, deployIdx, 'nrho-nominal');
@@ -30644,7 +30678,7 @@ function _trajExtractMission(m) {
     }
   });
 
-  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lan_deg, argp_deg) => {
+  const addOrbitRing = (body, peri, apo, ownerKeys, authIdx, inc, lanDeg, argp_deg) => {
     if (body == null || peri == null || apo == null) return null;
     if (_trajCorridorMoon(body, apo)) return null; // corridor state rings die (C2) — arcs carry transfer meaning now
     const frameId = body;
@@ -30667,8 +30701,8 @@ function _trajExtractMission(m) {
     // rec.elements when absent) can never override it. Precedence enforced by
     // write order: authored (here) -> flight-derived (§7i pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
-    if (!rec.elements && lan_deg != null) {
-      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are
+    if (!rec.elements && lanDeg != null) {
+      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lanDeg here are
       // AUTHORED, i.e. EQUATOR-referenced (os.inclination/os.lan — the
       // program's authoring convention). The ring is sampled + projected in
       // the WORLD (ecliptic) frame the tilted globe and the Moon are drawn
@@ -30679,8 +30713,8 @@ function _trajExtractMission(m) {
       // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
       // §7al assumed world==equator, which O2 retired).
       const _w20 = (typeof orbitWorldElements === 'function')
-        ? orbitWorldElements({ body, inc_deg: inc || 0, lan_deg })
-        : { incDeg: inc || 0, lanDeg: lan_deg };
+        ? orbitWorldElements({ body, incDeg: inc || 0, lanDeg })
+        : { incDeg: inc || 0, lanDeg };
       rec.elements = { i: _w20.incDeg * Math.PI / 180, raan: _w20.lanDeg * Math.PI / 180,
         argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
     }
@@ -30727,7 +30761,7 @@ function _trajExtractMission(m) {
       }
       const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
       if (!(peri > 0) && !(apo > 0)) return; // skip degenerate/zero orbits
-      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lan_deg, o.argp_deg);
+      addOrbitRing(o.body || 'Earth', peri, apo, v.owners, e._authIdx, o.inclination, o.lanDeg, o.argp_deg);
     });
   });
 
@@ -36201,6 +36235,14 @@ function missionUndoCapture(m) {
 
 function _missionUndoApply(m, snapStr) {
   const data = JSON.parse(snapStr);
+  // C2b: in-session undo/redo snapshots serialize e.orbit verbatim — a
+  // snapshot captured before this pass's rename (or loaded from an old
+  // session) may still carry legacy alt_km/apo_km/inc_deg/lan_deg. Run it
+  // through the same load-time migration persistence uses (450) so restore
+  // always lands on canonical field names.
+  if (Array.isArray(data.log) && typeof _missionMigrateLaunchOrbitLog === 'function') {
+    _missionMigrateLaunchOrbitLog({ log: data.log });
+  }
   m.log = data.log;
   m.groups = data.groups;
   m.vehicleNames = data.vehicleNames;
@@ -36382,7 +36424,7 @@ function missionReportHTML(m) {
   const sr = firstLaunch ? firstLaunch.stagingResult : null;
   // C3: read the actual authored LAUNCH entry's orbit; m.launchOrbit only as a
   // pre-authoring fallback (no LAUNCH entry logged yet).
-  const o = (firstLaunch && firstLaunch.orbit) || m.launchOrbit || {};
+  const o = (firstLaunch && firstLaunch.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
 
   const budget = (typeof missionBudget === 'function') ? missionBudget(m) : null;
 
@@ -36471,9 +36513,9 @@ function missionReportHTML(m) {
     <div><span class="mr-key">Total Payload Mass</span><span class="mr-val">${_mrNum(payloadMass)} kg</span></div>
     <div><span class="mr-key">Events</span><span class="mr-val">${log.length}</span></div>
     <div><span class="mr-key">Body</span><span class="mr-val">${_mrEsc(o.body || 'Earth')}</span></div>
-    <div><span class="mr-key">Altitude</span><span class="mr-val">${_mrNum(o.alt_km)} km${o.apo_km && o.apo_km !== o.alt_km ? ' × ' + _mrNum(o.apo_km) + ' km' : ''}</span></div>
-    <div><span class="mr-key">Inclination</span><span class="mr-val">${_mrNum(o.inc_deg)}&deg;</span></div>
-    <div><span class="mr-key">LAN</span><span class="mr-val">${_mrNum(o.lan_deg)}&deg;</span></div>
+    <div><span class="mr-key">Altitude</span><span class="mr-val">${_mrNum(o.periKm)} km${o.apoKm && o.apoKm !== o.periKm ? ' × ' + _mrNum(o.apoKm) + ' km' : ''}</span></div>
+    <div><span class="mr-key">Inclination</span><span class="mr-val">${_mrNum(o.incDeg)}&deg;</span></div>
+    <div><span class="mr-key">LAN</span><span class="mr-val">${_mrNum(o.lanDeg)}&deg;</span></div>
   </div>
 
   <h2>Event Log</h2>

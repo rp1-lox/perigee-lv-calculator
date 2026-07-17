@@ -73,10 +73,10 @@ function _missionLogCardHTML(entry, id, idx) {
     ${entry.boiloffKg > 0 ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:2px;">boiloff &minus;${Math.round(entry.boiloffKg).toLocaleString()} kg</div>` : ''}
   </div>`;
   if (entry.type === 'DEPLOY') {
-    // §14 U3: propagated orbit (NRHO) has no alt_km/apo_km — honest label.
+    // §14 U3: propagated orbit (NRHO) has no periKm/apoKm — honest label.
     const orbitVal = (entry.orbit && entry.orbit.propagated)
       ? 'NRHO (propagated)'
-      : `${(entry.orbit&&entry.orbit.alt_km||0).toLocaleString()} km${entry.orbit&&entry.orbit.apo_km&&entry.orbit.apo_km!==entry.orbit.alt_km?' × '+entry.orbit.apo_km.toLocaleString():''}`;
+      : `${(entry.orbit&&entry.orbit.periKm||0).toLocaleString()} km${entry.orbit&&entry.orbit.apoKm&&entry.orbit.apoKm!==entry.orbit.periKm?' × '+entry.orbit.apoKm.toLocaleString():''}`;
     return `<div class="mission-log-card"><div class="mission-log-header"><span class="mission-log-type">DEPLOY</span><span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">${entry.label||''}</span></div><div class="mission-state-grid"><div class="mission-state-kv"><span class="mission-state-key">Orbit</span><span class="mission-state-val">${orbitVal}</span></div><div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${entry.orbit&&entry.orbit.body||'Earth'}</span></div></div></div>`;
   }
   if (entry.type !== 'LAUNCH') return '';
@@ -97,9 +97,9 @@ function _missionLogCardHTML(entry, id, idx) {
     </div>
     <div class="mission-state-grid">
       <div class="mission-state-kv"><span class="mission-state-key">Body</span><span class="mission-state-val">${o.body}</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Altitude</span><span class="mission-state-val">${o.alt_km.toLocaleString()} km</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">Inc</span><span class="mission-state-val">${o.inc_deg}&deg;</span></div>
-      <div class="mission-state-kv"><span class="mission-state-key">LAN</span><span class="mission-state-val">${o.lan_deg}&deg;</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Altitude</span><span class="mission-state-val">${o.periKm.toLocaleString()} km</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">Inc</span><span class="mission-state-val">${o.incDeg}&deg;</span></div>
+      <div class="mission-state-kv"><span class="mission-state-key">LAN</span><span class="mission-state-val">${o.lanDeg}&deg;</span></div>
       <div class="mission-state-kv"><span class="mission-state-key">Payload</span><span class="mission-state-val">${entry.payloadMass.toLocaleString()} kg</span></div>
       ${sr.maxPayload != null ? `<div class="mission-state-kv"><span class="mission-state-key">Max to this orbit</span><span class="mission-state-val" style="color:${entry.payloadMass <= sr.maxPayload ? 'var(--accent3)' : 'var(--accent2)'}">${sr.maxPayload.toLocaleString()} kg</span></div>` : ''}
     </div>
@@ -429,9 +429,9 @@ function _missionEventEditFieldsHTML(m, idx) {
         ${payPickerHTML}
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
           ${refSelectHTML}
-          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
-          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
-          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.periKm ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apoKm ?? o.periKm ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
+          <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.incDeg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
           ${_missionLaunchLanFieldHTML(m, idx, e)}
         </div>
         ${_missionLaunchTargetHTML(m, idx, e)}

@@ -82,7 +82,7 @@ function devSeedGatewayMission(opts) {
   // the only ref-picker that accepts a propagated entry).
   const gwLaunchEv = m.log.find(e => e.type === 'LAUNCH');
   m.log.push({ type: 'DEPLOY', label: gateway.name, spacecraftId: gateway.spacecraftId,
-    orbit: { ...((gwLaunchEv && gwLaunchEv.orbit) || m.launchOrbit || {}) }, emptyTanks: false });
+    orbit: (gwLaunchEv && gwLaunchEv.orbit) ? { ...gwLaunchEv.orbit } : _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: false });
   missionRecompute(m); missionRenderDetail();
   const deployIdx = m.log.length - 1;
   missionDeployRefPick(m.missionId, deployIdx, 'nrho-nominal');

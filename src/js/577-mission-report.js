@@ -95,7 +95,7 @@ function missionReportHTML(m) {
   const sr = firstLaunch ? firstLaunch.stagingResult : null;
   // C3: read the actual authored LAUNCH entry's orbit; m.launchOrbit only as a
   // pre-authoring fallback (no LAUNCH entry logged yet).
-  const o = (firstLaunch && firstLaunch.orbit) || m.launchOrbit || {};
+  const o = (firstLaunch && firstLaunch.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
 
   const budget = (typeof missionBudget === 'function') ? missionBudget(m) : null;
 
@@ -184,9 +184,9 @@ function missionReportHTML(m) {
     <div><span class="mr-key">Total Payload Mass</span><span class="mr-val">${_mrNum(payloadMass)} kg</span></div>
     <div><span class="mr-key">Events</span><span class="mr-val">${log.length}</span></div>
     <div><span class="mr-key">Body</span><span class="mr-val">${_mrEsc(o.body || 'Earth')}</span></div>
-    <div><span class="mr-key">Altitude</span><span class="mr-val">${_mrNum(o.alt_km)} km${o.apo_km && o.apo_km !== o.alt_km ? ' × ' + _mrNum(o.apo_km) + ' km' : ''}</span></div>
-    <div><span class="mr-key">Inclination</span><span class="mr-val">${_mrNum(o.inc_deg)}&deg;</span></div>
-    <div><span class="mr-key">LAN</span><span class="mr-val">${_mrNum(o.lan_deg)}&deg;</span></div>
+    <div><span class="mr-key">Altitude</span><span class="mr-val">${_mrNum(o.periKm)} km${o.apoKm && o.apoKm !== o.periKm ? ' × ' + _mrNum(o.apoKm) + ' km' : ''}</span></div>
+    <div><span class="mr-key">Inclination</span><span class="mr-val">${_mrNum(o.incDeg)}&deg;</span></div>
+    <div><span class="mr-key">LAN</span><span class="mr-val">${_mrNum(o.lanDeg)}&deg;</span></div>
   </div>
 
   <h2>Event Log</h2>

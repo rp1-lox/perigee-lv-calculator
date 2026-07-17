@@ -384,7 +384,7 @@ function _missionLaunchGeoHTML(m, idx, e) {
       Program epoch: <span style="color:var(--text-bright);">${_mrEsc(epochDateTxt)}</span>
       ${launchDateTxt ? ` &middot; this launch: <span style="color:var(--text-bright);">${_mrEsc(launchDateTxt)}</span> (MET +${(+e.launchTime_s).toLocaleString()} s)` : ''}
     </div>
-    <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.inc_deg, e.launchTime_s, o.lan_deg)}</div>`;
+    <div id="launch-geo-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">${_missionLaunchGeoReadoutHTML(site, o.incDeg, e.launchTime_s, o.lanDeg)}</div>`;
 }
 // LAN field, relocated to sit alongside Inc (feedback item 4) instead of
 // buried in the separate launch-geo block. Always shows an effective value
@@ -394,7 +394,7 @@ function _missionLaunchLanFieldHTML(m, idx, e) {
   const id = m.missionId;
   const o = e.orbit || {};
   const lanDerived = !!(e.launchTime_s != null && e.launchTime_s !== '' && o._lanFromLaunchTime);
-  const lanVal = (o.lan_deg != null) ? o.lan_deg : 0;
+  const lanVal = (o.lanDeg != null) ? o.lanDeg : 0;
   return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
     <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
 }
@@ -744,7 +744,7 @@ function missionLaunchGeoUpdate(id, idx) {
     ? progDateToMissionTime(dtRaw + ':00Z') : null;
   if (timeField) timeField.dataset.rawS = (t != null) ? t : '';
   const incField = document.getElementById('edit-launch-inc-' + id);
-  const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.inc_deg) || 28.5;
+  const incDeg = incField ? (+incField.value || 0) : (e.orbit && e.orbit.incDeg) || 28.5;
   const lanField = document.getElementById('edit-launch-lan-' + id);
   const lanLabel = lanField && lanField.closest('.cfg-item')?.querySelector('.cfg-label');
   if (site && t != null) {
@@ -813,8 +813,8 @@ function missionLaunchRefPick(id, idx, refId) {
   e.orbitRefId = refId;
   if (res && res.periKm != null) {
     const o = e.orbit || (e.orbit = {});
-    o.body = res.body; o.alt_km = res.periKm; o.apo_km = res.apoKm; o.inc_deg = res.incDeg;
-    if (res.lanDeg != null) o.lan_deg = res.lanDeg;
+    o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
+    if (res.lanDeg != null) o.lanDeg = res.lanDeg;
     delete e._refNote;
   }
   missionRecompute(m);
@@ -941,11 +941,11 @@ function _missionLaunchSyncDraft(id, idx) {
   // carries a body field (other event types do target other bodies).
   o.body = 'Earth';
   const altEl = document.getElementById('edit-launch-alt-' + id);
-  if (altEl) o.alt_km = +altEl.value || 0;
+  if (altEl) o.periKm = +altEl.value || 0;
   const apoEl = document.getElementById('edit-launch-apo-' + id);
-  if (apoEl) o.apo_km = +apoEl.value || o.alt_km;
+  if (apoEl) o.apoKm = +apoEl.value || o.periKm;
   const incEl = document.getElementById('edit-launch-inc-' + id);
-  if (incEl) o.inc_deg = +incEl.value || 0;
+  if (incEl) o.incDeg = +incEl.value || 0;
   const siteEl = document.getElementById('edit-launch-site-' + id);
   if (siteEl) {
     const siteShort = siteEl.value;
@@ -960,10 +960,10 @@ function _missionLaunchSyncDraft(id, idx) {
   if (lanEl) {
     const lanRaw = lanEl.value;
     if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
-      o.lan_deg = parseFloat(lanRaw);
+      o.lanDeg = parseFloat(lanRaw);
       o._lanFromLaunchTime = e.launchTime_s != null && !!e.site;
     } else {
-      delete o.lan_deg;
+      delete o.lanDeg;
       o._lanFromLaunchTime = false;
     }
   }
