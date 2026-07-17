@@ -454,12 +454,19 @@ function physRebuildMissionTrajectories(m) {
         const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
-        const incMn = ((o.inclination || 0) * Math.PI) / 180;
         // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
         // the MNODE builder reconstructs the burn frame in THAT plane too —
         // same precedence thread as the departure/arrival cases above.
-        const raanMn = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : 0;
-        const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incMn, 0, raanMn);
+        // 2026-07-17 (user: solved burn ~180 deg from the placed node): this
+        // used to feed o.inclination/o.lan_deg straight into physAimBurnState
+        // as if they were already world-frame, skipping the eq->world seam
+        // (C1, orbitWorldElements/orbitWorldState, 385-physics-core.js) that
+        // the gizmo rail (_trajGizmoOrbitNodeAt, 5745-maneuver-gizmo-hover.js)
+        // and center-knob drag rail already route through — the executor
+        // reconstructed the burn state in a DIFFERENT plane than the node the
+        // user actually placed. Routed through the same C1 boundary now so
+        // all three reconstructions (rail, gizmo node, executor) agree.
+        const bs = orbitWorldState(o, theta);
         // R6.2' Phase B step 5 (detach fidelity): if this manual MNODE carries
         // a stamped burnState (from detaching a solved maneuver — see 5745's
         // _trajGizmoDetachManeuverIfNeeded), apply the dv vector in THAT exact

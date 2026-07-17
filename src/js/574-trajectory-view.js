@@ -43,11 +43,14 @@
 //
 // ── ANCHORED CAMERA (the teleport killer) ─────────────────────────────────
 // Camera state per mission: { anchorBody, relOffsetKm:{x,y}, wKm }. Effective
-// center = worldPos(anchorBody, viewTime) + relOffsetKm. R3.4: drag-pan and
-// cursor-anchored zoom are RETIRED (KSP camera semantics — see PHYSICS_PLAN
-// R3.4 item 1); relOffsetKm is only ever written as {0,0} now (wheel zoom is
-// a pure wKm change, drag always rotates az/el). The field stays on the
-// camera struct because the fit/zoom-to-content math still reads it. Changing
+// center = worldPos(anchorBody, viewTime) + relOffsetKm. R3.4 retired drag-pan
+// (KSP camera semantics — see PHYSICS_PLAN R3.4 item 1; drag always rotates
+// az/el) and relOffsetKm sat at a constant {0,0} for a while after. Cursor-
+// anchored wheel-zoom (2026-07-17, 5740's trajWheelZoom) reintroduced it as
+// the zoom accumulator — it keeps the world point under the cursor fixed on
+// screen as wKm changes, clamped to a few multiples of wKm so the anchor body
+// can never be scrolled out of reach. Fly-to/reset/focus changes still zero
+// it. Changing
 // the selected event (which moves viewTime) leaves anchor+offset untouched, so
 // the anchored body stays fixed on screen while the rest of the system moves
 // around it. Fly-to (trajSetFocus, kept name/signature for the focus-bar

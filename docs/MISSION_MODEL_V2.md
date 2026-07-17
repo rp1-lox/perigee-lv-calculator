@@ -747,6 +747,13 @@ Second round of "the gizmo doesn't work": user could not see or grab the handles
 
 Verified with real hit-tested input: `elementFromPoint` at the knob returns a gizmo element; a mousedown/move/up sequence dispatched to that hit-tested element slides the node (the MNODE's authored `at.value_s` changed in `m.log`); zero console errors. Gate 926/926. Lesson recorded: interaction verifications must use hit-tested dispatch (`elementFromPoint`), not direct element dispatch.
 
+## 23c. MANEUVER GIZMO — burn-phase seam fix + cursor-anchored zoom (user-reported 2026-07-18)
+
+Three follow-on reports after the pole fix, all resolved:
+1. **Burn applied ~180 deg from the node**: 565's manual-MNODE leg builder skipped the C1 seam entirely (MATH.md 7al site 12) — direct `physAimBurnState` with equator-authored elements as world-frame; measured 102.4 deg divergence vs the gizmo/ring reconstruction. Routed through `orbitWorldState`; post-fix 0.0 deg.
+2. **Drag not sliding along the ring**: no code change needed — once fix 1 put every reconstruction through the one boundary, the drag rail matches the drawn ring to 0 px across 64 samples.
+3. **Camera recentering on the node**: `_trajGizmoFollowOffsetKm` (the s23 camera-follow workaround, commit b902393de) RETIRED — superseded by cursor-anchored wheel zoom (`_trajUnprojectPlanarOffset` + rewritten `trajWheelZoom` in 5740; `relOffsetKm` reintroduced solely as the zoom-to-cursor accumulator, clamped to 4x wKm). Zooming with the pointer over a node dives to the node naturally; point-under-cursor invariant to ~0.5 px per step; opening a gizmo no longer moves the camera at all.
+
 ## 23. MANEUVER GIZMO — camera-follow fix (interaction bug, user-reported 2026-07-17)
 
 **The complaint:** "The maneuver node isn't really grabbable or draggable right now. It's also disappearing pretty easily when I zoom in."
