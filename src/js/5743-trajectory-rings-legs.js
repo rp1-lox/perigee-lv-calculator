@@ -620,8 +620,33 @@ function _trajPhysLegRender(ctx) {
     out += `<circle cx="${sm.x.toFixed(2)}" cy="${sm.y.toFixed(2)}" r="3.2" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="1.6,1.6" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>SOI handoff: ${sm.from} → ${sm.to} · ${_metFmt(sm.t)}</title></circle>`;
   });
   const markerOpts = { emphasized, authIdx: clickIdx, missionId: id, title: hoverTitle, zoom, screenSize: poly.extentPx };
-  if (ctx.depMarker) _trajBurnMarker(poly.first.x, poly.first.y, 'up', _trajDvText(ctx.depDv != null ? ctx.depDv : leg.dv), _metFmt(tDep), Object.assign({}, markerOpts, { opacity: stateAlpha }));
-  if (ctx.arrMarker) _trajBurnMarker(poly.last.x, poly.last.y, 'down', ctx.arrDv != null ? _trajDvText(ctx.arrDv) : '', isFinite(tArr) ? _metFmt(tArr) : '', Object.assign({}, markerOpts, { opacity: stateAlpha }));
+  // Burn markers at TRUE endpoint positions (user report 2026-07-17: "the
+  // maneuver hides behind the planet — I can't ever get on the side with
+  // it"). poly.first/.last are the first/last NON-OCCLUDED samples — when
+  // the burn point itself is behind the body disc the marker either jumped
+  // along the leg or vanished with its run, leaving the maneuver unclickable
+  // (the camera in this view can't orbit around to the far side). An
+  // INTERACTIVE marker must stay reachable: project the actual endpoint
+  // sample regardless of occlusion and ghost it (reduced opacity) when it's
+  // behind the disc, keeping the full hit target. The leg polyline itself
+  // keeps its occlusion split — only the marker punches through.
+  const _trueEnd = (s) => {
+    if (!s) return null;
+    const ea = anchorOf(s.frame); if (!ea) return null;
+    const eq = _trajProj3(s.r[0], s.r[1], s.r[2] || 0, s.t);
+    const exx = ea.x + eq.x * zoom, eyy = ea.y + eq.y * zoom;
+    if (!isFinite(exx) || !isFinite(eyy)) return null;
+    if (Math.abs(exx) > 3 * _TRAJ_VB || Math.abs(eyy) > 3 * _TRAJ_VB) return null; // render-unit safety, same bound as viewClampUnits
+    const ed = (ea.depth != null ? ea.depth : Infinity) + eq.depth;
+    return { x: exx, y: eyy, occluded: _trajPointOccluded(exx, eyy, ed, zoom, _trajOccludeBodies) };
+  };
+  const samplesArr = physLeg.samples || [];
+  const depEnd = _trueEnd(samplesArr[0]) || Object.assign({ occluded: false }, poly.first);
+  let lastVisIdx = samplesArr.length - 1;
+  if (isFinite(clipT)) { while (lastVisIdx > 0 && samplesArr[lastVisIdx].t > clipT) lastVisIdx--; }
+  const arrEnd = _trueEnd(samplesArr[lastVisIdx]) || Object.assign({ occluded: false }, poly.last);
+  if (ctx.depMarker) _trajBurnMarker(depEnd.x, depEnd.y, 'up', _trajDvText(ctx.depDv != null ? ctx.depDv : leg.dv), _metFmt(tDep), Object.assign({}, markerOpts, { opacity: stateAlpha * (depEnd.occluded ? 0.45 : 1) }));
+  if (ctx.arrMarker) _trajBurnMarker(arrEnd.x, arrEnd.y, 'down', ctx.arrDv != null ? _trajDvText(ctx.arrDv) : '', isFinite(tArr) ? _metFmt(tArr) : '', Object.assign({}, markerOpts, { opacity: stateAlpha * (arrEnd.occluded ? 0.45 : 1) }));
   if (legState === 'current') {
     const dotP = _trajPolylinePointAt(physLeg, anchorOf, zoom, vt);
     if (dotP) out += `<circle cx="${dotP.x.toFixed(2)}" cy="${dotP.y.toFixed(2)}" r="2.2" fill="var(--accent)" stroke="var(--nm-bg)" stroke-width="0.6" vector-effect="non-scaling-stroke"><title>Vehicle position (physics leg — interpolated from propagated samples)</title></circle>`;

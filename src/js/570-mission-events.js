@@ -284,6 +284,7 @@ function missionApplyManeuverEdit(id, idx) {
 function missionApplyDeployEdit(id, idx) {
   const m = _missionGet(id); if(!m) return;
   const e = m.log[idx]; if(!e || e.type!=='DEPLOY') return;
+  _missionApplyClearPending(id, e);
   const scId = document.getElementById('edit-deploy-sc-'+id)?.value;
   const sc = _scEdSC.find(s => s.spacecraftId === scId);
   if (sc) { e.spacecraftId = scId; e.label = sc.name; }
@@ -375,7 +376,8 @@ function _missionLaunchGeoHTML(m, idx, e) {
       <div class="cfg-item"><label class="cfg-label">Launch Site</label>
         <select id="edit-launch-site-${id}" style="${_es}" onchange="missionLaunchGeoUpdate('${id}',${idx})">${siteOpts}</select></div>
       <div class="cfg-item"><label class="cfg-label">Launch Time (UTC)</label>
-        <input type="datetime-local" id="edit-launch-time-${id}" class="field" data-raw-s="${hasTime ? e.launchTime_s : ''}" value="${dtVal}" style="width:190px;${_es}" onchange="missionLaunchGeoUpdate('${id}',${idx})">
+        <input type="text" readonly id="edit-launch-time-${id}" class="field" data-raw-s="${hasTime ? e.launchTime_s : ''}" value="${dtVal}" placeholder="&mdash; unset &mdash;" style="width:150px;cursor:pointer;${_es}" onclick="missionLaunchTimeOpen('${id}',${idx},this)">
+        <button type="button" class="act-btn" style="padding:2px 6px;margin-left:4px;display:inline-flex;align-items:center;" onclick="missionLaunchTimeOpen('${id}',${idx},this)" title="pick launch date/time (custom calendar)"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="10" height="9" rx="1"/><path d="M1 4.5 H11 M3.5 1 V3 M8.5 1 V3"/></svg></button>
         <button type="button" class="act-btn" style="padding:2px 8px;font-size:9px;margin-left:4px;" onclick="missionLaunchClearTime('${id}',${idx})" title="unauthor launch time (RAAN reverts to manual)">&times; clear</button></div>
     </div>
     <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">
@@ -493,6 +495,14 @@ function missionLaunchMatchPlane(id, idx, targetVal) {
   }
   const incField = document.getElementById('edit-launch-inc-' + id);
   if (incField) missionLaunchOrbitDetach(id, idx);
+  // Write-through (root-cause fix): persist the matched plane into the entry
+  // NOW — a later card re-render (payload pick, ref pick, anything) rebuilds
+  // the fields from e.orbit and used to silently revert the match to the
+  // stale values. Committed entries also auto-apply (recompute) so picking a
+  // plane target on an already-launched card takes effect without hunting
+  // for Apply.
+  _missionLaunchSyncDraft(id, idx);
+  if (!e.pending) { missionRecompute(m); missionRenderDetail(); }
 }
 // Clear button for the datetime-local field (native inputs have no easy
 // "unset" affordance) — reverts to unauthored launch time (LAN frees up to
@@ -501,6 +511,34 @@ function missionLaunchClearTime(id, idx) {
   const t = document.getElementById('edit-launch-time-' + id);
   if (t) { t.value = ''; t.dataset.rawS = ''; }
   missionLaunchGeoUpdate(id, idx);
+  _missionLaunchSyncDraft(id, idx);
+}
+// Launch-time picker: the card's date field opens the SAME custom calendar
+// popover the program-epoch stamp uses (578-mission-epoch-picker.js) instead
+// of a native datetime-local — user direction 2026-07-17 ("the calendar
+// should also be using the custom calendar gizmo we made"). Apply-only
+// commit, same as the epoch stamp; the hidden rawS/value contract that
+// missionLaunchGeoUpdate reads is preserved unchanged.
+function missionLaunchTimeOpen(id, idx, anchorEl) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  if (typeof epochPickerOpen !== 'function') return;
+  const t0 = (e.launchTime_s != null && isFinite(+e.launchTime_s)) ? +e.launchTime_s : 0;
+  epochPickerOpen({
+    initialJD: progEpochJD() + t0 / 86400,
+    anchorEl,
+    onApply: (jd) => {
+      const t_s = Math.round((jd - progEpochJD()) * 86400);
+      const tf = document.getElementById('edit-launch-time-' + id);
+      if (tf) {
+        tf.dataset.rawS = t_s;
+        tf.value = (typeof progDateToLocalInputValue === 'function') ? progDateToLocalInputValue(progJDToDate(jd)) : String(t_s);
+      }
+      missionLaunchGeoUpdate(id, idx);
+      _missionLaunchSyncDraft(id, idx);
+      if (!e.pending) { missionRecompute(m); missionRenderDetail(); }
+    }
+  });
 }
 // Optimize handler: runs the planner and fills the DOM fields (no commit until
 // Apply). Uses the site currently picked in THIS card (falls back to the
@@ -548,6 +586,11 @@ function missionLaunchPlanOptimize(id, idx) {
     }
   }
   setReadout(_missionLaunchPlanReadoutHTML(plan, dest, site, m));
+  // Write-through (root-cause fix): same as missionLaunchMatchPlane — the
+  // solved plane/alt/launch-time must survive card re-renders. Pending drafts
+  // sync only (the rich readout stays up); committed entries auto-apply.
+  _missionLaunchSyncDraft(id, idx);
+  if (!e.pending) { missionRecompute(m); }
 }
 // Formats the planner result into the readout caption. Handles the azimuth
 // object ({azNE,azSE,unreachable}) and the null dla (Earth-orbit target).
@@ -672,6 +715,7 @@ function missionLaunchGeoManualLan(id, idx) {
 function missionLaunchRefPick(id, idx, refId) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  _missionLaunchSyncDraft(id, idx); // the render below rebuilds from e — sync in-progress edits first (the ref resolution then overwrites the orbit fields, as intended)
   if (!refId) { e.orbitRefId = null; missionRenderDetail(); return; }
   const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
   e.orbitRefId = refId;
@@ -727,10 +771,10 @@ function _missionLaunchLvComboOpen(id, idx) {
       }
       return g;
     },
-    onPick: (item) => _missionLaunchLvPick(id, item)
+    onPick: (item) => _missionLaunchLvPick(id, idx, item)
   });
 }
-function _missionLaunchLvPick(id, item) {
+function _missionLaunchLvPick(id, idx, item) {
   const [kind, ref] = item.value.split(':');
   let fleetId;
   if (kind === 'fleet') {
@@ -746,6 +790,7 @@ function _missionLaunchLvPick(id, item) {
   const q = document.getElementById('edit-launch-lv-q-' + id);
   if (hidden) hidden.value = fleetId;
   if (q) q.value = item.label;
+  _missionLaunchSyncDraft(id, idx); // write-through: the pick must survive any later card re-render
 }
 
 // LAUNCH card payload search combobox — appends to e.payloadScIds (a list;
@@ -771,6 +816,7 @@ function _missionLaunchPayloadAdd(id, idx, scId) {
   comboboxClose();
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e) return;
+  if (e.type === 'LAUNCH') _missionLaunchSyncDraft(id, idx); // re-render below rebuilds fields from e — sync first or in-progress edits (incl. plane match) revert
   if (!e.payloadScIds) e.payloadScIds = [];
   if (!e.payloadScIds.includes(scId)) e.payloadScIds.push(scId);
   missionRenderDetail();
@@ -779,61 +825,96 @@ function _missionLaunchPayloadRemove(id, idx, scId) {
   comboboxClose();
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e) return;
+  if (e.type === 'LAUNCH') _missionLaunchSyncDraft(id, idx); // sync before the re-render below, same as PayloadAdd
   e.payloadScIds = (e.payloadScIds || []).filter(x => x !== scId);
   missionRenderDetail();
 }
 
-function missionApplyLaunchEdit(id, idx) {
+// ── Write-through draft sync (2026-07-17 root-cause fix) ───────────────────
+// The plane-match / plan-optimize / payload / ref-pick handlers all used to
+// leave their results in the DOM only, and half of them re-render the card
+// (missionRenderDetail rebuilds every field from e.orbit) — so anything not
+// yet synced was silently reverted to the entry's stale values. Measured
+// user-facing symptom: "target Moon" filled inc 19.04, adding a payload
+// re-rendered the card back to 28.5, and Launch committed 28.5. Every
+// mutating handler on the LAUNCH card now calls this DOM→entry sync BEFORE
+// triggering any re-render, so the entry is always the source of truth.
+function _missionLaunchSyncDraft(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   const lv = document.getElementById('edit-launch-lv-' + id)?.value;
   if (lv) { e.fleetEntryId = lv; const f = _fleetGet(lv); if (f) e.label = f.name; }
-  // payloadScIds is kept live on `e` by _missionLaunchPayloadAdd/Remove as the
-  // user works the search combobox (see 570-mission-cards.js) — nothing to
-  // read from the DOM here anymore.
   const o = e.orbit || (e.orbit = {});
   // Body selector removed from the LAUNCH card (2026-07-17 layout reorg) —
   // launches are from Earth, full stop. The orbit-state data model still
-  // carries a body field (other event types — DEPLOY, MNODE, etc. — do
-  // target other bodies) so this just hardcodes the one value a LAUNCH can
-  // ever produce rather than removing the field.
+  // carries a body field (other event types do target other bodies).
   o.body = 'Earth';
-  o.alt_km = +document.getElementById('edit-launch-alt-' + id)?.value || 0;
-  o.apo_km = +document.getElementById('edit-launch-apo-' + id)?.value || o.alt_km;
-  o.inc_deg = +document.getElementById('edit-launch-inc-' + id)?.value || 0;
-  const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
-  const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : null;
-  e.site = site || null;
+  const altEl = document.getElementById('edit-launch-alt-' + id);
+  if (altEl) o.alt_km = +altEl.value || 0;
+  const apoEl = document.getElementById('edit-launch-apo-' + id);
+  if (apoEl) o.apo_km = +apoEl.value || o.alt_km;
+  const incEl = document.getElementById('edit-launch-inc-' + id);
+  if (incEl) o.inc_deg = +incEl.value || 0;
+  const siteEl = document.getElementById('edit-launch-site-' + id);
+  if (siteEl) {
+    const siteShort = siteEl.value;
+    e.site = siteShort ? (_missionLaunchSiteChoices().find(s => s.short === siteShort) || null) : null;
+  }
   const timeField = document.getElementById('edit-launch-time-' + id);
-  const tRaw = timeField ? timeField.dataset.rawS : '';
-  e.launchTime_s = (tRaw !== '' && tRaw != null && isFinite(+tRaw)) ? +tRaw : null;
-  const lanRaw = document.getElementById('edit-launch-lan-' + id)?.value;
-  if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
-    o.lan_deg = parseFloat(lanRaw);
-    o._lanFromLaunchTime = e.launchTime_s != null && !!site;
-  } else {
-    delete o.lan_deg;
-    o._lanFromLaunchTime = false;
+  if (timeField) {
+    const tRaw = timeField.dataset.rawS;
+    e.launchTime_s = (tRaw !== '' && tRaw != null && isFinite(+tRaw)) ? +tRaw : null;
+  }
+  const lanEl = document.getElementById('edit-launch-lan-' + id);
+  if (lanEl) {
+    const lanRaw = lanEl.value;
+    if (lanRaw !== '' && lanRaw != null && Number.isFinite(parseFloat(lanRaw))) {
+      o.lan_deg = parseFloat(lanRaw);
+      o._lanFromLaunchTime = e.launchTime_s != null && !!e.site;
+    } else {
+      delete o.lan_deg;
+      o._lanFromLaunchTime = false;
+    }
   }
   e.launchOrbit = { ...o };
-  // Merged Target control (unify pass): remember which mode + which target
-  // (authoring metadata only; the actual orbit lives in e.orbit above —
-  // replay/accounting ignore these). dest: -> plan-for-destination inputs
-  // (planDepJD only meaningful alongside planDest); plane: -> plane-match
-  // target, mutually exclusive with planDest.
-  const targetVal = document.getElementById('edit-launch-target-' + id)?.value || '';
-  if (targetVal.startsWith('dest:')) {
-    e.planDest = targetVal.slice('dest:'.length);
-    e.planeMatchTarget = null;
-  } else if (targetVal.startsWith('plane:')) {
-    e.planDest = null;
-    e.planeMatchTarget = targetVal.slice('plane:'.length);
-  } else {
-    e.planDest = null;
-    e.planeMatchTarget = null;
+  const targetEl = document.getElementById('edit-launch-target-' + id);
+  if (targetEl) {
+    const targetVal = targetEl.value || '';
+    if (targetVal.startsWith('dest:')) {
+      e.planDest = targetVal.slice('dest:'.length);
+      e.planeMatchTarget = null;
+    } else if (targetVal.startsWith('plane:')) {
+      e.planDest = null;
+      e.planeMatchTarget = targetVal.slice('plane:'.length);
+    } else {
+      e.planDest = null;
+      e.planeMatchTarget = null;
+    }
   }
-  const depPick = document.getElementById('edit-launch-depjd-' + id)?.value;
-  e.planDepJD = (depPick !== '' && depPick != null && isFinite(+depPick)) ? +depPick : null;
+  const depEl = document.getElementById('edit-launch-depjd-' + id);
+  if (depEl) {
+    const depPick = depEl.value;
+    e.planDepJD = (depPick !== '' && depPick != null && isFinite(+depPick)) ? +depPick : null;
+  }
+}
+// Apply == commit (2026-07-17 root-cause fix): a pending draft's Apply used
+// to mutate the draft but leave pending:true — and _missionEffectiveLog
+// filters pending entries from replay, so recompute changed NOTHING visible
+// ("the apply button just doesn't do anything", user). Every missionApply*Edit
+// now clears the pending flag first, making Apply and the ctlbar commit
+// button functionally identical, per the user's explicit direction.
+function _missionApplyClearPending(id, e) {
+  if (!e || !e.pending) return;
+  delete e.pending;
+  if (typeof _missionPendingEvent !== 'undefined' && _missionPendingEvent && _missionPendingEvent.missionId === id) {
+    _missionPendingEvent = null;
+  }
+}
+function missionApplyLaunchEdit(id, idx) {
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
+  _missionLaunchSyncDraft(id, idx);
+  _missionApplyClearPending(id, e);
   missionRecompute(m); missionRenderDetail();
 }
 // Provisionally set which vehicle separates, then re-render so the stage list in
@@ -846,6 +927,7 @@ function missionSepEditSetVehicle(id, idx, key) {
 function missionApplySeparateEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'SEPARATE') return;
+  _missionApplyClearPending(id, e);
   const vk = document.getElementById('edit-sep-veh-' + id)?.value; if (vk) e.activeKey = vk;
   const si = document.getElementById('edit-sep-idx-' + id)?.value; if (si != null && si !== '') e.sepIndex = +si;
   missionRecompute(m); missionRenderDetail();
@@ -853,6 +935,7 @@ function missionApplySeparateEdit(id, idx) {
 function missionApplyDockEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'DOCK') return;
+  _missionApplyClearPending(id, e);
   const a = document.getElementById('edit-dock-a-' + id)?.value;
   const b = document.getElementById('edit-dock-b-' + id)?.value;
   if (a) { e.activeKey = a; delete e.aName; }
@@ -862,6 +945,7 @@ function missionApplyDockEdit(id, idx) {
 function missionApplyExpendEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'EXPEND') return;
+  _missionApplyClearPending(id, e);
   const vk = document.getElementById('edit-expend-veh-' + id)?.value;
   if (vk) { e.targetKey = vk; e.vehicleLevel = true; delete e.stageName; }
   missionRecompute(m); missionRenderDetail();
@@ -870,6 +954,7 @@ function missionApplyExpendEdit(id, idx) {
 function missionApplyPropTransferEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'TRANSFER_PROPELLANT') return;
+  _missionApplyClearPending(id, e);
   const srcI = parseInt(document.getElementById('edit-xfer-src-' + id)?.value, 10);
   const dstI = parseInt(document.getElementById('edit-xfer-dst-' + id)?.value, 10);
   const mass = parseFloat(document.getElementById('edit-xfer-mass-' + id)?.value) || 0;
@@ -1298,6 +1383,7 @@ function missionExecCoast(id) {
 function missionApplyCoastEdit(id, idx) {
   const m = _missionGet(id); if (!m || !m.log[idx]) return;
   const e = m.log[idx];
+  _missionApplyClearPending(id, e);
   const days = parseFloat(document.getElementById('edit-coast-days-' + id)?.value);
   if (days > 0) e.days = days;
   e.label = (document.getElementById('edit-coast-label-' + id)?.value || '').trim() || null;

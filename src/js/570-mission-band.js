@@ -657,6 +657,7 @@ function missionSolveFreeReturn(id) {
 function missionApplyMnodeEdit(id, idx) {
   const m = _missionGet(id); if (!m || !m.log[idx] || !_evIsManualBurn(m.log[idx])) return;
   const e = m.log[idx];
+  if (typeof _missionApplyClearPending === 'function') _missionApplyClearPending(id, e);
   const gv = f => { const el = document.getElementById(`edit-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
   e.at = { kind: 'met', value_s: Math.max(0, gv('met')) };
   e.dvPro_ms = gv('pro'); e.dvRad_ms = gv('rad'); e.dvNrm_ms = gv('nrm');
