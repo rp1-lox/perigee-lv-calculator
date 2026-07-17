@@ -358,6 +358,14 @@ function progPlanLaunchToDestination(args) {
  * plane at this exact epoch" but will drift over a long mission if reused
  * without recomputing at the new epoch. See MATH.md §7p critique 58.
  * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since §20).
+ * C1 NOTE (2026-07-17, MISSION_MODEL_V2.md §24): this progWorldToEqElements
+ * call is exempt from the C1 gate's "route through orbitWorldElements"
+ * requirement — it runs the INVERSE direction (a computed world-frame plane
+ * reported back OUT in the user-facing equator-authoring convention), not an
+ * authoring-side call into the boundary. orbitWorldElements/orbitWorldState
+ * (385) only cover the eq->world authoring direction; there is no
+ * orbit-object analog of "I have a world-frame plane, express it as an
+ * authored equator orbit" for this call site to route through.
  */
 function progMoonPlaneAt(epochJD, t_s) {
   const st = progBodyLocalEphemState('Moon', t_s || 0);

@@ -131,6 +131,7 @@ const {
   _tsOnOrbitDVEscapeC3,
   physBodyPoleAt, physEqBasis, physNormalFromIncLan, physIncLanFromNormal,
   progEqToWorldElements, progWorldToEqElements, _trajRingPlaneBasis,
+  orbitWorldElements, orbitWorldState,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -4909,6 +4910,60 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     // future _tsCollectBase regression on s15 would slip through unmeasured.
     ok(`S1.5 presets exercised by the path-equality check (covered ${s15Covered})`, s15Covered >= 3);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C1 frame-boundary gate (MISSION_MODEL_V2.md §24, UNIFICATION_AUDIT item 1)
+//
+// Guards the bug class C1 retired: an inline "progEqToWorldElements + typeof
+// guard" at a new call site silently skipping the eq->world seam (five
+// shipped bugs in one week were this exact disease). Every orbit-shaped
+// consumer must now go through the ONE boundary (orbitWorldElements /
+// orbitWorldState, 385-physics-core.js) instead of calling
+// progEqToWorldElements directly. Source-grep style mirrors the ghost-stage
+// guard above: read every src/js/*.js module as TEXT and assert no module
+// outside the allowed-callers list contains a direct call.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const JS_DIR = path.join(ROOT, 'src', 'js');
+  const allJsFiles = fs.readdirSync(JS_DIR).filter(f => f.endsWith('.js'));
+  // Allowed direct callers of progEqToWorldElements: the boundary's own
+  // module (385, where orbitWorldElements/orbitWorldState live and
+  // progEqToWorldElements/progWorldToEqElements are defined).
+  const ALLOWED_EQ_TO_WORLD = new Set(['385-physics-core.js']);
+  // progWorldToEqElements (the INVERSE direction) is exempt everywhere: C1
+  // only puts a boundary on the eq->world AUTHORING direction. 415's use is
+  // the one non-385 caller today (see the C1 NOTE comment at its call site)
+  // — kept as an explicit allowed-callers list per the spec rather than a
+  // blanket exemption, so a new inverse-direction call site still shows up
+  // for review.
+  const ALLOWED_WORLD_TO_EQ = new Set(['385-physics-core.js', '415-launch-planner.js']);
+  const violations = [];
+  allJsFiles.forEach(f => {
+    const text = fs.readFileSync(path.join(JS_DIR, f), 'utf8');
+    if (/\bprogEqToWorldElements\s*\(/.test(text) && !ALLOWED_EQ_TO_WORLD.has(f)) violations.push(f + ' calls progEqToWorldElements(');
+    if (/\bprogWorldToEqElements\s*\(/.test(text) && !ALLOWED_WORLD_TO_EQ.has(f)) violations.push(f + ' calls progWorldToEqElements(');
+  });
+  ok('C1 gate: no module outside the allowed-callers list calls progEqToWorldElements/progWorldToEqElements directly' +
+     (violations.length ? ' — VIOLATIONS: ' + violations.join('; ') : ''), violations.length === 0);
+}
+
+// orbitWorldElements unit pins (385-physics-core.js)
+{
+  ok('orbitWorldElements: frame:"world" is identity', (() => {
+    const w = orbitWorldElements({ body: 'Earth', inc_deg: 51.6, lan_deg: 200, frame: 'world' });
+    return w.incDeg === 51.6 && w.lanDeg === 200;
+  })());
+  ok('orbitWorldElements: frame:"eq" matches progEqToWorldElements output exactly', (() => {
+    const direct = progEqToWorldElements('Earth', 28.5, 60);
+    const w = orbitWorldElements({ body: 'Earth', inc_deg: 28.5, lan_deg: 60, frame: 'eq' });
+    return w.incDeg === direct.inc_deg && w.lanDeg === direct.lan_deg;
+  })());
+  ok('orbitWorldElements: missing frame defaults to "eq" (matches an explicit frame:"eq" call)', (() => {
+    const tagged = orbitWorldElements({ body: 'Moon', inclination: 90, lan: 40, frame: 'eq' });
+    const untagged = orbitWorldElements({ body: 'Moon', inclination: 90, lan: 40 });
+    return tagged.incDeg === untagged.incDeg && tagged.lanDeg === untagged.lanDeg;
+  })());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

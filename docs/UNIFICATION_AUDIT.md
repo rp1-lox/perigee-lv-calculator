@@ -13,14 +13,18 @@ concept. Migration cost S/M/L is engineering effort for the proposed unification
 
 ## Executive summary — top 5 offenders (severity × blast radius)
 
-1. **Equator-vs-world frame conversion applied per-call-site, not at one boundary**
-   (SHIPPED ×5 this week alone: b7d35afe0 rings, 36a46fd05 gizmo + event nodes,
-   9264919e0 NRHO, 28ed02b5e launch planner). `progEqToWorldElements` is called from
+1. **DONE (C1, 2026-07-17).** ~~Equator-vs-world frame conversion applied per-call-site, not
+   at one boundary~~ (SHIPPED ×5 this week alone: b7d35afe0 rings, 36a46fd05 gizmo + event
+   nodes, 9264919e0 NRHO, 28ed02b5e launch planner). `progEqToWorldElements` was called from
    **8 different modules** (566, 5741, 5742, 5744, 5745-hover, 565-nrho, 565-targeting;
    inverse from 415). Every consumer that turns authored `(inc, lan)` into a state vector
    or a rendered ring must remember to rotate first; the ones that forgot were the five
    bugs. The frame is an implicit property of the object, carried nowhere. **Root cause
    of the whole audit.** Blast radius: ~10 modules. Cost: **M**.
+   Fixed by the C1 boundary: `orbitWorldElements(o)`/`orbitWorldState(o, thetaRad)`
+   (385-physics-core.js) — all 8 call sites route through it, a gate test
+   (tests/math.test.js) fails the build if any module outside 385 calls
+   `progEqToWorldElements` directly. See MISSION_MODEL_V2.md §24 C1 as-built note.
 
 2. **Orbit-shaped objects have ≥6 incompatible dialects** with no single reader.
    Mission events use `{alt_km, apo_km, inc_deg, lan_deg}`; node-map/catalog builtins use

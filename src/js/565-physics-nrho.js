@@ -17,24 +17,25 @@
 // _physShootCache above).
 const _physNrhoShootCache = {};
 
-// ── §20 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ────
+// ── §20/C1 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ─
 // physAimBurnState feeds physElementsToState directly (385's convention:
 // ecliptic/world reference plane), but every (incRad, raan) pair THIS module
 // solves for or accepts is AUTHORED in Earth's EQUATOR frame (fromOrbit.
 // inclination/.lan_deg, or physFreeReturnSolve's incDeg parking-orbit arg) —
 // same authoring convention as physShootLegAim's fromOrbit (565-physics-
 // targeting.js, §7al site 2). This wrapper is the ONE place a ring actually
-// becomes a state in this module: it rotates the equatorial pair to world via
-// progEqToWorldElements right before the physElementsToState call, exactly
-// physShootLegAim's aimBurnEq pattern, no new math. All ~11 physAimBurnState
-// call sites in this file (both physSolveNrhoTransfer/_nrhoSolveFixedTArr and
-// physFreeReturnSolve) route through this — see MATH.md §7al's O1b audit for
-// the site-by-site trace proving each one previously fed already-equatorial
-// (incRad, raan) values straight into physAimBurnState as if they were world.
+// becomes a state in this module: it routes the equatorial pair through the
+// ONE C1 boundary (orbitWorldElements, 385) right before the
+// physElementsToState call, exactly physShootLegAim's aimBurnEq pattern, no
+// new math. All ~11 physAimBurnState call sites in this file (both
+// physSolveNrhoTransfer/_nrhoSolveFixedTArr and physFreeReturnSolve) route
+// through this — see MATH.md §7al's O1b audit for the site-by-site trace
+// proving each one previously fed already-equatorial (incRad, raan) values
+// straight into physAimBurnState as if they were world.
 function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
-  if (typeof progEqToWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
-  const w = progEqToWorldElements(fromBody, (iEqRad || 0) * 180 / Math.PI, (raanEqRad || 0) * 180 / Math.PI);
-  return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.inc_deg * Math.PI / 180, yaw, w.lan_deg * Math.PI / 180);
+  if (typeof orbitWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
+  const w = orbitWorldElements({ body: fromBody, inc_deg: (iEqRad || 0) * 180 / Math.PI, lan_deg: (raanEqRad || 0) * 180 / Math.PI });
+  return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.incDeg * Math.PI / 180, yaw, w.lanDeg * Math.PI / 180);
 }
 
 /**

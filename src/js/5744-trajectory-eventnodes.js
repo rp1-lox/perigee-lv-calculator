@@ -184,16 +184,11 @@ function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
     if (rMean > 0 && mu > 0) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * met) % (2 * Math.PI);
-      // §20 seam: same equator->world conversion as _trajGizmoOrbitNodeAt
-      // (5745-hover) — authored elements fed to physAimBurnState as if
-      // world-frame put passive event nodes off their (seam-rotated) rings.
-      let incDeg = o.inclination || 0;
-      let lanDeg = o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0);
-      if (typeof progEqToWorldElements === 'function') {
-        const wEl = progEqToWorldElements(body, incDeg, lanDeg);
-        if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
-      }
-      const bs = physAimBurnState(body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
+      // §20/C1 seam: same ONE boundary (orbitWorldState, 385) as
+      // _trajGizmoOrbitNodeAt (5745-hover) — authored elements fed to
+      // physAimBurnState as if world-frame put passive event nodes off their
+      // (seam-rotated) rings.
+      const bs = orbitWorldState(Object.assign({ body }, o), theta);
       if (bs && bs.r) {
         const q = _trajProj3(bs.r[0] * scale, bs.r[1] * scale, (bs.r[2] || 0) * scale);
         if (isFinite(q.x) && isFinite(q.y)) return { x: ox + q.x, y: oy + q.y };

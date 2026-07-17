@@ -12761,6 +12761,61 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
   return physIncLanFromNormal(comp);
 }
 
+// ── C1: the one frame boundary (MISSION_MODEL_V2.md §24, UNIFICATION_AUDIT
+// item 1) ────────────────────────────────────────────────────────────────
+// Every orbit-shaped object in the program now carries (or implicitly
+// defaults) an explicit `frame` tag: 'eq' (equator-authored — the program's
+// long-standing authoring convention, and the default when the field is
+// absent so no legacy data needs migration) or 'world' (already
+// ecliptic/world-frame, e.g. a propagated/state-derived ring). Every call
+// site that used to inline "progEqToWorldElements + a `typeof` guard" now
+// routes through orbitWorldElements/orbitWorldState instead — ONE boundary,
+// so the seam can never again be silently skipped at a new call site (the
+// bug class behind five shipped fixes in one week, §24 C1). Direct calls to
+// progEqToWorldElements outside this module are a gate violation (see the
+// grep-assert test in tests/math.test.js) — 415-launch-planner.js's
+// progWorldToEqElements use is the one intentional exception: it is the
+// INVERSE direction (a computed world-frame plane reported back out in the
+// user-facing equator-authoring convention), not an authoring boundary, so
+// it stays direct.
+/** Read `o`'s inclination/LAN across every authoring dialect in use today
+ *  (C2 will collapse these to one canonical name — this function is
+ *  deliberately dialect-tolerant so it can front ALL of them without
+ *  forcing a rename first): inc_deg | inclination | inc for inclination;
+ *  lan_deg | lan for LAN/RAAN. A null/absent LAN defaults to 0, matching
+ *  every existing call site's own fallback. Returns {incDeg, lanDeg} in
+ *  WORLD (ecliptic) frame: identity when `o.frame === 'world'`, rotated via
+ *  progEqToWorldElements(o.body||'Earth', ...) otherwise (frame absent or
+ *  'eq' — today's default authoring convention). */
+function orbitWorldElements(o) {
+  o = o || {};
+  const incDeg = (o.inc_deg != null ? o.inc_deg : (o.inclination != null ? o.inclination : (o.inc != null ? o.inc : 0))) || 0;
+  const lanDeg = (o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0)) || 0;
+  if (o.frame === 'world') return { incDeg, lanDeg };
+  const body = o.body || 'Earth';
+  if (typeof progEqToWorldElements !== 'function') return { incDeg, lanDeg };
+  const w = progEqToWorldElements(body, incDeg, lanDeg);
+  return w ? { incDeg: w.inc_deg, lanDeg: w.lan_deg } : { incDeg, lanDeg };
+}
+/** orbitWorldElements + physAimBurnState reconstruction, for consumers that
+ *  need r/v rather than bare elements — mirrors _trajGizmoOrbitNodeAt's
+ *  (5745) exact reconstruction (mean-motion phase from rMean, theta as the
+ *  in-plane anomaly, zero pitch/dv/yaw) so behavior is identical to the
+ *  pre-boundary call sites it replaces. `thetaRad` is the in-plane anomaly
+ *  (radians); `metOrOpts` is currently unused (reserved so future callers
+ *  that only have a MET, not a pre-computed theta, have a slot without a
+ *  signature break). Returns whatever physAimBurnState returns, or null if
+ *  physAimBurnState isn't loaded or `o`/`o.body` is missing. */
+function orbitWorldState(o, thetaRad, metOrOpts) {
+  if (!o || !o.body || typeof physAimBurnState !== 'function') return null;
+  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[o.body] : null;
+  const w = orbitWorldElements(o);
+  const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
+  const rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  return physAimBurnState(o.body, rMean, thetaRad || 0, 0, 0,
+    (w.incDeg * Math.PI) / 180, 0, (w.lanDeg * Math.PI) / 180);
+}
+
 // ── universal-variable Kepler propagation ────────────────────────────────────
 // One code path for ellipse / parabola / hyperbola. Curtis, "Orbital Mechanics
 // for Engineering Students", Alg. 3.4 (chi iteration) + f/g functions.
@@ -14685,6 +14740,14 @@ function progPlanLaunchToDestination(args) {
  * plane at this exact epoch" but will drift over a long mission if reused
  * without recomputing at the new epoch. See MATH.md §7p critique 58.
  * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since §20).
+ * C1 NOTE (2026-07-17, MISSION_MODEL_V2.md §24): this progWorldToEqElements
+ * call is exempt from the C1 gate's "route through orbitWorldElements"
+ * requirement — it runs the INVERSE direction (a computed world-frame plane
+ * reported back OUT in the user-facing equator-authoring convention), not an
+ * authoring-side call into the boundary. orbitWorldElements/orbitWorldState
+ * (385) only cover the eq->world authoring direction; there is no
+ * orbit-object analog of "I have a world-frame plane, express it as an
+ * authored equator orbit" for this call site to route through.
  */
 function progMoonPlaneAt(epochJD, t_s) {
   const st = progBodyLocalEphemState('Moon', t_s || 0);
@@ -18661,24 +18724,25 @@ function missionExecManeuverNode(id, spec, opts) {
 // _physShootCache above).
 const _physNrhoShootCache = {};
 
-// ── §20 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ────
+// ── §20/C1 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ─
 // physAimBurnState feeds physElementsToState directly (385's convention:
 // ecliptic/world reference plane), but every (incRad, raan) pair THIS module
 // solves for or accepts is AUTHORED in Earth's EQUATOR frame (fromOrbit.
 // inclination/.lan_deg, or physFreeReturnSolve's incDeg parking-orbit arg) —
 // same authoring convention as physShootLegAim's fromOrbit (565-physics-
 // targeting.js, §7al site 2). This wrapper is the ONE place a ring actually
-// becomes a state in this module: it rotates the equatorial pair to world via
-// progEqToWorldElements right before the physElementsToState call, exactly
-// physShootLegAim's aimBurnEq pattern, no new math. All ~11 physAimBurnState
-// call sites in this file (both physSolveNrhoTransfer/_nrhoSolveFixedTArr and
-// physFreeReturnSolve) route through this — see MATH.md §7al's O1b audit for
-// the site-by-site trace proving each one previously fed already-equatorial
-// (incRad, raan) values straight into physAimBurnState as if they were world.
+// becomes a state in this module: it routes the equatorial pair through the
+// ONE C1 boundary (orbitWorldElements, 385) right before the
+// physElementsToState call, exactly physShootLegAim's aimBurnEq pattern, no
+// new math. All ~11 physAimBurnState call sites in this file (both
+// physSolveNrhoTransfer/_nrhoSolveFixedTArr and physFreeReturnSolve) route
+// through this — see MATH.md §7al's O1b audit for the site-by-site trace
+// proving each one previously fed already-equatorial (incRad, raan) values
+// straight into physAimBurnState as if they were world.
 function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
-  if (typeof progEqToWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
-  const w = progEqToWorldElements(fromBody, (iEqRad || 0) * 180 / Math.PI, (raanEqRad || 0) * 180 / Math.PI);
-  return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.inc_deg * Math.PI / 180, yaw, w.lan_deg * Math.PI / 180);
+  if (typeof orbitWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
+  const w = orbitWorldElements({ body: fromBody, inc_deg: (iEqRad || 0) * 180 / Math.PI, lan_deg: (raanEqRad || 0) * 180 / Math.PI });
+  return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.incDeg * Math.PI / 180, yaw, w.lanDeg * Math.PI / 180);
 }
 
 /**
@@ -19599,9 +19663,9 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
   const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
   function toWorldPlane(iEqRad, raanEqRad) {
-    if (typeof progEqToWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
-    const w = progEqToWorldElements(fromBody, iEqRad * 180 / Math.PI, raanEqRad * 180 / Math.PI);
-    return { inc: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180 };
+    if (typeof orbitWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
+    const w = orbitWorldElements({ body: fromBody, inc_deg: iEqRad * 180 / Math.PI, lan_deg: raanEqRad * 180 / Math.PI });
+    return { inc: w.incDeg * Math.PI / 180, raan: w.lanDeg * Math.PI / 180 };
   }
   function aimBurnEq(bodyName, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
     const w = toWorldPlane(iEqRad, raanEqRad);
@@ -19710,10 +19774,10 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // against the world-frame osculating arrival elements below.
   const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
     ? (() => {
-        const w = (typeof progEqToWorldElements === 'function')
-          ? progEqToWorldElements(dest, toOrbit.inclination, toOrbit.lan_deg)
-          : { inc_deg: toOrbit.inclination, lan_deg: toOrbit.lan_deg };
-        return { i: (w.inc_deg * Math.PI) / 180, raan: (w.lan_deg * Math.PI) / 180 };
+        const w = (typeof orbitWorldElements === 'function')
+          ? orbitWorldElements({ body: dest, inclination: toOrbit.inclination, lan_deg: toOrbit.lan_deg, frame: toOrbit.frame })
+          : { incDeg: toOrbit.inclination, lanDeg: toOrbit.lan_deg };
+        return { i: (w.incDeg * Math.PI) / 180, raan: (w.lanDeg * Math.PI) / 180 };
       })()
     : null;
   const planeMissKm = res => {
@@ -19888,14 +19952,15 @@ function v2BuildShadow(m) {
           const bodyMeta = PROG_BODIES[os.body];
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
-          // §20: os.inclination/os.lan are authored in os.body's EQUATOR frame;
-          // rotate into world before physElementsToState (which is world-frame).
-          const _w20 = (typeof progEqToWorldElements === 'function')
-            ? progEqToWorldElements(os.body, os.inclination || 0, os.lan || 0)
-            : { inc_deg: os.inclination || 0, lan_deg: os.lan || 0 };
+          // §20/C1: os.inclination/os.lan are authored in os.body's EQUATOR
+          // frame; routed through the ONE C1 boundary (orbitWorldElements, 385)
+          // before physElementsToState (which is world-frame).
+          const _w20 = (typeof orbitWorldElements === 'function')
+            ? orbitWorldElements(os)
+            : { incDeg: os.inclination || 0, lanDeg: os.lan || 0 };
           const st0 = physElementsToState({
-            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.inc_deg * Math.PI / 180,
-            raan: _w20.lan_deg * Math.PI / 180, argp: 0, nu: 0,
+            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.incDeg * Math.PI / 180,
+            raan: _w20.lanDeg * Math.PI / 180, argp: 0, nu: 0,
           }, bodyMeta.mu);
           if (st0) { r = st0.r; v = st0.v; frame = os.body; }
           else note = 'elements->state reconstruction returned null';
@@ -30413,20 +30478,20 @@ function _trajExtractMission(m) {
     // write order: authored (here) -> flight-derived (§7i pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
     if (!rec.elements && lan_deg != null) {
-      // §20 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are AUTHORED,
-      // i.e. EQUATOR-referenced (os.inclination/os.lan — the program's authoring
-      // convention). The ring is sampled + projected in the WORLD (ecliptic)
-      // frame the tilted globe and the Moon are drawn in, so rotate through the
-      // SAME seam the physics-state path uses (progEqToWorldElements, 385)
+      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are
+      // AUTHORED, i.e. EQUATOR-referenced (os.inclination/os.lan — the
+      // program's authoring convention). The ring is sampled + projected in
+      // the WORLD (ecliptic) frame the tilted globe and the Moon are drawn
+      // in, so rotate through the ONE C1 boundary (orbitWorldElements, 385)
       // BEFORE stamping. Without this, a plane-matched parking orbit drew
       // ~23.44 deg (Earth's obliquity) off its own physics plane and off the
       // Moon — the reported "plane-match does nothing" bug, made visible once
       // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
       // §7al assumed world==equator, which O2 retired).
-      const _w20 = (typeof progEqToWorldElements === 'function')
-        ? progEqToWorldElements(body, inc || 0, lan_deg)
-        : { inc_deg: inc || 0, lan_deg: lan_deg };
-      rec.elements = { i: _w20.inc_deg * Math.PI / 180, raan: _w20.lan_deg * Math.PI / 180,
+      const _w20 = (typeof orbitWorldElements === 'function')
+        ? orbitWorldElements({ body, inc_deg: inc || 0, lan_deg })
+        : { incDeg: inc || 0, lanDeg: lan_deg };
+      rec.elements = { i: _w20.incDeg * Math.PI / 180, raan: _w20.lanDeg * Math.PI / 180,
         argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
     }
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
@@ -30830,17 +30895,18 @@ function _trajRingOrientationFor(rec) {
   // Tier 3 (default, Ω=ω=0): the authored inclination is EQUATOR-referenced,
   // but the ring is sampled/projected in the WORLD (ecliptic) frame, so a raw
   // draw hugs the ecliptic instead of the body's (now-tilted, §20 O2) equator.
-  // Rotate through the SAME seam (progEqToWorldElements, 385) the physics state
-  // path uses — Ω=0 in the equator frame becomes a body-specific world Ω, and
-  // the ring visibly rides ±inc of the tilted equator on screen (MATH.md §7al
-  // O2 line "28.5°-ring-vs-tilted-equator agreement" — now true in the render
-  // path, not just the physics path). Identity for untilted bodies.
+  // Rotate through the ONE C1 boundary (orbitWorldElements, 385) the physics
+  // state path uses — Ω=0 in the equator frame becomes a body-specific world
+  // Ω, and the ring visibly rides ±inc of the tilted equator on screen
+  // (MATH.md §7al O2 line "28.5°-ring-vs-tilted-equator agreement" — now true
+  // in the render path, not just the physics path). Identity for untilted
+  // bodies.
   const incEq = (rec && rec.inc) || 0;
   const body = (rec && rec.body) || 'Earth';
-  const w = (typeof progEqToWorldElements === 'function')
-    ? progEqToWorldElements(body, incEq, 0)
-    : { inc_deg: incEq, lan_deg: 0 };
-  return { i: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180, argp: 0, source: 'default' };
+  const w = (typeof orbitWorldElements === 'function')
+    ? orbitWorldElements({ body, inc_deg: incEq, lan_deg: 0 })
+    : { incDeg: incEq, lanDeg: 0 };
+  return { i: w.incDeg * Math.PI / 180, raan: w.lanDeg * Math.PI / 180, argp: 0, source: 'default' };
 }
 
 /** R6.5 (2026-07-11): pure apsides finder — samples orbit `elements`
@@ -31887,16 +31953,11 @@ function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
     if (rMean > 0 && mu > 0) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * met) % (2 * Math.PI);
-      // §20 seam: same equator->world conversion as _trajGizmoOrbitNodeAt
-      // (5745-hover) — authored elements fed to physAimBurnState as if
-      // world-frame put passive event nodes off their (seam-rotated) rings.
-      let incDeg = o.inclination || 0;
-      let lanDeg = o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0);
-      if (typeof progEqToWorldElements === 'function') {
-        const wEl = progEqToWorldElements(body, incDeg, lanDeg);
-        if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
-      }
-      const bs = physAimBurnState(body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
+      // §20/C1 seam: same ONE boundary (orbitWorldState, 385) as
+      // _trajGizmoOrbitNodeAt (5745-hover) — authored elements fed to
+      // physAimBurnState as if world-frame put passive event nodes off their
+      // (seam-rotated) rings.
+      const bs = orbitWorldState(Object.assign({ body }, o), theta);
       if (bs && bs.r) {
         const q = _trajProj3(bs.r[0] * scale, bs.r[1] * scale, (bs.r[2] || 0) * scale);
         if (isFinite(q.x) && isFinite(q.y)) return { x: ox + q.x, y: oy + q.y };
@@ -33920,18 +33981,14 @@ function _trajGizmoOrbitNodeAt(o, met) {
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);
-  // §20 seam (2026-07-17, user: gizmo "not on a real orbit... covered up by
-  // the Earth"): authored inc/lan are EQUATOR-referenced; physAimBurnState
-  // wants world-frame. This reconstruction — the single source for the gizmo
-  // node, center-knob rail, and hover ball — was never in the §7al audit, so
-  // after O2/O2b tilted the rendered rings the gizmo sat on a phantom orbit
-  // ~obliquity away from the ring the user sees (often behind the disc).
-  let incDeg = o.inclination || 0, lanDeg = o.lan != null ? o.lan : 0;
-  if (typeof progEqToWorldElements === 'function') {
-    const wEl = progEqToWorldElements(o.body, incDeg, lanDeg);
-    if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
-  }
-  const bs = physAimBurnState(o.body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
+  // §20/C1 seam (2026-07-17, user: gizmo "not on a real orbit... covered up
+  // by the Earth"): authored inc/lan are EQUATOR-referenced; physAimBurnState
+  // wants world-frame. Routed through the ONE C1 boundary (orbitWorldState,
+  // 385) — the single source for the gizmo node, center-knob rail, and hover
+  // ball — so after O2/O2b tilted the rendered rings the gizmo can't drift
+  // back onto a phantom orbit at a new call site.
+  const bs = orbitWorldState(o, theta);
+  if (!bs) return null;
   return { body: o.body, mu, r: bs.r, v: bs.v, rHat: bs.rHat, vHat: bs.vHat, hHat: bs.hHat };
 }
 

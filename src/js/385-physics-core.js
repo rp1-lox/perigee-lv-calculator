@@ -191,6 +191,61 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
   return physIncLanFromNormal(comp);
 }
 
+// ── C1: the one frame boundary (MISSION_MODEL_V2.md §24, UNIFICATION_AUDIT
+// item 1) ────────────────────────────────────────────────────────────────
+// Every orbit-shaped object in the program now carries (or implicitly
+// defaults) an explicit `frame` tag: 'eq' (equator-authored — the program's
+// long-standing authoring convention, and the default when the field is
+// absent so no legacy data needs migration) or 'world' (already
+// ecliptic/world-frame, e.g. a propagated/state-derived ring). Every call
+// site that used to inline "progEqToWorldElements + a `typeof` guard" now
+// routes through orbitWorldElements/orbitWorldState instead — ONE boundary,
+// so the seam can never again be silently skipped at a new call site (the
+// bug class behind five shipped fixes in one week, §24 C1). Direct calls to
+// progEqToWorldElements outside this module are a gate violation (see the
+// grep-assert test in tests/math.test.js) — 415-launch-planner.js's
+// progWorldToEqElements use is the one intentional exception: it is the
+// INVERSE direction (a computed world-frame plane reported back out in the
+// user-facing equator-authoring convention), not an authoring boundary, so
+// it stays direct.
+/** Read `o`'s inclination/LAN across every authoring dialect in use today
+ *  (C2 will collapse these to one canonical name — this function is
+ *  deliberately dialect-tolerant so it can front ALL of them without
+ *  forcing a rename first): inc_deg | inclination | inc for inclination;
+ *  lan_deg | lan for LAN/RAAN. A null/absent LAN defaults to 0, matching
+ *  every existing call site's own fallback. Returns {incDeg, lanDeg} in
+ *  WORLD (ecliptic) frame: identity when `o.frame === 'world'`, rotated via
+ *  progEqToWorldElements(o.body||'Earth', ...) otherwise (frame absent or
+ *  'eq' — today's default authoring convention). */
+function orbitWorldElements(o) {
+  o = o || {};
+  const incDeg = (o.inc_deg != null ? o.inc_deg : (o.inclination != null ? o.inclination : (o.inc != null ? o.inc : 0))) || 0;
+  const lanDeg = (o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0)) || 0;
+  if (o.frame === 'world') return { incDeg, lanDeg };
+  const body = o.body || 'Earth';
+  if (typeof progEqToWorldElements !== 'function') return { incDeg, lanDeg };
+  const w = progEqToWorldElements(body, incDeg, lanDeg);
+  return w ? { incDeg: w.inc_deg, lanDeg: w.lan_deg } : { incDeg, lanDeg };
+}
+/** orbitWorldElements + physAimBurnState reconstruction, for consumers that
+ *  need r/v rather than bare elements — mirrors _trajGizmoOrbitNodeAt's
+ *  (5745) exact reconstruction (mean-motion phase from rMean, theta as the
+ *  in-plane anomaly, zero pitch/dv/yaw) so behavior is identical to the
+ *  pre-boundary call sites it replaces. `thetaRad` is the in-plane anomaly
+ *  (radians); `metOrOpts` is currently unused (reserved so future callers
+ *  that only have a MET, not a pre-computed theta, have a slot without a
+ *  signature break). Returns whatever physAimBurnState returns, or null if
+ *  physAimBurnState isn't loaded or `o`/`o.body` is missing. */
+function orbitWorldState(o, thetaRad, metOrOpts) {
+  if (!o || !o.body || typeof physAimBurnState !== 'function') return null;
+  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[o.body] : null;
+  const w = orbitWorldElements(o);
+  const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
+  const rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  return physAimBurnState(o.body, rMean, thetaRad || 0, 0, 0,
+    (w.incDeg * Math.PI) / 180, 0, (w.lanDeg * Math.PI) / 180);
+}
+
 // ── universal-variable Kepler propagation ────────────────────────────────────
 // One code path for ellipse / parabola / hyperbola. Curtis, "Orbital Mechanics
 // for Engineering Students", Alg. 3.4 (chi iteration) + f/g functions.

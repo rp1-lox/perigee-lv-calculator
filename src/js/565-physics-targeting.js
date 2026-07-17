@@ -255,9 +255,9 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
   const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
   function toWorldPlane(iEqRad, raanEqRad) {
-    if (typeof progEqToWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
-    const w = progEqToWorldElements(fromBody, iEqRad * 180 / Math.PI, raanEqRad * 180 / Math.PI);
-    return { inc: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180 };
+    if (typeof orbitWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
+    const w = orbitWorldElements({ body: fromBody, inc_deg: iEqRad * 180 / Math.PI, lan_deg: raanEqRad * 180 / Math.PI });
+    return { inc: w.incDeg * Math.PI / 180, raan: w.lanDeg * Math.PI / 180 };
   }
   function aimBurnEq(bodyName, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
     const w = toWorldPlane(iEqRad, raanEqRad);
@@ -366,10 +366,10 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // against the world-frame osculating arrival elements below.
   const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
     ? (() => {
-        const w = (typeof progEqToWorldElements === 'function')
-          ? progEqToWorldElements(dest, toOrbit.inclination, toOrbit.lan_deg)
-          : { inc_deg: toOrbit.inclination, lan_deg: toOrbit.lan_deg };
-        return { i: (w.inc_deg * Math.PI) / 180, raan: (w.lan_deg * Math.PI) / 180 };
+        const w = (typeof orbitWorldElements === 'function')
+          ? orbitWorldElements({ body: dest, inclination: toOrbit.inclination, lan_deg: toOrbit.lan_deg, frame: toOrbit.frame })
+          : { incDeg: toOrbit.inclination, lanDeg: toOrbit.lan_deg };
+        return { i: (w.incDeg * Math.PI) / 180, raan: (w.lanDeg * Math.PI) / 180 };
       })()
     : null;
   const planeMissKm = res => {

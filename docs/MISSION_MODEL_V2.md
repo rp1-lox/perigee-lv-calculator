@@ -762,11 +762,41 @@ Verified with real hit-tested input: `elementFromPoint` at the knob returns a gi
 
 Driven by docs/UNIFICATION_AUDIT.md (commit 0e6757aae) and the user's direct feedback: "orbits aren't coherent... orbit definitions aren't consistently relative to one thing or another — there seem to be a thousand disjointed definitions." Five shipped bugs in one week were the same disease (frame conversion as a per-call-site obligation). This series retires the bug class structurally.
 
-### C1 — One frame boundary (audit item 1, cost M)
+### C1 — One frame boundary (audit item 1, cost M) — **DONE 2026-07-17**
 - Every orbit-shaped object gains an explicit `frame` tag: `'eq'` (equator-authored, the authoring default) or `'world'` (ecliptic/world). Absent tag = `'eq'` (matches today's authoring convention; legacy blobs need no migration).
 - New single boundary in 385-physics-core.js: `orbitWorldElements(o)` -> `{incDeg, lanDeg}` in world frame (identity for `frame:'world'`, seam for `'eq'`), plus `orbitWorldState(o, theta)` wrapping physAimBurnState for consumers that need r/v.
 - ALL 8 seam call sites from the audit (566:102, 5741:145, 5742:234, 5744:192, 5745-hover:37, 565-nrho:36, 565-targeting:259/370, 415:370 inverse) route through the boundary; direct `progEqToWorldElements` calls outside 385 + tests become a gate violation (new test: grep-assert over the module sources, same style as the ghost-stage guard).
 - Acceptance: all existing pins byte-stable (plane-match 19.02/9.48 saros band, Gateway 3143/519/2762, ring-vs-physics <1e-4 deg, NRHO/BLT pins, 150,838 Saturn V).
+
+**As-built note (C1, 2026-07-17):** `orbitWorldElements(o)` reads inc/lan across the
+existing authoring dialects (`inc_deg`/`inclination`/`inc`; `lan_deg`/`lan`, null->0) and
+applies the eq->world seam via `progEqToWorldElements(o.body||'Earth', ...)` unless
+`o.frame === 'world'` (identity). `orbitWorldState(o, thetaRad)` adds the exact
+mean-motion-phase + `physAimBurnState` reconstruction `_trajGizmoOrbitNodeAt` used to
+inline. All 8 audited seam call sites now route through one of the two: 566-mission-state-v2.js
+(orbitWorldElements(os)), 5741-trajectory-scene-extract.js (orbitWorldElements({body,
+inc_deg, lan_deg})), 5742-trajectory-overlay-lod.js (same pattern, tier-3 default),
+5744-trajectory-eventnodes.js (orbitWorldState(Object.assign({body}, o), theta)),
+5745-maneuver-gizmo-hover.js's `_trajGizmoOrbitNodeAt` (orbitWorldState(o, theta) directly),
+565-physics-nrho.js's `physAimBurnStateEq` wrapper (kept, body now routes through
+orbitWorldElements), and 565-physics-targeting.js's `toWorldPlane` helper plus its
+`toAuthoredPlane` computation (both route through orbitWorldElements). 415-launch-planner.js's
+`progWorldToEqElements` call in `progMoonPlaneAt` is the one intentional exception — it runs
+the INVERSE direction (a computed world-frame plane reported back out in the user-facing
+equator-authoring convention, not an authoring-side call into the boundary) and has no
+orbit-object analog to route through; the gate's allowed-callers list names it explicitly
+so any new inverse-direction call site still surfaces for review. Gate: a new
+tests/math.test.js block reads every `src/js/*.js` module as text and fails if any file
+outside `385-physics-core.js` (eq->world direction) or `{385-physics-core.js,
+415-launch-planner.js}` (world->eq inverse direction) contains a direct call, plus 3 unit
+pins on `orbitWorldElements` itself (world-frame identity, eq-frame exact match against
+`progEqToWorldElements`, missing-frame defaults to `'eq'`). `python build.py` gate: 930/930
+assertions pass (926 pre-existing + 4 new — 1 gate + 3 unit pins), all pre-existing pinned
+numbers byte-stable. Browser smoke (devSeedApolloMission): the boundary's `orbitWorldElements`
+output matches a raw `progEqToWorldElements` call bit-for-bit on the seeded LAUNCH orbit
+(Moon-body maneuver, inc 96.68/lan 0), the gizmo's `_trajGizmoOrbitNodeAt`
+(now `orbitWorldState`) returns a valid state (`r`/`v`/`hHat` populated, no null), and zero
+console errors.
 
 ### C2 — Canonical orbit object + normalize shim (audit item 2, cost L, the keystone)
 - Canonical shape: `{ body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }`.
