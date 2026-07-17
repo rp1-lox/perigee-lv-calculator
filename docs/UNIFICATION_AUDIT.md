@@ -25,6 +25,21 @@ concept. Migration cost S/M/L is engineering effort for the proposed unification
    (385-physics-core.js) — all 8 call sites route through it, a gate test
    (tests/math.test.js) fails the build if any module outside 385 calls
    `progEqToWorldElements` directly. See MISSION_MODEL_V2.md §24 C1 as-built note.
+   **STATUS UPDATE (2026-07-18, §7al seam-skip re-sweep):** the grep-gate closes
+   the "re-implements the seam" hole but NOT the "skips the seam entirely"
+   hole — an independent reconstruction that never calls `progEqToWorldElements`
+   at all is invisible to it (this is how site 12's manual-MNODE builder shipped
+   a 102.4° error post-gate). Two mitigations landed: (a) a **reconstruction-
+   agreement** pin block in `tests/suites/05-orbit-orientation.js` (+5, docs/MATH.md
+   §7al) asserts the independent world-frame reconstructions of one orbit agree
+   geometrically AND that an un-seamed reconstruction is provably off-plane, so
+   the next skip trips the gate; (b) the residual open debt is fully enumerated —
+   the rendering sites 10/11 are now DONE (route through `orbitWorldState`), and
+   the ONLY remaining seam-skips are the three **site-9** reconstructions in
+   `565-physics-mission.js` (lines 233/640/792, §7al sites 13-15), HELD because
+   fixing them moves the loosely-pinned Apollo/moon leg geometry at
+   `tests/suites/03-mission-phasing.js:106-108` and needs an in-browser
+   convergence re-measurement (out of scope for a lightweight seam pass).
 
 2. **Orbit-shaped objects have ≥6 incompatible dialects** with no single reader.
    Mission events use `{alt_km, apo_km, inc_deg, lan_deg}`; node-map/catalog builtins use

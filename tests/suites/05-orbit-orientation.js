@@ -427,5 +427,77 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// §7al RECONSTRUCTION-AGREEMENT PINS (2026-07-18) — the missing invariant class
+// (site 12's lesson). The C1 grep-gate proves nobody RE-IMPLEMENTS the eq→world
+// seam (no direct progEqToWorldElements outside 385), but it CANNOT prove every
+// independent world-frame reconstruction of the same orbit GOES THROUGH the
+// boundary. Site 12 (565 manual-MNODE builder) skipped the seam entirely and
+// shipped a measured 102.4° burn-position error the grep-gate never saw. These
+// pins assert the independent reconstructions of ONE representative orbit agree
+// geometrically, and that a skip is provably off-plane by an obliquity-scale
+// angle — so the NEXT skip trips the gate instead of shipping. Pure geometry,
+// no solvers (fast).
+{
+  const { physAimBurnState, physMag, physDot, physScale, physSub } =
+    vm.runInContext('({ physAimBurnState, physMag, physDot, physScale, physSub })', sandbox);
+  // Representative orbit: Earth (a tilted body), inc 28.5°, LAN 45° (nonzero
+  // node so both the inc AND lan rotations are exercised).
+  const o = { body: 'Earth', perigee: 200, apogee: 200, inclination: 28.5, lan_deg: 45 };
+  const rMean = PROG_BODIES.Earth.R + 200;
+  const nWorld = orbitWorldNormal(o);          // seam ∘ normal recipe (384)
+  const wEl = orbitWorldElements(o);           // seam only → world (inc,lan) deg
+
+  // (1) Every orbitWorldState position lies in the orbitWorldNormal plane:
+  //     n·r̂ ≈ 0 at every anomaly (the C1 boundary is internally coherent).
+  let maxDot = 0;
+  for (let k = 0; k < 12; k++) {
+    const bs = orbitWorldState(o, k * Math.PI / 6);
+    const rhat = physScale(bs.r, 1 / physMag(bs.r));
+    maxDot = Math.max(maxDot, Math.abs(physDot(nWorld, rhat)));
+  }
+  ok(`§7al recon-agree: orbitWorldState positions lie in the orbitWorldNormal plane (max |n·r̂| ${maxDot.toExponential(1)} < 1e-9)`, maxDot < 1e-9);
+
+  // (2) orbitWorldState(o,θ) === a hand-rolled physAimBurnState fed the SAME
+  //     world elements from orbitWorldElements — the two sanctioned
+  //     reconstruction paths (C1 boundary vs a call site that seams then builds
+  //     the state itself, as physShootLegAim's aimBurnEq and 565's
+  //     physAimBurnStateEq do) produce byte-close states.
+  let maxPosErr = 0;
+  for (let k = 0; k < 8; k++) {
+    const th = k * Math.PI / 4;
+    const a = orbitWorldState(o, th);
+    const b = physAimBurnState('Earth', rMean, th, 0, 0, wEl.incDeg * Math.PI / 180, 0, wEl.lanDeg * Math.PI / 180);
+    maxPosErr = Math.max(maxPosErr, physMag(physSub(a.r, b.r)));
+  }
+  ok(`§7al recon-agree: orbitWorldState === seamed physAimBurnState (max Δpos ${maxPosErr.toExponential(1)} km < 1e-6)`, maxPosErr < 1e-6);
+
+  // (3) SEAM IS LOAD-BEARING (site 12 / line-792 regression guard): the
+  //     UN-seamed reconstruction — feeding the AUTHORED equatorial inc/lan
+  //     straight to physAimBurnState as if world-frame (the exact skip site 12
+  //     shipped and site 9 still carries at 565-physics-mission.js:640/792) —
+  //     is provably OFF the true world plane. If a future refactor accidentally
+  //     makes orbitWorldState skip the seam, |n·r̂| collapses toward 0 and this
+  //     fails.
+  const bad = physAimBurnState('Earth', rMean, 0, 0, 0, 28.5 * Math.PI / 180, 0, 45 * Math.PI / 180);
+  const badHat = physScale(bad.r, 1 / physMag(bad.r));
+  const badDot = Math.abs(physDot(nWorld, badHat));
+  ok(`§7al recon-agree: un-seamed reconstruction sits OFF the world plane (|n·r̂| ${badDot.toFixed(3)} > 0.05 — seam is load-bearing)`, badDot > 0.05);
+
+  // (4) One normal recipe, one seam: orbitWorldNormal === physNormalFromIncLan
+  //     applied to orbitWorldElements' output.
+  const n2 = physNormalFromIncLan(wEl.incDeg, wEl.lanDeg);
+  const nErr = physMag(physSub(nWorld, n2));
+  ok(`§7al recon-agree: orbitWorldNormal === physNormalFromIncLan∘orbitWorldElements (Δ ${nErr.toExponential(1)} < 1e-12)`, nErr < 1e-12);
+
+  // (5) Magnitude of a skip: the authored-equatorial normal vs the world normal
+  //     for this orbit differ by an obliquity-scale angle — documents that a
+  //     seam-skip is genuinely user-visible (the static analog of site 12's
+  //     102.4° measurement), not a rounding-level slip.
+  const nEq = physNormalFromIncLan(28.5, 45); // authored, deliberately NOT seamed
+  const seamAngleDeg = Math.acos(Math.min(1, Math.max(-1, physDot(nEq, nWorld)))) * 180 / Math.PI;
+  ok(`§7al recon-agree: eq-vs-world normal gap is obliquity-scale (${seamAngleDeg.toFixed(1)}° > 10°)`, seamAngleDeg > 10);
+}
+
   return counts();
 };
