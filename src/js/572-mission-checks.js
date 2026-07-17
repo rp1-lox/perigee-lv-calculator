@@ -44,7 +44,8 @@ function _mcNodeOrbitMatchesState(node, os) {
   if (no.type === 'transit' || no.type === 'escape') return true;   // not a fixed orbital state — skip
   if (no.body && os.body && no.body !== os.body) return false;
   if (no.type === 'surface') return !!os.surface;
-  const a = { apogee: no.apogee, perigee: no.perigee, inclination: no.inclination };
+  // `no` = node.orbit (canonical, C2b item-3); `os` = vehicle orbitState (380 dialect).
+  const a = { apogee: (no.apoKm ?? no.apogee), perigee: (no.periKm ?? no.perigee), inclination: (no.incDeg ?? no.inclination) };
   const b = { apogee: os.apogee, perigee: os.perigee, inclination: os.inclination };
   return Math.abs((a.apogee ?? 0) - (b.apogee ?? 0)) < 1 &&
     Math.abs((a.perigee ?? 0) - (b.perigee ?? 0)) < 1 &&

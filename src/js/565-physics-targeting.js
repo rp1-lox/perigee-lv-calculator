@@ -252,7 +252,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // equatorial (inc, raan) pair get rotated into world/ecliptic via
   // progEqToWorldElements — see aimBurnEq below. This is the ONE seam
   // application for this function; MATH.md §7al lists it in the audit.
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
   function toWorldPlane(iEqRad, raanEqRad) {
     if (typeof orbitWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
@@ -304,8 +304,8 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // descending ambiguity to try) so a plane the fixed |Δv| genuinely cannot
   // reach honestly reports converged:false downstream rather than silently
   // being re-aimed onto a different plane the user didn't author.
-  const raanAuthored = fromOrbit.lan_deg != null;
-  const raanRoots = raanAuthored ? [(fromOrbit.lan_deg * Math.PI) / 180] : [0];
+  const raanAuthored = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null;
+  const raanRoots = raanAuthored ? [((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180] : [0];
   if (!raanAuthored && burn0.kind === 'moon' && incRad > 1e-6) {
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
@@ -364,11 +364,11 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // §20: toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
   // (same convention as fromOrbit) — rotate into world before comparing
   // against the world-frame osculating arrival elements below.
-  const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
+  const toAuthoredPlane = ((toOrbit.lanDeg ?? toOrbit.lan_deg) != null && (toOrbit.incDeg ?? toOrbit.inclination) != null)
     ? (() => {
         const w = (typeof orbitWorldElements === 'function')
-          ? orbitWorldElements({ body: dest, inclination: toOrbit.inclination, lan_deg: toOrbit.lan_deg, frame: toOrbit.frame })
-          : { incDeg: toOrbit.inclination, lanDeg: toOrbit.lan_deg };
+          ? orbitWorldElements({ body: dest, inclination: (toOrbit.incDeg ?? toOrbit.inclination), lan_deg: (toOrbit.lanDeg ?? toOrbit.lan_deg), frame: toOrbit.frame })
+          : { incDeg: (toOrbit.incDeg ?? toOrbit.inclination), lanDeg: (toOrbit.lanDeg ?? toOrbit.lan_deg) };
         return { i: (w.incDeg * Math.PI) / 180, raan: (w.lanDeg * Math.PI) / 180 };
       })()
     : null;

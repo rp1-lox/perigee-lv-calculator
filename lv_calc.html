@@ -15635,12 +15635,12 @@ const PROG_NM_NODES = [
     orbit:{ type:'surface',  body:'Earth' } },
   // LEO directly above the planet (57 px from center → 19 px clear of disc top).
   { id:'leo',           label:'LEO',     sub:'185 – 400 km',   zone:'earth',  cx:195, cy:190, r:20,
-    orbit:{ type:'circular', body:'Earth', perigee:185,   apogee:185,   inclination:28.5 } },
+    orbit:{ type:'circular', body:'Earth', periKm:185,   apoKm:185,   incDeg:28.5 } },
   // GTO upper-left; GEO upper-right — same altitude band, fanned ±30° from vertical.
   { id:'gto',           label:'GTO',     sub:'35,786 km apo',  zone:'earth',  cx:140, cy:168, r:18,
-    orbit:{ type:'elliptic', body:'Earth', perigee:185,   apogee:35786, inclination:28.5 } },
+    orbit:{ type:'elliptic', body:'Earth', periKm:185,   apoKm:35786, incDeg:28.5 } },
   { id:'geo',           label:'GEO',     sub:'35,786 km circ', zone:'earth',  cx:252, cy:163, r:18,
-    orbit:{ type:'circular', body:'Earth', perigee:35786, apogee:35786, inclination:0    } },
+    orbit:{ type:'circular', body:'Earth', periKm:35786, apoKm:35786, incDeg:0    } },
   // Escape near the SOI boundary, centred above.
   { id:'escape',        label:'ESCAPE',  sub:'C3 ≥ 0',         zone:'earth',  cx:195, cy:122, r:17, dashed:true,
     orbit:{ type:'escape',   body:'Earth', c3:0.1 } },
@@ -15651,9 +15651,9 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Earth', c3:-1.9, destination:'Moon' } },
   // LLO upper-left of Moon, DRO upper-right — angled apart so they're clear.
   { id:'llo',           label:'LLO',     sub:'100 km lunar',   zone:'lunar',  cx:418, cy:152, r:18,
-    orbit:{ type:'circular', body:'Moon',  perigee:100,   apogee:100,   inclination:90 } },
+    orbit:{ type:'circular', body:'Moon',  periKm:100,   apoKm:100,   incDeg:90 } },
   { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:483, cy:138, r:18,
-    orbit:{ type:'circular', body:'Moon',  perigee:68300, apogee:68300, inclination:0 } },
+    orbit:{ type:'circular', body:'Moon',  periKm:68300, apoKm:68300, incDeg:0 } },
   // MISSION_MODEL_V2 §15 5a: Gateway NRHO destination — bound to the SEEDED
   // propagated ref-orbit catalog entry (425's 'nrho-nominal'). orbit.{perigee,
   // apogee} are the SAME approximate label-only values 425 stores (NOT
@@ -15664,7 +15664,7 @@ const PROG_NM_NODES = [
   // the leg builder (565's nrhoRefAfter) to physSolveNrhoTransfer instead of
   // the generic Keplerian moon-leg shooter.
   { id:'nrho',          label:'NRHO',    sub:'Gateway (true 9:2)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
-    orbit:{ type:'circular', body:'Moon',  perigee:5544, apogee:71203, inclination:58 },
+    orbit:{ type:'circular', body:'Moon',  periKm:5544, apoKm:71203, incDeg:58 },
     orbitRefId:'nrho-nominal' },
   // Surface node at Moon body center — disc is the node.
   { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:192, r:12,
@@ -15675,7 +15675,7 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:8.7,  departure_body:'Earth', destination:'Mars'  } },
   // Orbit above, surface below.
   { id:'mars-orbit',    label:'MARS',    sub:'orbit 400 km',   zone:'interp', cx:860, cy:150, r:22,
-    orbit:{ type:'circular', body:'Mars',  perigee:400,   apogee:400,   inclination:0 } },
+    orbit:{ type:'circular', body:'Mars',  periKm:400,   apoKm:400,   incDeg:0 } },
   // Surface node at Mars body center — disc is the node.
   { id:'mars-surface',  label:'MARS',    sub:'surface',        zone:'interp', cx:860, cy:205, r:18,
     orbit:{ type:'surface',  body:'Mars' } },
@@ -15685,13 +15685,13 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:6.3,  departure_body:'Earth', destination:'Venus' } },
   // Orbit above Venus disc.
   { id:'venus-orbit',   label:'VENUS',   sub:'orbit 300 km',   zone:'interp', cx:848, cy:318, r:20,
-    orbit:{ type:'circular', body:'Venus', perigee:300,   apogee:300,   inclination:0 } },
+    orbit:{ type:'circular', body:'Venus', periKm:300,   apoKm:300,   incDeg:0 } },
 
   // ── Mercury ─────────────────────────────────────────────────────────────────
   { id:'mercury-transit', label:'TRANSIT', sub:'Earth → Mercury', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:56.7, departure_body:'Earth', destination:'Mercury' } },
   { id:'mercury-orbit',   label:'MERCURY', sub:'orbit 200 km',    zone:'interp', r:18,
-    orbit:{ type:'circular', body:'Mercury', perigee:200, apogee:200, inclination:0 } },
+    orbit:{ type:'circular', body:'Mercury', periKm:200, apoKm:200, incDeg:0 } },
   { id:'mercury-surface', label:'MERCURY', sub:'surface',         zone:'interp', r:14,
     orbit:{ type:'surface',  body:'Mercury' } },
 
@@ -15699,31 +15699,31 @@ const PROG_NM_NODES = [
   { id:'jupiter-transit', label:'TRANSIT', sub:'Earth → Jupiter', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:77.4, departure_body:'Earth', destination:'Jupiter' } },
   { id:'jupiter-orbit',   label:'JUPITER', sub:'orbit 1,000 km',  zone:'interp', r:22,
-    orbit:{ type:'circular', body:'Jupiter', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Jupiter', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Saturn ──────────────────────────────────────────────────────────────────
   { id:'saturn-transit',  label:'TRANSIT', sub:'Earth → Saturn',  zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:105.7, departure_body:'Earth', destination:'Saturn' } },
   { id:'saturn-orbit',    label:'SATURN',  sub:'orbit 1,000 km',  zone:'interp', r:22,
-    orbit:{ type:'circular', body:'Saturn', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Saturn', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Uranus ──────────────────────────────────────────────────────────────────
   { id:'uranus-transit',  label:'TRANSIT', sub:'Earth → Uranus',  zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:127.5, departure_body:'Earth', destination:'Uranus' } },
   { id:'uranus-orbit',    label:'URANUS',  sub:'orbit 1,000 km',  zone:'interp', r:20,
-    orbit:{ type:'circular', body:'Uranus', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Uranus', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Neptune ─────────────────────────────────────────────────────────────────
   { id:'neptune-transit', label:'TRANSIT', sub:'Earth → Neptune', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:135.9, departure_body:'Earth', destination:'Neptune' } },
   { id:'neptune-orbit',   label:'NEPTUNE', sub:'orbit 1,000 km',  zone:'interp', r:20,
-    orbit:{ type:'circular', body:'Neptune', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Neptune', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Pluto ───────────────────────────────────────────────────────────────────
   { id:'pluto-transit',   label:'TRANSIT', sub:'Earth → Pluto',   zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:139.6, departure_body:'Earth', destination:'Pluto' } },
   { id:'pluto-orbit',     label:'PLUTO',   sub:'orbit 1,000 km',  zone:'interp', r:18,
-    orbit:{ type:'circular', body:'Pluto', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Pluto', periKm:1000, apoKm:1000, incDeg:0 } },
 ];
 
 // No pre-spawned edges — users draw their own via right-click → Add Edge From Here.
@@ -15802,8 +15802,8 @@ function _nmOrbitVAtR(body, orbit, r_km) {
   if (!b) return 0;
   if (!orbit || orbit.type === 'surface') return 0;
   if (orbit.type === 'circular') return Math.sqrt(b.mu / r_km);
-  const rp = b.R + (orbit.perigee ?? orbit.apogee ?? 0);
-  const ra = b.R + (orbit.apogee  ?? orbit.perigee ?? 0);
+  const rp = b.R + ((orbit.periKm ?? orbit.perigee) ?? (orbit.apoKm ?? orbit.apogee) ?? 0);
+  const ra = b.R + ((orbit.apoKm ?? orbit.apogee)  ?? (orbit.periKm ?? orbit.perigee) ?? 0);
   const a  = (rp + ra) / 2;
   return Math.sqrt(Math.max(0, b.mu * (2 / r_km - 1 / a)));
 }
@@ -15820,7 +15820,7 @@ function _nmOrbitVAtR(body, orbit, r_km) {
 function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   const b = PROG_BODIES[body]; if (!b) return null;
   const apsOf = o => {
-    const r1 = b.R + (o.perigee ?? o.apogee ?? 0), r2 = b.R + (o.apogee ?? o.perigee ?? 0);
+    const r1 = b.R + ((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0), r2 = b.R + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0);
     return { rp: Math.min(r1, r2), ra: Math.max(r1, r2) };
   };
   const A = apsOf(oa), B = apsOf(ob);
@@ -15852,8 +15852,8 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   // absent lan_deg on either side is treated as Ω=0 (same convention the
   // renderer/physics fall back to).
   if (priceOrientation && best < Infinity) {
-    const i1 = oa.inclination || 0, lan1 = oa.lan_deg || 0;
-    const i2 = ob.inclination || 0, lan2 = ob.lan_deg || 0;
+    const i1 = (oa.incDeg ?? oa.inclination) || 0, lan1 = (oa.lanDeg ?? oa.lan_deg) || 0;
+    const i2 = (ob.incDeg ?? ob.inclination) || 0, lan2 = (ob.lanDeg ?? ob.lan_deg) || 0;
     if (Math.abs(i1 - i2) > 1e-9 || Math.abs(lan1 - lan2) > 1e-9) {
       const dvPlane_kms = progDvPlaneChangeFull(body, Math.min(A.rp, A.ra) - b.R, i1, lan1, i2, lan2) / 1000;
       const dv1Combined_kms = Math.sqrt(dv1b * dv1b + dvPlane_kms * dvPlane_kms);
@@ -15870,7 +15870,7 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
  */
 function _nmDvDepart(body, orbit, v_inf_kms) {
   const b  = PROG_BODIES[body];
-  const r  = b.R + (orbit.perigee ?? orbit.apogee ?? 0);
+  const r  = b.R + ((orbit.periKm ?? orbit.perigee) ?? (orbit.apoKm ?? orbit.apogee) ?? 0);
   const v0 = _nmOrbitVAtR(body, orbit, r);
   const ve = Math.sqrt(v_inf_kms * v_inf_kms + 2 * b.mu / r);
   return Math.abs(ve - v0) * 1000;
@@ -15923,7 +15923,7 @@ function _nmDvPhysics(nA, nB) {
 
     // Surface → orbit (ascent)
     if (oa.type === 'surface') {
-      const h = ob.perigee ?? ob.apogee ?? 0;
+      const h = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 0;
       if (body === 'Earth')  return { dv: 9400, note: 'Earth ascent (gravity + drag losses included)', method: 'empirical' };
       if (body === 'Moon')   return { dv: Math.round(progDvLunarAscent(h)), note: `Lunar ascent to ${h} km`, method: 'scaled model' };
       if (body === 'Mars')   return { dv: Math.round(progDvMarsAscent(h)),  note: `Mars ascent to ${h} km`, method: 'scaled model' };
@@ -15932,7 +15932,7 @@ function _nmDvPhysics(nA, nB) {
     // Orbit → surface (descent, symmetric with ascent for planning)
     // Guard: only for actual orbits, not transit/escape trajectories
     if (ob.type === 'surface' && (oa.type === 'circular' || oa.type === 'elliptic')) {
-      const h = oa.perigee ?? oa.apogee ?? 0;
+      const h = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0;
       if (body === 'Earth')  return { dv: 9400, note: 'Earth deorbit/reentry', method: 'empirical' };
       if (body === 'Moon')   return { dv: Math.round(progDvLunarAscent(h)), note: `Lunar descent from ${h} km`, method: 'scaled model' };
       if (body === 'Mars')   return { dv: Math.round(progDvMarsAscent(h)),  note: `Mars descent from ${h} km`, method: 'scaled model' };
@@ -15941,10 +15941,10 @@ function _nmDvPhysics(nA, nB) {
     // circular/elliptic orbit → escape velocity
     if (ob.type === 'escape' && (oa.type === 'circular' || oa.type === 'elliptic')) {
       const c3 = ob.c3 ?? 0;
-      const r  = PROG_BODIES[body].R + (oa.perigee ?? oa.apogee ?? 0);
+      const r  = PROG_BODIES[body].R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0);
       const v0 = _nmOrbitVAtR(body, oa, r);
       const ve = Math.sqrt(Math.max(0, 2 * PROG_BODIES[body].mu / r + c3));
-      return { dv: Math.round(Math.abs(ve - v0) * 1000), note: `Escape from ${body} at ${oa.perigee ?? oa.apogee ?? 0} km (C3=${c3} km²/s²)`, method: 'vis-viva' };
+      return { dv: Math.round(Math.abs(ve - v0) * 1000), note: `Escape from ${body} at ${(oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0} km (C3=${c3} km²/s²)`, method: 'vis-viva' };
     }
 
     // circular/elliptic orbit → transit departure (TLI, TMI, etc.)
@@ -15952,7 +15952,7 @@ function _nmDvPhysics(nA, nB) {
     if (ob.type === 'transit' && (ob.departure_body === body || ob.body === body)
         && (oa.type === 'circular' || oa.type === 'elliptic')) {
       const c3  = ob.c3 ?? 0;
-      const r   = PROG_BODIES[body].R + (oa.perigee ?? oa.apogee ?? 185);
+      const r   = PROG_BODIES[body].R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185);
       const v0  = _nmOrbitVAtR(body, oa, r);
       const ve  = Math.sqrt(Math.max(0, 2 * PROG_BODIES[body].mu / r + c3));
       const alt = Math.round(r - PROG_BODIES[body].R);
@@ -15995,7 +15995,7 @@ function _nmDvPhysics(nA, nB) {
         note: `LOI to 100 km: ${Math.round(loi)} m/s  +  Lunar descent: ${Math.round(descent)} m/s`,
         method: 'patched-conic' };
     }
-    const h_llo = ob.perigee ?? ob.apogee ?? 100;
+    const h_llo = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 100;
     const loi = progDvLOI(h_llo, 185);
     return { dv: Math.round(loi),
       note: `LOI to ${h_llo} km LLO`,
@@ -16020,7 +16020,7 @@ function _nmDvPhysics(nA, nB) {
           note = `VOI to 300 km (Venus surface via aerobraking — entry ΔV not modeled)`;
         }
       } else {
-        const h_arr = ob.perigee ?? ob.apogee ?? 400;
+        const h_arr = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 400;
         if (ob.body === 'Mars')  { dvCapture = progDvMOI(h_arr); note = `Mars orbit insertion to ${h_arr} km`; }
         if (ob.body === 'Venus') { dvCapture = progDvVOI(h_arr); note = `Venus orbit insertion to ${h_arr} km`; }
       }
@@ -16034,9 +16034,9 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Earth' && ob.body === 'Moon' &&
       (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
     // Generalized TLI from any Earth orbit altitude
-    const h_park = oa.perigee ?? oa.apogee ?? 185;
+    const h_park = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185;
     const tli    = progDvTLI(h_park);
-    const h_llo  = (ob.type === 'surface') ? 0 : (ob.perigee ?? ob.apogee ?? 100);
+    const h_llo  = (ob.type === 'surface') ? 0 : ((ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 100);
     const loi    = progDvLOI(h_llo === 0 ? 100 : h_llo, h_park);
     if (ob.type === 'surface') {
       const descent = progDvLunarAscent(100);
@@ -16051,8 +16051,8 @@ function _nmDvPhysics(nA, nB) {
 
   if (oa.body === 'Moon' && ob.body === 'Earth' &&
       (oa.type === 'circular' || oa.type === 'elliptic')) {
-    const h_llo  = oa.perigee ?? oa.apogee ?? 100;
-    const h_park = (ob.type === 'surface') ? 0 : (ob.perigee ?? ob.apogee ?? 185);
+    const h_llo  = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 100;
+    const h_park = (ob.type === 'surface') ? 0 : ((ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 185);
     return { dv: Math.round(progDvTEI(h_llo, Math.max(h_park, 185))),
       note: `TEI from ${h_llo} km LLO → ${h_park > 0 ? h_park + ' km' : 'Earth surface'}`,
       method: 'patched-conic' };
@@ -16064,7 +16064,7 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Moon' && ob.type === 'transit' &&
       (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
     const mu_M    = PROG_BODIES.Moon.mu;
-    const r_M     = PROG_BODIES.Moon.R + (oa.perigee ?? oa.apogee ?? 100);
+    const r_M     = PROG_BODIES.Moon.R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 100);
     const v_cM    = _nmOrbitVAtR('Moon', oa, r_M);           // current Moon orbit speed
     const v_escM  = Math.sqrt(2 * mu_M / r_M);               // Moon escape speed at periapsis
     const dv_esc  = Math.abs(v_escM - v_cM) * 1000;          // m/s to escape Moon
@@ -16089,7 +16089,7 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Earth' && ob.type === 'transit' &&
       (oa.type === 'circular' || oa.type === 'elliptic')) {
     const c3     = ob.c3 ?? 8.7;
-    const h_park = oa.perigee ?? oa.apogee ?? 185;
+    const h_park = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185;
     const r      = PROG_BODIES.Earth.R + h_park;
     const v0     = _nmOrbitVAtR('Earth', oa, r);
     const vinj   = Math.sqrt(Math.max(0, 2 * PROG_BODIES.Earth.mu / r + c3));
@@ -16178,13 +16178,13 @@ function _nmMatchOrbitToNode(body, periKm, apoKm, incDeg, nodes, tol) {
     const o = n && n.orbit;
     if (!o || o.body !== body) continue;
     if (o.type === 'escape' || o.type === 'transit' || o.type === 'surface') continue;
-    const nPeri = o.perigee != null ? o.perigee : (o.apogee || 0);
-    const nApo  = o.apogee  != null ? o.apogee  : (o.perigee || 0);
+    const nPeri = (o.periKm ?? o.perigee) != null ? (o.periKm ?? o.perigee) : ((o.apoKm ?? o.apogee) || 0);
+    const nApo  = (o.apoKm ?? o.apogee)  != null ? (o.apoKm ?? o.apogee)  : ((o.periKm ?? o.perigee) || 0);
     const periTol = Math.max(t.absKm, t.pct * Math.max(1, nPeri));
     const apoTol  = Math.max(t.absKm, t.pct * Math.max(1, nApo));
     if (Math.abs(periKm - nPeri) > periTol) continue;
     if (Math.abs(apoKm  - nApo)  > apoTol)  continue;
-    const nInc = o.inclination || 0;
+    const nInc = (o.incDeg ?? o.inclination) || 0;
     if (Math.abs(incDeg - nInc) > t.incDeg) continue;
     return n;
   }
@@ -16346,14 +16346,36 @@ function _missionsSansPending() {
 // merge above, so persistence stays untouched (writers keep emitting
 // whatever's live in memory; this is the one load-time boundary that makes
 // old blobs compatible). Canonical wins if somehow both are present.
+// C2b: absorbs BOTH legacy orbit-element dialects on a single object:
+//   - event dialect  : alt_km / apo_km / inc_deg / lan_deg   (e.orbit, m.launchOrbit)
+//   - node-map dialect: perigee / apogee / inclination / lan  (node.orbit, e.orbitAtBurn)
+// -> canonical periKm/apoKm/incDeg/lanDeg (+ argpDeg). Canonical key wins if
+// already present; every legacy alias is then removed. Non-element fields
+// (type/body/c3/destination/surface/propagated/r/v/frame ...) are untouched.
 function _missionMigrateOrbitFieldNames(o) {
   if (!o || typeof o !== 'object') return o;
-  if (o.periKm == null && o.alt_km != null) o.periKm = o.alt_km;
-  if (o.apoKm == null && o.apo_km != null) o.apoKm = o.apo_km;
-  if (o.incDeg == null && o.inc_deg != null) o.incDeg = o.inc_deg;
-  if (o.lanDeg == null && o.lan_deg != null) o.lanDeg = o.lan_deg;
+  if (o.periKm == null) o.periKm = (o.alt_km != null ? o.alt_km : o.perigee);
+  if (o.apoKm == null)  o.apoKm  = (o.apo_km != null ? o.apo_km : o.apogee);
+  if (o.incDeg == null) o.incDeg = (o.inc_deg != null ? o.inc_deg : o.inclination);
+  if (o.lanDeg == null) o.lanDeg = (o.lan_deg != null ? o.lan_deg : o.lan);
+  if (o.argpDeg == null && o.argp_deg != null) o.argpDeg = o.argp_deg;
+  // never leave a null we just introduced (absent legacy source) on the object
+  if (o.periKm == null) delete o.periKm;
+  if (o.apoKm == null) delete o.apoKm;
+  if (o.incDeg == null) delete o.incDeg;
+  if (o.lanDeg == null) delete o.lanDeg;
   delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  delete o.perigee; delete o.apogee; delete o.inclination; delete o.lan;
+  delete o.argp_deg;
   return o;
+}
+// C2b item-3: legacy .program/autosave blobs carry custom node-map nodes whose
+// .orbit uses the node-map dialect — canonicalize their element field names on
+// load (the node-map dialect writers are canonical as of this pass).
+function _missionMigrateNodeMapCustomNodes(prog) {
+  if (prog && Array.isArray(prog.nodeMapCustomNodes)) {
+    prog.nodeMapCustomNodes.forEach(cn => { if (cn && cn.orbit) _missionMigrateOrbitFieldNames(cn.orbit); });
+  }
 }
 function _missionMigrateLaunchOrbitEntry(e) {
   if (!e) return e;
@@ -16362,6 +16384,10 @@ function _missionMigrateLaunchOrbitEntry(e) {
     delete e.launchOrbit;
   }
   if (e.orbit) _missionMigrateOrbitFieldNames(e.orbit);
+  // C2b item-3: e.orbitAtBurn is a canonical boundary field now — rename any
+  // legacy-dialect element names on old blobs (recompute regenerates it
+  // canonically too, but a consumer may read it before the load-time recompute).
+  if (e.orbitAtBurn) _missionMigrateOrbitFieldNames(e.orbitAtBurn);
   return e;
 }
 function _missionMigrateLaunchOrbitLog(m) {
@@ -16462,6 +16488,8 @@ function applyProgramObject(obj) {
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
+  _missionMigrateNodeMapCustomNodes(PROG_ACTIVE_PROGRAM);   // C2b item-3: legacy node.orbit dialect -> canonical
+
   // R1: programs saved before the epoch feature get the default epoch
   if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
   _fleetSel   = (obj.sel && obj.sel.fleet)   || (_fleetEntries[0] && _fleetEntries[0].fleetId) || null;
@@ -18263,7 +18291,7 @@ function physSchematicCoastTof(fromO, toO) {
   if (dest && PROG_MOON_ORBITS[dest]) {
     const parent = PROG_MOON_ORBITS[dest].parent;
     const altA = fromO.type === 'surface' ? 0 :
-      (fromO.type === 'transit' ? 185 : ((fromO.perigee ?? fromO.apogee ?? 185) + (fromO.apogee ?? fromO.perigee ?? 185)) / 2);
+      (fromO.type === 'transit' ? 185 : (((fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 185) + ((fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 185)) / 2);
     return progHohmannTOF(parent, altA, PROG_MOON_ORBITS[dest].r - PROG_BODIES[parent].R);
   }
   // interplanetary: selected launch window is authoritative, else heliocentric Hohmann
@@ -18275,8 +18303,8 @@ function physSchematicCoastTof(fromO, toO) {
   }
   // same-body orbit -> orbit
   if (fromO.body === toO.body && PROG_BODIES[fromO.body]) {
-    const altA = fromO.type === 'surface' ? 0 : ((fromO.perigee ?? fromO.apogee ?? 0) + (fromO.apogee ?? fromO.perigee ?? 0)) / 2;
-    const altB = toO.type === 'surface' ? 0 : ((toO.perigee ?? toO.apogee ?? 0) + (toO.apogee ?? toO.perigee ?? 0)) / 2;
+    const altA = fromO.type === 'surface' ? 0 : (((fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 0) + ((fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 0)) / 2;
+    const altB = toO.type === 'surface' ? 0 : (((toO.periKm ?? toO.perigee) ?? (toO.apoKm ?? toO.apogee) ?? 0) + ((toO.apoKm ?? toO.apogee) ?? (toO.periKm ?? toO.perigee) ?? 0)) / 2;
     if (Math.abs(altA - altB) < 1) return 0;
     return progHohmannTOF(fromO.body, altA, altB);
   }
@@ -18312,7 +18340,7 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   const fromBody = fromOrbit.body || 'Earth';
   if (!PROG_BODIES[fromBody]) return null;
   const altFrom = fromOrbit.type === 'surface' ? 0 :
-    (fromOrbit.type === 'transit' ? 185 : ((fromOrbit.perigee ?? fromOrbit.apogee ?? 185) + (fromOrbit.apogee ?? fromOrbit.perigee ?? 185)) / 2);
+    (fromOrbit.type === 'transit' ? 185 : (((fromOrbit.periKm ?? fromOrbit.perigee) ?? (fromOrbit.apoKm ?? fromOrbit.apogee) ?? 185) + ((fromOrbit.apoKm ?? fromOrbit.apogee) ?? (fromOrbit.periKm ?? fromOrbit.perigee) ?? 185)) / 2);
   const r1 = PROG_BODIES[fromBody].R + altFrom;
   const mu = PROG_BODIES[fromBody].mu;
   const coastTof = physSchematicCoastTof(fromOrbit, toOrbit);
@@ -18342,12 +18370,12 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
 
   // R3: departure state in the authored orbit plane (Ω=0 convention, same as
   // the R2 ring rendering); prograde unit = v̂ of the inclined state.
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   // R3.2: an authored departure plane (lan_deg) is fixed geometry, not a
   // solve target — physShootLegAim's raan solve is skipped entirely for an
   // authored fromOrbit (see there); this single-burn (samebody) construction
   // just needs to honor the same authored raan for consistency.
-  const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const raanFixed = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180 : 0;
   // §7al site 15 (2026-07-18): the authored (inc, lan) are EQUATOR-frame. Seam
   // them to WORLD/ecliptic via the C1 boundary before physAimBurnState (a
   // world-frame constructor) — mirrors aimBurnEq (565-physics-targeting) — but
@@ -18367,8 +18395,8 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // to the ecliptic).
   let incWorldRad = incRad, raanWorldRad = raanFixed;
   if (sameBody && typeof orbitWorldElements === 'function') {
-    const _w = orbitWorldElements({ body: fromBody, inc_deg: (fromOrbit.inclination || 0),
-      lan_deg: (fromOrbit.lan_deg != null ? fromOrbit.lan_deg : 0) });
+    const _w = orbitWorldElements({ body: fromBody, inc_deg: ((fromOrbit.incDeg ?? fromOrbit.inclination) || 0),
+      lan_deg: ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? (fromOrbit.lanDeg ?? fromOrbit.lan_deg) : 0) });
     incWorldRad = (_w.incDeg * Math.PI) / 180; raanWorldRad = (_w.lanDeg * Math.PI) / 180;
   }
   const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incWorldRad, 0, raanWorldRad);
@@ -18515,7 +18543,7 @@ function physRebuildMissionTrajectories(m) {
       const tn = _missionNmNodeById(ev.toNode);
       const o = tn && tn.orbit;
       if (o && o.body === dest && (o.type === 'circular' || o.type === 'elliptic'))
-        return { peri: o.perigee ?? o.apogee ?? 100, apo: o.apogee ?? o.perigee ?? 100 };
+        return { peri: (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 100, apo: (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 100 };
     }
     return { peri: 100, apo: 100 };
   };
@@ -18550,12 +18578,14 @@ function physRebuildMissionTrajectories(m) {
   let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
-    // C2b: e.orbit's own field names are canonical (periKm/apoKm/incDeg/lanDeg)
-    // as of this pass; lastAuthoredPlane stays in 565's internal lan_deg
-    // convention (out of scope to rename — see docs/MISSION_MODEL_V2.md §24
-    // C2b), so the read off e.orbit is translated right here at the boundary.
+    // C2b item-4 (2026-07-17): e.orbit AND node.orbit are both canonical now
+    // (periKm/apoKm/incDeg/lanDeg). lastAuthoredPlane — a 565-internal tracker
+    // that is OVERLAID back onto a same-body fromO before solving — is carried
+    // in the SAME canonical dialect so the overlay writes the field names the
+    // (canonical-primary) reads prefer (a legacy-keyed overlay would be shadowed
+    // by the node's own canonical incDeg/lanDeg). It stays otherwise internal.
     if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.incDeg != null) {
-      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.incDeg, lan_deg: e.orbit.lanDeg ?? 0 };
+      lastAuthoredPlane = { body: e.orbit.body, incDeg: e.orbit.incDeg, lanDeg: e.orbit.lanDeg ?? 0 };
     }
     // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
     // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point
@@ -18592,7 +18622,7 @@ function physRebuildMissionTrajectories(m) {
       const mu = PROG_BODIES[bodyForBurn].mu;
       let rBase, vBase, vHat, rHat, hHat;
       if (oValid) {
-        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
+        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
         // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
@@ -18674,7 +18704,7 @@ function physRebuildMissionTrajectories(m) {
       if (typeof _nmClassifySettledOrbit === 'function' && res.stateF) {
         const nodes = (typeof _missionNmNodes === 'function') ? _missionNmNodes() : [];
         const fromNode = (oValid && typeof _nmMatchOrbitToNode === 'function')
-          ? _nmMatchOrbitToNode(o.body, o.perigee ?? o.apogee ?? 0, o.apogee ?? o.perigee ?? 0, o.inclination || 0, nodes)
+          ? _nmMatchOrbitToNode(o.body, (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, (o.incDeg ?? o.inclination) || 0, nodes)
           : null;
         // A frame change away from the departure body (including a handoff
         // into a body our node set doesn't track, e.g. heliocentric 'Sun')
@@ -18719,10 +18749,10 @@ function physRebuildMissionTrajectories(m) {
     if (!fromO || !toO) continue;
     // Overlay the last-authored plane onto a canonical (lan_deg-less) fromO
     // that shares its body — see lastAuthoredPlane note above.
-    if (lastAuthoredPlane && fromO.body === lastAuthoredPlane.body && fromO.lan_deg == null) {
-      fromO = { ...fromO, inclination: lastAuthoredPlane.inclination, lan_deg: lastAuthoredPlane.lan_deg };
+    if (lastAuthoredPlane && fromO.body === lastAuthoredPlane.body && (fromO.lanDeg ?? fromO.lan_deg) == null) {
+      fromO = { ...fromO, incDeg: lastAuthoredPlane.incDeg, lanDeg: lastAuthoredPlane.lanDeg };
     }
-    if (toO.lan_deg != null && toO.body) lastAuthoredPlane = { body: toO.body, inclination: toO.inclination || 0, lan_deg: toO.lan_deg };
+    if ((toO.lanDeg ?? toO.lan_deg) != null && toO.body) lastAuthoredPlane = { body: toO.body, incDeg: (toO.incDeg ?? toO.inclination) || 0, lanDeg: (toO.lanDeg ?? toO.lan_deg) };
 
     // burn magnitude from the EXISTING engine (identical to _missionApplyManeuver)
     const edge = progNmComputeEdgeDv(e.fromNode, e.toNode);
@@ -18772,8 +18802,8 @@ function physRebuildMissionTrajectories(m) {
           const arrSt = muDest ? physArrivalStateAt(lastTransit, lastTransit.dest) : null;
           if (arrSt) {
             const rMag = physMag(arrSt.r);
-            const rp = PROG_BODIES[lastTransit.dest].R + (toO.perigee ?? toO.apogee ?? 0);
-            const ra = PROG_BODIES[lastTransit.dest].R + (toO.apogee ?? toO.perigee ?? 0);
+            const rp = PROG_BODIES[lastTransit.dest].R + ((toO.periKm ?? toO.perigee) ?? (toO.apoKm ?? toO.apogee) ?? 0);
+            const ra = PROG_BODIES[lastTransit.dest].R + ((toO.apoKm ?? toO.apogee) ?? (toO.periKm ?? toO.perigee) ?? 0);
             const aTarget = (rp + ra) / 2;
             const vTargetMag = (aTarget > 0 && rMag > 0) ? Math.sqrt(Math.max(0, muDest * (2 / rMag - 1 / aTarget))) : null;
             // §7al site 14 (2026-07-18): the target plane normal must be built
@@ -18786,8 +18816,8 @@ function physRebuildMissionTrajectories(m) {
             // (headless / non-Keplerian toO) — same value the old code produced.
             let hHatT = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(toO) : null;
             if (!hHatT) {
-              const incT = (toO.inclination || 0) * Math.PI / 180;
-              const raanT = toO.lan_deg != null ? (toO.lan_deg * Math.PI / 180) : 0;
+              const incT = ((toO.incDeg ?? toO.inclination) || 0) * Math.PI / 180;
+              const raanT = (toO.lanDeg ?? toO.lan_deg) != null ? ((toO.lanDeg ?? toO.lan_deg) * Math.PI / 180) : 0;
               hHatT = [Math.sin(raanT) * Math.sin(incT), -Math.cos(raanT) * Math.sin(incT), Math.cos(incT)];
             }
             const rHat = rMag > 0 ? physScale(arrSt.r, 1 / rMag) : null;
@@ -18917,7 +18947,7 @@ function physRebuildMissionTrajectories(m) {
     // by leg signature so a warm recompute costs ~one propagation per leg.
     let st0 = burn.state, dvVec = burn.dvVec, st0Pre = burn.preState;
     const r1 = physMag(burn.state.r);
-    const incLeg = (fromO.inclination || 0);
+    const incLeg = ((fromO.incDeg ?? fromO.inclination) || 0);
     let raanUsed = 0;
     // §7al site 13 (2026-07-18): WORLD/ecliptic-frame mirror of (incLeg,
     // raanUsed). physShootLegAim RETURNS an EQUATORIAL raan (raan0) and seams
@@ -18935,7 +18965,7 @@ function physRebuildMissionTrajectories(m) {
       // differential-corrector cache kept returning the shot solved under
       // the OLD plane — the trajectory ring/maneuver node visibly stuck to
       // the previous LAN despite the authored orbit having changed.
-      const lanLeg = (fromO.lan_deg != null) ? fromO.lan_deg : 0;
+      const lanLeg = ((fromO.lanDeg ?? fromO.lan_deg) != null) ? (fromO.lanDeg ?? fromO.lan_deg) : 0;
       const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|i${incLeg}|o${lanLeg}`;
       let aim = _physShootCache[sig];
       if (!aim) {
@@ -19216,7 +19246,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   const burn0 = physSolveNodeBurn(fromOrbit, toTransit, tDepart_s, dv_kms, overrides);
   if (!burn0) return { converged: false, note: 'no departure geometry for fromOrbit' };
   const r1 = physMag(burn0.state.r);
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   let theta0 = physPhaseBurnAngle(progBodyAngleAt('Moon', tDepart_s + burn0.coastTof_s));
 
   // PERILUNE-phased arrival epochs (spec: "target = the NRHO's PERILUNE state
@@ -19256,8 +19286,8 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // out-of-plane residual drops back into the linear regime. An AUTHORED
   // fromOrbit.lan_deg is fixed geometry (not a solve target), same precedence
   // as physShootLegAim.
-  const raanAuthored = fromOrbit.lan_deg != null;
-  const raanAuthoredRad = raanAuthored ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const raanAuthored = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null;
+  const raanAuthoredRad = raanAuthored ? ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180 : 0;
   const propCtx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const toMoonFrame = (st, frame, t) => frame === 'Moon' ? st : physPatchState(st, frame, 'Moon', t, overrides);
   const targetAtAbs = tArr => refOrbitPropagatedStateAt(nrhoRefId, tArr);
@@ -20054,7 +20084,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // equatorial (inc, raan) pair get rotated into world/ecliptic via
   // progEqToWorldElements — see aimBurnEq below. This is the ONE seam
   // application for this function; MATH.md §7al lists it in the audit.
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
   function toWorldPlane(iEqRad, raanEqRad) {
     if (typeof orbitWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
@@ -20106,8 +20136,8 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // descending ambiguity to try) so a plane the fixed |Δv| genuinely cannot
   // reach honestly reports converged:false downstream rather than silently
   // being re-aimed onto a different plane the user didn't author.
-  const raanAuthored = fromOrbit.lan_deg != null;
-  const raanRoots = raanAuthored ? [(fromOrbit.lan_deg * Math.PI) / 180] : [0];
+  const raanAuthored = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null;
+  const raanRoots = raanAuthored ? [((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180] : [0];
   if (!raanAuthored && burn0.kind === 'moon' && incRad > 1e-6) {
     const mSt = physPatchState(physBodyStateAt(dest, tArrSched), 'Sun', fromBody, tArrSched, overrides);
     const mMag = physMag(mSt.r);
@@ -20166,11 +20196,11 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // §20: toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
   // (same convention as fromOrbit) — rotate into world before comparing
   // against the world-frame osculating arrival elements below.
-  const toAuthoredPlane = (toOrbit.lan_deg != null && toOrbit.inclination != null)
+  const toAuthoredPlane = ((toOrbit.lanDeg ?? toOrbit.lan_deg) != null && (toOrbit.incDeg ?? toOrbit.inclination) != null)
     ? (() => {
         const w = (typeof orbitWorldElements === 'function')
-          ? orbitWorldElements({ body: dest, inclination: toOrbit.inclination, lan_deg: toOrbit.lan_deg, frame: toOrbit.frame })
-          : { incDeg: toOrbit.inclination, lanDeg: toOrbit.lan_deg };
+          ? orbitWorldElements({ body: dest, inclination: (toOrbit.incDeg ?? toOrbit.inclination), lan_deg: (toOrbit.lanDeg ?? toOrbit.lan_deg), frame: toOrbit.frame })
+          : { incDeg: (toOrbit.incDeg ?? toOrbit.inclination), lanDeg: (toOrbit.lanDeg ?? toOrbit.lan_deg) };
         return { i: (w.incDeg * Math.PI) / 180, raan: (w.lanDeg * Math.PI) / 180 };
       })()
     : null;
@@ -23055,9 +23085,9 @@ function _missionLtEdgeEstimate(m, fromId, toId) {
   const okType = t => t === 'circular' || t === 'elliptic';
   if (!okType(oa.type) || !okType(ob.type)) return null;
   const b = PROG_BODIES[oa.body]; if (!b) return null;
-  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2)); // C2: canonical mean-radius helper
+  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + ((((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2)); // C2: canonical mean-radius helper
   const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
-  const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
+  const di = Math.abs(((oa.incDeg ?? oa.inclination) || 0) - ((ob.incDeg ?? ob.inclination) || 0));
   const dv_kms = ltEdelbaumFullDv(v0, v1, di);
   const ep = { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: progStageMass(stage), mDry_kg: stage.dry_mass };
   const tof = ltEdelbaumTofEst(dv_kms, ep);
@@ -23083,7 +23113,7 @@ function missionExecLowThrustFromEdge(id) {
   const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
   if (!est || est.tof_s == null) return;
   const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
-  const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  const meanAlt = o => (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2;
   const law = meanAlt(nB.orbit) >= meanAlt(nA.orbit) ? 'prograde' : 'retrograde';
   m.log.push({ type: 'LOWTHRUST', duration_s: Math.round(est.tof_s), law, throttle: 1 });
   _missionAddEvt = null; _missionAddMv = { from: null, to: null, steps: [] };
@@ -25810,14 +25840,16 @@ function _missionOrbitToNodeOrbit(o, planet) {
   if (o.mode === 'escape') {
     return { type: 'escape', body: 'Earth', c3: o.c3 ?? 0 };
   }
+  // Input `o` is a frozen ORBIT_CATEGORIES entry (060 dialect: perigee/apogee/
+  // inc) — read as-is; the OUTPUT node.orbit spec is canonical (C2b item-3).
   const peri = o.perigee ?? o.apogee ?? 0;
   const apo  = o.apogee ?? o.perigee ?? 0;
   const spec = { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
-           body: planet, perigee: peri, apogee: apo, inclination: o.inc ?? 0 };
+           body: planet, periKm: peri, apoKm: apo, incDeg: o.inc ?? 0 };
   // R3.2: authored orientation is OPTIONAL — only carried over when the
   // source orbit spec actually authored it (see MATH.md §7i tier 1).
-  if (o.lan_deg != null) spec.lan_deg = o.lan_deg;
-  if (o.argp_deg != null) spec.argp_deg = o.argp_deg;
+  if (o.lan_deg != null) spec.lanDeg = o.lan_deg;
+  if (o.argp_deg != null) spec.argpDeg = o.argp_deg;
   return spec;
 }
 
@@ -25952,12 +25984,12 @@ function missionSaveCustomNode() {
   } else {
     const peri = parseFloat(document.getElementById('nmnode-peri')?.value) || 0;
     const apo  = parseFloat(document.getElementById('nmnode-apo')?.value) || peri;
-    orbit = { type: t, body, perigee: peri, apogee: apo, inclination: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
+    orbit = { type: t, body, periKm: peri, apoKm: apo, incDeg: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
     // R3.2: LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
     const lanRaw = (document.getElementById('nmnode-lan')?.value ?? '').trim();
     const argpRaw = (document.getElementById('nmnode-argp')?.value ?? '').trim();
-    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lan_deg = parseFloat(lanRaw);
-    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argp_deg = parseFloat(argpRaw);
+    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lanDeg = parseFloat(lanRaw);
+    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argpDeg = parseFloat(argpRaw);
   }
   // place new node in open space mid-canvas; user can drag it
   _missionCreateCustomNode(label, orbit, 550 + Math.round((Math.random()-0.5)*120), 300 + Math.round((Math.random()-0.5)*80));
@@ -25976,13 +26008,14 @@ function missionSaveCustomNode() {
 function _missionOrientationBadge(n, missionId) {
   const o = n && n.orbit;
   if (!o || o.surface || o.type === 'surface' || o.type === 'transit' || o.type === 'escape') return '';
-  const inc = o.inclination || 0;
-  if (o.lan_deg != null) {
-    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+o.lan_deg).toFixed(1)}&deg; (authored)`;
+  const inc = (o.incDeg ?? o.inclination) || 0;
+  const oLan = o.lanDeg ?? o.lan_deg;
+  if (oLan != null) {
+    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+oLan).toFixed(1)}&deg; (authored)`;
   }
   if (missionId != null && typeof _physTrajByMission !== 'undefined' && typeof _trajOrbitKey === 'function') {
     const legs = (_physTrajByMission[missionId] && _physTrajByMission[missionId].legs) || [];
-    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const peri = (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apo = (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0;
     const key = _trajOrbitKey(o.body, peri, apo);
     for (const L of legs) {
       if (!L.converged) continue;
@@ -26372,7 +26405,7 @@ function _missionNmLayout() {
 
   const meanAlt = n => {
     const o = n.orbit || {};
-    return ((o.apogee ?? o.perigee ?? 0) + (o.perigee ?? o.apogee ?? 0)) / 2;
+    return (((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0) + ((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0)) / 2;
   };
 
   const pos = {};
@@ -26951,7 +26984,7 @@ function _missionApplyManeuver(active, e) {
     const o = node.orbit;
     if (o.type === 'surface') active.orbitState = { body: o.body, perigee: 0, apogee: 0, inclination: 0, lan: 0, epoch: 0, surface: true };
     else if (o.type === 'circular' || o.type === 'elliptic') {
-      active.orbitState = { body: o.body, perigee: o.perigee ?? o.apogee ?? 0, apogee: o.apogee ?? o.perigee ?? 0, inclination: o.inclination ?? 0, lan: 0, epoch: 0, surface: false };
+      active.orbitState = { body: o.body, perigee: (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apogee: (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, inclination: (o.incDeg ?? o.inclination) ?? 0, lan: 0, epoch: 0, surface: false };
       // Phase 5a fix (user flight-test): a destination node bound to a
       // PROPAGATED catalog ref (the NRHO) must stamp propagated/refId onto the
       // arrived orbitState — the node's Kepler-ish peri/apo are label-only
@@ -27497,6 +27530,18 @@ function missionClearArrivalOption(id, idx) {
 // Split out of 570-mission-manager.js (behavior-preserving move). Definitions only
 //   (no load-time execution); load order relative to the manager is immaterial.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// C2b item-3: translate a vehicle orbitState (380 dialect: perigee/apogee/
+// inclination/lan + surface/propagated/r/v/frame/body) into the CANONICAL
+// orbitAtBurn boundary shape (periKm/apoKm/incDeg/lanDeg), preserving every
+// non-element field via spread. The element keys are removed so the persisted
+// boundary field carries canonical-only names (matches the 450 migration).
+function _missionOrbitAtBurnCanonical(os) {
+  const ob = { ...os };
+  ob.periKm = os.perigee; ob.apoKm = os.apogee; ob.incDeg = os.inclination; ob.lanDeg = os.lan;
+  delete ob.perigee; delete ob.apogee; delete ob.inclination; delete ob.lan;
+  return ob;
+}
 
 // Capture a serialisable snapshot of every live vehicle's state at a point in time.
 // Names are disambiguated (#N) within the snapshot so duplicates are distinguishable.
@@ -28137,12 +28182,13 @@ function missionRecompute(m) {
         // P4: cache the vehicle's node-map orbit at the burn so the physics
         // rebuild (565) can reconstruct + propagate the post-burn trajectory
         // (same replay-derived-cache pattern as e.orbitAfter / e.stagingResult).
-        // BUG FIX (feedback item 6): orbitState's plane key is `lan` everywhere
-        // it's constructed (573-380), but the 565 physics consumers of
-        // orbitAtBurn all read `lan_deg` (the e.orbit/node-orbit convention) —
-        // that key mismatch silently dropped the authored LAN for every
-        // manual-MNODE burn frame. Carry both so neither convention breaks.
-        e.orbitAtBurn = active.orbitState ? { ...active.orbitState, lan_deg: active.orbitState.lan } : null;
+        // C2b item-3 (2026-07-17): orbitAtBurn is a CANONICAL boundary field
+        // (periKm/apoKm/incDeg/lanDeg). active.orbitState is the 380 dialect
+        // (perigee/apogee/inclination/lan) — translate the element field names
+        // to canonical here (the ONE writer), spreading the rest (body/surface/
+        // propagated/r/v/frame) through unchanged so 565's oValid/propagated
+        // checks and orbitWorldState/orbitMeanRadiusKm reads keep working.
+        e.orbitAtBurn = active.orbitState ? _missionOrbitAtBurnCanonical(active.orbitState) : null;
         if (authEntry) authEntry.orbitAtBurn = e.orbitAtBurn;
         const fullDv = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
         e.dvRequired = Math.round(fullDv);
@@ -28446,7 +28492,8 @@ function _mcNodeOrbitMatchesState(node, os) {
   if (no.type === 'transit' || no.type === 'escape') return true;   // not a fixed orbital state — skip
   if (no.body && os.body && no.body !== os.body) return false;
   if (no.type === 'surface') return !!os.surface;
-  const a = { apogee: no.apogee, perigee: no.perigee, inclination: no.inclination };
+  // `no` = node.orbit (canonical, C2b item-3); `os` = vehicle orbitState (380 dialect).
+  const a = { apogee: (no.apoKm ?? no.apogee), perigee: (no.periKm ?? no.perigee), inclination: (no.incDeg ?? no.inclination) };
   const b = { apogee: os.apogee, perigee: os.perigee, inclination: os.inclination };
   return Math.abs((a.apogee ?? 0) - (b.apogee ?? 0)) < 1 &&
     Math.abs((a.perigee ?? 0) - (b.perigee ?? 0)) < 1 &&
@@ -29551,7 +29598,7 @@ function _trajLocalRadius(o, body) {
   }
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   if (o.type === 'surface') return R;
-  const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+  const peri = (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apo = (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0;
   return R + (peri + apo) / 2; // transfer endpoints use mean radius as departure/arrival point
 }
 
@@ -31061,7 +31108,7 @@ function _trajExtractMission(m) {
       const fromO = fromN && fromN.orbit;
       if (L.departElements && fromO && fromO.body) {
         const sc = frames[fromO.body];
-        const key = _trajOrbitKey(fromO.body, fromO.perigee ?? fromO.apogee ?? 0, fromO.apogee ?? fromO.perigee ?? 0);
+        const key = _trajOrbitKey(fromO.body, (fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 0, (fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 0);
         const rec = sc && sc.orbits.get(key);
         if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.departElements);
       }
@@ -32615,12 +32662,14 @@ function _trajSelectedAuthIdx(m) {
 // node-map orbit spec — used only by the redundancy check below (distinct
 // from _trajLocalRadius's single "mean radius" used for arc endpoints).
 function toO_peri(o, R) {
-  if (!o || o.perigee == null && o.apogee == null) return null;
-  return R + (o.perigee ?? o.apogee ?? 0);
+  const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
+  if (!o || peri == null && apo == null) return null;
+  return R + (peri ?? apo ?? 0);
 }
 function toO_apo(o, R) {
-  if (!o || o.perigee == null && o.apogee == null) return null;
-  return R + (o.apogee ?? o.perigee ?? 0);
+  const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
+  if (!o || peri == null && apo == null) return null;
+  return R + (apo ?? peri ?? 0);
 }
 
 // Redundant-transfer check: a leg's transfer ellipse (rPeri..rApo) is
@@ -34436,7 +34485,10 @@ function _trajGizmoRepaintScenePreview() {
 function _trajGizmoOrbitNodeAt(o, met) {
   if (!o || o.surface || !PROG_BODIES[o.body]) return null;
   const mu = PROG_BODIES[o.body].mu;
-  const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  // `o` may be a canonical node.orbit / orbitAtBurn (periKm/apoKm) OR a legacy
+  // vehicle orbitState / ring record (perigee/apogee) — orbitMeanRadiusKm
+  // normalizes either; the inline keeps the propagated-orbit (null) fallback.
+  const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2);
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);
@@ -35777,13 +35829,14 @@ function _oiClassify(m, authIdx, e) {
         periKm, apoKm,
       };
     }
-    if (o.body == null || o.alt_km == null) return null;
+    // e.orbit is canonical (C2b pass 2a): read periKm/apoKm/incDeg/lanDeg.
+    if (o.body == null || o.periKm == null) return null;
     const isBuiltinRef = e.orbitRefId && typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId);
     const refEntry = e.orbitRefId && typeof refOrbitGet === 'function' ? refOrbitGet(e.orbitRefId) : null;
     return {
       authIdx, source: 'launch', evType: e.type,
-      body: o.body, peri: o.alt_km, apo: (o.apo_km != null ? o.apo_km : o.alt_km),
-      inc: o.inc_deg || 0, lan: o.lan_deg || 0,
+      body: o.body, peri: o.periKm, apo: (o.apoKm != null ? o.apoKm : o.periKm),
+      inc: o.incDeg || 0, lan: o.lanDeg || 0,
       binding: e.orbitRefId ? (isBuiltinRef ? 'builtin' : 'user') : 'unbound',
       refId: e.orbitRefId || null,
       name: refEntry ? refEntry.name : 'custom orbit',
@@ -35817,11 +35870,12 @@ function _oiClassify(m, authIdx, e) {
         };
       }
     }
-    if (o.perigee == null) return null;
+    const oPeri = o.periKm ?? o.perigee, oApo = o.apoKm ?? o.apogee;
+    if (oPeri == null) return null;
     return {
       authIdx, source: 'maneuver', nodeId: e.toNode,
-      body: o.body, peri: o.perigee, apo: (o.apogee != null ? o.apogee : o.perigee),
-      inc: o.inclination || 0, lan: o.lan_deg || 0,
+      body: o.body, peri: oPeri, apo: (oApo != null ? oApo : oPeri),
+      inc: (o.incDeg ?? o.inclination) || 0, lan: (o.lanDeg ?? o.lan_deg) || 0,
       binding: n.custom ? 'user' : 'builtin',
       refId: null,
       name: n.sub ? n.label + ' (' + n.sub + ')' : n.label,
@@ -35911,7 +35965,7 @@ function _oiCommitLaunch(m, e, st, merged) {
   if (typeof _missionNodeForLaunch === 'function' && typeof _evIsSolvedManeuver === 'function') {
     const originId = _missionNodeForLaunch(m);
     m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
-    const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
+    const orbitSpec = { body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
     (m.log || []).forEach(e2 => {
       if (_evIsSolvedManeuver(e2) && e2.fromNode === originId) {
         const newId = _oiResolveManeuverNodeId(e2.fromNode, orbitSpec, 'Launch');
@@ -35936,14 +35990,14 @@ function _oiResolveManeuverNodeId(existingNodeId, orbitSpec, labelBase) {
   const label = (n ? n.label : labelBase) + ' (copy)';
   const sub = n ? n.sub : '';
   const dashed = false;
-  const spec = { type: (Math.abs((orbitSpec.apogee || 0) - (orbitSpec.perigee || 0)) < 1 ? 'circular' : 'elliptic'),
-    body: orbitSpec.body, perigee: orbitSpec.perigee, apogee: orbitSpec.apogee, inclination: orbitSpec.inclination };
-  if (orbitSpec.lan_deg != null) spec.lan_deg = orbitSpec.lan_deg;
+  const spec = { type: (Math.abs((orbitSpec.apoKm || 0) - (orbitSpec.periKm || 0)) < 1 ? 'circular' : 'elliptic'),
+    body: orbitSpec.body, periKm: orbitSpec.periKm, apoKm: orbitSpec.apoKm, incDeg: orbitSpec.incDeg };
+  if (orbitSpec.lanDeg != null) spec.lanDeg = orbitSpec.lanDeg;
   return (typeof _missionCreateCustomNode === 'function') ? _missionCreateCustomNode(label, spec, 0, 0, sub) : existingNodeId;
 }
 
 function _oiCommitManeuver(m, e, st, merged) {
-  const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
+  const orbitSpec = { body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
   const newId = _oiResolveManeuverNodeId(e.toNode, orbitSpec, st.name);
   if (newId && newId !== e.toNode) {
     e.toNode = newId; if (e.target) e.target.toNode = newId;
@@ -36005,10 +36059,10 @@ function _oiApplyScrubPreview() {
   const e = m && m.log[st.authIdx]; if (!m || !e) return;
   if (st.source === 'launch') {
     const o = e.orbit || (e.orbit = {});
-    o.body = st.body; o.alt_km = st.peri; o.apo_km = st.apo; o.inc_deg = st.inc; o.lan_deg = st.lan;
+    o.body = st.body; o.periKm = st.peri; o.apoKm = st.apo; o.incDeg = st.inc; o.lanDeg = st.lan;
   } else {
     const n = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.toNode) : null;
-    if (n) { n.orbit = { ...n.orbit, perigee: st.peri, apogee: st.apo, inclination: st.inc, lan_deg: st.lan }; }
+    if (n) { n.orbit = { ...n.orbit, periKm: st.peri, apoKm: st.apo, incDeg: st.inc, lanDeg: st.lan }; }
   }
   if (typeof _trajApplyCam === 'function' && typeof _trajCamByMission !== 'undefined') {
     const cam = _trajCamByMission[st.missionId];

@@ -33,12 +33,12 @@ const PROG_NM_NODES = [
     orbit:{ type:'surface',  body:'Earth' } },
   // LEO directly above the planet (57 px from center → 19 px clear of disc top).
   { id:'leo',           label:'LEO',     sub:'185 – 400 km',   zone:'earth',  cx:195, cy:190, r:20,
-    orbit:{ type:'circular', body:'Earth', perigee:185,   apogee:185,   inclination:28.5 } },
+    orbit:{ type:'circular', body:'Earth', periKm:185,   apoKm:185,   incDeg:28.5 } },
   // GTO upper-left; GEO upper-right — same altitude band, fanned ±30° from vertical.
   { id:'gto',           label:'GTO',     sub:'35,786 km apo',  zone:'earth',  cx:140, cy:168, r:18,
-    orbit:{ type:'elliptic', body:'Earth', perigee:185,   apogee:35786, inclination:28.5 } },
+    orbit:{ type:'elliptic', body:'Earth', periKm:185,   apoKm:35786, incDeg:28.5 } },
   { id:'geo',           label:'GEO',     sub:'35,786 km circ', zone:'earth',  cx:252, cy:163, r:18,
-    orbit:{ type:'circular', body:'Earth', perigee:35786, apogee:35786, inclination:0    } },
+    orbit:{ type:'circular', body:'Earth', periKm:35786, apoKm:35786, incDeg:0    } },
   // Escape near the SOI boundary, centred above.
   { id:'escape',        label:'ESCAPE',  sub:'C3 ≥ 0',         zone:'earth',  cx:195, cy:122, r:17, dashed:true,
     orbit:{ type:'escape',   body:'Earth', c3:0.1 } },
@@ -49,9 +49,9 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Earth', c3:-1.9, destination:'Moon' } },
   // LLO upper-left of Moon, DRO upper-right — angled apart so they're clear.
   { id:'llo',           label:'LLO',     sub:'100 km lunar',   zone:'lunar',  cx:418, cy:152, r:18,
-    orbit:{ type:'circular', body:'Moon',  perigee:100,   apogee:100,   inclination:90 } },
+    orbit:{ type:'circular', body:'Moon',  periKm:100,   apoKm:100,   incDeg:90 } },
   { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:483, cy:138, r:18,
-    orbit:{ type:'circular', body:'Moon',  perigee:68300, apogee:68300, inclination:0 } },
+    orbit:{ type:'circular', body:'Moon',  periKm:68300, apoKm:68300, incDeg:0 } },
   // MISSION_MODEL_V2 §15 5a: Gateway NRHO destination — bound to the SEEDED
   // propagated ref-orbit catalog entry (425's 'nrho-nominal'). orbit.{perigee,
   // apogee} are the SAME approximate label-only values 425 stores (NOT
@@ -62,7 +62,7 @@ const PROG_NM_NODES = [
   // the leg builder (565's nrhoRefAfter) to physSolveNrhoTransfer instead of
   // the generic Keplerian moon-leg shooter.
   { id:'nrho',          label:'NRHO',    sub:'Gateway (true 9:2)', zone:'lunar', cx:520, cy:120, r:16, dashed:true,
-    orbit:{ type:'circular', body:'Moon',  perigee:5544, apogee:71203, inclination:58 },
+    orbit:{ type:'circular', body:'Moon',  periKm:5544, apoKm:71203, incDeg:58 },
     orbitRefId:'nrho-nominal' },
   // Surface node at Moon body center — disc is the node.
   { id:'moon-surface',  label:'MOON',    sub:'surface',        zone:'lunar',  cx:450, cy:192, r:12,
@@ -73,7 +73,7 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:8.7,  departure_body:'Earth', destination:'Mars'  } },
   // Orbit above, surface below.
   { id:'mars-orbit',    label:'MARS',    sub:'orbit 400 km',   zone:'interp', cx:860, cy:150, r:22,
-    orbit:{ type:'circular', body:'Mars',  perigee:400,   apogee:400,   inclination:0 } },
+    orbit:{ type:'circular', body:'Mars',  periKm:400,   apoKm:400,   incDeg:0 } },
   // Surface node at Mars body center — disc is the node.
   { id:'mars-surface',  label:'MARS',    sub:'surface',        zone:'interp', cx:860, cy:205, r:18,
     orbit:{ type:'surface',  body:'Mars' } },
@@ -83,13 +83,13 @@ const PROG_NM_NODES = [
     orbit:{ type:'transit',  body:'Sun', c3:6.3,  departure_body:'Earth', destination:'Venus' } },
   // Orbit above Venus disc.
   { id:'venus-orbit',   label:'VENUS',   sub:'orbit 300 km',   zone:'interp', cx:848, cy:318, r:20,
-    orbit:{ type:'circular', body:'Venus', perigee:300,   apogee:300,   inclination:0 } },
+    orbit:{ type:'circular', body:'Venus', periKm:300,   apoKm:300,   incDeg:0 } },
 
   // ── Mercury ─────────────────────────────────────────────────────────────────
   { id:'mercury-transit', label:'TRANSIT', sub:'Earth → Mercury', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:56.7, departure_body:'Earth', destination:'Mercury' } },
   { id:'mercury-orbit',   label:'MERCURY', sub:'orbit 200 km',    zone:'interp', r:18,
-    orbit:{ type:'circular', body:'Mercury', perigee:200, apogee:200, inclination:0 } },
+    orbit:{ type:'circular', body:'Mercury', periKm:200, apoKm:200, incDeg:0 } },
   { id:'mercury-surface', label:'MERCURY', sub:'surface',         zone:'interp', r:14,
     orbit:{ type:'surface',  body:'Mercury' } },
 
@@ -97,31 +97,31 @@ const PROG_NM_NODES = [
   { id:'jupiter-transit', label:'TRANSIT', sub:'Earth → Jupiter', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:77.4, departure_body:'Earth', destination:'Jupiter' } },
   { id:'jupiter-orbit',   label:'JUPITER', sub:'orbit 1,000 km',  zone:'interp', r:22,
-    orbit:{ type:'circular', body:'Jupiter', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Jupiter', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Saturn ──────────────────────────────────────────────────────────────────
   { id:'saturn-transit',  label:'TRANSIT', sub:'Earth → Saturn',  zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:105.7, departure_body:'Earth', destination:'Saturn' } },
   { id:'saturn-orbit',    label:'SATURN',  sub:'orbit 1,000 km',  zone:'interp', r:22,
-    orbit:{ type:'circular', body:'Saturn', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Saturn', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Uranus ──────────────────────────────────────────────────────────────────
   { id:'uranus-transit',  label:'TRANSIT', sub:'Earth → Uranus',  zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:127.5, departure_body:'Earth', destination:'Uranus' } },
   { id:'uranus-orbit',    label:'URANUS',  sub:'orbit 1,000 km',  zone:'interp', r:20,
-    orbit:{ type:'circular', body:'Uranus', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Uranus', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Neptune ─────────────────────────────────────────────────────────────────
   { id:'neptune-transit', label:'TRANSIT', sub:'Earth → Neptune', zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:135.9, departure_body:'Earth', destination:'Neptune' } },
   { id:'neptune-orbit',   label:'NEPTUNE', sub:'orbit 1,000 km',  zone:'interp', r:20,
-    orbit:{ type:'circular', body:'Neptune', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Neptune', periKm:1000, apoKm:1000, incDeg:0 } },
 
   // ── Pluto ───────────────────────────────────────────────────────────────────
   { id:'pluto-transit',   label:'TRANSIT', sub:'Earth → Pluto',   zone:'interp', r:17, dashed:true,
     orbit:{ type:'transit',  body:'Sun', c3:139.6, departure_body:'Earth', destination:'Pluto' } },
   { id:'pluto-orbit',     label:'PLUTO',   sub:'orbit 1,000 km',  zone:'interp', r:18,
-    orbit:{ type:'circular', body:'Pluto', perigee:1000, apogee:1000, inclination:0 } },
+    orbit:{ type:'circular', body:'Pluto', periKm:1000, apoKm:1000, incDeg:0 } },
 ];
 
 // No pre-spawned edges — users draw their own via right-click → Add Edge From Here.
@@ -200,8 +200,8 @@ function _nmOrbitVAtR(body, orbit, r_km) {
   if (!b) return 0;
   if (!orbit || orbit.type === 'surface') return 0;
   if (orbit.type === 'circular') return Math.sqrt(b.mu / r_km);
-  const rp = b.R + (orbit.perigee ?? orbit.apogee ?? 0);
-  const ra = b.R + (orbit.apogee  ?? orbit.perigee ?? 0);
+  const rp = b.R + ((orbit.periKm ?? orbit.perigee) ?? (orbit.apoKm ?? orbit.apogee) ?? 0);
+  const ra = b.R + ((orbit.apoKm ?? orbit.apogee)  ?? (orbit.periKm ?? orbit.perigee) ?? 0);
   const a  = (rp + ra) / 2;
   return Math.sqrt(Math.max(0, b.mu * (2 / r_km - 1 / a)));
 }
@@ -218,7 +218,7 @@ function _nmOrbitVAtR(body, orbit, r_km) {
 function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   const b = PROG_BODIES[body]; if (!b) return null;
   const apsOf = o => {
-    const r1 = b.R + (o.perigee ?? o.apogee ?? 0), r2 = b.R + (o.apogee ?? o.perigee ?? 0);
+    const r1 = b.R + ((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0), r2 = b.R + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0);
     return { rp: Math.min(r1, r2), ra: Math.max(r1, r2) };
   };
   const A = apsOf(oa), B = apsOf(ob);
@@ -250,8 +250,8 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   // absent lan_deg on either side is treated as Ω=0 (same convention the
   // renderer/physics fall back to).
   if (priceOrientation && best < Infinity) {
-    const i1 = oa.inclination || 0, lan1 = oa.lan_deg || 0;
-    const i2 = ob.inclination || 0, lan2 = ob.lan_deg || 0;
+    const i1 = (oa.incDeg ?? oa.inclination) || 0, lan1 = (oa.lanDeg ?? oa.lan_deg) || 0;
+    const i2 = (ob.incDeg ?? ob.inclination) || 0, lan2 = (ob.lanDeg ?? ob.lan_deg) || 0;
     if (Math.abs(i1 - i2) > 1e-9 || Math.abs(lan1 - lan2) > 1e-9) {
       const dvPlane_kms = progDvPlaneChangeFull(body, Math.min(A.rp, A.ra) - b.R, i1, lan1, i2, lan2) / 1000;
       const dv1Combined_kms = Math.sqrt(dv1b * dv1b + dvPlane_kms * dvPlane_kms);
@@ -268,7 +268,7 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
  */
 function _nmDvDepart(body, orbit, v_inf_kms) {
   const b  = PROG_BODIES[body];
-  const r  = b.R + (orbit.perigee ?? orbit.apogee ?? 0);
+  const r  = b.R + ((orbit.periKm ?? orbit.perigee) ?? (orbit.apoKm ?? orbit.apogee) ?? 0);
   const v0 = _nmOrbitVAtR(body, orbit, r);
   const ve = Math.sqrt(v_inf_kms * v_inf_kms + 2 * b.mu / r);
   return Math.abs(ve - v0) * 1000;
@@ -321,7 +321,7 @@ function _nmDvPhysics(nA, nB) {
 
     // Surface → orbit (ascent)
     if (oa.type === 'surface') {
-      const h = ob.perigee ?? ob.apogee ?? 0;
+      const h = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 0;
       if (body === 'Earth')  return { dv: 9400, note: 'Earth ascent (gravity + drag losses included)', method: 'empirical' };
       if (body === 'Moon')   return { dv: Math.round(progDvLunarAscent(h)), note: `Lunar ascent to ${h} km`, method: 'scaled model' };
       if (body === 'Mars')   return { dv: Math.round(progDvMarsAscent(h)),  note: `Mars ascent to ${h} km`, method: 'scaled model' };
@@ -330,7 +330,7 @@ function _nmDvPhysics(nA, nB) {
     // Orbit → surface (descent, symmetric with ascent for planning)
     // Guard: only for actual orbits, not transit/escape trajectories
     if (ob.type === 'surface' && (oa.type === 'circular' || oa.type === 'elliptic')) {
-      const h = oa.perigee ?? oa.apogee ?? 0;
+      const h = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0;
       if (body === 'Earth')  return { dv: 9400, note: 'Earth deorbit/reentry', method: 'empirical' };
       if (body === 'Moon')   return { dv: Math.round(progDvLunarAscent(h)), note: `Lunar descent from ${h} km`, method: 'scaled model' };
       if (body === 'Mars')   return { dv: Math.round(progDvMarsAscent(h)),  note: `Mars descent from ${h} km`, method: 'scaled model' };
@@ -339,10 +339,10 @@ function _nmDvPhysics(nA, nB) {
     // circular/elliptic orbit → escape velocity
     if (ob.type === 'escape' && (oa.type === 'circular' || oa.type === 'elliptic')) {
       const c3 = ob.c3 ?? 0;
-      const r  = PROG_BODIES[body].R + (oa.perigee ?? oa.apogee ?? 0);
+      const r  = PROG_BODIES[body].R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0);
       const v0 = _nmOrbitVAtR(body, oa, r);
       const ve = Math.sqrt(Math.max(0, 2 * PROG_BODIES[body].mu / r + c3));
-      return { dv: Math.round(Math.abs(ve - v0) * 1000), note: `Escape from ${body} at ${oa.perigee ?? oa.apogee ?? 0} km (C3=${c3} km²/s²)`, method: 'vis-viva' };
+      return { dv: Math.round(Math.abs(ve - v0) * 1000), note: `Escape from ${body} at ${(oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 0} km (C3=${c3} km²/s²)`, method: 'vis-viva' };
     }
 
     // circular/elliptic orbit → transit departure (TLI, TMI, etc.)
@@ -350,7 +350,7 @@ function _nmDvPhysics(nA, nB) {
     if (ob.type === 'transit' && (ob.departure_body === body || ob.body === body)
         && (oa.type === 'circular' || oa.type === 'elliptic')) {
       const c3  = ob.c3 ?? 0;
-      const r   = PROG_BODIES[body].R + (oa.perigee ?? oa.apogee ?? 185);
+      const r   = PROG_BODIES[body].R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185);
       const v0  = _nmOrbitVAtR(body, oa, r);
       const ve  = Math.sqrt(Math.max(0, 2 * PROG_BODIES[body].mu / r + c3));
       const alt = Math.round(r - PROG_BODIES[body].R);
@@ -393,7 +393,7 @@ function _nmDvPhysics(nA, nB) {
         note: `LOI to 100 km: ${Math.round(loi)} m/s  +  Lunar descent: ${Math.round(descent)} m/s`,
         method: 'patched-conic' };
     }
-    const h_llo = ob.perigee ?? ob.apogee ?? 100;
+    const h_llo = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 100;
     const loi = progDvLOI(h_llo, 185);
     return { dv: Math.round(loi),
       note: `LOI to ${h_llo} km LLO`,
@@ -418,7 +418,7 @@ function _nmDvPhysics(nA, nB) {
           note = `VOI to 300 km (Venus surface via aerobraking — entry ΔV not modeled)`;
         }
       } else {
-        const h_arr = ob.perigee ?? ob.apogee ?? 400;
+        const h_arr = (ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 400;
         if (ob.body === 'Mars')  { dvCapture = progDvMOI(h_arr); note = `Mars orbit insertion to ${h_arr} km`; }
         if (ob.body === 'Venus') { dvCapture = progDvVOI(h_arr); note = `Venus orbit insertion to ${h_arr} km`; }
       }
@@ -432,9 +432,9 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Earth' && ob.body === 'Moon' &&
       (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
     // Generalized TLI from any Earth orbit altitude
-    const h_park = oa.perigee ?? oa.apogee ?? 185;
+    const h_park = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185;
     const tli    = progDvTLI(h_park);
-    const h_llo  = (ob.type === 'surface') ? 0 : (ob.perigee ?? ob.apogee ?? 100);
+    const h_llo  = (ob.type === 'surface') ? 0 : ((ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 100);
     const loi    = progDvLOI(h_llo === 0 ? 100 : h_llo, h_park);
     if (ob.type === 'surface') {
       const descent = progDvLunarAscent(100);
@@ -449,8 +449,8 @@ function _nmDvPhysics(nA, nB) {
 
   if (oa.body === 'Moon' && ob.body === 'Earth' &&
       (oa.type === 'circular' || oa.type === 'elliptic')) {
-    const h_llo  = oa.perigee ?? oa.apogee ?? 100;
-    const h_park = (ob.type === 'surface') ? 0 : (ob.perigee ?? ob.apogee ?? 185);
+    const h_llo  = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 100;
+    const h_park = (ob.type === 'surface') ? 0 : ((ob.periKm ?? ob.perigee) ?? (ob.apoKm ?? ob.apogee) ?? 185);
     return { dv: Math.round(progDvTEI(h_llo, Math.max(h_park, 185))),
       note: `TEI from ${h_llo} km LLO → ${h_park > 0 ? h_park + ' km' : 'Earth surface'}`,
       method: 'patched-conic' };
@@ -462,7 +462,7 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Moon' && ob.type === 'transit' &&
       (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
     const mu_M    = PROG_BODIES.Moon.mu;
-    const r_M     = PROG_BODIES.Moon.R + (oa.perigee ?? oa.apogee ?? 100);
+    const r_M     = PROG_BODIES.Moon.R + ((oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 100);
     const v_cM    = _nmOrbitVAtR('Moon', oa, r_M);           // current Moon orbit speed
     const v_escM  = Math.sqrt(2 * mu_M / r_M);               // Moon escape speed at periapsis
     const dv_esc  = Math.abs(v_escM - v_cM) * 1000;          // m/s to escape Moon
@@ -487,7 +487,7 @@ function _nmDvPhysics(nA, nB) {
   if (oa.body === 'Earth' && ob.type === 'transit' &&
       (oa.type === 'circular' || oa.type === 'elliptic')) {
     const c3     = ob.c3 ?? 8.7;
-    const h_park = oa.perigee ?? oa.apogee ?? 185;
+    const h_park = (oa.periKm ?? oa.perigee) ?? (oa.apoKm ?? oa.apogee) ?? 185;
     const r      = PROG_BODIES.Earth.R + h_park;
     const v0     = _nmOrbitVAtR('Earth', oa, r);
     const vinj   = Math.sqrt(Math.max(0, 2 * PROG_BODIES.Earth.mu / r + c3));
@@ -576,13 +576,13 @@ function _nmMatchOrbitToNode(body, periKm, apoKm, incDeg, nodes, tol) {
     const o = n && n.orbit;
     if (!o || o.body !== body) continue;
     if (o.type === 'escape' || o.type === 'transit' || o.type === 'surface') continue;
-    const nPeri = o.perigee != null ? o.perigee : (o.apogee || 0);
-    const nApo  = o.apogee  != null ? o.apogee  : (o.perigee || 0);
+    const nPeri = (o.periKm ?? o.perigee) != null ? (o.periKm ?? o.perigee) : ((o.apoKm ?? o.apogee) || 0);
+    const nApo  = (o.apoKm ?? o.apogee)  != null ? (o.apoKm ?? o.apogee)  : ((o.periKm ?? o.perigee) || 0);
     const periTol = Math.max(t.absKm, t.pct * Math.max(1, nPeri));
     const apoTol  = Math.max(t.absKm, t.pct * Math.max(1, nApo));
     if (Math.abs(periKm - nPeri) > periTol) continue;
     if (Math.abs(apoKm  - nApo)  > apoTol)  continue;
-    const nInc = o.inclination || 0;
+    const nInc = (o.incDeg ?? o.inclination) || 0;
     if (Math.abs(incDeg - nInc) > t.incDeg) continue;
     return n;
   }

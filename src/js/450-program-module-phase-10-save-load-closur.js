@@ -33,14 +33,36 @@ function _missionsSansPending() {
 // merge above, so persistence stays untouched (writers keep emitting
 // whatever's live in memory; this is the one load-time boundary that makes
 // old blobs compatible). Canonical wins if somehow both are present.
+// C2b: absorbs BOTH legacy orbit-element dialects on a single object:
+//   - event dialect  : alt_km / apo_km / inc_deg / lan_deg   (e.orbit, m.launchOrbit)
+//   - node-map dialect: perigee / apogee / inclination / lan  (node.orbit, e.orbitAtBurn)
+// -> canonical periKm/apoKm/incDeg/lanDeg (+ argpDeg). Canonical key wins if
+// already present; every legacy alias is then removed. Non-element fields
+// (type/body/c3/destination/surface/propagated/r/v/frame ...) are untouched.
 function _missionMigrateOrbitFieldNames(o) {
   if (!o || typeof o !== 'object') return o;
-  if (o.periKm == null && o.alt_km != null) o.periKm = o.alt_km;
-  if (o.apoKm == null && o.apo_km != null) o.apoKm = o.apo_km;
-  if (o.incDeg == null && o.inc_deg != null) o.incDeg = o.inc_deg;
-  if (o.lanDeg == null && o.lan_deg != null) o.lanDeg = o.lan_deg;
+  if (o.periKm == null) o.periKm = (o.alt_km != null ? o.alt_km : o.perigee);
+  if (o.apoKm == null)  o.apoKm  = (o.apo_km != null ? o.apo_km : o.apogee);
+  if (o.incDeg == null) o.incDeg = (o.inc_deg != null ? o.inc_deg : o.inclination);
+  if (o.lanDeg == null) o.lanDeg = (o.lan_deg != null ? o.lan_deg : o.lan);
+  if (o.argpDeg == null && o.argp_deg != null) o.argpDeg = o.argp_deg;
+  // never leave a null we just introduced (absent legacy source) on the object
+  if (o.periKm == null) delete o.periKm;
+  if (o.apoKm == null) delete o.apoKm;
+  if (o.incDeg == null) delete o.incDeg;
+  if (o.lanDeg == null) delete o.lanDeg;
   delete o.alt_km; delete o.apo_km; delete o.inc_deg; delete o.lan_deg;
+  delete o.perigee; delete o.apogee; delete o.inclination; delete o.lan;
+  delete o.argp_deg;
   return o;
+}
+// C2b item-3: legacy .program/autosave blobs carry custom node-map nodes whose
+// .orbit uses the node-map dialect — canonicalize their element field names on
+// load (the node-map dialect writers are canonical as of this pass).
+function _missionMigrateNodeMapCustomNodes(prog) {
+  if (prog && Array.isArray(prog.nodeMapCustomNodes)) {
+    prog.nodeMapCustomNodes.forEach(cn => { if (cn && cn.orbit) _missionMigrateOrbitFieldNames(cn.orbit); });
+  }
 }
 function _missionMigrateLaunchOrbitEntry(e) {
   if (!e) return e;
@@ -49,6 +71,10 @@ function _missionMigrateLaunchOrbitEntry(e) {
     delete e.launchOrbit;
   }
   if (e.orbit) _missionMigrateOrbitFieldNames(e.orbit);
+  // C2b item-3: e.orbitAtBurn is a canonical boundary field now — rename any
+  // legacy-dialect element names on old blobs (recompute regenerates it
+  // canonically too, but a consumer may read it before the load-time recompute).
+  if (e.orbitAtBurn) _missionMigrateOrbitFieldNames(e.orbitAtBurn);
   return e;
 }
 function _missionMigrateLaunchOrbitLog(m) {
@@ -149,6 +175,8 @@ function applyProgramObject(obj) {
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
   if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
+  _missionMigrateNodeMapCustomNodes(PROG_ACTIVE_PROGRAM);   // C2b item-3: legacy node.orbit dialect -> canonical
+
   // R1: programs saved before the epoch feature get the default epoch
   if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
   _fleetSel   = (obj.sel && obj.sel.fleet)   || (_fleetEntries[0] && _fleetEntries[0].fleetId) || null;

@@ -496,7 +496,7 @@ function _trajLocalRadius(o, body) {
   }
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   if (o.type === 'surface') return R;
-  const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+  const peri = (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apo = (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0;
   return R + (peri + apo) / 2; // transfer endpoints use mean radius as departure/arrival point
 }
 

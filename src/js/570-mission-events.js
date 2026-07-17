@@ -119,9 +119,9 @@ function _missionLtEdgeEstimate(m, fromId, toId) {
   const okType = t => t === 'circular' || t === 'elliptic';
   if (!okType(oa.type) || !okType(ob.type)) return null;
   const b = PROG_BODIES[oa.body]; if (!b) return null;
-  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2)); // C2: canonical mean-radius helper
+  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + ((((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2)); // C2: canonical mean-radius helper
   const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
-  const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
+  const di = Math.abs(((oa.incDeg ?? oa.inclination) || 0) - ((ob.incDeg ?? ob.inclination) || 0));
   const dv_kms = ltEdelbaumFullDv(v0, v1, di);
   const ep = { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: progStageMass(stage), mDry_kg: stage.dry_mass };
   const tof = ltEdelbaumTofEst(dv_kms, ep);
@@ -147,7 +147,7 @@ function missionExecLowThrustFromEdge(id) {
   const est = (fromId && toId) ? _missionLtEdgeEstimate(m, fromId, toId) : null;
   if (!est || est.tof_s == null) return;
   const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
-  const meanAlt = o => ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  const meanAlt = o => (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2;
   const law = meanAlt(nB.orbit) >= meanAlt(nA.orbit) ? 'prograde' : 'retrograde';
   m.log.push({ type: 'LOWTHRUST', duration_s: Math.round(est.tof_s), law, throttle: 1 });
   _missionAddEvt = null; _missionAddMv = { from: null, to: null, steps: [] };

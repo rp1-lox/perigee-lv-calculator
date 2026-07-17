@@ -479,7 +479,7 @@ function _missionApplyManeuver(active, e) {
     const o = node.orbit;
     if (o.type === 'surface') active.orbitState = { body: o.body, perigee: 0, apogee: 0, inclination: 0, lan: 0, epoch: 0, surface: true };
     else if (o.type === 'circular' || o.type === 'elliptic') {
-      active.orbitState = { body: o.body, perigee: o.perigee ?? o.apogee ?? 0, apogee: o.apogee ?? o.perigee ?? 0, inclination: o.inclination ?? 0, lan: 0, epoch: 0, surface: false };
+      active.orbitState = { body: o.body, perigee: (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apogee: (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, inclination: (o.incDeg ?? o.inclination) ?? 0, lan: 0, epoch: 0, surface: false };
       // Phase 5a fix (user flight-test): a destination node bound to a
       // PROPAGATED catalog ref (the NRHO) must stamp propagated/refId onto the
       // arrived orbitState — the node's Kepler-ish peri/apo are label-only

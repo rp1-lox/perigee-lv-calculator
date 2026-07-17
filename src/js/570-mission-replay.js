@@ -18,6 +18,18 @@
 //   (no load-time execution); load order relative to the manager is immaterial.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// C2b item-3: translate a vehicle orbitState (380 dialect: perigee/apogee/
+// inclination/lan + surface/propagated/r/v/frame/body) into the CANONICAL
+// orbitAtBurn boundary shape (periKm/apoKm/incDeg/lanDeg), preserving every
+// non-element field via spread. The element keys are removed so the persisted
+// boundary field carries canonical-only names (matches the 450 migration).
+function _missionOrbitAtBurnCanonical(os) {
+  const ob = { ...os };
+  ob.periKm = os.perigee; ob.apoKm = os.apogee; ob.incDeg = os.inclination; ob.lanDeg = os.lan;
+  delete ob.perigee; delete ob.apogee; delete ob.inclination; delete ob.lan;
+  return ob;
+}
+
 // Capture a serialisable snapshot of every live vehicle's state at a point in time.
 // Names are disambiguated (#N) within the snapshot so duplicates are distinguishable.
 // Single source of truth for vehicle display names. When several live vehicles share
@@ -657,12 +669,13 @@ function missionRecompute(m) {
         // P4: cache the vehicle's node-map orbit at the burn so the physics
         // rebuild (565) can reconstruct + propagate the post-burn trajectory
         // (same replay-derived-cache pattern as e.orbitAfter / e.stagingResult).
-        // BUG FIX (feedback item 6): orbitState's plane key is `lan` everywhere
-        // it's constructed (573-380), but the 565 physics consumers of
-        // orbitAtBurn all read `lan_deg` (the e.orbit/node-orbit convention) —
-        // that key mismatch silently dropped the authored LAN for every
-        // manual-MNODE burn frame. Carry both so neither convention breaks.
-        e.orbitAtBurn = active.orbitState ? { ...active.orbitState, lan_deg: active.orbitState.lan } : null;
+        // C2b item-3 (2026-07-17): orbitAtBurn is a CANONICAL boundary field
+        // (periKm/apoKm/incDeg/lanDeg). active.orbitState is the 380 dialect
+        // (perigee/apogee/inclination/lan) — translate the element field names
+        // to canonical here (the ONE writer), spreading the rest (body/surface/
+        // propagated/r/v/frame) through unchanged so 565's oValid/propagated
+        // checks and orbitWorldState/orbitMeanRadiusKm reads keep working.
+        e.orbitAtBurn = active.orbitState ? _missionOrbitAtBurnCanonical(active.orbitState) : null;
         if (authEntry) authEntry.orbitAtBurn = e.orbitAtBurn;
         const fullDv = Math.sqrt(Math.pow(e.dvPro_ms || 0, 2) + Math.pow(e.dvRad_ms || 0, 2) + Math.pow(e.dvNrm_ms || 0, 2));
         e.dvRequired = Math.round(fullDv);

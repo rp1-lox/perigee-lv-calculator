@@ -257,7 +257,7 @@ function _trajExtractMission(m) {
       const fromO = fromN && fromN.orbit;
       if (L.departElements && fromO && fromO.body) {
         const sc = frames[fromO.body];
-        const key = _trajOrbitKey(fromO.body, fromO.perigee ?? fromO.apogee ?? 0, fromO.apogee ?? fromO.perigee ?? 0);
+        const key = _trajOrbitKey(fromO.body, (fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 0, (fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 0);
         const rec = sc && sc.orbits.get(key);
         if (rec && !rec.elements) rec.elements = Object.assign({ source: 'flight' }, L.departElements);
       }

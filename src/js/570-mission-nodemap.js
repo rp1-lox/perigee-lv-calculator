@@ -47,14 +47,16 @@ function _missionOrbitToNodeOrbit(o, planet) {
   if (o.mode === 'escape') {
     return { type: 'escape', body: 'Earth', c3: o.c3 ?? 0 };
   }
+  // Input `o` is a frozen ORBIT_CATEGORIES entry (060 dialect: perigee/apogee/
+  // inc) — read as-is; the OUTPUT node.orbit spec is canonical (C2b item-3).
   const peri = o.perigee ?? o.apogee ?? 0;
   const apo  = o.apogee ?? o.perigee ?? 0;
   const spec = { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
-           body: planet, perigee: peri, apogee: apo, inclination: o.inc ?? 0 };
+           body: planet, periKm: peri, apoKm: apo, incDeg: o.inc ?? 0 };
   // R3.2: authored orientation is OPTIONAL — only carried over when the
   // source orbit spec actually authored it (see MATH.md §7i tier 1).
-  if (o.lan_deg != null) spec.lan_deg = o.lan_deg;
-  if (o.argp_deg != null) spec.argp_deg = o.argp_deg;
+  if (o.lan_deg != null) spec.lanDeg = o.lan_deg;
+  if (o.argp_deg != null) spec.argpDeg = o.argp_deg;
   return spec;
 }
 
@@ -189,12 +191,12 @@ function missionSaveCustomNode() {
   } else {
     const peri = parseFloat(document.getElementById('nmnode-peri')?.value) || 0;
     const apo  = parseFloat(document.getElementById('nmnode-apo')?.value) || peri;
-    orbit = { type: t, body, perigee: peri, apogee: apo, inclination: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
+    orbit = { type: t, body, periKm: peri, apoKm: apo, incDeg: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
     // R3.2: LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
     const lanRaw = (document.getElementById('nmnode-lan')?.value ?? '').trim();
     const argpRaw = (document.getElementById('nmnode-argp')?.value ?? '').trim();
-    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lan_deg = parseFloat(lanRaw);
-    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argp_deg = parseFloat(argpRaw);
+    if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lanDeg = parseFloat(lanRaw);
+    if (argpRaw !== '' && Number.isFinite(parseFloat(argpRaw))) orbit.argpDeg = parseFloat(argpRaw);
   }
   // place new node in open space mid-canvas; user can drag it
   _missionCreateCustomNode(label, orbit, 550 + Math.round((Math.random()-0.5)*120), 300 + Math.round((Math.random()-0.5)*80));
@@ -213,13 +215,14 @@ function missionSaveCustomNode() {
 function _missionOrientationBadge(n, missionId) {
   const o = n && n.orbit;
   if (!o || o.surface || o.type === 'surface' || o.type === 'transit' || o.type === 'escape') return '';
-  const inc = o.inclination || 0;
-  if (o.lan_deg != null) {
-    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+o.lan_deg).toFixed(1)}&deg; (authored)`;
+  const inc = (o.incDeg ?? o.inclination) || 0;
+  const oLan = o.lanDeg ?? o.lan_deg;
+  if (oLan != null) {
+    return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+oLan).toFixed(1)}&deg; (authored)`;
   }
   if (missionId != null && typeof _physTrajByMission !== 'undefined' && typeof _trajOrbitKey === 'function') {
     const legs = (_physTrajByMission[missionId] && _physTrajByMission[missionId].legs) || [];
-    const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
+    const peri = (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apo = (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0;
     const key = _trajOrbitKey(o.body, peri, apo);
     for (const L of legs) {
       if (!L.converged) continue;
@@ -609,7 +612,7 @@ function _missionNmLayout() {
 
   const meanAlt = n => {
     const o = n.orbit || {};
-    return ((o.apogee ?? o.perigee ?? 0) + (o.perigee ?? o.apogee ?? 0)) / 2;
+    return (((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0) + ((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0)) / 2;
   };
 
   const pos = {};

@@ -145,7 +145,7 @@ function physSchematicCoastTof(fromO, toO) {
   if (dest && PROG_MOON_ORBITS[dest]) {
     const parent = PROG_MOON_ORBITS[dest].parent;
     const altA = fromO.type === 'surface' ? 0 :
-      (fromO.type === 'transit' ? 185 : ((fromO.perigee ?? fromO.apogee ?? 185) + (fromO.apogee ?? fromO.perigee ?? 185)) / 2);
+      (fromO.type === 'transit' ? 185 : (((fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 185) + ((fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 185)) / 2);
     return progHohmannTOF(parent, altA, PROG_MOON_ORBITS[dest].r - PROG_BODIES[parent].R);
   }
   // interplanetary: selected launch window is authoritative, else heliocentric Hohmann
@@ -157,8 +157,8 @@ function physSchematicCoastTof(fromO, toO) {
   }
   // same-body orbit -> orbit
   if (fromO.body === toO.body && PROG_BODIES[fromO.body]) {
-    const altA = fromO.type === 'surface' ? 0 : ((fromO.perigee ?? fromO.apogee ?? 0) + (fromO.apogee ?? fromO.perigee ?? 0)) / 2;
-    const altB = toO.type === 'surface' ? 0 : ((toO.perigee ?? toO.apogee ?? 0) + (toO.apogee ?? toO.perigee ?? 0)) / 2;
+    const altA = fromO.type === 'surface' ? 0 : (((fromO.periKm ?? fromO.perigee) ?? (fromO.apoKm ?? fromO.apogee) ?? 0) + ((fromO.apoKm ?? fromO.apogee) ?? (fromO.periKm ?? fromO.perigee) ?? 0)) / 2;
+    const altB = toO.type === 'surface' ? 0 : (((toO.periKm ?? toO.perigee) ?? (toO.apoKm ?? toO.apogee) ?? 0) + ((toO.apoKm ?? toO.apogee) ?? (toO.periKm ?? toO.perigee) ?? 0)) / 2;
     if (Math.abs(altA - altB) < 1) return 0;
     return progHohmannTOF(fromO.body, altA, altB);
   }
@@ -194,7 +194,7 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   const fromBody = fromOrbit.body || 'Earth';
   if (!PROG_BODIES[fromBody]) return null;
   const altFrom = fromOrbit.type === 'surface' ? 0 :
-    (fromOrbit.type === 'transit' ? 185 : ((fromOrbit.perigee ?? fromOrbit.apogee ?? 185) + (fromOrbit.apogee ?? fromOrbit.perigee ?? 185)) / 2);
+    (fromOrbit.type === 'transit' ? 185 : (((fromOrbit.periKm ?? fromOrbit.perigee) ?? (fromOrbit.apoKm ?? fromOrbit.apogee) ?? 185) + ((fromOrbit.apoKm ?? fromOrbit.apogee) ?? (fromOrbit.periKm ?? fromOrbit.perigee) ?? 185)) / 2);
   const r1 = PROG_BODIES[fromBody].R + altFrom;
   const mu = PROG_BODIES[fromBody].mu;
   const coastTof = physSchematicCoastTof(fromOrbit, toOrbit);
@@ -224,12 +224,12 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
 
   // R3: departure state in the authored orbit plane (Ω=0 convention, same as
   // the R2 ring rendering); prograde unit = v̂ of the inclined state.
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   // R3.2: an authored departure plane (lan_deg) is fixed geometry, not a
   // solve target — physShootLegAim's raan solve is skipped entirely for an
   // authored fromOrbit (see there); this single-burn (samebody) construction
   // just needs to honor the same authored raan for consistency.
-  const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const raanFixed = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180 : 0;
   // §7al site 15 (2026-07-18): the authored (inc, lan) are EQUATOR-frame. Seam
   // them to WORLD/ecliptic via the C1 boundary before physAimBurnState (a
   // world-frame constructor) — mirrors aimBurnEq (565-physics-targeting) — but
@@ -249,8 +249,8 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // to the ecliptic).
   let incWorldRad = incRad, raanWorldRad = raanFixed;
   if (sameBody && typeof orbitWorldElements === 'function') {
-    const _w = orbitWorldElements({ body: fromBody, inc_deg: (fromOrbit.inclination || 0),
-      lan_deg: (fromOrbit.lan_deg != null ? fromOrbit.lan_deg : 0) });
+    const _w = orbitWorldElements({ body: fromBody, inc_deg: ((fromOrbit.incDeg ?? fromOrbit.inclination) || 0),
+      lan_deg: ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? (fromOrbit.lanDeg ?? fromOrbit.lan_deg) : 0) });
     incWorldRad = (_w.incDeg * Math.PI) / 180; raanWorldRad = (_w.lanDeg * Math.PI) / 180;
   }
   const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incWorldRad, 0, raanWorldRad);
@@ -397,7 +397,7 @@ function physRebuildMissionTrajectories(m) {
       const tn = _missionNmNodeById(ev.toNode);
       const o = tn && tn.orbit;
       if (o && o.body === dest && (o.type === 'circular' || o.type === 'elliptic'))
-        return { peri: o.perigee ?? o.apogee ?? 100, apo: o.apogee ?? o.perigee ?? 100 };
+        return { peri: (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 100, apo: (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 100 };
     }
     return { peri: 100, apo: 100 };
   };
@@ -432,12 +432,14 @@ function physRebuildMissionTrajectories(m) {
   let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
-    // C2b: e.orbit's own field names are canonical (periKm/apoKm/incDeg/lanDeg)
-    // as of this pass; lastAuthoredPlane stays in 565's internal lan_deg
-    // convention (out of scope to rename — see docs/MISSION_MODEL_V2.md §24
-    // C2b), so the read off e.orbit is translated right here at the boundary.
+    // C2b item-4 (2026-07-17): e.orbit AND node.orbit are both canonical now
+    // (periKm/apoKm/incDeg/lanDeg). lastAuthoredPlane — a 565-internal tracker
+    // that is OVERLAID back onto a same-body fromO before solving — is carried
+    // in the SAME canonical dialect so the overlay writes the field names the
+    // (canonical-primary) reads prefer (a legacy-keyed overlay would be shadowed
+    // by the node's own canonical incDeg/lanDeg). It stays otherwise internal.
     if (e.type === 'LAUNCH' && e.orbit && e.orbit.body && e.orbit.incDeg != null) {
-      lastAuthoredPlane = { body: e.orbit.body, inclination: e.orbit.incDeg, lan_deg: e.orbit.lanDeg ?? 0 };
+      lastAuthoredPlane = { body: e.orbit.body, incDeg: e.orbit.incDeg, lanDeg: e.orbit.lanDeg ?? 0 };
     }
     // ── P4: MNODE — a vector burn propagated from the vehicle's node-map
     // orbit at its MET (orbitAtBurn cached by 570's replay). The burn point
@@ -474,7 +476,7 @@ function physRebuildMissionTrajectories(m) {
       const mu = PROG_BODIES[bodyForBurn].mu;
       let rBase, vBase, vHat, rHat, hHat;
       if (oValid) {
-        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
+        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
         // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
@@ -556,7 +558,7 @@ function physRebuildMissionTrajectories(m) {
       if (typeof _nmClassifySettledOrbit === 'function' && res.stateF) {
         const nodes = (typeof _missionNmNodes === 'function') ? _missionNmNodes() : [];
         const fromNode = (oValid && typeof _nmMatchOrbitToNode === 'function')
-          ? _nmMatchOrbitToNode(o.body, o.perigee ?? o.apogee ?? 0, o.apogee ?? o.perigee ?? 0, o.inclination || 0, nodes)
+          ? _nmMatchOrbitToNode(o.body, (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, (o.incDeg ?? o.inclination) || 0, nodes)
           : null;
         // A frame change away from the departure body (including a handoff
         // into a body our node set doesn't track, e.g. heliocentric 'Sun')
@@ -601,10 +603,10 @@ function physRebuildMissionTrajectories(m) {
     if (!fromO || !toO) continue;
     // Overlay the last-authored plane onto a canonical (lan_deg-less) fromO
     // that shares its body — see lastAuthoredPlane note above.
-    if (lastAuthoredPlane && fromO.body === lastAuthoredPlane.body && fromO.lan_deg == null) {
-      fromO = { ...fromO, inclination: lastAuthoredPlane.inclination, lan_deg: lastAuthoredPlane.lan_deg };
+    if (lastAuthoredPlane && fromO.body === lastAuthoredPlane.body && (fromO.lanDeg ?? fromO.lan_deg) == null) {
+      fromO = { ...fromO, incDeg: lastAuthoredPlane.incDeg, lanDeg: lastAuthoredPlane.lanDeg };
     }
-    if (toO.lan_deg != null && toO.body) lastAuthoredPlane = { body: toO.body, inclination: toO.inclination || 0, lan_deg: toO.lan_deg };
+    if ((toO.lanDeg ?? toO.lan_deg) != null && toO.body) lastAuthoredPlane = { body: toO.body, incDeg: (toO.incDeg ?? toO.inclination) || 0, lanDeg: (toO.lanDeg ?? toO.lan_deg) };
 
     // burn magnitude from the EXISTING engine (identical to _missionApplyManeuver)
     const edge = progNmComputeEdgeDv(e.fromNode, e.toNode);
@@ -654,8 +656,8 @@ function physRebuildMissionTrajectories(m) {
           const arrSt = muDest ? physArrivalStateAt(lastTransit, lastTransit.dest) : null;
           if (arrSt) {
             const rMag = physMag(arrSt.r);
-            const rp = PROG_BODIES[lastTransit.dest].R + (toO.perigee ?? toO.apogee ?? 0);
-            const ra = PROG_BODIES[lastTransit.dest].R + (toO.apogee ?? toO.perigee ?? 0);
+            const rp = PROG_BODIES[lastTransit.dest].R + ((toO.periKm ?? toO.perigee) ?? (toO.apoKm ?? toO.apogee) ?? 0);
+            const ra = PROG_BODIES[lastTransit.dest].R + ((toO.apoKm ?? toO.apogee) ?? (toO.periKm ?? toO.perigee) ?? 0);
             const aTarget = (rp + ra) / 2;
             const vTargetMag = (aTarget > 0 && rMag > 0) ? Math.sqrt(Math.max(0, muDest * (2 / rMag - 1 / aTarget))) : null;
             // §7al site 14 (2026-07-18): the target plane normal must be built
@@ -668,8 +670,8 @@ function physRebuildMissionTrajectories(m) {
             // (headless / non-Keplerian toO) — same value the old code produced.
             let hHatT = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(toO) : null;
             if (!hHatT) {
-              const incT = (toO.inclination || 0) * Math.PI / 180;
-              const raanT = toO.lan_deg != null ? (toO.lan_deg * Math.PI / 180) : 0;
+              const incT = ((toO.incDeg ?? toO.inclination) || 0) * Math.PI / 180;
+              const raanT = (toO.lanDeg ?? toO.lan_deg) != null ? ((toO.lanDeg ?? toO.lan_deg) * Math.PI / 180) : 0;
               hHatT = [Math.sin(raanT) * Math.sin(incT), -Math.cos(raanT) * Math.sin(incT), Math.cos(incT)];
             }
             const rHat = rMag > 0 ? physScale(arrSt.r, 1 / rMag) : null;
@@ -799,7 +801,7 @@ function physRebuildMissionTrajectories(m) {
     // by leg signature so a warm recompute costs ~one propagation per leg.
     let st0 = burn.state, dvVec = burn.dvVec, st0Pre = burn.preState;
     const r1 = physMag(burn.state.r);
-    const incLeg = (fromO.inclination || 0);
+    const incLeg = ((fromO.incDeg ?? fromO.inclination) || 0);
     let raanUsed = 0;
     // §7al site 13 (2026-07-18): WORLD/ecliptic-frame mirror of (incLeg,
     // raanUsed). physShootLegAim RETURNS an EQUATORIAL raan (raan0) and seams
@@ -817,7 +819,7 @@ function physRebuildMissionTrajectories(m) {
       // differential-corrector cache kept returning the shot solved under
       // the OLD plane — the trajectory ring/maneuver node visibly stuck to
       // the previous LAN despite the authored orbit having changed.
-      const lanLeg = (fromO.lan_deg != null) ? fromO.lan_deg : 0;
+      const lanLeg = ((fromO.lanDeg ?? fromO.lan_deg) != null) ? (fromO.lanDeg ?? fromO.lan_deg) : 0;
       const sig = `${e.fromNode}|${e.toNode}|${met.toFixed(0)}|${dv_ms.toFixed(1)}|i${incLeg}|o${lanLeg}`;
       let aim = _physShootCache[sig];
       if (!aim) {

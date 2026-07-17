@@ -23,7 +23,10 @@
 function _trajGizmoOrbitNodeAt(o, met) {
   if (!o || o.surface || !PROG_BODIES[o.body]) return null;
   const mu = PROG_BODIES[o.body].mu;
-  const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+  // `o` may be a canonical node.orbit / orbitAtBurn (periKm/apoKm) OR a legacy
+  // vehicle orbitState / ring record (perigee/apogee) — orbitMeanRadiusKm
+  // normalizes either; the inline keeps the propagated-orbit (null) fallback.
+  const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2);
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);

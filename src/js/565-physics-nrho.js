@@ -115,7 +115,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   const burn0 = physSolveNodeBurn(fromOrbit, toTransit, tDepart_s, dv_kms, overrides);
   if (!burn0) return { converged: false, note: 'no departure geometry for fromOrbit' };
   const r1 = physMag(burn0.state.r);
-  const incRad = ((fromOrbit.inclination || 0) * Math.PI) / 180;
+  const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
   let theta0 = physPhaseBurnAngle(progBodyAngleAt('Moon', tDepart_s + burn0.coastTof_s));
 
   // PERILUNE-phased arrival epochs (spec: "target = the NRHO's PERILUNE state
@@ -155,8 +155,8 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // out-of-plane residual drops back into the linear regime. An AUTHORED
   // fromOrbit.lan_deg is fixed geometry (not a solve target), same precedence
   // as physShootLegAim.
-  const raanAuthored = fromOrbit.lan_deg != null;
-  const raanAuthoredRad = raanAuthored ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
+  const raanAuthored = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null;
+  const raanAuthoredRad = raanAuthored ? ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180 : 0;
   const propCtx = { center: 'Earth', bodies: physBodySetFor({ center: 'Earth', dest: 'Moon', kind: 'cislunar' }), overrides };
   const toMoonFrame = (st, frame, t) => frame === 'Moon' ? st : physPatchState(st, frame, 'Moon', t, overrides);
   const targetAtAbs = tArr => refOrbitPropagatedStateAt(nrhoRefId, tArr);

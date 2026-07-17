@@ -45,6 +45,7 @@ const {
   orbitWorldElements, orbitWorldState,
   orbitNormalize, orbitMeanRadiusKm, orbitPeriodS, orbitWorldNormal,
   _missionMigrateLaunchOrbitEntry, _missionMigrateLaunchOrbitLog,
+  _missionMigrateOrbitFieldNames, _missionMigrateNodeMapCustomNodes,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -239,6 +240,38 @@ ok('_missionMigrateLaunchOrbitLog: legacy m.launchOrbit field-renamed to canonic
   _missionMigrateLaunchOrbitLog(m);
   return m.launchOrbit.periKm === 185 && m.launchOrbit.apoKm === 220 && m.launchOrbit.incDeg === 51.6 && m.launchOrbit.lanDeg === 30 &&
     !('alt_km' in m.launchOrbit) && !('apo_km' in m.launchOrbit) && !('inc_deg' in m.launchOrbit) && !('lan_deg' in m.launchOrbit);
+})());
+
+// C2b item-3 (node-map + orbitAtBurn dialect rename): the shared
+// _missionMigrateOrbitFieldNames now ALSO absorbs the node-map dialect
+// (perigee/apogee/inclination/lan) so legacy custom nodes + orbitAtBurn blobs
+// land on canonical field names.
+ok('_missionMigrateOrbitFieldNames: node-map dialect (perigee/apogee/inclination/lan) -> canonical', (() => {
+  const o = { type: 'circular', body: 'Moon', perigee: 100, apogee: 200, inclination: 90, lan: 40, argp_deg: 12 };
+  _missionMigrateOrbitFieldNames(o);
+  return o.periKm === 100 && o.apoKm === 200 && o.incDeg === 90 && o.lanDeg === 40 && o.argpDeg === 12 &&
+    o.type === 'circular' && o.body === 'Moon' &&
+    !('perigee' in o) && !('apogee' in o) && !('inclination' in o) && !('lan' in o) && !('argp_deg' in o);
+})());
+
+ok('_missionMigrateLaunchOrbitEntry: legacy e.orbitAtBurn (node-map dialect + state fields) -> canonical, non-element fields preserved', (() => {
+  const e = { type: 'MNODE', orbitAtBurn: { body: 'Earth', perigee: 185, apogee: 185, inclination: 28.5, lan: 45, lan_deg: 45, surface: false, frame: 'Earth' } };
+  _missionMigrateLaunchOrbitEntry(e);
+  const o = e.orbitAtBurn;
+  return o.periKm === 185 && o.apoKm === 185 && o.incDeg === 28.5 && o.lanDeg === 45 &&
+    o.body === 'Earth' && o.surface === false && o.frame === 'Earth' &&
+    !('perigee' in o) && !('apogee' in o) && !('inclination' in o) && !('lan' in o) && !('lan_deg' in o);
+})());
+
+ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed to canonical', (() => {
+  const prog = { nodeMapCustomNodes: [
+    { nodeId: 'c1', orbit: { type: 'circular', body: 'Earth', perigee: 400, apogee: 400, inclination: 51.6 } },
+    { nodeId: 'c2', orbit: { type: 'escape', body: 'Earth', c3: 0.1 } },
+  ] };
+  _missionMigrateNodeMapCustomNodes(prog);
+  const a = prog.nodeMapCustomNodes[0].orbit, b = prog.nodeMapCustomNodes[1].orbit;
+  return a.periKm === 400 && a.apoKm === 400 && a.incDeg === 51.6 && !('perigee' in a) && !('inclination' in a) &&
+    b.type === 'escape' && b.c3 === 0.1;   // escape node: no element fields to touch
 })());
 
 // ═══════════════════════════════════════════════════════════════════════════

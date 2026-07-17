@@ -60,13 +60,14 @@ function _oiClassify(m, authIdx, e) {
         periKm, apoKm,
       };
     }
-    if (o.body == null || o.alt_km == null) return null;
+    // e.orbit is canonical (C2b pass 2a): read periKm/apoKm/incDeg/lanDeg.
+    if (o.body == null || o.periKm == null) return null;
     const isBuiltinRef = e.orbitRefId && typeof refOrbitIsBuiltin === 'function' && refOrbitIsBuiltin(e.orbitRefId);
     const refEntry = e.orbitRefId && typeof refOrbitGet === 'function' ? refOrbitGet(e.orbitRefId) : null;
     return {
       authIdx, source: 'launch', evType: e.type,
-      body: o.body, peri: o.alt_km, apo: (o.apo_km != null ? o.apo_km : o.alt_km),
-      inc: o.inc_deg || 0, lan: o.lan_deg || 0,
+      body: o.body, peri: o.periKm, apo: (o.apoKm != null ? o.apoKm : o.periKm),
+      inc: o.incDeg || 0, lan: o.lanDeg || 0,
       binding: e.orbitRefId ? (isBuiltinRef ? 'builtin' : 'user') : 'unbound',
       refId: e.orbitRefId || null,
       name: refEntry ? refEntry.name : 'custom orbit',
@@ -100,11 +101,12 @@ function _oiClassify(m, authIdx, e) {
         };
       }
     }
-    if (o.perigee == null) return null;
+    const oPeri = o.periKm ?? o.perigee, oApo = o.apoKm ?? o.apogee;
+    if (oPeri == null) return null;
     return {
       authIdx, source: 'maneuver', nodeId: e.toNode,
-      body: o.body, peri: o.perigee, apo: (o.apogee != null ? o.apogee : o.perigee),
-      inc: o.inclination || 0, lan: o.lan_deg || 0,
+      body: o.body, peri: oPeri, apo: (oApo != null ? oApo : oPeri),
+      inc: (o.incDeg ?? o.inclination) || 0, lan: (o.lanDeg ?? o.lan_deg) || 0,
       binding: n.custom ? 'user' : 'builtin',
       refId: null,
       name: n.sub ? n.label + ' (' + n.sub + ')' : n.label,
@@ -194,7 +196,7 @@ function _oiCommitLaunch(m, e, st, merged) {
   if (typeof _missionNodeForLaunch === 'function' && typeof _evIsSolvedManeuver === 'function') {
     const originId = _missionNodeForLaunch(m);
     m.launchOrbit = { ...(m.launchOrbit || {}), body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
-    const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
+    const orbitSpec = { body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
     (m.log || []).forEach(e2 => {
       if (_evIsSolvedManeuver(e2) && e2.fromNode === originId) {
         const newId = _oiResolveManeuverNodeId(e2.fromNode, orbitSpec, 'Launch');
@@ -219,14 +221,14 @@ function _oiResolveManeuverNodeId(existingNodeId, orbitSpec, labelBase) {
   const label = (n ? n.label : labelBase) + ' (copy)';
   const sub = n ? n.sub : '';
   const dashed = false;
-  const spec = { type: (Math.abs((orbitSpec.apogee || 0) - (orbitSpec.perigee || 0)) < 1 ? 'circular' : 'elliptic'),
-    body: orbitSpec.body, perigee: orbitSpec.perigee, apogee: orbitSpec.apogee, inclination: orbitSpec.inclination };
-  if (orbitSpec.lan_deg != null) spec.lan_deg = orbitSpec.lan_deg;
+  const spec = { type: (Math.abs((orbitSpec.apoKm || 0) - (orbitSpec.periKm || 0)) < 1 ? 'circular' : 'elliptic'),
+    body: orbitSpec.body, periKm: orbitSpec.periKm, apoKm: orbitSpec.apoKm, incDeg: orbitSpec.incDeg };
+  if (orbitSpec.lanDeg != null) spec.lanDeg = orbitSpec.lanDeg;
   return (typeof _missionCreateCustomNode === 'function') ? _missionCreateCustomNode(label, spec, 0, 0, sub) : existingNodeId;
 }
 
 function _oiCommitManeuver(m, e, st, merged) {
-  const orbitSpec = { body: st.body, perigee: merged.peri, apogee: merged.apo, inclination: merged.inc, lan_deg: merged.lan };
+  const orbitSpec = { body: st.body, periKm: merged.peri, apoKm: merged.apo, incDeg: merged.inc, lanDeg: merged.lan };
   const newId = _oiResolveManeuverNodeId(e.toNode, orbitSpec, st.name);
   if (newId && newId !== e.toNode) {
     e.toNode = newId; if (e.target) e.target.toNode = newId;
@@ -288,10 +290,10 @@ function _oiApplyScrubPreview() {
   const e = m && m.log[st.authIdx]; if (!m || !e) return;
   if (st.source === 'launch') {
     const o = e.orbit || (e.orbit = {});
-    o.body = st.body; o.alt_km = st.peri; o.apo_km = st.apo; o.inc_deg = st.inc; o.lan_deg = st.lan;
+    o.body = st.body; o.periKm = st.peri; o.apoKm = st.apo; o.incDeg = st.inc; o.lanDeg = st.lan;
   } else {
     const n = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.toNode) : null;
-    if (n) { n.orbit = { ...n.orbit, perigee: st.peri, apogee: st.apo, inclination: st.inc, lan_deg: st.lan }; }
+    if (n) { n.orbit = { ...n.orbit, periKm: st.peri, apoKm: st.apo, incDeg: st.inc, lanDeg: st.lan }; }
   }
   if (typeof _trajApplyCam === 'function' && typeof _trajCamByMission !== 'undefined') {
     const cam = _trajCamByMission[st.missionId];

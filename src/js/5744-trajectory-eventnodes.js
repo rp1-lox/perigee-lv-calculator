@@ -387,12 +387,14 @@ function _trajSelectedAuthIdx(m) {
 // node-map orbit spec — used only by the redundancy check below (distinct
 // from _trajLocalRadius's single "mean radius" used for arc endpoints).
 function toO_peri(o, R) {
-  if (!o || o.perigee == null && o.apogee == null) return null;
-  return R + (o.perigee ?? o.apogee ?? 0);
+  const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
+  if (!o || peri == null && apo == null) return null;
+  return R + (peri ?? apo ?? 0);
 }
 function toO_apo(o, R) {
-  if (!o || o.perigee == null && o.apogee == null) return null;
-  return R + (o.apogee ?? o.perigee ?? 0);
+  const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
+  if (!o || peri == null && apo == null) return null;
+  return R + (apo ?? peri ?? 0);
 }
 
 // Redundant-transfer check: a leg's transfer ellipse (rPeri..rApo) is
