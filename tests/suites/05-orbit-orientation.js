@@ -475,10 +475,10 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
   // (3) SEAM IS LOAD-BEARING (site 12 / line-792 regression guard): the
   //     UN-seamed reconstruction — feeding the AUTHORED equatorial inc/lan
   //     straight to physAimBurnState as if world-frame (the exact skip site 12
-  //     shipped and site 9 still carries at 565-physics-mission.js:640/792) —
-  //     is provably OFF the true world plane. If a future refactor accidentally
-  //     makes orbitWorldState skip the seam, |n·r̂| collapses toward 0 and this
-  //     fails.
+  //     shipped, and site 9 carried at 565-physics-mission.js:640/792 until the
+  //     2026-07-18 re-sweep fix) — is provably OFF the true world plane. If a
+  //     future refactor accidentally makes orbitWorldState skip the seam, |n·r̂|
+  //     collapses toward 0 and this fails.
   const bad = physAimBurnState('Earth', rMean, 0, 0, 0, 28.5 * Math.PI / 180, 0, 45 * Math.PI / 180);
   const badHat = physScale(bad.r, 1 / physMag(bad.r));
   const badDot = Math.abs(physDot(nWorld, badHat));
@@ -497,6 +497,29 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
   const nEq = physNormalFromIncLan(28.5, 45); // authored, deliberately NOT seamed
   const seamAngleDeg = Math.acos(Math.min(1, Math.max(-1, physDot(nEq, nWorld)))) * 180 / Math.PI;
   ok(`§7al recon-agree: eq-vs-world normal gap is obliquity-scale (${seamAngleDeg.toFixed(1)}° > 10°)`, seamAngleDeg > 10);
+
+  // (6) SITE-9 committed-leg guard (565-physics-mission.js:792, fixed 2026-07-18).
+  //     The committed moon/interplanetary leg reconstructs its burn state via a
+  //     DIRECT physAimBurnState call at a solver-derived anomaly θ with nonzero
+  //     pitch/yaw (the burn-vector DOFs). Position r depends only on (r1, θ,
+  //     inc, raan) — pitch/yaw steer the Δv, not the point — so the plane check
+  //     is exactly the same invariant: fed the SEAMED world (inc, raan) the
+  //     reconstructed position lies in the world plane; fed the raw equatorial
+  //     pair (the pre-fix skip) it does not. Distinct θ/pitch/yaw from (1)-(3)
+  //     so the guard exercises the actual site-9 call shape, not just θ-grids.
+  {
+    const th = 1.9, pitch = 0.25, yaw = -0.4, dv = 3.15;
+    const seamed = physAimBurnState('Earth', rMean, th, pitch, dv,
+      wEl.incDeg * Math.PI / 180, yaw, wEl.lanDeg * Math.PI / 180);
+    const sHat = physScale(seamed.r, 1 / physMag(seamed.r));
+    ok(`§7al site-9 committed-leg: seamed reconstruction lies in the world plane (|n·r̂| ${Math.abs(physDot(nWorld, sHat)).toExponential(1)} < 1e-9)`,
+      Math.abs(physDot(nWorld, sHat)) < 1e-9);
+    const skip = physAimBurnState('Earth', rMean, th, pitch, dv,
+      28.5 * Math.PI / 180, yaw, 45 * Math.PI / 180);
+    const kHat = physScale(skip.r, 1 / physMag(skip.r));
+    ok(`§7al site-9 committed-leg: eq-as-world skip sits OFF the world plane (|n·r̂| ${Math.abs(physDot(nWorld, kHat)).toFixed(3)} > 0.05)`,
+      Math.abs(physDot(nWorld, kHat)) > 0.05);
+  }
 }
 
   return counts();

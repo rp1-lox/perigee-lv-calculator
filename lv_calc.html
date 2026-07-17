@@ -18245,7 +18245,30 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // authored fromOrbit (see there); this single-burn (samebody) construction
   // just needs to honor the same authored raan for consistency.
   const raanFixed = fromOrbit.lan_deg != null ? (fromOrbit.lan_deg * Math.PI) / 180 : 0;
-  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incRad, 0, raanFixed);
+  // §7al site 15 (2026-07-18): the authored (inc, lan) are EQUATOR-frame. Seam
+  // them to WORLD/ecliptic via the C1 boundary before physAimBurnState (a
+  // world-frame constructor) — mirrors aimBurnEq (565-physics-targeting) — but
+  // ONLY on the sameBody path. Rationale (measured): for moon/interplanetary
+  // legs (a) this seed's state is OVERWRITTEN wholesale at ~L800 by the shooter
+  // solution (only its magnitude r1 survives, frame-invariant), so seaming its
+  // plane has zero downstream effect, AND (b) the burn-point anomaly `theta`
+  // for those legs is derived from the destination's ECLIPTIC angle
+  // (physPhaseBurnAngle∘progBodyAngleAt) and placed as an in-plane ν assuming
+  // the Ω=0 ecliptic-referenced plane — rotating the plane WITHOUT re-deriving
+  // theta decouples the phasing from the geometry (measured: the analytic
+  // Moon-seed miss blows up 14,036→768,456 km). The sameBody path has theta=0
+  // (no phasing coupling) and IS the seed's only user-visible product (the
+  // drawn transfer ellipse), so seaming there is both correct and safe — the
+  // ellipse now sits in the true world plane relative to the tilted globe.
+  // NOT identity for Earth even at authored inc=0 (an equatorial LEO is 23.44°
+  // to the ecliptic).
+  let incWorldRad = incRad, raanWorldRad = raanFixed;
+  if (sameBody && typeof orbitWorldElements === 'function') {
+    const _w = orbitWorldElements({ body: fromBody, inc_deg: (fromOrbit.inclination || 0),
+      lan_deg: (fromOrbit.lan_deg != null ? fromOrbit.lan_deg : 0) });
+    incWorldRad = (_w.incDeg * Math.PI) / 180; raanWorldRad = (_w.lanDeg * Math.PI) / 180;
+  }
+  const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incWorldRad, 0, raanWorldRad);
   // N1b: body set through the one resolver (contextual = the old ad-hoc lists
   // verbatim; 'full' unions the whole system). Samebody keeps [fromBody] —
   // its leg model is analytic Kepler (documented exemption, physBodySetFor).
@@ -18650,9 +18673,20 @@ function physRebuildMissionTrajectories(m) {
             const ra = PROG_BODIES[lastTransit.dest].R + (toO.apogee ?? toO.perigee ?? 0);
             const aTarget = (rp + ra) / 2;
             const vTargetMag = (aTarget > 0 && rMag > 0) ? Math.sqrt(Math.max(0, muDest * (2 / rMag - 1 / aTarget))) : null;
-            const incT = (toO.inclination || 0) * Math.PI / 180;
-            const raanT = toO.lan_deg != null ? (toO.lan_deg * Math.PI / 180) : 0;
-            const hHatT = [Math.sin(raanT) * Math.sin(incT), -Math.cos(raanT) * Math.sin(incT), Math.cos(incT)];
+            // §7al site 14 (2026-07-18): the target plane normal must be built
+            // in the WORLD/ecliptic frame the arrival position (arrSt.r) lives
+            // in — toO's authored (inc, lan) are EQUATOR-frame, so route them
+            // through the C1 boundary (orbitWorldNormal = orbitWorldElements ∘
+            // physNormalFromIncLan) instead of feeding the equatorial pair
+            // straight into the normal recipe (equator-as-world skip). Fallback
+            // to the raw equatorial recipe only when the boundary is unavailable
+            // (headless / non-Keplerian toO) — same value the old code produced.
+            let hHatT = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(toO) : null;
+            if (!hHatT) {
+              const incT = (toO.inclination || 0) * Math.PI / 180;
+              const raanT = toO.lan_deg != null ? (toO.lan_deg * Math.PI / 180) : 0;
+              hHatT = [Math.sin(raanT) * Math.sin(incT), -Math.cos(raanT) * Math.sin(incT), Math.cos(incT)];
+            }
             const rHat = rMag > 0 ? physScale(arrSt.r, 1 / rMag) : null;
             const vDirRaw = rHat ? physCross(hHatT, rHat) : null;
             const vDirMag = vDirRaw ? physMag(vDirRaw) : 0;
@@ -18782,6 +18816,14 @@ function physRebuildMissionTrajectories(m) {
     const r1 = physMag(burn.state.r);
     const incLeg = (fromO.inclination || 0);
     let raanUsed = 0;
+    // §7al site 13 (2026-07-18): WORLD/ecliptic-frame mirror of (incLeg,
+    // raanUsed). physShootLegAim RETURNS an EQUATORIAL raan (raan0) and seams
+    // internally via aimBurnEq; the committed reconstruction below (and the
+    // rendered departElements) must apply the SAME seam or the drawn/propagated
+    // leg sits ~obliquity off the plane the shooter converged in. Populated
+    // alongside raanUsed inside the shot block; defaults track the eq values so
+    // the no-shot fallback is unchanged.
+    let incLegWorldRad = incLeg * Math.PI / 180, raanWorldRad = 0;
     {
       // R3: signature includes the departure inclination AND lan/raan —
       // editing a node's inclination OR LAN must re-shoot the leg. The
@@ -18804,8 +18846,17 @@ function physRebuildMissionTrajectories(m) {
       if (aim.theta != null) {
         // even an unconverged shoot's best x beats the raw analytic seed
         raanUsed = aim.raan || 0;
+        // seam (incLeg[eq], raanUsed[eq]) → world before the world-frame
+        // constructor — mirrors aimBurnEq; theta/pitch/yaw are frame-invariant
+        // DOFs and pass straight through (same as inside physShootLegAim).
+        if (typeof orbitWorldElements === 'function') {
+          const _wl = orbitWorldElements({ body: burn.center, inc_deg: incLeg, lan_deg: raanUsed * 180 / Math.PI });
+          incLegWorldRad = _wl.incDeg * Math.PI / 180; raanWorldRad = _wl.lanDeg * Math.PI / 180;
+        } else {
+          incLegWorldRad = incLeg * Math.PI / 180; raanWorldRad = raanUsed;
+        }
         const bs = physAimBurnState(burn.center, r1, aim.theta, aim.pitch || 0, dv_ms / 1000,
-          incLeg * Math.PI / 180, aim.yaw || 0, raanUsed);
+          incLegWorldRad, aim.yaw || 0, raanWorldRad);
         st0 = { r: bs.r, v: bs.v }; dvVec = bs.dvVec;
         // R6.2' Phase B step 5: the shooter's actual PRE-burn departure state
         // (bs.vPre) — this is the real basis the corrector flew, distinct
@@ -18832,7 +18883,11 @@ function physRebuildMissionTrajectories(m) {
     // flight truth, see the module doc comment above).
     let departElements = null, arrivalElements = null;
     if (converged) {
-      departElements = { a: r1, e: 0, i: incLeg * Math.PI / 180, raan: raanUsed, argp: 0 };
+      // §7al site 13: the departure ring is consumed as WORLD-frame elements by
+      // 5741 (rec.elements) and 570-mission-nodemap — use the seamed world
+      // (inc, raan) so the rendered ring matches the plane the leg actually flew
+      // (previously eq-as-world, consistent only with the pre-seam propagation).
+      departElements = { a: r1, e: 0, i: incLegWorldRad, raan: raanWorldRad, argp: 0 };
       const muDest = PROG_BODIES[burn.dest] && PROG_BODIES[burn.dest].mu;
       const oscul = muDest ? physArrivalOsculatingElements(res, burn.dest, muDest) : null;
       if (oscul && PROG_BODIES[burn.dest]) {
