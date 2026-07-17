@@ -954,8 +954,50 @@ pre-existing pins byte-stable. Browser smoke (`devSeedApolloMission`): payload m
 (`launchOrbit` only) through `_missionMigrateLaunchOrbitEntry` migrates correctly; a fresh
 LAUNCH draft (`_missionPendingDraft`) carries `orbit` only; zero console errors.
 
-### C4 — StageMass unification (audit item 4, cost M, parallel-safe)
+### C4 — StageMass unification (audit item 4, cost M, parallel-safe) — **DONE 2026-07-17**
 - One stage-mass shape with `s15` as a nested object spread atomically (`{...stage, s15: {...}}`), so no assembler can drop the sextet field-by-field again (three shipped bugs). The three assemblers (worksheet/_tsCollectBase, _fleetExpandStages, _tsVehicleToBase) consume it; the S1.5 path-equality gate pin (926-assertion suite) guards the migration.
+
+**As-built note (C4, 2026-07-17):** shipped **option (b)** from the spec (centralized
+carriage helper, flat fields kept) instead of the nested-`s15`-object shape sketched above.
+Rationale: all three shipped drops (critique 119/commit 00b720710 among them) were CARRIAGE
+bugs (a field-by-field copy at a call site forgot one or more of the sextet), not shape bugs —
+the flat `s15_*` field names were never ambiguous or hard to read, they were just tedious and
+error-prone to copy by hand at ~12 call sites. A nested-object migration would have touched
+every one of those same 12 modules (reader AND writer sides, since a nested shape isn't
+spread-compatible with the many DOM-population sites that read individual fields into inputs)
+for the same risk reduction a narrower fix gives, and would have meant re-shaping
+`_s15BecoSplit`'s already-pinned input contract (`s.s15_sust_thrust` etc, frozen by the S1.5
+goldens) — strictly more churn for no extra protection.
+**Mechanism** (`src/js/140-physics.js`, adjacent to `rocketEq`): `STAGE_S15_FIELDS` (the 5
+sextet field names) + three helpers — `stageCarryS15(dst, src)` copies the `s15` flag + all 5
+fields from `src` onto `dst` atomically (no-op if `src.s15` is falsy, so it's safe to call
+unconditionally at every assembler); `stageClearS15(dst)` removes the flag + all 5 fields
+(the toggle-off case); `stagePickS15(src)` reads the flag + sextet into a fresh object without
+mutating `src` (used where a fresh object needs to be seeded from a live stage before the
+usual `stageCarryS15` write, e.g. modal-populate flows). Every module that previously
+hand-copied the sextet field-by-field now calls one of these instead: **165-trade-study.js**
+(`_tsCollectBase`, `_tsVehicleToBase`), **560-fleet-editor.js** (`_fleetStageCopy`,
+`fleetSnapshotCurrent`), **210-stage-library.js** (load-stage-into-slot), **330-stage-
+resolver.js** (`resolvePresetStages`), **320-stage-card-save.js**, **110-vehicles-panel.js**
+(preset load), **170-save-load-lv.js** (both `.program`/session load paths), **350-user-
+stage-management.js** (`doAddStage`), **310-stage-edit-wrench.js** (save handler + the UGC
+library-entry sync). Preset LITERAL data (`050-builtin-presets.js`, `210-stage-library.js`'s
+builtin catalog entries) is untouched — those are authoring-time source data, not carriage,
+and were never the bug's location. DOM-population reads (`sd.s15_sust_thrust` into an
+`<input>.value`) and the splitter's own read-only destructure (`150-stage-and-a-half.js`,
+`s.s15_sust_thrust`) are likewise untouched — neither is a stage-to-stage copy.
+**Gate**: new `tests/math.test.js` block source-greps every `src/js/*.js` file (mirrors the
+C1/ghost-stage gate style) and fails if any module OTHER than `140-physics.js` dot-assigns an
+`s15_*` field (`obj.s15_xxx = ...` — exactly the field-by-field copy pattern that shipped the
+bug 3x); plus 4 unit pins on `stageCarryS15`/`stageClearS15`/`stagePickS15` (atomic carry,
+no-op on absent src, atomic clear, non-mutating read). 952 -> 957 assertions, all pre-existing
+pins byte-stable (Saturn V 150,838 kg unchanged). Browser smoke: builtin Saturn V golden
+confirmed (150,838 kg @ 185x185/28.5 from lat 28.5); builtin Atlas-Centaur (S1.5) — all three
+assemblers (`_tsCollectBase`, `_tsVehicleToBase`, `resolvePresetStages`) produce byte-identical
+sextets for the same source vehicle; a stage-and-a-half vehicle saved to the library and
+round-tripped through `_buildSessionObject`/`_applySessionObject` (JSON serialize + restore,
+simulating a page reload) keeps its full `s15` sextet on the reloaded `stageData`; zero
+console errors.
 
 ### Non-goals (explicit)
 - NO dv m/s <-> km/s auto-conversion (protects the byte-identical dv accounting invariant; naming hygiene only, later).

@@ -54,6 +54,16 @@ concept. Migration cost S/M/L is engineering effort for the proposed unification
    beco_twr, boost_isp) is copied field-by-field in ≥3 assemblers (210:211, 210:1814,
    plus the splitters). SHIPPED ×3 (the S1.5-splitter drop, per CLAUDE.md). Blast radius:
    ~12 modules. Cost: **M**.
+   > **STATUS (2026-07-17): C4 DONE** (MISSION_MODEL_V2.md §24 C4 as-built) — the S1.5
+   > sextet-carriage half of this item is closed. `stageCarryS15`/`stageClearS15`/
+   > `stagePickS15` (140-physics.js) are now the one sanctioned way to move the `s15`
+   > flag + 5-field sextet between stage records; all ~12 field-by-field copy sites
+   > migrated; a source-grep gate (tests/math.test.js) fails the build if any module
+   > outside 140-physics.js dot-assigns an `s15_*` field again. The BROADER mass/
+   > propellant dialect gap named in this item (`stageStore` string fields vs 370's
+   > `dry_mass`/`tanks` live-stage shape vs preset numeric `{dry,prop}`) is UNCHANGED —
+   > only the S1.5 sextet-carriage sub-problem (the part that had shipped 3 bugs) was
+   > in scope for C4.
 
 5. **Time dialects** — `epochJD` (JD), MET seconds (`t_s`, `launchTime_s`, `metStart`),
    `at:{kind:'met', value_s}`, JD leg fields (`planDepJD`), `Date` objects, and

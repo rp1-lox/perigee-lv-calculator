@@ -130,12 +130,14 @@ function doAddStage(andSave){
   };
   const s15On=document.getElementById('stg-s15')?.checked??false;
   if(s15On&&!stage.isBooster){
-    stage.s15=true;
-    stage.s15_sust_thrust=parseFloat(document.getElementById('stg-s15-thrust')?.value)||0;
-    stage.s15_sust_isp   =parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0;
-    stage.s15_jet_mass   =parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0;
-    stage.s15_beco_twr   =parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2;
-    stage.s15_boost_isp  =parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0;
+    stageCarryS15(stage,{
+      s15:true,
+      s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value)||0,
+      s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0,
+      s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0,
+      s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2,
+      s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0,
+    });
   }
   if(!userStagesByCategory[cat])userStagesByCategory[cat]=[];
   userStagesByCategory[cat].unshift(stage); // prepend so new stages appear first

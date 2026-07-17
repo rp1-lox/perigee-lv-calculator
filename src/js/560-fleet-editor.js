@@ -62,14 +62,7 @@ function fleetImportRenderList() {
 // (S1.5) fields so library/imported/snapshotted vehicles keep their BECO config.
 function _fleetStageCopy(s) {
   const o = { dry: s.dry||0, prop: s.prop||0, isp: s.isp||1, thrust: s.thrust||0, res: s.res||2 };
-  if (s.s15) {
-    o.s15 = true;
-    o.s15_sust_thrust = s.s15_sust_thrust || 0;
-    o.s15_sust_isp    = s.s15_sust_isp    || 0;
-    o.s15_jet_mass    = s.s15_jet_mass    || 0;
-    o.s15_beco_twr    = s.s15_beco_twr    || 1.2;
-    o.s15_boost_isp   = s.s15_boost_isp   || 0;
-  }
+  stageCarryS15(o,s);
   return o;
 }
 
@@ -320,8 +313,9 @@ function fleetSnapshotCurrent() {
   const names  = [];
   for (let s = 0; s < (typeof numStages !== 'undefined' ? numStages : 0); s++) {
     const st = stageStore[s] || {};
-    stages.push(_fleetStageCopy({ dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2,
-      s15: st.s15, s15_sust_thrust: st.s15_sust_thrust, s15_sust_isp: st.s15_sust_isp, s15_jet_mass: st.s15_jet_mass, s15_beco_twr: st.s15_beco_twr, s15_boost_isp: st.s15_boost_isp }));
+    const base = { dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2 };
+    stageCarryS15(base, st);
+    stages.push(_fleetStageCopy(base));
     names.push((typeof currentStageNames !== 'undefined' && currentStageNames[s]) ? currentStageNames[s] : ('Stage ' + (s+1)));
   }
   if (!stages.length) { alert('No stages in LV Calc — configure a vehicle on the Vehicles page first.'); return; }

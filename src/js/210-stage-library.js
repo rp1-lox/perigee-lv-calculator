@@ -1811,19 +1811,9 @@ function applyStageData(stageIdx,stage){
   set('dry',stage.dry);set('prop',stage.prop);set('thrust',stage.thrust);set('isp',stage.isp);set('res',stage.res??2);
   // Forward stage-and-a-half fields from the library entry into stageStore
   if(stage.s15){
-    stageStore[stageIdx].s15=true;
-    stageStore[stageIdx].s15_sust_thrust=stage.s15_sust_thrust||0;
-    stageStore[stageIdx].s15_sust_isp=stage.s15_sust_isp||0;
-    stageStore[stageIdx].s15_jet_mass=stage.s15_jet_mass||0;
-    stageStore[stageIdx].s15_beco_twr=stage.s15_beco_twr||1.2;
-    stageStore[stageIdx].s15_boost_isp=stage.s15_boost_isp||0;
+    stageCarryS15(stageStore[stageIdx],stage);
   } else {
-    delete stageStore[stageIdx].s15;
-    delete stageStore[stageIdx].s15_sust_thrust;
-    delete stageStore[stageIdx].s15_sust_isp;
-    delete stageStore[stageIdx].s15_jet_mass;
-    delete stageStore[stageIdx].s15_beco_twr;
-    delete stageStore[stageIdx].s15_boost_isp;
+    stageClearS15(stageStore[stageIdx]);
   }
   currentStageNames[stageIdx]=stage.name||null;
   stageSaved[stageIdx]=false;

@@ -3361,7 +3361,7 @@ function loadPreset(p,key){
   stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
     const orig=(p.stageData||[])[si]||{};
-    if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
+    stageCarryS15(entry,orig);
     stageStore[si]=entry;
   });
   _suppressUD=true;setStages(numStgs);
@@ -3629,6 +3629,44 @@ function rotVel(lat,azMin,azMax){
 }
 function rocketEq(isp,m0,mf){return(mf<=0||m0<=mf)?0:G0*isp*Math.log(m0/mf);}
 
+// ─── S1.5 (STAGE-AND-A-HALF) CARRIAGE ─────────
+// The s15 sextet (the `s15` flag + these 5 fields) describes a stage's BECO
+// (booster-engine-cutoff) split and must move ATOMICALLY between every stage
+// record shape in the app (worksheet stageStore, library entries, fleet
+// snapshots, presets, trade-study assemblers, ...). Copying it field-by-field
+// at each call site has shipped the same drop bug 3x (see CLAUDE.md hard
+// invariant + docs/UNIFICATION_AUDIT.md item 4) — every module that needs to
+// carry, clear, or read-off s15 data MUST route through these three helpers
+// (grep-gated in tests/math.test.js: no other module may reference an
+// `s15_*` field name directly outside the splitters that consume it).
+const STAGE_S15_FIELDS=['s15_sust_thrust','s15_sust_isp','s15_jet_mass','s15_beco_twr','s15_boost_isp'];
+function _s15FieldDefault(f){return f==='s15_beco_twr'?1.2:0;}
+// Copy the s15 flag + sextet from src onto dst atomically. No-op (dst
+// untouched) if src has no s15 data — callers that need clear-on-toggle-off
+// call stageClearS15(dst) explicitly.
+function stageCarryS15(dst,src){
+  if(!dst||!src||!src.s15)return dst;
+  dst.s15=true;
+  STAGE_S15_FIELDS.forEach(f=>{dst[f]=src[f]||_s15FieldDefault(f);});
+  return dst;
+}
+// Remove the s15 flag + sextet from dst (the toggle-off / clear case).
+function stageClearS15(dst){
+  if(!dst)return dst;
+  delete dst.s15;
+  STAGE_S15_FIELDS.forEach(f=>delete dst[f]);
+  return dst;
+}
+// Read-only: pull the s15 flag + sextet off src into a fresh plain object
+// (for DOM population, preview computation, etc.) without touching src.
+// Returns null if src has no s15 data.
+function stagePickS15(src){
+  if(!src||!src.s15)return null;
+  const out={s15:true};
+  STAGE_S15_FIELDS.forEach(f=>{out[f]=src[f]||_s15FieldDefault(f);});
+  return out;
+}
+
 // Parse editable stage quantities without eval. Supports decimal numbers,
 // scientific notation, parentheses, unary signs, and + - * /.
 function parseMathExpression(value){
@@ -3829,7 +3867,7 @@ function collectVehicle(){
     const sd=stageStore[s]||{};
     const st={dry:mathValue(sd.dry,0),prop:mathValue(sd.prop,0),thrust:mathValue(sd.thrust,0),isp:parseFloat(sd.isp)||1,res:mathValue(sd.res,0)};
     // Persist S1.5 fields so they survive save/load
-    if(sd.s15){st.s15=true;st.s15_sust_thrust=sd.s15_sust_thrust||0;st.s15_sust_isp=sd.s15_sust_isp||0;st.s15_jet_mass=sd.s15_jet_mass||0;st.s15_beco_twr=sd.s15_beco_twr||1.2;st.s15_boost_isp=sd.s15_boost_isp||0;}
+    stageCarryS15(st,sd);
     stages.push(st);
   }
   const groups=lvBoosterGroups();
@@ -4248,14 +4286,7 @@ function _tsCollectBase(){
     // the worksheet trade-study numbers diverge from the Orbits-page calculator
     // for every S1.5 vehicle (shipped-a-third-time S1.5 splitter bug).
     const sd=(typeof stageStore!=='undefined'&&stageStore[s])?stageStore[s]:null;
-    if(sd&&sd.s15){
-      st.s15=true;
-      st.s15_sust_thrust=sd.s15_sust_thrust||0;
-      st.s15_sust_isp=sd.s15_sust_isp||0;
-      st.s15_jet_mass=sd.s15_jet_mass||0;
-      st.s15_beco_twr=sd.s15_beco_twr||1.2;
-      st.s15_boost_isp=sd.s15_boost_isp||0;
-    }
+    stageCarryS15(st,sd);
     stages.push(st);
   }
   const boosterArg=useBooster?lvBoosterGroups():null;
@@ -4614,8 +4645,7 @@ function _tsResolveLabel(cv){return cv.kind==='worksheet'?_tsWorksheetLabel():cv
 // stages/booster/fairing/site — but callers overlay the swept variable + shared
 // orbit params so curves stay comparable (see tsRunSweep).
 function _tsVehicleToBase(vehObj){
-  const stages=resolvePresetStages(vehObj).map(sd=>({dry:sd.dry,prop:sd.prop,thrust:sd.thrust,isp:sd.isp,res:sd.res??2,
-    ...(sd.s15?{s15:true,s15_sust_thrust:sd.s15_sust_thrust||0,s15_sust_isp:sd.s15_sust_isp||0,s15_jet_mass:sd.s15_jet_mass||0,s15_beco_twr:sd.s15_beco_twr||1.2,s15_boost_isp:sd.s15_boost_isp||0}:{})}));
+  const stages=resolvePresetStages(vehObj).map(sd=>stageCarryS15({dry:sd.dry,prop:sd.prop,thrust:sd.thrust,isp:sd.isp,res:sd.res??2},sd));
   // boosterGroups (array, Group 2+) takes precedence like the live-DOM assembler (lvBoosterGroups);
   // fall back to a single resolved boosterData/boosterName group.
   let boosterArg=null;
@@ -5842,7 +5872,7 @@ function applyLVObject(obj){
   // ── Vehicle config ──
   if(obj.stageData)obj.stageData.forEach((sd,si)=>{
     const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
-    if(sd.s15){entry.s15=true;entry.s15_sust_thrust=sd.s15_sust_thrust||0;entry.s15_sust_isp=sd.s15_sust_isp||0;entry.s15_jet_mass=sd.s15_jet_mass||0;entry.s15_beco_twr=sd.s15_beco_twr||1.2;entry.s15_boost_isp=sd.s15_boost_isp||0;}
+    stageCarryS15(entry,sd);
     stageStore[si]=entry;
   });
   // Resolve stage names if present (new format)
@@ -5852,7 +5882,7 @@ function applyLVObject(obj){
       const entry={dry:String(sd.dry),prop:String(sd.prop),thrust:String(sd.thrust),isp:String(sd.isp),res:String(sd.res??2)};
       // Carry over s15 fields from the original stageData if present
       const orig=(obj.stageData||[])[si]||{};
-      if(orig.s15){entry.s15=true;entry.s15_sust_thrust=orig.s15_sust_thrust||0;entry.s15_sust_isp=orig.s15_sust_isp||0;entry.s15_jet_mass=orig.s15_jet_mass||0;entry.s15_beco_twr=orig.s15_beco_twr||1.2;entry.s15_boost_isp=orig.s15_boost_isp||0;}
+      stageCarryS15(entry,orig);
       stageStore[si]=entry;
     });
     _suppressUD=true;setStages(resolved.length);
@@ -8317,19 +8347,9 @@ function applyStageData(stageIdx,stage){
   set('dry',stage.dry);set('prop',stage.prop);set('thrust',stage.thrust);set('isp',stage.isp);set('res',stage.res??2);
   // Forward stage-and-a-half fields from the library entry into stageStore
   if(stage.s15){
-    stageStore[stageIdx].s15=true;
-    stageStore[stageIdx].s15_sust_thrust=stage.s15_sust_thrust||0;
-    stageStore[stageIdx].s15_sust_isp=stage.s15_sust_isp||0;
-    stageStore[stageIdx].s15_jet_mass=stage.s15_jet_mass||0;
-    stageStore[stageIdx].s15_beco_twr=stage.s15_beco_twr||1.2;
-    stageStore[stageIdx].s15_boost_isp=stage.s15_boost_isp||0;
+    stageCarryS15(stageStore[stageIdx],stage);
   } else {
-    delete stageStore[stageIdx].s15;
-    delete stageStore[stageIdx].s15_sust_thrust;
-    delete stageStore[stageIdx].s15_sust_isp;
-    delete stageStore[stageIdx].s15_jet_mass;
-    delete stageStore[stageIdx].s15_beco_twr;
-    delete stageStore[stageIdx].s15_boost_isp;
+    stageClearS15(stageStore[stageIdx]);
   }
   currentStageNames[stageIdx]=stage.name||null;
   stageSaved[stageIdx]=false;
@@ -10958,20 +10978,17 @@ function doEditStage(){
     // ── S1.5 fields ──
     const s15On = document.getElementById('stg-s15')?.checked ?? false;
     if (s15On) {
-      stageStore[stageIdx].s15             = true;
-      stageStore[stageIdx].s15_sust_thrust = parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0;
-      stageStore[stageIdx].s15_sust_isp   = parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0;
-      stageStore[stageIdx].s15_jet_mass   = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
-      stageStore[stageIdx].s15_beco_twr   = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
-      stageStore[stageIdx].s15_boost_isp  = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
+      stageCarryS15(stageStore[stageIdx],{
+        s15:true,
+        s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0,
+        s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0,
+        s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0,
+        s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2,
+        s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0,
+      });
     } else {
       // Clear any previous s15 data
-      delete stageStore[stageIdx].s15;
-      delete stageStore[stageIdx].s15_sust_thrust;
-      delete stageStore[stageIdx].s15_sust_isp;
-      delete stageStore[stageIdx].s15_jet_mass;
-      delete stageStore[stageIdx].s15_beco_twr;
-      delete stageStore[stageIdx].s15_boost_isp;
+      stageClearS15(stageStore[stageIdx]);
     }
     const wasUGC=isUGCStage(currentStageNames[stageIdx]);
     currentStageNames[stageIdx]=name;
@@ -10979,14 +10996,7 @@ function doEditStage(){
     // If UGC, update library entry directly
     if(wasUGC){
       const newStage={name,dry,prop,thrust,isp,res,engines,note,tags,_userGenerated:true,_category:cat};
-      if(stageStore[stageIdx].s15){
-        newStage.s15=true;
-        newStage.s15_sust_thrust=stageStore[stageIdx].s15_sust_thrust||0;
-        newStage.s15_sust_isp   =stageStore[stageIdx].s15_sust_isp   ||0;
-        newStage.s15_jet_mass   =stageStore[stageIdx].s15_jet_mass   ||0;
-        newStage.s15_beco_twr   =stageStore[stageIdx].s15_beco_twr   ||1.2;
-        newStage.s15_boost_isp  =stageStore[stageIdx].s15_boost_isp  ||0;
-      }
+      stageCarryS15(newStage,stageStore[stageIdx]);
       updateUGCStage(currentStageNames[stageIdx]||name,newStage);
     }
   }
@@ -11057,14 +11067,7 @@ function saveStageCardAsFile(stageIdx,isBooster){
       res:mathValue(store.res,2),
       _userGenerated:true,
     };
-    if(store.s15){
-      stage.s15=true;
-      stage.s15_sust_thrust=store.s15_sust_thrust||0;
-      stage.s15_sust_isp   =store.s15_sust_isp   ||0;
-      stage.s15_jet_mass   =store.s15_jet_mass   ||0;
-      stage.s15_beco_twr   =store.s15_beco_twr   ||1.2;
-      stage.s15_boost_isp  =store.s15_boost_isp  ||0;
-    }
+    stageCarryS15(stage,store);
     stageSaved[stageIdx]=true;
   }
   const fname=stage.name.replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'.stage';
@@ -11092,7 +11095,7 @@ function resolvePresetStages(p){
     const s=findStageByName(name);
     if(!s)return {dry:0,prop:0,thrust:0,isp:300,res:2,_missing:name};
     const entry={dry:s.dry,prop:s.prop,thrust:s.thrust,isp:s.isp,res:s.res??2};
-    if(s.s15){entry.s15=true;entry.s15_sust_thrust=s.s15_sust_thrust||0;entry.s15_sust_isp=s.s15_sust_isp||0;entry.s15_jet_mass=s.s15_jet_mass||0;entry.s15_beco_twr=s.s15_beco_twr||1.2;entry.s15_boost_isp=s.s15_boost_isp||0;}
+    stageCarryS15(entry,s);
     return entry;
   });
 }
@@ -11346,12 +11349,14 @@ function doAddStage(andSave){
   };
   const s15On=document.getElementById('stg-s15')?.checked??false;
   if(s15On&&!stage.isBooster){
-    stage.s15=true;
-    stage.s15_sust_thrust=parseFloat(document.getElementById('stg-s15-thrust')?.value)||0;
-    stage.s15_sust_isp   =parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0;
-    stage.s15_jet_mass   =parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0;
-    stage.s15_beco_twr   =parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2;
-    stage.s15_boost_isp  =parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0;
+    stageCarryS15(stage,{
+      s15:true,
+      s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value)||0,
+      s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0,
+      s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0,
+      s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2,
+      s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0,
+    });
   }
   if(!userStagesByCategory[cat])userStagesByCategory[cat]=[];
   userStagesByCategory[cat].unshift(stage); // prepend so new stages appear first
@@ -16676,14 +16681,7 @@ function fleetImportRenderList() {
 // (S1.5) fields so library/imported/snapshotted vehicles keep their BECO config.
 function _fleetStageCopy(s) {
   const o = { dry: s.dry||0, prop: s.prop||0, isp: s.isp||1, thrust: s.thrust||0, res: s.res||2 };
-  if (s.s15) {
-    o.s15 = true;
-    o.s15_sust_thrust = s.s15_sust_thrust || 0;
-    o.s15_sust_isp    = s.s15_sust_isp    || 0;
-    o.s15_jet_mass    = s.s15_jet_mass    || 0;
-    o.s15_beco_twr    = s.s15_beco_twr    || 1.2;
-    o.s15_boost_isp   = s.s15_boost_isp   || 0;
-  }
+  stageCarryS15(o,s);
   return o;
 }
 
@@ -16934,8 +16932,9 @@ function fleetSnapshotCurrent() {
   const names  = [];
   for (let s = 0; s < (typeof numStages !== 'undefined' ? numStages : 0); s++) {
     const st = stageStore[s] || {};
-    stages.push(_fleetStageCopy({ dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2,
-      s15: st.s15, s15_sust_thrust: st.s15_sust_thrust, s15_sust_isp: st.s15_sust_isp, s15_jet_mass: st.s15_jet_mass, s15_beco_twr: st.s15_beco_twr, s15_boost_isp: st.s15_boost_isp }));
+    const base = { dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2 };
+    stageCarryS15(base, st);
+    stages.push(_fleetStageCopy(base));
     names.push((typeof currentStageNames !== 'undefined' && currentStageNames[s]) ? currentStageNames[s] : ('Stage ' + (s+1)));
   }
   if (!stages.length) { alert('No stages in LV Calc — configure a vehicle on the Vehicles page first.'); return; }

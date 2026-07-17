@@ -8,6 +8,44 @@ function rotVel(lat,azMin,azMax){
 }
 function rocketEq(isp,m0,mf){return(mf<=0||m0<=mf)?0:G0*isp*Math.log(m0/mf);}
 
+// ─── S1.5 (STAGE-AND-A-HALF) CARRIAGE ─────────
+// The s15 sextet (the `s15` flag + these 5 fields) describes a stage's BECO
+// (booster-engine-cutoff) split and must move ATOMICALLY between every stage
+// record shape in the app (worksheet stageStore, library entries, fleet
+// snapshots, presets, trade-study assemblers, ...). Copying it field-by-field
+// at each call site has shipped the same drop bug 3x (see CLAUDE.md hard
+// invariant + docs/UNIFICATION_AUDIT.md item 4) — every module that needs to
+// carry, clear, or read-off s15 data MUST route through these three helpers
+// (grep-gated in tests/math.test.js: no other module may reference an
+// `s15_*` field name directly outside the splitters that consume it).
+const STAGE_S15_FIELDS=['s15_sust_thrust','s15_sust_isp','s15_jet_mass','s15_beco_twr','s15_boost_isp'];
+function _s15FieldDefault(f){return f==='s15_beco_twr'?1.2:0;}
+// Copy the s15 flag + sextet from src onto dst atomically. No-op (dst
+// untouched) if src has no s15 data — callers that need clear-on-toggle-off
+// call stageClearS15(dst) explicitly.
+function stageCarryS15(dst,src){
+  if(!dst||!src||!src.s15)return dst;
+  dst.s15=true;
+  STAGE_S15_FIELDS.forEach(f=>{dst[f]=src[f]||_s15FieldDefault(f);});
+  return dst;
+}
+// Remove the s15 flag + sextet from dst (the toggle-off / clear case).
+function stageClearS15(dst){
+  if(!dst)return dst;
+  delete dst.s15;
+  STAGE_S15_FIELDS.forEach(f=>delete dst[f]);
+  return dst;
+}
+// Read-only: pull the s15 flag + sextet off src into a fresh plain object
+// (for DOM population, preview computation, etc.) without touching src.
+// Returns null if src has no s15 data.
+function stagePickS15(src){
+  if(!src||!src.s15)return null;
+  const out={s15:true};
+  STAGE_S15_FIELDS.forEach(f=>{out[f]=src[f]||_s15FieldDefault(f);});
+  return out;
+}
+
 // Parse editable stage quantities without eval. Supports decimal numbers,
 // scientific notation, parentheses, unary signs, and + - * /.
 function parseMathExpression(value){
@@ -208,7 +246,7 @@ function collectVehicle(){
     const sd=stageStore[s]||{};
     const st={dry:mathValue(sd.dry,0),prop:mathValue(sd.prop,0),thrust:mathValue(sd.thrust,0),isp:parseFloat(sd.isp)||1,res:mathValue(sd.res,0)};
     // Persist S1.5 fields so they survive save/load
-    if(sd.s15){st.s15=true;st.s15_sust_thrust=sd.s15_sust_thrust||0;st.s15_sust_isp=sd.s15_sust_isp||0;st.s15_jet_mass=sd.s15_jet_mass||0;st.s15_beco_twr=sd.s15_beco_twr||1.2;st.s15_boost_isp=sd.s15_boost_isp||0;}
+    stageCarryS15(st,sd);
     stages.push(st);
   }
   const groups=lvBoosterGroups();

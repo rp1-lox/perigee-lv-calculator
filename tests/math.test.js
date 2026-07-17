@@ -108,7 +108,7 @@ const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
-  _s15BecoSplit, progBodyAngleAt, progBodyWorldPos,
+  _s15BecoSplit, stageCarryS15, stageClearS15, stagePickS15, progBodyAngleAt, progBodyWorldPos,
   progBodyWorldPosCalibrated, progBodyEphemState, progBodyLocalEphemState,
   progKeplerSolveE, progEpochJD, progHelioPos, progHelioVel, progPorkchopGrid,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
@@ -5094,6 +5094,67 @@ ok('_missionMigrateLaunchOrbitEntry: legacy-shaped e.orbit field-renamed to cano
   return e.orbit.periKm === 185 && e.orbit.apoKm === 220 && e.orbit.incDeg === 51.6 && e.orbit.lanDeg === 30 &&
     !('alt_km' in e.orbit) && !('apo_km' in e.orbit) && !('inc_deg' in e.orbit) && !('lan_deg' in e.orbit);
 })());
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C4 — atomic S1.5 (stage-and-a-half) carriage (MISSION_MODEL_V2.md §24 C4,
+// UNIFICATION_AUDIT item 4)
+//
+// The s15 sextet (the `s15` flag + s15_sust_thrust/s15_sust_isp/s15_jet_mass/
+// s15_beco_twr/s15_boost_isp) was copied field-by-field at each assembler and
+// has shipped the same drop bug 3x. stageCarryS15/stageClearS15/stagePickS15
+// (140-physics.js) are now the ONE sanctioned way to move it between stage
+// records. Gate: no module writes an s15_* field via dot-assignment
+// (`obj.s15_xxx = ...`) outside 140-physics.js — that is exactly the
+// field-by-field copy pattern that shipped the bug. (Object-literal
+// `s15_xxx: value` construction from fresh DOM input, or the splitter's
+// read-only `s.s15_xxx`, are unaffected — those aren't stage-to-stage
+// carriage.)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const JS_DIR = path.join(ROOT, 'src', 'js');
+  const allJsFiles = fs.readdirSync(JS_DIR).filter(f => f.endsWith('.js'));
+  const ALLOWED_S15_DOT_ASSIGN = new Set(['140-physics.js']);
+  const dotAssignRe = /\.s15_\w+\s*=(?!=)/;
+  const violations = [];
+  allJsFiles.forEach(f => {
+    if (ALLOWED_S15_DOT_ASSIGN.has(f)) return;
+    const text = fs.readFileSync(path.join(JS_DIR, f), 'utf8');
+    if (dotAssignRe.test(text)) violations.push(f);
+  });
+  ok('C4 gate: no module outside 140-physics.js dot-assigns an s15_* field (must route through stageCarryS15/stageClearS15)' +
+     (violations.length ? ' — VIOLATIONS: ' + violations.join('; ') : ''), violations.length === 0);
+}
+
+// stageCarryS15 / stageClearS15 / stagePickS15 unit pins: the carriage
+// helper must move the flag + ALL 5 sextet fields atomically, clear all of
+// them atomically, and read them off without mutating the source.
+{
+  const full = { dry: 100, prop: 900, thrust: 500, isp: 300, res: 2,
+    s15: true, s15_sust_thrust: 270, s15_sust_isp: 309, s15_jet_mass: 1800, s15_beco_twr: 0.5, s15_boost_isp: 282 };
+  ok('stageCarryS15: carries the flag + all 5 sextet fields atomically', (() => {
+    const dst = { dry: 100, prop: 900, thrust: 500, isp: 300, res: 2 };
+    stageCarryS15(dst, full);
+    return dst.s15 === true && dst.s15_sust_thrust === 270 && dst.s15_sust_isp === 309 &&
+      dst.s15_jet_mass === 1800 && dst.s15_beco_twr === 0.5 && dst.s15_boost_isp === 282;
+  })());
+  ok('stageCarryS15: no-op (dst untouched) when src has no s15 data', (() => {
+    const dst = { dry: 1, s15: true, s15_sust_thrust: 999 };
+    stageCarryS15(dst, { dry: 2 });
+    return dst.s15 === true && dst.s15_sust_thrust === 999;
+  })());
+  ok('stageClearS15: removes the flag + all 5 sextet fields', (() => {
+    const dst = { ...full };
+    stageClearS15(dst);
+    return !('s15' in dst) && !('s15_sust_thrust' in dst) && !('s15_sust_isp' in dst) &&
+      !('s15_jet_mass' in dst) && !('s15_beco_twr' in dst) && !('s15_boost_isp' in dst) && dst.dry === 100;
+  })());
+  ok('stagePickS15: returns the flag + sextet without mutating src, null when absent', (() => {
+    const picked = stagePickS15(full);
+    const noS15 = stagePickS15({ dry: 1 });
+    return picked && picked.s15 === true && picked.s15_sust_thrust === 270 && picked.s15_boost_isp === 282 &&
+      full.dry === 100 && noS15 === null;
+  })());
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // summary

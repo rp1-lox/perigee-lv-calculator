@@ -220,20 +220,17 @@ function doEditStage(){
     // ── S1.5 fields ──
     const s15On = document.getElementById('stg-s15')?.checked ?? false;
     if (s15On) {
-      stageStore[stageIdx].s15             = true;
-      stageStore[stageIdx].s15_sust_thrust = parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0;
-      stageStore[stageIdx].s15_sust_isp   = parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0;
-      stageStore[stageIdx].s15_jet_mass   = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
-      stageStore[stageIdx].s15_beco_twr   = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
-      stageStore[stageIdx].s15_boost_isp  = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
+      stageCarryS15(stageStore[stageIdx],{
+        s15:true,
+        s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0,
+        s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0,
+        s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0,
+        s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2,
+        s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0,
+      });
     } else {
       // Clear any previous s15 data
-      delete stageStore[stageIdx].s15;
-      delete stageStore[stageIdx].s15_sust_thrust;
-      delete stageStore[stageIdx].s15_sust_isp;
-      delete stageStore[stageIdx].s15_jet_mass;
-      delete stageStore[stageIdx].s15_beco_twr;
-      delete stageStore[stageIdx].s15_boost_isp;
+      stageClearS15(stageStore[stageIdx]);
     }
     const wasUGC=isUGCStage(currentStageNames[stageIdx]);
     currentStageNames[stageIdx]=name;
@@ -241,14 +238,7 @@ function doEditStage(){
     // If UGC, update library entry directly
     if(wasUGC){
       const newStage={name,dry,prop,thrust,isp,res,engines,note,tags,_userGenerated:true,_category:cat};
-      if(stageStore[stageIdx].s15){
-        newStage.s15=true;
-        newStage.s15_sust_thrust=stageStore[stageIdx].s15_sust_thrust||0;
-        newStage.s15_sust_isp   =stageStore[stageIdx].s15_sust_isp   ||0;
-        newStage.s15_jet_mass   =stageStore[stageIdx].s15_jet_mass   ||0;
-        newStage.s15_beco_twr   =stageStore[stageIdx].s15_beco_twr   ||1.2;
-        newStage.s15_boost_isp  =stageStore[stageIdx].s15_boost_isp  ||0;
-      }
+      stageCarryS15(newStage,stageStore[stageIdx]);
       updateUGCStage(currentStageNames[stageIdx]||name,newStage);
     }
   }

@@ -43,14 +43,7 @@ function _tsCollectBase(){
     // the worksheet trade-study numbers diverge from the Orbits-page calculator
     // for every S1.5 vehicle (shipped-a-third-time S1.5 splitter bug).
     const sd=(typeof stageStore!=='undefined'&&stageStore[s])?stageStore[s]:null;
-    if(sd&&sd.s15){
-      st.s15=true;
-      st.s15_sust_thrust=sd.s15_sust_thrust||0;
-      st.s15_sust_isp=sd.s15_sust_isp||0;
-      st.s15_jet_mass=sd.s15_jet_mass||0;
-      st.s15_beco_twr=sd.s15_beco_twr||1.2;
-      st.s15_boost_isp=sd.s15_boost_isp||0;
-    }
+    stageCarryS15(st,sd);
     stages.push(st);
   }
   const boosterArg=useBooster?lvBoosterGroups():null;
@@ -409,8 +402,7 @@ function _tsResolveLabel(cv){return cv.kind==='worksheet'?_tsWorksheetLabel():cv
 // stages/booster/fairing/site — but callers overlay the swept variable + shared
 // orbit params so curves stay comparable (see tsRunSweep).
 function _tsVehicleToBase(vehObj){
-  const stages=resolvePresetStages(vehObj).map(sd=>({dry:sd.dry,prop:sd.prop,thrust:sd.thrust,isp:sd.isp,res:sd.res??2,
-    ...(sd.s15?{s15:true,s15_sust_thrust:sd.s15_sust_thrust||0,s15_sust_isp:sd.s15_sust_isp||0,s15_jet_mass:sd.s15_jet_mass||0,s15_beco_twr:sd.s15_beco_twr||1.2,s15_boost_isp:sd.s15_boost_isp||0}:{})}));
+  const stages=resolvePresetStages(vehObj).map(sd=>stageCarryS15({dry:sd.dry,prop:sd.prop,thrust:sd.thrust,isp:sd.isp,res:sd.res??2},sd));
   // boosterGroups (array, Group 2+) takes precedence like the live-DOM assembler (lvBoosterGroups);
   // fall back to a single resolved boosterData/boosterName group.
   let boosterArg=null;
