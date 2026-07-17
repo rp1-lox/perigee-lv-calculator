@@ -396,21 +396,68 @@ function _missionLaunchLanFieldHTML(m, idx, e) {
   return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
     <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
 }
-// "Match plane" picker (feedback item 2) — offers the Moon's current
-// orbital plane (from its ephemeris state at the launch epoch) and any
-// catalog reference orbit with a defined (non-null) inclination. Picking
-// one fills inc/LAN — still user-overridable afterward, same philosophy as
-// R7's "Plan for destination." Surfaces an unreachable-at-this-latitude
-// warning rather than silently clamping (per the feedback).
-function _missionLaunchPlaneMatchHTML(m, idx, e) {
+// Merged Target control (unify pass, 2026-07-17 layout reorg): "match plane"
+// and "plan for destination" used to be two separate pickers that both, in
+// the end, set inc/LAN — plan-for-destination additionally solves alt +
+// launch time via its Optimize step. User feedback: "those don't really
+// make sense separate. Those need to be the same thing." One control now:
+// "— none —" (manual orbit, unchanged), a "Plan transfer to destination"
+// group (Moon/Mercury/Venus/Mars/Jupiter/Saturn/Uranus/Neptune — the old
+// plan-for-destination list, unchanged capability) that reveals the
+// Depart(JD)+Optimize affordance, and a "Match plane only" group (Moon's
+// current plane + any keplerian catalog ref orbit with a defined
+// inclination — the old match-plane list, unchanged capability) that
+// applies immediately on pick (no Optimize step — it's inc/LAN only).
+// Nothing here mutates m.log; missionApplyLaunchEdit persists
+// e.planDest/e.planDepJD (dest mode) or e.planeMatchTarget (plane mode).
+function _missionLaunchTargetHTML(m, idx, e) {
   const id = m.missionId;
   const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
+  const dests = ['Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
   const catalog = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries() : [];
   const planeEntries = catalog.filter(o => o.kind === 'keplerian' && isFinite(o.inc));
-  const opts = ['<option value="">— match plane —</option>', '<option value="Moon">Moon (current plane)</option>',
-    ...planeEntries.map(o => `<option value="${_tsEsc(o.id)}">${_tsEsc(o.name)}${o.lan != null ? '' : ' (LAN free)'}</option>`)].join('');
-  return `<div class="cfg-item"><label class="cfg-label">&nbsp;</label>
-    <select id="edit-launch-planematch-${id}" style="${_es}" onchange="missionLaunchMatchPlane('${id}',${idx},this.value)">${opts}</select></div>`;
+  const cur = e.planDest ? ('dest:' + e.planDest) : (e.planeMatchTarget ? ('plane:' + e.planeMatchTarget) : '');
+  const destOpts = dests.map(d => `<option value="dest:${d}"${cur === 'dest:' + d ? ' selected' : ''}>${d}</option>`).join('');
+  const planeOpts = [`<option value="plane:Moon"${cur === 'plane:Moon' ? ' selected' : ''}>Moon (current plane)</option>`,
+    ...planeEntries.map(o => `<option value="plane:${_tsEsc(o.id)}"${cur === 'plane:' + o.id ? ' selected' : ''}>${_tsEsc(o.name)}${o.lan != null ? '' : ' (LAN free)'}</option>`)].join('');
+  const isDest = cur.startsWith('dest:');
+  const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
+  const initReadout = e.planDest
+    ? `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`
+    : e.planeMatchTarget
+      ? `// plane matched to ${_mrEsc(e.planeMatchTarget)} &mdash; pick Target again to rematch`
+      : '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+  return `
+    <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;padding:8px;background:var(--accent-tint-faint);border-radius:3px;">
+      <div class="cfg-item"><label class="cfg-label">Target</label>
+        <select id="edit-launch-target-${id}" style="${_es}" onchange="missionLaunchTargetChange('${id}',${idx},this.value)">
+          <option value=""${cur === '' ? ' selected' : ''}>&mdash; none (manual orbit) &mdash;</option>
+          <optgroup label="Plan transfer to destination">${destOpts}</optgroup>
+          <optgroup label="Match plane only">${planeOpts}</optgroup>
+        </select></div>
+      <div class="cfg-item" id="edit-launch-depjd-wrap-${id}" style="${isDest ? '' : 'display:none;'}">
+        <label class="cfg-label">Depart (JD)</label>
+        <input type="number" id="edit-launch-depjd-${id}" class="field" placeholder="auto (min &Delta;V)" value="${depVal}" step="any" style="width:120px;"></div>
+      <button class="act-btn" id="edit-launch-optimize-${id}" style="padding:4px 12px;${isDest ? '' : 'display:none;'}" onclick="missionLaunchPlanOptimize('${id}',${idx})">&#x27F3; Optimize parking orbit</button>
+    </div>
+    <div id="launch-plan-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;line-height:1.5;">${initReadout}</div>`;
+}
+// Merged-control onchange: dest:* just reveals the Depart/Optimize affordance
+// (unchanged plan-for-destination flow — still a multi-field solve gated on
+// clicking Optimize); plane:* applies immediately (unchanged match-plane
+// flow — inc/LAN only, delegates to the existing missionLaunchMatchPlane).
+function missionLaunchTargetChange(id, idx, val) {
+  const depWrap = document.getElementById('edit-launch-depjd-wrap-' + id);
+  const optBtn = document.getElementById('edit-launch-optimize-' + id);
+  const isDest = val.startsWith('dest:');
+  if (depWrap) depWrap.style.display = isDest ? '' : 'none';
+  if (optBtn) optBtn.style.display = isDest ? '' : 'none';
+  if (val.startsWith('plane:')) {
+    missionLaunchMatchPlane(id, idx, val.slice('plane:'.length));
+  } else if (!isDest) {
+    const out = document.getElementById('launch-plan-readout-' + id);
+    if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+  }
 }
 // Fills inc/LAN from the picked plane target. Warns (not clamps) if the
 // site latitude exceeds the plane's inclination — that combination is a
@@ -455,46 +502,19 @@ function missionLaunchClearTime(id, idx) {
   if (t) { t.value = ''; t.dataset.rawS = ''; }
   missionLaunchGeoUpdate(id, idx);
 }
-// ── R7 phase 1: "Plan for destination" — auto-set the ideal parking orbit ──
-// A launch's parking orbit should be the plane that sets up the lowest-DV
-// departure toward a destination. This block picks a destination + optional
-// departure date, calls the pure planner (progPlanLaunchToDestination, 415),
-// and FILLS the inc/LAN/alt fields + launch time — all of which stay editable
-// (Apply commits whatever's in the fields). Nothing here mutates m.log; the
-// only persisted state is e.planDest/e.planDepJD, written by missionApplyLaunchEdit.
-function _missionLaunchPlanHTML(m, idx, e) {
-  const id = m.missionId;
-  const _es = 'background:var(--input);color:var(--text-bright);-webkit-text-fill-color:var(--text-bright);border:1px solid var(--border);font-family:var(--mono);font-size:11px;padding:4px 8px;';
-  // Moon routes through the geocentric cislunar plane math (progMoonPlaneAt)
-  // inside progPlanLaunchToDestination rather than the heliocentric Lambert
-  // scan the other bodies use — see 415's Moon branch.
-  const dests = ['Moon', 'Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'];
-  const cur = e.planDest || '';
-  const destOpts = ['<option value="">&mdash; none (manual orbit) &mdash;</option>',
-    ...dests.map(d => `<option value="${d}"${d === cur ? ' selected' : ''}>${d}</option>`)].join('');
-  const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
-  const initReadout = e.planDest
-    ? `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`
-    : '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
-  return `
-    <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;padding:8px;background:var(--accent-tint-faint);border-radius:3px;">
-      <div class="cfg-item"><label class="cfg-label">Plan for destination</label>
-        <select id="edit-launch-dest-${id}" style="${_es}">${destOpts}</select></div>
-      <div class="cfg-item"><label class="cfg-label">Depart (JD)</label>
-        <input type="number" id="edit-launch-depjd-${id}" class="field" placeholder="auto (min &Delta;V)" value="${depVal}" step="any" style="width:120px;"></div>
-      <button class="act-btn" style="padding:4px 12px;" onclick="missionLaunchPlanOptimize('${id}',${idx})">&#x27F3; Optimize parking orbit</button>
-    </div>
-    <div id="launch-plan-readout-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;line-height:1.5;">${initReadout}</div>`;
-}
 // Optimize handler: runs the planner and fills the DOM fields (no commit until
 // Apply). Uses the site currently picked in THIS card (falls back to the
 // event's site) so azimuth/launch-window reflect the user's in-progress choice.
+// Moon routes through the geocentric cislunar plane math (progMoonPlaneAt)
+// inside progPlanLaunchToDestination rather than the heliocentric Lambert
+// scan the other bodies use — see 415's Moon branch.
 function missionLaunchPlanOptimize(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   const readEl = document.getElementById('launch-plan-readout-' + id);
   const setReadout = html => { if (readEl) readEl.innerHTML = html; };
-  const dest = document.getElementById('edit-launch-dest-' + id)?.value;
+  const targetVal = document.getElementById('edit-launch-target-' + id)?.value || '';
+  const dest = targetVal.startsWith('dest:') ? targetVal.slice('dest:'.length) : '';
   if (!dest) { setReadout('// no destination selected &mdash; pick one, then Optimize'); return; }
   if (typeof progPlanLaunchToDestination !== 'function') { setReadout('// planner module unavailable'); return; }
   const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
@@ -772,7 +792,12 @@ function missionApplyLaunchEdit(id, idx) {
   // user works the search combobox (see 570-mission-cards.js) — nothing to
   // read from the DOM here anymore.
   const o = e.orbit || (e.orbit = {});
-  const body = document.getElementById('edit-launch-body-' + id)?.value; if (body) o.body = body;
+  // Body selector removed from the LAUNCH card (2026-07-17 layout reorg) —
+  // launches are from Earth, full stop. The orbit-state data model still
+  // carries a body field (other event types — DEPLOY, MNODE, etc. — do
+  // target other bodies) so this just hardcodes the one value a LAUNCH can
+  // ever produce rather than removing the field.
+  o.body = 'Earth';
   o.alt_km = +document.getElementById('edit-launch-alt-' + id)?.value || 0;
   o.apo_km = +document.getElementById('edit-launch-apo-' + id)?.value || o.alt_km;
   o.inc_deg = +document.getElementById('edit-launch-inc-' + id)?.value || 0;
@@ -791,10 +816,22 @@ function missionApplyLaunchEdit(id, idx) {
     o._lanFromLaunchTime = false;
   }
   e.launchOrbit = { ...o };
-  // R7 phase 1: remember the destination-plan inputs (authoring metadata only;
-  // the actual orbit lives in e.orbit above — replay/accounting ignore these).
-  const destPick = document.getElementById('edit-launch-dest-' + id)?.value;
-  e.planDest = destPick || null;
+  // Merged Target control (unify pass): remember which mode + which target
+  // (authoring metadata only; the actual orbit lives in e.orbit above —
+  // replay/accounting ignore these). dest: -> plan-for-destination inputs
+  // (planDepJD only meaningful alongside planDest); plane: -> plane-match
+  // target, mutually exclusive with planDest.
+  const targetVal = document.getElementById('edit-launch-target-' + id)?.value || '';
+  if (targetVal.startsWith('dest:')) {
+    e.planDest = targetVal.slice('dest:'.length);
+    e.planeMatchTarget = null;
+  } else if (targetVal.startsWith('plane:')) {
+    e.planDest = null;
+    e.planeMatchTarget = targetVal.slice('plane:'.length);
+  } else {
+    e.planDest = null;
+    e.planeMatchTarget = null;
+  }
   const depPick = document.getElementById('edit-launch-depjd-' + id)?.value;
   e.planDepJD = (depPick !== '' && depPick != null && isFinite(+depPick)) ? +depPick : null;
   missionRecompute(m); missionRenderDetail();

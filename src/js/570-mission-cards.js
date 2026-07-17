@@ -400,7 +400,6 @@ function _missionEventEditFieldsHTML(m, idx) {
           style="margin-bottom:6px;width:100%;box-sizing:border-box;"
           onfocus="_missionLaunchPayComboOpen('${id}',${idx})" onclick="_missionLaunchPayComboOpen('${id}',${idx})">
         <div id="edit-launch-pay-list-${id}" style="margin-bottom:8px;">${payListHTML}</div>`;
-    const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
     const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
     // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
     // sets orbitRefId + fills the fields; hand-editing a bound field clears orbitRefId
@@ -415,23 +414,27 @@ function _missionEventEditFieldsHTML(m, idx) {
             ${refOpts.map(r => `<option value="${r.id}"${r.id === e.orbitRefId ? ' selected' : ''}>${_mrEsc(r.name)}${r.builtin ? '' : ' (user)'}</option>`).join('')}
           </select>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:6px;">${e.orbitRefId ? '' : '(custom)'}${e._refNote ? ' // ' + _mrEsc(e._refNote) : ''}</span></div>`;
+    // Card reorg (2026-07-17, user priority): identity/context first — launch
+    // date + site, vehicle, payloads — ALL above the orbit-element fields.
+    // The Body selector is gone (launches are Earth-only, see
+    // missionApplyLaunchEdit); the merged Target control (plan-for-destination
+    // + match-plane, unified) sits WITH the reference-orbit fields since it
+    // authors them.
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        ${_missionLaunchGeoHTML(m, idx, e)}
         <label class="cfg-label">Launch Vehicle</label>
         ${lvPickerHTML}
         <label class="cfg-label">Payloads</label>
         ${payPickerHTML}
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
           ${refSelectHTML}
-          <div class="cfg-item"><label class="cfg-label">Body</label><select id="edit-launch-body-${id}" style="${_es}">${bodies.map(b => `<option${b === (o.body || 'Earth') ? ' selected' : ''}>${b}</option>`).join('')}</select></div>
           <div class="cfg-item"><label class="cfg-label">Perigee (km)</label><input type="number" id="edit-launch-alt-${id}" class="field" value="${o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
           <div class="cfg-item"><label class="cfg-label">Apogee (km)</label><input type="number" id="edit-launch-apo-${id}" class="field" value="${o.apo_km ?? o.alt_km ?? 200}" style="width:90px;" oninput="missionLaunchOrbitDetach('${id}',${idx})"></div>
           <div class="cfg-item"><label class="cfg-label">Inc (deg)</label><input type="number" id="edit-launch-inc-${id}" class="field" value="${o.inc_deg ?? 28.5}" style="width:80px;" oninput="missionLaunchOrbitDetach('${id}',${idx});missionLaunchGeoUpdate('${id}',${idx})"></div>
           ${_missionLaunchLanFieldHTML(m, idx, e)}
-          ${_missionLaunchPlaneMatchHTML(m, idx, e)}
         </div>
-        ${_missionLaunchPlanHTML(m, idx, e)}
-        ${_missionLaunchGeoHTML(m, idx, e)}
+        ${_missionLaunchTargetHTML(m, idx, e)}
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyLaunchEdit('${id}',${idx})">Apply</button>
       </div>`;
   } else if (e.type === 'SEPARATE') {
