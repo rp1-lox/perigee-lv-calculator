@@ -22124,13 +22124,42 @@ function _missionEventEditFieldsHTML(m, idx) {
         </div>`;
     }
   } else if (e.type === 'LAUNCH') {
-    const lvOpts = ['<option value="">— launch vehicle —</option>',
-      ..._fleetEntries.map(f => `<option value="${f.fleetId}"${f.fleetId === e.fleetEntryId ? ' selected' : ''}>${f.name}</option>`)].join('');
+    // Rebuilt as a search combobox (see 571-combobox.js) — the plain
+    // `_fleetEntries`-only <select> this used to be is the confirmed
+    // regression from e1b08583f: it never listed Built-in/My Vehicles and
+    // never snapshotted a picked one into `_fleetEntries`, so on a fresh
+    // program (empty `_fleetEntries`) the dropdown had nothing in it.
+    const _curFleet = e.fleetEntryId ? _fleetGet(e.fleetEntryId) : null;
+    const _curLvLabel = _curFleet ? _curFleet.name : '';
+    const lvPickerHTML = `
+        <input type="hidden" id="edit-launch-lv-${id}" value="${e.fleetEntryId || ''}">
+        <input type="text" id="edit-launch-lv-q-${id}" class="mcc-field-select" autocomplete="off"
+          placeholder="Search launch vehicles..." value="${_mrEsc(_curLvLabel)}"
+          style="margin-bottom:8px;width:100%;box-sizing:border-box;"
+          onfocus="_missionLaunchLvComboOpen('${id}',${idx})" onclick="_missionLaunchLvComboOpen('${id}',${idx})">`;
     const o = e.orbit || {};
-    const payChecks = (_scEdSC || []).map(sc => {
-      const on = (e.payloadScIds || []).includes(sc.spacecraftId);
-      return `<label style="display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text-bright);"><input type="checkbox" class="edit-launch-pay-${id}" value="${sc.spacecraftId}"${on ? ' checked' : ''}>${sc.name}</label>`;
-    }).join('') || '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">No spacecraft defined</div>';
+    // Payload multi-picker: e.payloadScIds is ALREADY a list (mass = sum, see
+    // 570-mission-manager.js's launch mass accounting) — only the UI needed
+    // rebuilding, not the data model. Add-via-search, remove via the × on
+    // each row; both mutate e.payloadScIds directly (same pre-Apply-mutation
+    // convention missionLaunchOrbitDetach/missionSepEditSetVehicle already use).
+    const curPayloads = (e.payloadScIds || []).map(scId => {
+      const sc = (_scEdSC || []).find(s => s.spacecraftId === scId);
+      return { scId, name: sc ? sc.name : '(missing spacecraft)' };
+    });
+    const payListHTML = curPayloads.length
+      ? curPayloads.map(p => `
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-bottom:3px;background:var(--input);border:1px solid var(--border);border-radius:4px;">
+          <span style="flex:1;font-family:var(--mono);font-size:10px;color:var(--text-bright);">${_mrEsc(p.name)}</span>
+          <button type="button" class="act-btn" title="Remove payload" style="padding:2px 6px;line-height:1;display:flex;" onclick="_missionLaunchPayloadRemove('${id}',${idx},'${p.scId}')"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1,1 L9,9 M9,1 L1,9" stroke="currentColor" stroke-width="1.6"/></svg></button>
+        </div>`).join('')
+      : '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">No payloads added</div>';
+    const payPickerHTML = `
+        <input type="text" id="edit-launch-pay-q-${id}" class="mcc-field-select" autocomplete="off"
+          placeholder="Search spacecraft to add..." value=""
+          style="margin-bottom:6px;width:100%;box-sizing:border-box;"
+          onfocus="_missionLaunchPayComboOpen('${id}',${idx})" onclick="_missionLaunchPayComboOpen('${id}',${idx})">
+        <div id="edit-launch-pay-list-${id}" style="margin-bottom:8px;">${payListHTML}</div>`;
     const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
     const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
     // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
@@ -22149,9 +22178,9 @@ function _missionEventEditFieldsHTML(m, idx) {
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <label class="cfg-label">Launch Vehicle</label>
-        <select id="edit-launch-lv-${id}" class="mcc-field-select" style="margin-bottom:8px;">${lvOpts}</select>
+        ${lvPickerHTML}
         <label class="cfg-label">Payloads</label>
-        <div style="margin:4px 0 8px;">${payChecks}</div>
+        ${payPickerHTML}
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
           ${refSelectHTML}
           <div class="cfg-item"><label class="cfg-label">Body</label><select id="edit-launch-body-${id}" style="${_es}">${bodies.map(b => `<option${b === (o.body || 'Earth') ? ' selected' : ''}>${b}</option>`).join('')}</select></div>
@@ -23118,12 +23147,92 @@ function missionLaunchOrbitDetach(id, idx) {
   delete e._refNote;
 }
 
+// LAUNCH card LV search combobox — see 571-combobox.js. Restores the
+// Built-in/My Vehicles/Program grouping the pre-e1b08583f dock picker had
+// (_missionLvPickerOptsHTML/missionPickLibVehicle, both now dead) and its
+// on-pick snapshot-into-`_fleetEntries` behavior for library vehicles.
+function _missionLaunchLvComboOpen(id, idx) {
+  const inputEl = document.getElementById('edit-launch-lv-q-' + id);
+  if (!inputEl) return;
+  comboboxOpen({
+    inputEl,
+    groups: () => {
+      const g = [];
+      if (typeof BUILTIN_PRESETS !== 'undefined' && BUILTIN_PRESETS.length) {
+        g.push({ label: 'Built-in', items: BUILTIN_PRESETS.map((v, i) => ({ value: 'builtin:' + i, label: v.name })) });
+      }
+      if (typeof userLVs !== 'undefined' && userLVs.length) {
+        g.push({ label: 'My Vehicles', items: userLVs.map((v, i) => ({ value: 'user:' + i, label: v.name })) });
+      }
+      if (_fleetEntries.length) {
+        g.push({ label: 'Program', items: _fleetEntries.map(f => ({ value: 'fleet:' + f.fleetId, label: f.name })) });
+      }
+      return g;
+    },
+    onPick: (item) => _missionLaunchLvPick(id, item)
+  });
+}
+function _missionLaunchLvPick(id, item) {
+  const [kind, ref] = item.value.split(':');
+  let fleetId;
+  if (kind === 'fleet') {
+    fleetId = ref;
+  } else {
+    const spec = _fleetVehicleSpecFromLib(kind, parseInt(ref, 10));
+    if (!spec) return;
+    const entry = { fleetId: progUUID(), ...spec, payloads: [] };
+    _fleetEntries.push(entry);
+    fleetId = entry.fleetId;
+  }
+  const hidden = document.getElementById('edit-launch-lv-' + id);
+  const q = document.getElementById('edit-launch-lv-q-' + id);
+  if (hidden) hidden.value = fleetId;
+  if (q) q.value = item.label;
+}
+
+// LAUNCH card payload search combobox — appends to e.payloadScIds (a list;
+// mass accounting already sums it, see 570-mission-manager.js). Mutates the
+// log entry directly and re-renders, same pre-Apply-mutation convention as
+// missionLaunchOrbitDetach/missionSepEditSetVehicle.
+function _missionLaunchPayComboOpen(id, idx) {
+  const inputEl = document.getElementById('edit-launch-pay-q-' + id);
+  const m = _missionGet(id);
+  if (!inputEl || !m) return;
+  const e = m.log[idx]; if (!e) return;
+  comboboxOpen({
+    inputEl,
+    groups: () => {
+      const already = e.payloadScIds || [];
+      const avail = (_scEdSC || []).filter(sc => !already.includes(sc.spacecraftId));
+      return avail.length ? [{ label: 'Spacecraft', items: avail.map(sc => ({ value: sc.spacecraftId, label: sc.name })) }] : [];
+    },
+    onPick: (item) => _missionLaunchPayloadAdd(id, idx, item.value)
+  });
+}
+function _missionLaunchPayloadAdd(id, idx, scId) {
+  comboboxClose();
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  if (!e.payloadScIds) e.payloadScIds = [];
+  if (!e.payloadScIds.includes(scId)) e.payloadScIds.push(scId);
+  missionRenderDetail();
+}
+function _missionLaunchPayloadRemove(id, idx, scId) {
+  comboboxClose();
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  e.payloadScIds = (e.payloadScIds || []).filter(x => x !== scId);
+  missionRenderDetail();
+}
+
 function missionApplyLaunchEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   const lv = document.getElementById('edit-launch-lv-' + id)?.value;
   if (lv) { e.fleetEntryId = lv; const f = _fleetGet(lv); if (f) e.label = f.name; }
-  e.payloadScIds = [...document.querySelectorAll('.edit-launch-pay-' + id + ':checked')].map(c => c.value);
+  // payloadScIds is kept live on `e` by _missionLaunchPayloadAdd/Remove as the
+  // user works the search combobox (see 570-mission-cards.js) — nothing to
+  // read from the DOM here anymore.
   const o = e.orbit || (e.orbit = {});
   const body = document.getElementById('edit-launch-body-' + id)?.value; if (body) o.body = body;
   o.alt_km = +document.getElementById('edit-launch-alt-' + id)?.value || 0;
@@ -27465,6 +27574,141 @@ function missionRecompute(m) {
   // already scheduled its save and undo has already captured its snapshot, so
   // neither persistence path can pick them up (see 572-mission-checks.js header).
   if (typeof missionRunChecks === 'function') missionRunChecks(m);
+}
+// ─── Generic search-combobox helper ────────────────────────────────────────
+// Reused by the LAUNCH card's vehicle picker and payload picker (see
+// docs/MISSION_MODEL_V2.md s12 addendum, "LAUNCH card LV/payload search").
+// Pattern follows 578-mission-epoch-picker.js: a body-appended floating
+// popover, capture-phase Escape (stopPropagation so it doesn't ALSO cancel
+// the whole pending event card via 575-mission-undo.js's document Escape
+// listener, which runs in the bubble phase), and a deferred outside-click
+// listener (deferred one tick so the click that opened the combobox doesn't
+// immediately close it).
+//
+// Regression this exists to fix: the unified pending-card LAUNCH form
+// (e1b08583f) rendered its vehicle <select> straight from `_fleetEntries`
+// (src/js/570-mission-cards.js) instead of the old dock's
+// `_missionLvPickerOptsHTML` (src/js/570-mission-manager.js), which is the
+// ONLY place that also listed Built-in/My Vehicles and snapshotted a picked
+// library vehicle into `_fleetEntries` via `_fleetVehicleSpecFromLib`
+// (`missionPickLibVehicle`, now dead code with no callers). `_fleetEntries`
+// starts empty in every fresh program, so the LAUNCH form's dropdown had
+// nothing to show and picking never fired the snapshot path -> "blank
+// dropdown, does nothing." The combobox picker below restores the
+// Built-in/My Vehicles/Program grouping AND the on-pick snapshot behavior.
+
+let _comboPopEl = null;
+let _comboCloseHandlers = null;
+
+/** Tear down any currently-open combobox popover (safe if none is open). */
+function comboboxClose() {
+  if (_comboCloseHandlers) {
+    document.removeEventListener('keydown', _comboCloseHandlers.onKey, true);
+    document.removeEventListener('mousedown', _comboCloseHandlers.onOutside, true);
+    if (_comboCloseHandlers.inputEl) _comboCloseHandlers.inputEl.removeEventListener('input', _comboCloseHandlers.onInput);
+    _comboCloseHandlers = null;
+  }
+  if (_comboPopEl && _comboPopEl.parentNode) _comboPopEl.parentNode.removeChild(_comboPopEl);
+  _comboPopEl = null;
+}
+
+/**
+ * Open a filtered, keyboard-navigable dropdown anchored under a text input.
+ * opts:
+ *   inputEl     — the <input type="text"> the user types into (also the anchor)
+ *   groups()    — fn returning [{ label, items:[{value,label}] }]; called on
+ *                 every keystroke so callers can recompute from live state
+ *                 (e.g. `_fleetEntries` growing as vehicles get snapshotted)
+ *   onPick(item)— called with the chosen {value,label} on select; the popover
+ *                 is already closed by the time this runs
+ */
+function comboboxOpen(opts) {
+  const { inputEl, groups, onPick } = opts || {};
+  if (!inputEl) return;
+  comboboxClose();
+  let activeIdx = -1;
+
+  const pop = document.createElement('div');
+  pop.className = 'combo-pop';
+  pop.setAttribute('role', 'listbox');
+  pop.style.cssText = [
+    'position:fixed', 'z-index:9999', 'min-width:180px', 'max-height:260px', 'overflow:auto',
+    'background:var(--panel)', 'border:1px solid var(--border-bright)', 'border-radius:6px',
+    'box-shadow:0 6px 24px rgba(0,0,0,.4)', 'padding:4px', 'font-family:var(--mono)', 'font-size:11px'
+  ].join(';');
+  document.body.appendChild(pop);
+  _comboPopEl = pop;
+
+  function esc(s) { return (typeof _mrEsc === 'function') ? _mrEsc(s) : String(s == null ? '' : s); }
+
+  function filteredGroups() {
+    const q = (inputEl.value || '').trim().toLowerCase();
+    const out = [];
+    (groups() || []).forEach(g => {
+      const matches = (g.items || []).filter(it => !q || it.label.toLowerCase().includes(q));
+      if (matches.length) out.push({ label: g.label, items: matches });
+    });
+    return out;
+  }
+
+  function render() {
+    const gs = filteredGroups();
+    const flat = [];
+    gs.forEach(g => g.items.forEach(it => flat.push(it)));
+    if (activeIdx >= flat.length) activeIdx = flat.length - 1;
+    let html = '';
+    if (!flat.length) html = '<div style="padding:6px 8px;color:var(--text-dim);">No matches</div>';
+    let i = 0;
+    gs.forEach(g => {
+      if (g.label) html += `<div style="padding:3px 8px;color:var(--text-dim);font-size:9px;text-transform:uppercase;letter-spacing:.03em;">${esc(g.label)}</div>`;
+      g.items.forEach(it => {
+        const isActive = i === activeIdx;
+        html += `<div class="combo-item" data-idx="${i}" style="padding:5px 8px;cursor:pointer;border-radius:4px;color:var(--text-bright);${isActive ? 'background:var(--accent-tint-med);' : ''}">${esc(it.label)}</div>`;
+        i++;
+      });
+    });
+    pop.innerHTML = html;
+    pop._flat = flat;
+    pop.querySelectorAll('.combo-item').forEach(el => {
+      // mousedown (not click) so the pick fires before the input's blur tears the popover down.
+      el.addEventListener('mousedown', ev => {
+        ev.preventDefault();
+        pick(pop._flat[parseInt(el.getAttribute('data-idx'), 10)]);
+      });
+      el.addEventListener('mouseenter', () => { activeIdx = parseInt(el.getAttribute('data-idx'), 10); render(); });
+    });
+    position();
+  }
+
+  function position() {
+    const r = inputEl.getBoundingClientRect();
+    pop.style.left = Math.max(4, r.left) + 'px';
+    pop.style.top = (r.bottom + 4) + 'px';
+    pop.style.width = Math.max(180, r.width) + 'px';
+  }
+
+  function pick(item) {
+    if (!item) return;
+    comboboxClose();
+    if (typeof onPick === 'function') onPick(item);
+  }
+
+  const onInput = () => { activeIdx = -1; render(); };
+  const onKey = (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); comboboxClose(); return; }
+    const flat = pop._flat || [];
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); activeIdx = Math.min(flat.length - 1, activeIdx + 1); render(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); activeIdx = Math.max(0, activeIdx - 1); render(); }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (activeIdx >= 0 && flat[activeIdx]) pick(flat[activeIdx]); }
+  };
+  const onOutside = (ev) => { if (_comboPopEl && !_comboPopEl.contains(ev.target) && ev.target !== inputEl) comboboxClose(); };
+
+  inputEl.addEventListener('input', onInput);
+  document.addEventListener('keydown', onKey, true);
+  setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
+  _comboCloseHandlers = { onKey, onOutside, onInput, inputEl };
+
+  render();
 }
 
 // ─── MISSION FLIGHT READINESS CHECKS ─────────────────────────────────────────

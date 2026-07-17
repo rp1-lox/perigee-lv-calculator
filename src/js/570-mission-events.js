@@ -685,12 +685,92 @@ function missionLaunchOrbitDetach(id, idx) {
   delete e._refNote;
 }
 
+// LAUNCH card LV search combobox — see 571-combobox.js. Restores the
+// Built-in/My Vehicles/Program grouping the pre-e1b08583f dock picker had
+// (_missionLvPickerOptsHTML/missionPickLibVehicle, both now dead) and its
+// on-pick snapshot-into-`_fleetEntries` behavior for library vehicles.
+function _missionLaunchLvComboOpen(id, idx) {
+  const inputEl = document.getElementById('edit-launch-lv-q-' + id);
+  if (!inputEl) return;
+  comboboxOpen({
+    inputEl,
+    groups: () => {
+      const g = [];
+      if (typeof BUILTIN_PRESETS !== 'undefined' && BUILTIN_PRESETS.length) {
+        g.push({ label: 'Built-in', items: BUILTIN_PRESETS.map((v, i) => ({ value: 'builtin:' + i, label: v.name })) });
+      }
+      if (typeof userLVs !== 'undefined' && userLVs.length) {
+        g.push({ label: 'My Vehicles', items: userLVs.map((v, i) => ({ value: 'user:' + i, label: v.name })) });
+      }
+      if (_fleetEntries.length) {
+        g.push({ label: 'Program', items: _fleetEntries.map(f => ({ value: 'fleet:' + f.fleetId, label: f.name })) });
+      }
+      return g;
+    },
+    onPick: (item) => _missionLaunchLvPick(id, item)
+  });
+}
+function _missionLaunchLvPick(id, item) {
+  const [kind, ref] = item.value.split(':');
+  let fleetId;
+  if (kind === 'fleet') {
+    fleetId = ref;
+  } else {
+    const spec = _fleetVehicleSpecFromLib(kind, parseInt(ref, 10));
+    if (!spec) return;
+    const entry = { fleetId: progUUID(), ...spec, payloads: [] };
+    _fleetEntries.push(entry);
+    fleetId = entry.fleetId;
+  }
+  const hidden = document.getElementById('edit-launch-lv-' + id);
+  const q = document.getElementById('edit-launch-lv-q-' + id);
+  if (hidden) hidden.value = fleetId;
+  if (q) q.value = item.label;
+}
+
+// LAUNCH card payload search combobox — appends to e.payloadScIds (a list;
+// mass accounting already sums it, see 570-mission-manager.js). Mutates the
+// log entry directly and re-renders, same pre-Apply-mutation convention as
+// missionLaunchOrbitDetach/missionSepEditSetVehicle.
+function _missionLaunchPayComboOpen(id, idx) {
+  const inputEl = document.getElementById('edit-launch-pay-q-' + id);
+  const m = _missionGet(id);
+  if (!inputEl || !m) return;
+  const e = m.log[idx]; if (!e) return;
+  comboboxOpen({
+    inputEl,
+    groups: () => {
+      const already = e.payloadScIds || [];
+      const avail = (_scEdSC || []).filter(sc => !already.includes(sc.spacecraftId));
+      return avail.length ? [{ label: 'Spacecraft', items: avail.map(sc => ({ value: sc.spacecraftId, label: sc.name })) }] : [];
+    },
+    onPick: (item) => _missionLaunchPayloadAdd(id, idx, item.value)
+  });
+}
+function _missionLaunchPayloadAdd(id, idx, scId) {
+  comboboxClose();
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  if (!e.payloadScIds) e.payloadScIds = [];
+  if (!e.payloadScIds.includes(scId)) e.payloadScIds.push(scId);
+  missionRenderDetail();
+}
+function _missionLaunchPayloadRemove(id, idx, scId) {
+  comboboxClose();
+  const m = _missionGet(id); if (!m) return;
+  const e = m.log[idx]; if (!e) return;
+  e.payloadScIds = (e.payloadScIds || []).filter(x => x !== scId);
+  missionRenderDetail();
+}
+
 function missionApplyLaunchEdit(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   const lv = document.getElementById('edit-launch-lv-' + id)?.value;
   if (lv) { e.fleetEntryId = lv; const f = _fleetGet(lv); if (f) e.label = f.name; }
-  e.payloadScIds = [...document.querySelectorAll('.edit-launch-pay-' + id + ':checked')].map(c => c.value);
+  // payloadScIds is kept live on `e` by _missionLaunchPayloadAdd/Remove as the
+  // user works the search combobox (see 570-mission-cards.js) — nothing to
+  // read from the DOM here anymore.
   const o = e.orbit || (e.orbit = {});
   const body = document.getElementById('edit-launch-body-' + id)?.value; if (body) o.body = body;
   o.alt_km = +document.getElementById('edit-launch-alt-' + id)?.value || 0;

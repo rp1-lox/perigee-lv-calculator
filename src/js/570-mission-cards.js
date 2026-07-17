@@ -364,13 +364,42 @@ function _missionEventEditFieldsHTML(m, idx) {
         </div>`;
     }
   } else if (e.type === 'LAUNCH') {
-    const lvOpts = ['<option value="">— launch vehicle —</option>',
-      ..._fleetEntries.map(f => `<option value="${f.fleetId}"${f.fleetId === e.fleetEntryId ? ' selected' : ''}>${f.name}</option>`)].join('');
+    // Rebuilt as a search combobox (see 571-combobox.js) — the plain
+    // `_fleetEntries`-only <select> this used to be is the confirmed
+    // regression from e1b08583f: it never listed Built-in/My Vehicles and
+    // never snapshotted a picked one into `_fleetEntries`, so on a fresh
+    // program (empty `_fleetEntries`) the dropdown had nothing in it.
+    const _curFleet = e.fleetEntryId ? _fleetGet(e.fleetEntryId) : null;
+    const _curLvLabel = _curFleet ? _curFleet.name : '';
+    const lvPickerHTML = `
+        <input type="hidden" id="edit-launch-lv-${id}" value="${e.fleetEntryId || ''}">
+        <input type="text" id="edit-launch-lv-q-${id}" class="mcc-field-select" autocomplete="off"
+          placeholder="Search launch vehicles..." value="${_mrEsc(_curLvLabel)}"
+          style="margin-bottom:8px;width:100%;box-sizing:border-box;"
+          onfocus="_missionLaunchLvComboOpen('${id}',${idx})" onclick="_missionLaunchLvComboOpen('${id}',${idx})">`;
     const o = e.orbit || {};
-    const payChecks = (_scEdSC || []).map(sc => {
-      const on = (e.payloadScIds || []).includes(sc.spacecraftId);
-      return `<label style="display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text-bright);"><input type="checkbox" class="edit-launch-pay-${id}" value="${sc.spacecraftId}"${on ? ' checked' : ''}>${sc.name}</label>`;
-    }).join('') || '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">No spacecraft defined</div>';
+    // Payload multi-picker: e.payloadScIds is ALREADY a list (mass = sum, see
+    // 570-mission-manager.js's launch mass accounting) — only the UI needed
+    // rebuilding, not the data model. Add-via-search, remove via the × on
+    // each row; both mutate e.payloadScIds directly (same pre-Apply-mutation
+    // convention missionLaunchOrbitDetach/missionSepEditSetVehicle already use).
+    const curPayloads = (e.payloadScIds || []).map(scId => {
+      const sc = (_scEdSC || []).find(s => s.spacecraftId === scId);
+      return { scId, name: sc ? sc.name : '(missing spacecraft)' };
+    });
+    const payListHTML = curPayloads.length
+      ? curPayloads.map(p => `
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-bottom:3px;background:var(--input);border:1px solid var(--border);border-radius:4px;">
+          <span style="flex:1;font-family:var(--mono);font-size:10px;color:var(--text-bright);">${_mrEsc(p.name)}</span>
+          <button type="button" class="act-btn" title="Remove payload" style="padding:2px 6px;line-height:1;display:flex;" onclick="_missionLaunchPayloadRemove('${id}',${idx},'${p.scId}')"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1,1 L9,9 M9,1 L1,9" stroke="currentColor" stroke-width="1.6"/></svg></button>
+        </div>`).join('')
+      : '<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">No payloads added</div>';
+    const payPickerHTML = `
+        <input type="text" id="edit-launch-pay-q-${id}" class="mcc-field-select" autocomplete="off"
+          placeholder="Search spacecraft to add..." value=""
+          style="margin-bottom:6px;width:100%;box-sizing:border-box;"
+          onfocus="_missionLaunchPayComboOpen('${id}',${idx})" onclick="_missionLaunchPayComboOpen('${id}',${idx})">
+        <div id="edit-launch-pay-list-${id}" style="margin-bottom:8px;">${payListHTML}</div>`;
     const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
     const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
     // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
@@ -389,9 +418,9 @@ function _missionEventEditFieldsHTML(m, idx) {
     editForm = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <label class="cfg-label">Launch Vehicle</label>
-        <select id="edit-launch-lv-${id}" class="mcc-field-select" style="margin-bottom:8px;">${lvOpts}</select>
+        ${lvPickerHTML}
         <label class="cfg-label">Payloads</label>
-        <div style="margin:4px 0 8px;">${payChecks}</div>
+        ${payPickerHTML}
         <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;">
           ${refSelectHTML}
           <div class="cfg-item"><label class="cfg-label">Body</label><select id="edit-launch-body-${id}" style="${_es}">${bodies.map(b => `<option${b === (o.body || 'Earth') ? ' selected' : ''}>${b}</option>`).join('')}</select></div>
