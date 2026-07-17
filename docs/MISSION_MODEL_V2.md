@@ -1037,3 +1037,40 @@ console errors.
 
 ### Execution order + risk containment
 C1 -> C2 (adapters) -> C3 -> C2 (renames, per-module) ; C4 parallel any time. Each step: own commit, gate green, golden numbers byte-stable, one browser smoke pass (lightweight-verification policy). Any step that moves a pinned number STOPS and reports rather than re-pinning silently.
+
+## 25. DEV SEED — Apollo TLC re-solve under corrected pole physics (2026-07-17)
+
+`devSeedApolloMission` authored its LEO parking orbit as a raw 185x185 km @28.5 deg, LAN 0 — a
+fixed geometry that happened to sit near the Moon's transfer corridor under the PRE-pole-fix
+(3f4350ce1) Moon phase. After that fix corrected the Moon's plane phase, the corridor moved and
+the seed's hand-tuned LAN-0 launch stopped bracketing it: the TLC leg's shooter
+(`physShootLegAim`, 565-physics-targeting.js) converged on a best-effort aim with `missKm`
+~100,000-104,000 km (varies slightly run to run with epoch drift), an order of magnitude past the
+~66,000 km lunar SOI — a plainly non-convergent "solution" that was silently accepted downstream.
+
+Root cause: the seed never plane-matched its parking orbit to the Moon the way the UI's
+Target:"Moon" launch-card picker does (`missionLaunchMatchPlane`, 570-mission-events.js) — it just
+bound to the `leo-185` catalog entry (inc 28.5, LAN unpinned -> defaults to 0) and launched at
+MET 0. A LAN-0 parking orbit is essentially never in the Moon's actual orbital plane at an
+arbitrary epoch, so the shooter had no real corridor to find.
+
+Fix (573-dev-seed.js): added `_devSeedPlaneMatchLaunchToMoon(m, launchEv)`, a programmatic
+reproduction of the UI recipe (`progResolvePlaneTarget('Moon', epochJD, 0, siteLat)` ->
+`progLaunchRaanFor` -> `progLaunchNextWindowS`), called after the LAUNCH event exists and before
+the TLC/LLO maneuvers are authored. One wrinkle: `progResolvePlaneTarget` intentionally returns
+the Moon's TRUE inclination (~28.09 deg at the default 2026 epoch) even when it's below the
+site's latitude (KSC 28.5 deg) — flagged `unreachable`, never silently clamped (415-launch-
+planner.js contract). A site physically cannot launch directly into a plane below its own
+latitude, so the seed floors the authored inclination to `max(moonInc, |siteLat|)` = 28.5 deg
+(matching CLAUDE.md's documented ~0.4 deg penalty) and keeps the Moon's solved LAN (~174.8 deg at
+this epoch) and the solved launch window (~82,672 s / ~23h after MET 0). `leo-185`'s catalog LAN
+is unpinned (inc-only), so the orbit stays ref-bound to `leo-185` after the LAN edit — the T2
+ref-binding exercise (§13 T3 item 3) this seed is also meant to cover is preserved.
+
+Result: TLC leg `converged:true`, `missKm` ~1,290 km (well under SOI/3 ~22,000 km), LLO insertion
+unaffected (`converged:true`), payload 45,078 kg / 5 stages unchanged, `{maneuvers:false}` variant
+untouched (plane-match only runs on the maneuvers path). `devSeedGatewayMission` was checked and
+needed no change — its NRHO leg (`physSolveNrhoTransfer`, 565-physics-nrho.js) already solves its
+own departure geometry rather than inheriting a hand-tuned LAN, and converges at ~59.5 km miss.
+Gate: 978/978 assertions unchanged (no test pinned the old seed's non-convergent numbers, so no
+re-pin was needed).

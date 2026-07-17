@@ -1,4 +1,45 @@
 
+// Plane-matches a just-launched LAUNCH event's parking orbit to the Moon and
+// solves the launch time that reaches that plane — the SAME recipe the UI's
+// Target:"Moon" plane-match picker runs (missionLaunchMatchPlane, 570-mission-
+// events.js), reproduced here programmatically for the dev seed (no DOM).
+// Needed because a raw 185x185@28.5/LAN-0 parking orbit (the seed's old,
+// unmatched authoring) is generically NOT in the Moon's orbital plane at an
+// arbitrary epoch, so the TLC leg's shooter (physShootLegAim, 565) has no
+// departure-plane corridor to converge into — confirmed non-convergent
+// (miss ~100,000 km >> the ~66,000 km lunar SOI) after the pole-sign fix
+// (3f4350ce1) corrected the Moon's plane phase and moved the real corridor
+// away from the old hand-tuned geometry.
+// progResolvePlaneTarget('Moon', ...) returns the Moon's TRUE inclination
+// (~28.1 deg at the default 2026 epoch) even when that's below the launch
+// site's latitude (28.5 deg here) — "unreachable" in that case, by design
+// (415-launch-planner.js: never silently clamped, surfaced to the caller).
+// A site can never launch directly into a plane below its own latitude, so
+// the achievable min-penalty inclination is max(moonInc, |siteLat|); LAN
+// stays the Moon's LAN (only ~0.4 deg penalty at this epoch/site — see
+// CLAUDE.md). Mutates the LAUNCH event's orbit + launch time in place and
+// recomputes; returns the resolved {inc_deg, lan_deg, launchTime_s} for
+// callers that want to report/verify the match, or null if the required
+// helpers aren't loaded (older builds) — callers should treat null as
+// "left the seed's baseline orbit untouched".
+function _devSeedPlaneMatchLaunchToMoon(m, launchEv) {
+  if (typeof progResolvePlaneTarget !== 'function' || typeof progLaunchRaanFor !== 'function'
+      || typeof progLaunchNextWindowS !== 'function' || !launchEv || !launchEv.orbit) return null;
+  const site = (typeof _missionLaunchSiteFor === 'function') ? _missionLaunchSiteFor(launchEv) : null;
+  if (!site || site.lon == null) return null;
+  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const res = progResolvePlaneTarget('Moon', epochJD, 0, site.lat);
+  if (!res) return null;
+  const incUse = Math.max(res.inc_deg, Math.abs(site.lat)); // achievable floor = site latitude
+  const rNow = progLaunchRaanFor(site.lat, site.lon, incUse, 0, _missionEarthSpinRad);
+  if (rNow.unreachable) return null; // shouldn't happen once inc is floored to |siteLat|
+  const win_t_s = Math.round(progLaunchNextWindowS(rNow.raan, res.lan_deg, 86164.1));
+  launchEv.orbit.incDeg = incUse;
+  launchEv.orbit.lanDeg = res.lan_deg;
+  launchEv.launchTime_s = win_t_s;
+  missionRecompute(m);
+  return { inc_deg: incUse, lan_deg: res.lan_deg, launchTime_s: win_t_s, penalty_deg: res.penalty_deg };
+}
 // ─── DEV SEED — Apollo reference mission ─────────
 // Console/test helper: builds the standard Apollo-style test mission in one call
 // so subagents and manual testing never have to hand-assemble it through the UI.
@@ -32,6 +73,12 @@ function devSeedApolloMission(opts) {
   const launchEv = m.log.find(e => e.type === 'LAUNCH');
   if (launchEv) { launchEv.orbitRefId = 'leo-185'; missionRecompute(m); }
   if (opts.maneuvers !== false) {
+    // Plane-match the parking orbit to the Moon (+ solve the launch window
+    // that reaches it) BEFORE flying TLC — see _devSeedPlaneMatchLaunchToMoon.
+    // leo-185's LAN is unpinned in the catalog (inc-only), so this stays
+    // bound to orbitRefId 'leo-185' after the LAN edit (T2's ref-binding
+    // path above is preserved, not detached).
+    if (launchEv) _devSeedPlaneMatchLaunchToMoon(m, launchEv);
     missionExecManeuver(m.missionId, 'leo', 'tlc');   // trans-lunar injection
     missionExecManeuver(m.missionId, 'tlc', 'llo');   // lunar orbit insertion
   }
