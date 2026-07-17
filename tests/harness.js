@@ -26,6 +26,7 @@ const FILES = [
   'src/js/165-trade-study.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/384-orbit-canonical.js',
+  'src/js/600-architecture-model.js',
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',

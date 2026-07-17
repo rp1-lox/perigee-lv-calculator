@@ -14,7 +14,9 @@
 // ASSERTION-PARITY FLOOR: MIN_ASSERTIONS below is the assertion count as of
 // the 2026-07-17 monolith->suite split (961, matched the old math.test.js
 // exactly at split time; +5 on 2026-07-18 for the §7al reconstruction-agreement
-// pins in suite 05, +2 same date for the site-9 committed-leg guard pair). If a
+// pins in suite 05, +2 same date for the site-9 committed-leg guard pair, +20
+// same date for the A1 architecture-data-model pins (600-architecture-model.js)
+// in suite 10 — 998 total). If a
 // suite is silently dropped from the manifest
 // (or a suite's require() throws before running any assertions), the
 // aggregate count drops below this floor and the gate fails even if every
@@ -27,7 +29,7 @@ const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 972;
+const MIN_ASSERTIONS = 998;
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');

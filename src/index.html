@@ -17,6 +17,7 @@
     <button class="nav-btn" id="nav-orbits" onclick="showPage('orbits')">Orbits</button>
     <button class="nav-btn" id="nav-trades" onclick="showPage('trades')">Trade Studies</button>
     <button class="nav-btn" id="nav-spacecraft" onclick="showPage('spacecraft')">Spacecraft</button>
+    <button class="nav-btn" id="nav-architecture" onclick="showPage('architecture')">Architecture</button>
     <button class="nav-btn" id="nav-program" onclick="showPage('program')">Mission</button>
   </nav>
   <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
@@ -443,6 +444,23 @@
     </div>
     </div><!-- /sc-lib-wrap -->
 
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: ARCHITECTURE -->
+<!-- A1 shell only (MISSION_MODEL_V2.md §26): two-region skeleton, both
+     regions empty pending A2 (ladder rail) / A3 (node-map stage). -->
+<div id="page-architecture" class="page">
+  <div class="vp-header">Architecture <span class="vp-header-sub">Author the mission's orbit ladder and transfer edges</span></div>
+  <div class="arch-layout" style="display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:stretch;">
+    <div class="arch-stage lib-panel" style="margin-top:0;min-width:0;display:flex;align-items:center;justify-content:center;min-height:360px;">
+      <div class="placeholder-msg">No architecture yet - add orbits from the rail (A2)</div>
+    </div>
+    <div class="arch-rail lib-panel" style="margin-top:0;min-width:0;display:flex;flex-direction:column;">
+      <div class="sl" style="flex-shrink:0;">Orbit Ladder</div>
+      <div id="arch-ladder-list" class="lv-list" style="flex:1;min-height:0;overflow-y:auto;"></div>
+      <div id="arch-dv-budget" class="arch-rail-footer" style="flex-shrink:0;border-top:1px solid var(--border);padding-top:8px;margin-top:8px;font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);"></div>
+    </div>
   </div>
 </div>
 

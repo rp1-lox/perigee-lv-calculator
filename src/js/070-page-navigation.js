@@ -4,7 +4,7 @@
 // 'results' is a legacy alias (calculate() calls showPage('results') and that
 // function is untouchable) — it resolves to the Orbits page, since the Results
 // content now lives there, and scrolls #results-panel into view.
-const _TOP_PAGES = ['vehicles', 'orbits', 'trades', 'spacecraft', 'program'];
+const _TOP_PAGES = ['vehicles', 'orbits', 'trades', 'spacecraft', 'architecture', 'program'];
 
 function showPage(p){
   let target = p;

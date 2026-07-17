@@ -188,6 +188,10 @@ function applyProgramObject(obj) {
   // loaded file had none). Older multi-mission .program files keep the rest of
   // _missions in the array — just not surfaced in the UI.
   if (typeof missionEnsureDefault === 'function') missionEnsureDefault();
+  // A1: architecture undo history is scoped to the PREVIOUS program's object
+  // identity — a freshly loaded program (even an architecture-less one) must
+  // not carry over undo/redo snapshots from whatever was open before.
+  if (typeof archUndoReset === 'function') archUndoReset();
   // Refresh all program UI.
   if (typeof scEdRenderList    === 'function') scEdRenderList();
   if (typeof scEdRenderDetail  === 'function') scEdRenderDetail();

@@ -15,6 +15,8 @@ module.exports = function run() {
   const { ok, approx, counts } = makeAssertions();
 
 const {
+  archGet, archAddNode, archRemoveNode, archAddEdge, archRemoveEdge,
+  archUndoCapture, archUndo, archRedo, archUndoReset,
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
@@ -440,6 +442,123 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
   ok(`reality anchor: Earth pole y-component > 0 (the sign that was mirrored) — got ${earthPole[1].toFixed(4)}`,
     earthPole[1] > 0);
   sandbox.PROG_ACTIVE_PROGRAM = _savedActive;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A1 — Architecture data model (600-architecture-model.js, MISSION_MODEL_V2.md
+// §26). Data-model CRUD + own undo stack + persistence round-trip + legacy-
+// blob guard. archGet()/archAddNode() etc. read/write PROG_ACTIVE_PROGRAM,
+// which the harness sandbox doesn't otherwise define — set it fresh per block
+// the same way the REALITY ANCHOR section above does.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Deterministic ids for this block only (the harness's shared progUUID stub
+  // returns one constant string, which is fine for suites that only ever add
+  // one entity but not for cascade/edge tests here that need distinct ids).
+  let _idCounter = 0;
+  sandbox.progUUID = () => 'arch-test-' + (_idCounter++);
+
+  const leo = { body: 'Earth', periKm: 185, apoKm: 185, incDeg: 28.5, lanDeg: 0 };
+  const geo = { body: 'Earth', periKm: 35786, apoKm: 35786, incDeg: 0, lanDeg: 0 };
+
+  // archGet(): lazy-creates an empty architecture on first access, in place.
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    const arch = archGet();
+    ok('archGet: lazily creates {nodes:[],edges:[]}', Array.isArray(arch.nodes) && arch.nodes.length === 0 && Array.isArray(arch.edges) && arch.edges.length === 0);
+    ok('archGet: the created object is wired onto PROG_ACTIVE_PROGRAM.architecture (same reference on re-call)', archGet() === arch);
+  }
+
+  // archAddNode(): validates the orbit through orbitNormalize; rejects
+  // propagated/surface orbits (v1 has no non-Keplerian nodes).
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    const n = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    ok('archAddNode: returns a node with a canonical orbit + generated id', n && n.id && n.name === 'LEO' && n.orbit.periKm === 185 && n.orbit.incDeg === 28.5);
+    ok('archAddNode: node lands in archGet().nodes', archGet().nodes.length === 1 && archGet().nodes[0].id === n.id);
+
+    const rejected = archAddNode({ name: 'Bad', body: 'Earth', orbit: { body: 'Earth', propagated: true, r: [1, 0, 0], v: [0, 1, 0] } });
+    ok('archAddNode: propagated orbit (no Keplerian form) is rejected -> null, no node added', rejected === null && archGet().nodes.length === 1);
+  }
+
+  // archRemoveNode(): removes the node AND cascades to any edge touching it.
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    const a = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    const b = archAddNode({ name: 'GEO', body: 'Earth', orbit: geo });
+    const e = archAddEdge(a.id, b.id);
+    ok('archAddEdge: connects two existing nodes', e && e.fromId === a.id && e.toId === b.id && Array.isArray(e.chain) && e.chain.length === 0);
+    ok('archAddEdge: unknown endpoint -> null, no edge added', archAddEdge(a.id, 'nope') === null && archGet().edges.length === 1);
+
+    const removed = archRemoveNode(a.id);
+    ok('archRemoveNode: removes the node', removed === true && archGet().nodes.length === 1 && archGet().nodes[0].id === b.id);
+    ok('archRemoveNode: cascades — the edge touching the removed node is also gone', archGet().edges.length === 0);
+
+    // archRemoveEdge on an already-cascaded edge is a clean no-op (false).
+    ok('archRemoveEdge: removing an already-gone edge id returns false', archRemoveEdge(e.id) === false);
+  }
+
+  // Undo/redo — own small stack, JSON-snapshot based.
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    archUndoReset();
+    const n = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    ok('undo: one node present after archAddNode', archGet().nodes.length === 1);
+    const undone = archUndo();
+    ok('archUndo: reverts to the pre-add (empty) state', undone === true && archGet().nodes.length === 0);
+    const redone = archRedo();
+    ok('archRedo: re-applies the add', redone === true && archGet().nodes.length === 1 && archGet().nodes[0].name === 'LEO');
+    ok('archUndo: empty stack returns false (nothing left to undo after a fresh redo)', (() => {
+      // stack has exactly the pre-add snapshot again after redo re-pushed it to undo;
+      // undo it back to empty, then undo again should report false.
+      archUndo();
+      return archUndo() === false;
+    })());
+  }
+
+  // Persistence round-trip: architecture rides inside PROG_ACTIVE_PROGRAM,
+  // which buildProgramObject/applyProgramObject (450) already serialize
+  // verbatim as `activeProgram` — simulate exactly that JSON round trip here
+  // (no dedicated architecture save/load code exists, by design) and assert
+  // nodes/edges/canonical orbit fields survive byte-for-byte.
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    const b = archAddNode({ name: 'GEO', body: 'Earth', orbit: geo });
+    const a = archGet().nodes[0];
+    archAddEdge(a.id, b.id);
+    const before = archGet();
+
+    // round trip: exactly what buildProgramObject -> JSON.stringify (autosave/
+    // .program export) -> JSON.parse -> applyProgramObject's
+    // `PROG_ACTIVE_PROGRAM = obj.activeProgram` does to the whole object.
+    const serialized = JSON.stringify({ activeProgram: sandbox.PROG_ACTIVE_PROGRAM });
+    const restoredProgram = JSON.parse(serialized).activeProgram;
+    sandbox.PROG_ACTIVE_PROGRAM = restoredProgram;
+    const after = archGet();
+
+    ok('persistence round-trip: node count survives', after.nodes.length === before.nodes.length && after.nodes.length === 2);
+    ok('persistence round-trip: edge count survives', after.edges.length === before.edges.length && after.edges.length === 1);
+    ok('persistence round-trip: canonical orbit fields survive on a node', after.nodes[1].orbit.periKm === 35786 && after.nodes[1].orbit.incDeg === 0 && after.nodes[1].orbit.frame === 'eq');
+    ok('persistence round-trip: edge endpoints still reference the (re-hydrated) node ids', after.edges[0].fromId === after.nodes[0].id && after.edges[0].toId === after.nodes[1].id);
+  }
+
+  // Legacy-blob guard: a program object that predates the architecture field
+  // (no .architecture key at all) must not crash and must NOT spuriously gain
+  // an empty architecture until something actually asks for one via
+  // archGet() — applying an old blob is purely `PROG_ACTIVE_PROGRAM =
+  // obj.activeProgram` (450), which never calls archGet() itself.
+  {
+    const legacyBlob = { name: 'Old Program', pads: [] }; // no .architecture key — pre-A1 shape
+    sandbox.PROG_ACTIVE_PROGRAM = legacyBlob; // mirrors applyProgramObject's direct assignment
+    ok('legacy blob: no crash, architecture field absent until archGet() is called', !('architecture' in sandbox.PROG_ACTIVE_PROGRAM));
+    const arch = archGet();
+    ok('legacy blob: archGet() lazily creates an empty architecture on first access', Array.isArray(arch.nodes) && arch.nodes.length === 0 && Array.isArray(arch.edges) && arch.edges.length === 0);
+  }
+
+  // restore the shared progUUID stub for any later code in this process that
+  // might rely on it (defensive — this suite doesn't reuse it after this point).
+  sandbox.progUUID = () => 'test-uuid';
 }
 
   return counts();
