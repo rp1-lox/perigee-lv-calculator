@@ -219,10 +219,18 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
  *  'eq' — today's default authoring convention). */
 function orbitWorldElements(o) {
   o = o || {};
-  const incDeg = (o.inc_deg != null ? o.inc_deg : (o.inclination != null ? o.inclination : (o.inc != null ? o.inc : 0))) || 0;
-  const lanDeg = (o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0)) || 0;
-  if (o.frame === 'world') return { incDeg, lanDeg };
-  const body = o.body || 'Earth';
+  // C2: the canonical shape is the boundary's native input — normalize first
+  // (one dialect reader, 384) so post-C2 consumers can pass anything. The
+  // inline multi-dialect read below stays as the fallback for the one case
+  // orbitNormalize returns null on (a non-Keplerian propagated/surface orbit
+  // — which has no inc/lan element form anyway, so the fallback yields the
+  // same 0/0 it always did), and for headless load orders where 384 is absent.
+  const _c = (typeof orbitNormalize === 'function') ? orbitNormalize(o) : null;
+  const src = _c || o;
+  const incDeg = (src.incDeg != null ? src.incDeg : (src.inc_deg != null ? src.inc_deg : (src.inclination != null ? src.inclination : (src.inc != null ? src.inc : 0)))) || 0;
+  const lanDeg = (src.lanDeg != null ? src.lanDeg : (src.lan_deg != null ? src.lan_deg : (src.lan != null ? src.lan : 0))) || 0;
+  if (src.frame === 'world') return { incDeg, lanDeg };
+  const body = src.body || 'Earth';
   if (typeof progEqToWorldElements !== 'function') return { incDeg, lanDeg };
   const w = progEqToWorldElements(body, incDeg, lanDeg);
   return w ? { incDeg: w.inc_deg, lanDeg: w.lan_deg } : { incDeg, lanDeg };
@@ -240,8 +248,14 @@ function orbitWorldState(o, thetaRad, metOrOpts) {
   if (!o || !o.body || typeof physAimBurnState !== 'function') return null;
   const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[o.body] : null;
   const w = orbitWorldElements(o);
-  const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
-  const rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  // C2: mean radius via the canonical helper (handles every dialect incl. the
+  // canonical periKm/apoKm shape); fall back to the inline perigee/apogee read
+  // if 384 isn't loaded (headless) or the orbit is non-Keplerian.
+  let rMean = (typeof orbitMeanRadiusKm === 'function') ? orbitMeanRadiusKm(o, bodyMeta ? bodyMeta.R : 0) : null;
+  if (rMean == null) {
+    const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
+    rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  }
   return physAimBurnState(o.body, rMean, thetaRad || 0, 0, 0,
     (w.incDeg * Math.PI) / 180, 0, (w.lanDeg * Math.PI) / 180);
 }

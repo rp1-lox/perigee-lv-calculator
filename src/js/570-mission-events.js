@@ -119,7 +119,7 @@ function _missionLtEdgeEstimate(m, fromId, toId) {
   const okType = t => t === 'circular' || t === 'elliptic';
   if (!okType(oa.type) || !okType(ob.type)) return null;
   const b = PROG_BODIES[oa.body]; if (!b) return null;
-  const meanR = o => b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2);
+  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2)); // C2: canonical mean-radius helper
   const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
   const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
   const dv_kms = ltEdelbaumFullDv(v0, v1, di);

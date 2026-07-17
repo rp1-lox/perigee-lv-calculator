@@ -447,7 +447,7 @@ function physRebuildMissionTrajectories(m) {
       const mu = PROG_BODIES[bodyForBurn].mu;
       let rBase, vBase, vHat, rHat, hHat;
       if (oValid) {
-        const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
         const incMn = ((o.inclination || 0) * Math.PI) / 180;

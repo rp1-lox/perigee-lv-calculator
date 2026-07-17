@@ -104,6 +104,8 @@ boundary function + the inverse in the launch solver. Authoring UIs stamp
 
 ## 2. Orbit-shaped objects — dialect explosion
 
+> **STATUS (2026-07-17): C2 ADAPTERS DONE** (MISSION_MODEL_V2.md §24 C2 as-built). `orbitNormalize` + `orbitMeanRadiusKm`/`orbitPeriodS`/`orbitWorldNormal` live in `src/js/384-orbit-canonical.js`; canonical shape `{ body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }`. The C1 boundary (`orbitWorldElements`/`orbitWorldState`, 385) now normalizes internally. Three inline mean-radius derivations replaced. **Correction to the table below**: the node-map/catalog + `refOrbitResolve` keplerian dialects use `lan`, NOT `lan_deg` (only launch-planner `plan.*` objects carry `lan_deg`) — `orbitNormalize` accepts both. Writers not yet renamed (per-module rename pass pending) — see the §24 rename checklist.
+
 ### Dialect table
 | Dialect | Fields | Frame | Units | Where |
 |---|---|---|---|---|

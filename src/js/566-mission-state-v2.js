@@ -93,8 +93,10 @@ function v2BuildShadow(m) {
         else note = 'propagated orbit — sampled state unavailable this replay';
       } else if (os && !os.surface && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[os.body] && typeof physElementsToState === 'function') {
         try {
-          const alt = ((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2;
           const bodyMeta = PROG_BODIES[os.body];
+          // C2: mean radius via the canonical helper (was an inline mean-alt
+          // derivation); fallback keeps behavior byte-identical if 384 is absent.
+          const aMean = orbitMeanRadiusKm(os, bodyMeta.R) ?? (bodyMeta.R + (((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2));
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
           // §20/C1: os.inclination/os.lan are authored in os.body's EQUATOR
@@ -104,7 +106,7 @@ function v2BuildShadow(m) {
             ? orbitWorldElements(os)
             : { incDeg: os.inclination || 0, lanDeg: os.lan || 0 };
           const st0 = physElementsToState({
-            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.incDeg * Math.PI / 180,
+            a: aMean, e: 0, i: _w20.incDeg * Math.PI / 180,
             raan: _w20.lanDeg * Math.PI / 180, argp: 0, nu: 0,
           }, bodyMeta.mu);
           if (st0) { r = st0.r; v = st0.v; frame = os.body; }

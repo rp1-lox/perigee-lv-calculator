@@ -12568,6 +12568,141 @@ function progDispatchEvent(program, event) {
     default: return { result: 'FAILED', warnings: ['Unknown event type: ' + event.type] };
   }
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// C2 — Canonical orbit object + normalize shim
+// (MISSION_MODEL_V2.md §24 C2, UNIFICATION_AUDIT item 2 — the keystone step)
+//
+// The program grew a dialect explosion for the same physical thing (an orbit):
+// the SAME quantity appears as alt_km / perigee / peri, apo_km / apogee / apo,
+// inc_deg / inclination / inc, lan_deg / lan. Mean radius and the world-frame
+// orbit-normal were each re-derived inline in 3+ places. Every hand field-rename
+// between dialects was a place a converter could drop or mistranslate a field —
+// the disease behind the week's frame bugs. C2 introduces ONE canonical shape
+// plus a normalize shim so consumers can migrate to reading through it
+// incrementally (adapters first — THIS phase; per-module field renames second).
+//
+//   CANONICAL SHAPE: { body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }
+//     - body    : body name string ('Earth' default when absent).
+//     - periKm  : periapsis ALTITUDE above the body surface, km.
+//     - apoKm   : apoapsis  ALTITUDE above the body surface, km.
+//     - incDeg  : inclination, degrees.
+//     - lanDeg  : longitude of ascending node (RAAN), degrees.
+//     - argpDeg : argument of periapsis, degrees (optional; absent for the
+//                 circular-parking dialects that never carry it).
+//     - frame   : 'eq' (equator-authored — the program's authoring default) or
+//                 'world' (ecliptic/world). ABSENT ⇒ 'eq' (C1 convention). This
+//                 module always emits an explicit 'eq'|'world'.
+//
+// This module is pure/definitions-only; load order (filename-sort concatenation)
+// is irrelevant — it is placed at 384 for logical adjacency to the 385 physics
+// core and its C1 frame boundary, which composes on top of orbitNormalize.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Normalize any of the program's orbit dialects to the ONE canonical shape
+ *  documented above. Accepts every dialect in the UNIFICATION_AUDIT item-2
+ *  table (verified against the live code, 2026-07-17):
+ *    - mission event  e.orbit : {body, alt_km(=peri), apo_km, inc_deg, lan_deg}
+ *    - node-map/catalog builtin : {body, perigee, apogee, inclination, lan|lan_deg}
+ *    - refOrbitResolve keplerian: {body, peri, apo, inc, lan, argp}
+ *    - vehicle orbitState (os)  : {body, perigee, apogee, inclination, lan, frame}
+ *    - already-canonical        : idempotent passthrough.
+ *
+ *  AMBIGUITY RULE (documented precedence): when BOTH a canonical key and a
+ *  legacy alias are present on the same input, the CANONICAL key wins
+ *  (periKm over alt_km/peri/perigee, etc.). Resolution is silent — nothing is
+ *  logged — but the precedence is fixed here so it can never drift.
+ *
+ *  CIRCULAR FILL: if exactly one of peri/apo is present the other mirrors it
+ *  (matches every consumer's `peri ?? apo` / `apo ?? peri` fallback), so a
+ *  circular orbit authored with a single radius normalizes with periKm===apoKm.
+ *
+ *  NULL CONTRACT (mirrors physKeplerPropagate's null return): a state-vector
+ *  orbit that has NO Keplerian element form — a `propagated` orbit
+ *  (os.propagated truthy or kind==='propagated') or a pre-orbit `surface`
+ *  state (os.surface truthy) — returns `null`. Callers MUST handle null the
+ *  same way they handle physKeplerPropagate === null.
+ *
+ *  @returns {{body,periKm,apoKm,incDeg,lanDeg,argpDeg,frame}|null}
+ */
+function orbitNormalize(o) {
+  if (!o || typeof o !== 'object') return null;
+  // Non-Keplerian state orbits have no canonical element form.
+  if (o.propagated || o.surface || o.kind === 'propagated') return null;
+
+  const body = o.body || 'Earth';
+  // Radii (canonical key wins, then dialect aliases). null when wholly absent.
+  let periKm = o.periKm != null ? o.periKm
+             : (o.alt_km != null ? o.alt_km
+             : (o.peri   != null ? o.peri
+             : (o.perigee != null ? o.perigee : null)));
+  let apoKm  = o.apoKm != null ? o.apoKm
+             : (o.apo_km != null ? o.apo_km
+             : (o.apo    != null ? o.apo
+             : (o.apogee != null ? o.apogee : null)));
+  // Circular fill: one radius present ⇒ mirror it; neither present ⇒ 0.
+  if (periKm == null && apoKm == null) { periKm = 0; apoKm = 0; }
+  else if (periKm == null) periKm = apoKm;
+  else if (apoKm == null) apoKm = periKm;
+
+  const incDeg = (o.incDeg != null ? o.incDeg
+               : (o.inc_deg != null ? o.inc_deg
+               : (o.inclination != null ? o.inclination
+               : (o.inc != null ? o.inc : 0)))) || 0;
+  const lanDeg = (o.lanDeg != null ? o.lanDeg
+               : (o.lan_deg != null ? o.lan_deg
+               : (o.lan != null ? o.lan : 0))) || 0;
+  // argp is optional — only emit it when the input actually carried one.
+  const argpRaw = o.argpDeg != null ? o.argpDeg
+                : (o.argp_deg != null ? o.argp_deg
+                : (o.argp != null ? o.argp : null));
+
+  // frame: honor an explicit 'eq'|'world'; anything else (absent, or the
+  // body-name "frame" that refOrbitResolve/orbitState stamp on propagated
+  // entries — which already returned null above) defaults to 'eq' (C1).
+  const frame = (o.frame === 'world') ? 'world' : 'eq';
+
+  const canon = { body, periKm, apoKm, incDeg, lanDeg, frame };
+  if (argpRaw != null) canon.argpDeg = argpRaw;
+  return canon;
+}
+
+/** Mean orbital radius (km, measured from body CENTER): bodyR + mean altitude.
+ *  Replaces the `bodyR + ((peri ?? apo ?? 0)+(apo ?? peri ?? 0))/2` idiom that
+ *  the audit found re-derived inline in 3+ spots. Returns null for a
+ *  non-Keplerian orbit (orbitNormalize null contract). */
+function orbitMeanRadiusKm(o, bodyR) {
+  const c = orbitNormalize(o);
+  if (!c) return null;
+  return (bodyR || 0) + (c.periKm + c.apoKm) / 2;
+}
+
+/** Keplerian orbital period (seconds) from a canonical/dialect orbit and the
+ *  body's μ (km³/s²). a = mean radius (semi-major axis for the ellipse whose
+ *  peri/apo altitudes are periKm/apoKm). T = 2π√(a³/μ). Returns null for a
+ *  non-Keplerian orbit or a missing/degenerate μ. bodyR defaults to the orbit
+ *  body's PROG_BODIES radius when omitted. */
+function orbitPeriodS(o, mu, bodyR) {
+  const c = orbitNormalize(o);
+  if (!c || !(mu > 0)) return null;
+  if (bodyR == null && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[c.body]) bodyR = PROG_BODIES[c.body].R;
+  const a = (bodyR || 0) + (c.periKm + c.apoKm) / 2;
+  if (!(a > 0)) return null;
+  return 2 * Math.PI * Math.sqrt((a * a * a) / mu);
+}
+
+/** Unit orbit-normal in the WORLD (ecliptic) frame for a canonical/dialect
+ *  orbit. Composes the C1 frame boundary (orbitWorldElements, 385) with the
+ *  ONE normal recipe (physNormalFromIncLan, 385: [sin i·sin Ω, −sin i·cos Ω,
+ *  cos i]) so the recipe — previously copy-pasted into verification code —
+ *  lives in exactly one place. Returns null for a non-Keplerian orbit, or if
+ *  the 385 helpers aren't loaded (headless callers without physics). */
+function orbitWorldNormal(o) {
+  const c = orbitNormalize(o);
+  if (!c) return null;
+  if (typeof orbitWorldElements !== 'function' || typeof physNormalFromIncLan !== 'function') return null;
+  const w = orbitWorldElements(c); // eq→world seam (identity for frame:'world')
+  return physNormalFromIncLan(w.incDeg, w.lanDeg);
+}
 
 // ─── PHYSICS CORE (P0) — 3D two-body machinery ───────────────────────────────
 //
@@ -12789,10 +12924,18 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
  *  'eq' — today's default authoring convention). */
 function orbitWorldElements(o) {
   o = o || {};
-  const incDeg = (o.inc_deg != null ? o.inc_deg : (o.inclination != null ? o.inclination : (o.inc != null ? o.inc : 0))) || 0;
-  const lanDeg = (o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0)) || 0;
-  if (o.frame === 'world') return { incDeg, lanDeg };
-  const body = o.body || 'Earth';
+  // C2: the canonical shape is the boundary's native input — normalize first
+  // (one dialect reader, 384) so post-C2 consumers can pass anything. The
+  // inline multi-dialect read below stays as the fallback for the one case
+  // orbitNormalize returns null on (a non-Keplerian propagated/surface orbit
+  // — which has no inc/lan element form anyway, so the fallback yields the
+  // same 0/0 it always did), and for headless load orders where 384 is absent.
+  const _c = (typeof orbitNormalize === 'function') ? orbitNormalize(o) : null;
+  const src = _c || o;
+  const incDeg = (src.incDeg != null ? src.incDeg : (src.inc_deg != null ? src.inc_deg : (src.inclination != null ? src.inclination : (src.inc != null ? src.inc : 0)))) || 0;
+  const lanDeg = (src.lanDeg != null ? src.lanDeg : (src.lan_deg != null ? src.lan_deg : (src.lan != null ? src.lan : 0))) || 0;
+  if (src.frame === 'world') return { incDeg, lanDeg };
+  const body = src.body || 'Earth';
   if (typeof progEqToWorldElements !== 'function') return { incDeg, lanDeg };
   const w = progEqToWorldElements(body, incDeg, lanDeg);
   return w ? { incDeg: w.inc_deg, lanDeg: w.lan_deg } : { incDeg, lanDeg };
@@ -12810,8 +12953,14 @@ function orbitWorldState(o, thetaRad, metOrOpts) {
   if (!o || !o.body || typeof physAimBurnState !== 'function') return null;
   const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[o.body] : null;
   const w = orbitWorldElements(o);
-  const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
-  const rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  // C2: mean radius via the canonical helper (handles every dialect incl. the
+  // canonical periKm/apoKm shape); fall back to the inline perigee/apogee read
+  // if 384 isn't loaded (headless) or the orbit is non-Keplerian.
+  let rMean = (typeof orbitMeanRadiusKm === 'function') ? orbitMeanRadiusKm(o, bodyMeta ? bodyMeta.R : 0) : null;
+  if (rMean == null) {
+    const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
+    rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
+  }
   return physAimBurnState(o.body, rMean, thetaRad || 0, 0, 0,
     (w.incDeg * Math.PI) / 180, 0, (w.lanDeg * Math.PI) / 180);
 }
@@ -18237,7 +18386,7 @@ function physRebuildMissionTrajectories(m) {
       const mu = PROG_BODIES[bodyForBurn].mu;
       let rBase, vBase, vHat, rHat, hHat;
       if (oValid) {
-        const rMean = PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2;
+        const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + ((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
         const incMn = ((o.inclination || 0) * Math.PI) / 180;
@@ -19948,8 +20097,10 @@ function v2BuildShadow(m) {
         else note = 'propagated orbit — sampled state unavailable this replay';
       } else if (os && !os.surface && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[os.body] && typeof physElementsToState === 'function') {
         try {
-          const alt = ((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2;
           const bodyMeta = PROG_BODIES[os.body];
+          // C2: mean radius via the canonical helper (was an inline mean-alt
+          // derivation); fallback keeps behavior byte-identical if 384 is absent.
+          const aMean = orbitMeanRadiusKm(os, bodyMeta.R) ?? (bodyMeta.R + (((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2));
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
           // §20/C1: os.inclination/os.lan are authored in os.body's EQUATOR
@@ -19959,7 +20110,7 @@ function v2BuildShadow(m) {
             ? orbitWorldElements(os)
             : { incDeg: os.inclination || 0, lanDeg: os.lan || 0 };
           const st0 = physElementsToState({
-            a: bodyMeta.R + (alt || 0), e: 0, i: _w20.incDeg * Math.PI / 180,
+            a: aMean, e: 0, i: _w20.incDeg * Math.PI / 180,
             raan: _w20.lanDeg * Math.PI / 180, argp: 0, nu: 0,
           }, bodyMeta.mu);
           if (st0) { r = st0.r; v = st0.v; frame = os.body; }
@@ -22650,7 +22801,7 @@ function _missionLtEdgeEstimate(m, fromId, toId) {
   const okType = t => t === 'circular' || t === 'elliptic';
   if (!okType(oa.type) || !okType(ob.type)) return null;
   const b = PROG_BODIES[oa.body]; if (!b) return null;
-  const meanR = o => b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2);
+  const meanR = o => orbitMeanRadiusKm(o, b.R) ?? (b.R + (((o.perigee ?? o.apogee ?? 0) + (o.apogee ?? o.perigee ?? 0)) / 2)); // C2: canonical mean-radius helper
   const v0 = Math.sqrt(b.mu / meanR(oa)), v1 = Math.sqrt(b.mu / meanR(ob));
   const di = Math.abs((oa.inclination || 0) - (ob.inclination || 0));
   const dv_kms = ltEdelbaumFullDv(v0, v1, di);

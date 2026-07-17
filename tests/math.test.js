@@ -27,6 +27,7 @@ const FILES = [
   'src/js/150-stage-and-a-half.js',
   'src/js/165-trade-study.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
+  'src/js/384-orbit-canonical.js',
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
   'src/js/565-physics-mission.js',
@@ -132,6 +133,7 @@ const {
   physBodyPoleAt, physEqBasis, physNormalFromIncLan, physIncLanFromNormal,
   progEqToWorldElements, progWorldToEqElements, _trajRingPlaneBasis,
   orbitWorldElements, orbitWorldState,
+  orbitNormalize, orbitMeanRadiusKm, orbitPeriodS, orbitWorldNormal,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -4964,6 +4966,78 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const untagged = orbitWorldElements({ body: 'Moon', inclination: 90, lan: 40 });
     return tagged.incDeg === untagged.incDeg && tagged.lanDeg === untagged.lanDeg;
   })());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C2 canonical orbit — orbitNormalize + helpers (384-orbit-canonical.js)
+// (MISSION_MODEL_V2.md §24 C2, UNIFICATION_AUDIT item 2)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // Every dialect for the SAME orbit (LEO 185×420 @ 51.6° eq, Ω 60) must
+  // normalize to one identical canonical record.
+  const expected = { body: 'Earth', periKm: 185, apoKm: 420, incDeg: 51.6, lanDeg: 60, frame: 'eq' };
+  const eq = (c) => c && c.body === expected.body && c.periKm === expected.periKm &&
+    c.apoKm === expected.apoKm && c.incDeg === expected.incDeg && c.lanDeg === expected.lanDeg &&
+    c.frame === expected.frame && c.argpDeg === undefined;
+  ok('orbitNormalize: event dialect (alt_km/apo_km/inc_deg/lan_deg)',
+    eq(orbitNormalize({ body: 'Earth', alt_km: 185, apo_km: 420, inc_deg: 51.6, lan_deg: 60 })));
+  ok('orbitNormalize: node-map/catalog dialect (perigee/apogee/inclination/lan)',
+    eq(orbitNormalize({ body: 'Earth', perigee: 185, apogee: 420, inclination: 51.6, lan: 60 })));
+  ok('orbitNormalize: refOrbitResolve dialect (peri/apo/inc/lan)',
+    eq(orbitNormalize({ body: 'Earth', peri: 185, apo: 420, inc: 51.6, lan: 60 })));
+  ok('orbitNormalize: idempotent passthrough of a canonical record',
+    eq(orbitNormalize({ body: 'Earth', periKm: 185, apoKm: 420, incDeg: 51.6, lanDeg: 60, frame: 'eq' })));
+  ok('orbitNormalize: idempotence (normalize(normalize(x)) === normalize(x))', (() => {
+    const a = orbitNormalize({ body: 'Earth', alt_km: 185, apo_km: 420, inc_deg: 51.6, lan_deg: 60 });
+    const b = orbitNormalize(a);
+    return JSON.stringify(a) === JSON.stringify(b);
+  })());
+  ok('orbitNormalize: ambiguity — canonical key wins over legacy alias', (() => {
+    const c = orbitNormalize({ body: 'Earth', periKm: 200, alt_km: 999, apoKm: 300, apogee: 888, incDeg: 10, inclination: 77, lanDeg: 5, lan: 44 });
+    return c.periKm === 200 && c.apoKm === 300 && c.incDeg === 10 && c.lanDeg === 5;
+  })());
+  ok('orbitNormalize: circular fill — single radius mirrors to both', (() => {
+    const c = orbitNormalize({ body: 'Earth', alt_km: 185, inc_deg: 28.5 });
+    return c.periKm === 185 && c.apoKm === 185;
+  })());
+  ok('orbitNormalize: argpDeg emitted only when input carries argp', (() => {
+    const withArgp = orbitNormalize({ body: 'Earth', peri: 185, apo: 420, inc: 28.5, argp: 90 });
+    const without = orbitNormalize({ body: 'Earth', peri: 185, apo: 420, inc: 28.5 });
+    return withArgp.argpDeg === 90 && without.argpDeg === undefined;
+  })());
+  ok('orbitNormalize: frame:"world" preserved', orbitNormalize({ body: 'Moon', perigee: 100, apogee: 100, inclination: 90, frame: 'world' }).frame === 'world');
+  ok('orbitNormalize: propagated orbit -> null (no Keplerian form)',
+    orbitNormalize({ body: 'Moon', kind: 'propagated', seedState: {} }) === null &&
+    orbitNormalize({ body: 'Moon', propagated: true, r: [1, 0, 0], v: [0, 1, 0] }) === null);
+  ok('orbitNormalize: surface (pre-orbit) state -> null',
+    orbitNormalize({ body: 'Earth', surface: true }) === null);
+
+  // orbitMeanRadiusKm vs the inline idiom it replaces.
+  ok('orbitMeanRadiusKm: matches R + (peri+apo)/2', (() => {
+    const R = PROG_BODIES.Earth.R;
+    return orbitMeanRadiusKm({ perigee: 185, apogee: 420, body: 'Earth' }, R) === R + (185 + 420) / 2;
+  })());
+  ok('orbitMeanRadiusKm: null for propagated', orbitMeanRadiusKm({ propagated: true, body: 'Moon' }, PROG_BODIES.Moon.R) === null);
+
+  // orbitPeriodS vs a hand-computed Kepler period.
+  ok('orbitPeriodS: matches 2π√(a³/μ) hand computation', (() => {
+    const R = PROG_BODIES.Earth.R, mu = PROG_BODIES.Earth.mu;
+    const a = R + (185 + 420) / 2;
+    const hand = 2 * Math.PI * Math.sqrt((a * a * a) / mu);
+    return orbitPeriodS({ perigee: 185, apogee: 420, body: 'Earth' }, mu) === hand;
+  })());
+
+  // orbitWorldNormal vs the hand recipe [sin i·sin Ω, −sin i·cos Ω, cos i]
+  // applied to the C1 world-frame elements.
+  ok('orbitWorldNormal: matches the hand recipe applied to world elements', (() => {
+    const o = { body: 'Moon', perigee: 100, apogee: 100, inclination: 96.68, lan: 20 };
+    const w = orbitWorldElements(o);
+    const iR = w.incDeg * Math.PI / 180, LR = w.lanDeg * Math.PI / 180;
+    const hand = [Math.sin(LR) * Math.sin(iR), -Math.cos(LR) * Math.sin(iR), Math.cos(iR)];
+    const n = orbitWorldNormal(o);
+    return n && Math.abs(n[0] - hand[0]) < 1e-12 && Math.abs(n[1] - hand[1]) < 1e-12 && Math.abs(n[2] - hand[2]) < 1e-12;
+  })());
+  ok('orbitWorldNormal: null for propagated', orbitWorldNormal({ propagated: true, body: 'Moon' }) === null);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
