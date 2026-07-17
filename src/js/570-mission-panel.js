@@ -160,19 +160,21 @@ function _missionMultiVehicleHTML(m) {
     </div>`;
 }
 
-// Mission epoch (T+0 date/time) inline editor state — the top-strip date
-// stamp is click-to-edit. Module-level (not per-mission: epoch is a
-// program-wide setting, PROG_ACTIVE_PROGRAM.epochJD), transient (not part of
-// any persisted object).
-let _missionEpochEditing = false;
-
+// Mission epoch (T+0 date/time) editing — the top-strip date stamp AND its
+// adjacent calendar button both open the custom themed popover calendar
+// (578-mission-epoch-picker.js, _missionEpochOpen/epochPickerOpen). Nothing
+// commits until the popover's Apply button; the old inline
+// datetime-local-input approach (commit-on-change/blur) is retired — it
+// committed PARTIAL segment edits mid-type (see 578's header comment for the
+// root-cause writeup), which looked like "typing 1919 only moves the date
+// back about a year" because each keystroke's transient (still-valid)
+// intermediate value re-rendered and killed the input's focus.
+//
 // MISSION_MODEL_V2 §12 U3: top universal strip, identical across all three
 // views. Minimal by decree: MET + calendar date + a minimal scrubber
 // (reuses the UNCHANGED _trajScrubberHTML — the same scrub track/thumb/ticks
 // used everywhere else, so drag/click/arrow-key behavior is byte-identical),
 // the active-vehicle name, and — right end — the readiness counts chip.
-// The calendar date is also the mission-epoch (T+0) affordance: click opens
-// an inline UTC datetime-local input (see _missionEpochStartEdit/Commit/Cancel).
 function _missionTopStripHTML(m) {
   const id = m.missionId;
   const vt = (typeof _trajViewTime === 'function') ? _trajViewTime(m) : (m._metTotal || 0);
@@ -183,20 +185,12 @@ function _missionTopStripHTML(m) {
   const activeFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeName = activeFv ? _missionVehicleDisplayName(activeFv) : '—';
   const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
-  const dateCell = _missionEpochEditing
-    ? (() => {
-        const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
-        const val = (typeof progDateToLocalInputValue === 'function' && typeof progJDToDate === 'function')
-          ? progDateToLocalInputValue(progJDToDate(epochJD)) : '';
-        return `<input type="datetime-local" class="field mcc-top-epoch-input"
-          title="Mission epoch (T+0), UTC"
-          value="${val}" min="1900-01-01T00:00" max="2100-12-31T23:59"
-          style="background:var(--input);color:var(--text-bright);border:1px solid var(--accent);border-radius:4px;font-family:var(--mono);font-size:10px;padding:1px 4px;"
-          onchange="_missionEpochCommit(this.value)"
-          onkeydown="if(event.key==='Escape'){event.stopPropagation();_missionEpochCancel();}"
-          onblur="_missionEpochCancel()">`;
-      })()
-    : `<span class="mcc-top-date" title="Click to change mission epoch (T+0), UTC" style="cursor:pointer;border-bottom:1px dashed var(--accent-tint-strong);" onclick="_missionEpochStartEdit()">${dateStr}</span>`;
+  const dateCell = `<span class="mcc-top-date" title="Click to change mission epoch (T+0), UTC"
+      style="cursor:pointer;border-bottom:1px dashed var(--accent-tint-strong);"
+      onclick="_missionEpochOpen(this)">${dateStr}</span><button type="button" class="act-btn mcc-epoch-btn"
+      title="Change mission epoch (T+0)" aria-label="Change mission epoch (T+0)"
+      style="padding:1px 5px;font-size:11px;line-height:1;margin-left:3px;"
+      onclick="_missionEpochOpen(this)">&#128197;</button>`;
   return `<div class="mcc-top-strip">
     <span class="mcc-top-met">T+${_metFmt(vt)}</span>
     ${dateCell}
@@ -206,33 +200,25 @@ function _missionTopStripHTML(m) {
   </div>`;
 }
 
-// Enter edit mode for the mission-epoch stamp; just a re-render (see
-// _missionTopStripHTML's _missionEpochEditing branch).
-function _missionEpochStartEdit() {
-  _missionEpochEditing = true;
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
-}
-
-// Escape/blur-without-change cancels back to the plain stamp, no mutation.
-function _missionEpochCancel() {
-  if (!_missionEpochEditing) return;
-  _missionEpochEditing = false;
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
-}
-
-// Commit a new mission epoch from the datetime-local input's raw value
-// ("YYYY-MM-DDTHH:mm", UTC semantics per the input's UTC-based formatting
-// helpers). Recomputes + re-renders + autosaves like any other authored
-// mutation (missionRecompute's tail hooks missionUndoCapture/autosave).
-function _missionEpochCommit(raw) {
-  _missionEpochEditing = false;
-  if (!raw || typeof progDateToJD !== 'function') { if (typeof missionRenderDetail === 'function') missionRenderDetail(); return; }
-  const jd = progDateToJD(raw + ':00Z');
-  if (!isFinite(jd)) { if (typeof missionRenderDetail === 'function') missionRenderDetail(); return; }
-  PROG_ACTIVE_PROGRAM.epochJD = jd;
-  const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : (_missions && _missions[0]);
-  if (m && typeof missionRecompute === 'function') missionRecompute(m);
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+// Opens the custom epoch-picker popover (578) anchored under whichever
+// element (stamp or button) was clicked, seeded with the current program
+// epoch, and wires Apply to the real commit path: set epochJD -> recompute
+// -> re-render (missionRecompute's tail already hooks undo capture +
+// autosave — see 575/455).
+function _missionEpochOpen(anchorEl) {
+  if (typeof epochPickerOpen !== 'function') return;
+  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  epochPickerOpen({
+    initialJD: epochJD,
+    anchorEl: anchorEl,
+    onApply: function(jd) {
+      if (!isFinite(jd)) return;
+      PROG_ACTIVE_PROGRAM.epochJD = jd;
+      const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : (_missions && _missions[0]);
+      if (m && typeof missionRecompute === 'function') missionRecompute(m);
+      if (typeof missionRenderDetail === 'function') missionRenderDetail();
+    }
+  });
 }
 
 // MISSION_MODEL_V2 §12 U3: the visible tri-toggle at the top of the center

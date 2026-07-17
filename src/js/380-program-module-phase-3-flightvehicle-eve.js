@@ -90,7 +90,13 @@ function progMakeProgram(name) {
     nodeMapActiveNodes:    (typeof PROG_NM_NODES !== 'undefined' ? PROG_NM_NODES : []).filter(n => n.zone === 'earth' && n.orbit?.type !== 'surface').map(n => n.id), // earth orbitals on by default; surface nodes tied to planet discs
     performanceCases:      [],       // archived perf cases (Phase 10)
     warnings:              [],
-    epochJD:               (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5), // R1: absolute date of MET 0 (Julian date)
+    // R1: absolute date of MET 0 (Julian date). NEW programs default to
+    // "right now" (via progDateToJD, Unix-epoch-anchored — see 360) rather
+    // than a hardcoded constant, so a fresh program always starts today.
+    // Loaded/restored programs get their epochJD overwritten by the loader
+    // after this object is built (450/455/575) — this default is only ever
+    // seen for a brand-new program.
+    epochJD:               (typeof progDateToJD === 'function' ? progDateToJD(new Date()) : (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5)),
   };
 }
 
