@@ -11430,19 +11430,27 @@ const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centr
 // -cos(node)*sin(obliquity), cos(obliquity)] in the WORLD (ecliptic) frame —
 // i.e. "obliquity" plays the role of an orbital inclination of the body's
 // equator against the ecliptic, "node" the role of that equator's RAAN.
-// v1: node=0 for every entry (each body's equinox direction is taken to
-// coincide with the ecliptic +x reference direction — true by construction
-// for Earth/J2000; an approximation, undocumented real value, for the
-// others, same "hand-tuned constant" category as other MATH.md critiques).
-// Moon: 6.68 deg is the figure this project is using for the lunar pole's
-// obliquity TO THE ECLIPTIC (not to Earth's equator, and not the ~5.14 deg
-// inclination of the Moon's ORBIT to the ecliptic — a different angle from a
-// different vector). The real lunar pole precesses on an 18.6-year cycle
-// (Cassini's laws); this is a STATIC v1 value — see MATH.md §7al.
+// node values (SIGN BUG FIXED 2026-07-18, MATH.md critique 120): the v1
+// claim that node=0 was "true by construction for Earth/J2000" was WRONG
+// under this exact formula — node 0 yields pole (0, -sin eps, cos eps), the
+// MIRROR of the real north celestial pole (0, +sin eps, cos eps) at ecliptic
+// longitude 90. The whole seam was reflected: every self-consistency check
+// passed (rings/gizmo/plane-match all mirrored together) but external truth
+// failed — the Moon's inclination-to-equator came out phase-INVERTED against
+// the real standstill calendar (app said 18.3 deg in 1969 when Apollo's
+// near-coplanar 28.6-deg launches happened; 28.6 in 2015's minor
+// standstill). Under this convention the correct node = (pole ecliptic
+// longitude) + 90:
+//   Earth  -> pole lon 90.0  -> node 180   (anchored by the standstill calendar)
+//   Mars   -> pole lon 352.9 -> node 82.9  (IAU pole RA/dec 317.68/52.89)
+//   Saturn -> pole lon 79.5  -> node 169.5 (IAU pole RA/dec 40.59/83.54)
+//   Moon   -> UNANCHORED static v1 (real pole precesses with the 18.6-yr
+//             Cassini cycle; 6.68 deg obliquity-to-ecliptic is itself a
+//             hand-tuned static stand-in — left at node 0, documented debt).
 const PROG_BODY_POLES = {
-  Earth:  { obliquity_deg: 23.44, node_deg: 0 },
-  Mars:   { obliquity_deg: 25.19, node_deg: 0 },
-  Saturn: { obliquity_deg: 26.73, node_deg: 0 },
+  Earth:  { obliquity_deg: 23.44, node_deg: 180 },
+  Mars:   { obliquity_deg: 25.19, node_deg: 82.9 },
+  Saturn: { obliquity_deg: 26.73, node_deg: 169.5 },
   Moon:   { obliquity_deg: 6.68,  node_deg: 0 },
 };
 /** Unit pole vector (world/ecliptic frame) for `body`. Bodies absent from
@@ -14904,7 +14912,19 @@ function progPlanLaunchToDestination(args) {
  * authored equator orbit" for this call site to route through.
  */
 function progMoonPlaneAt(epochJD, t_s) {
-  const st = progBodyLocalEphemState('Moon', t_s || 0);
+  // The canonical ephemeris (progBodyLocalEphemState) evaluates at the GLOBAL
+  // program epoch + MET (the one-position-source invariant — epoch lives on
+  // PROG_ACTIVE_PROGRAM, MET is the offset). Honor an explicit epochJD argument
+  // by folding (epochJD - globalEpoch) into the MET so a caller can query the
+  // plane at any absolute epoch WITHOUT mutating the global — the argument used
+  // to be silently ignored (dead), which also masked a latent bug: a caller
+  // passing an epochJD different from the global got the GLOBAL epoch's plane.
+  // When epochJD is absent/non-finite, fall back to the global epoch (met=t_s,
+  // byte-identical to the pre-fix behavior for every normal caller that already
+  // passes epochJD == the program epoch). See MATH.md §7al / critique 120.
+  const base = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const met = (t_s || 0) + (isFinite(epochJD) ? (epochJD - base) * 86400 : 0);
+  const st = progBodyLocalEphemState('Moon', met);
   const h = physCross(st.r, st.v);
   const hMag = physMag(h);
   if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };
@@ -28965,8 +28985,20 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   // orbit rings (skip for Sun frame — heliocentric transit legs are drawn as
   // arcs between the planet rings, not as a new "orbit" of the Sun)
   if (!isSun) {
+    // Gizmo-attached ring stays emphasized (user-reported 2026-07-18: "the
+    // orbit deselects and is no longer highlighted when making a maneuver
+    // node"): selecting/creating an MNODE moves selAuthIdx to the node's own
+    // event, which owns no ring — so the very orbit being edited faded to the
+    // unselected wash mid-interaction. Match the open gizmo's node to a ring
+    // by body + mean radius (the gizmo's circular reconstruction radius IS
+    // the ring's mean radius, so 2% + 50 km covers float noise).
+    const _gz = (typeof _trajGizmo !== 'undefined') ? _trajGizmo : null;
+    const _gzRKm = (_gz && _gz.missionId === id && _gz.node && _gz.node.body === body && _gz.node.r)
+      ? Math.hypot(_gz.node.r[0], _gz.node.r[1], _gz.node.r[2] || 0) : null;
     sc.orbits.forEach(rec => {
-      const emphasized = selAuthIdx != null && rec.firstAuthIdx === selAuthIdx;
+      const _recRMean = (PROG_BODIES[body] ? PROG_BODIES[body].R : 0) + (rec.peri + rec.apo) / 2;
+      const gizmoOnRing = _gzRKm != null && Math.abs(_recRMean - _gzRKm) < Math.max(50, _gzRKm * 0.02);
+      const emphasized = (selAuthIdx != null && rec.firstAuthIdx === selAuthIdx) || gizmoOnRing;
       // C2: a ring whose owning vehicle(s) are ALL expended by viewTime dims
       // to history alpha, same treatment as an arrived leg.
       const isHistoryOrbit = rec.expendMet != null && viewT != null && rec.expendMet <= viewT;
@@ -30688,6 +30720,7 @@ function _trajExtractMission(m) {
       sc.orbits.set(key, {
         key, body, peri, apo,
         inc: inc || 0,   // authored inclination (deg) — drawn for real since R2 (Ω,ω assumed 0)
+        lan: (lanDeg != null ? lanDeg : null), // authored eq-frame LAN — threaded to the hover/click rail so the gizmo rail lives on the SAME plane as the drawn ring (it used to hardcode Ω=0: user-reported "node on a different place from the orbit")
         label: _trajOrbitLabel(body, peri, apo),
         colors: new Set(), names: new Set(),
         firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)
@@ -31251,7 +31284,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // existing dblclick spawn. Thread the ring's own orbit basis (body/peri/
   // apo/inc) so the hover/menu handlers can build the same mean-motion rail
   // the gizmo's center-knob drag uses (_trajGizmoOrbitNodeAt/_trajRingHoverRail).
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',${rec.peri},${rec.apo},${rec.inc || 0})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)" onmousemove="_trajRingHoverMove(event,'${opts.missionId}','${body}',${rec.peri},${rec.apo},${rec.inc || 0},'${strokeColor}')" onmouseleave="_trajRingHoverLeave('${opts.missionId}')"` : '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',${rec.peri},${rec.apo},${rec.inc || 0},${rec.lan != null ? rec.lan : 'null'})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)" onmousemove="_trajRingHoverMove(event,'${opts.missionId}','${body}',${rec.peri},${rec.apo},${rec.inc || 0},${rec.lan != null ? rec.lan : 'null'},'${strokeColor}')" onmouseleave="_trajRingHoverLeave('${opts.missionId}')"` : '';
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
@@ -31450,7 +31483,7 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   }
   const visRuns = _trajOcclusionSplitRuns(screenPts, zoom, _trajOccludeBodies);
   if (!visRuns.length) return '';
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',0,0,0)"` : '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',0,0,0,null)"` : '';
   const fullD = visRuns.map(run => run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ')).join(' ');
   const hitArea = opts.authIdx != null ? `<path d="${fullD}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
@@ -34235,11 +34268,16 @@ function _trajRailNearestPoint(pts, x, y) {
  *  geometry and the gizmo's mean-anomaly reconstruction both already use),
  *  independent of any active gizmo. Mirrors _trajGizmoCenterDown's ringPts
  *  precompute 1:1 so hover/click-menu/drag all agree on the same rail. */
-function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, rect) {
+function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect) {
   const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[missionId] : null;
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
   if (!cam || !m || !rect || !(rect.width > 0)) return null;
-  const o = { body, perigee: Math.min(periKm, apoKm), apogee: Math.max(periKm, apoKm), inclination: incDeg || 0, lan: 0 };
+  // lanDeg threaded from rec.lan (2026-07-18): the rail used to hardcode
+  // lan:0, putting the hover ball / placement menu / drag rail on a DIFFERENT
+  // plane than any plane-matched ring (user-reported "node on a different
+  // place from the orbit"). Same eq-authored convention as the ring itself;
+  // orbitWorldState applies the seam.
+  const o = { body, perigee: Math.min(periKm, apoKm), apogee: Math.max(periKm, apoKm), inclination: incDeg || 0, lan: (lanDeg != null && isFinite(lanDeg)) ? lanDeg : 0 };
   const node0 = _trajGizmoOrbitNodeAt(o, 0);
   if (!node0) return null;
   const period = _trajGizmoOrbitPeriodMet(node0.mu, node0.r, node0.v);
@@ -34286,7 +34324,7 @@ function _trajRingHoverPaint(missionId) {
 
 /** Wired from the ring hit path's onmousemove. Throttled ~30ms; no-op while
  *  a gizmo drag/menu owns the pointer so the two affordances never fight. */
-function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, color) {
+function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, lanDeg, color) {
   if (typeof _trajGizmo !== 'undefined' && _trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
   const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
   if (now - _trajRingHoverLastMs < 30) return;
@@ -34295,7 +34333,7 @@ function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, color) 
   const svgEl = va && va.querySelector('svg.traj-svg');
   const rect = svgEl && svgEl.getBoundingClientRect();
   if (!rect || !(rect.width > 0)) return;
-  const rail = _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, rect);
+  const rail = _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect);
   if (!rail || !rail.pts.length) return;
   const cx = evt.clientX - rect.left, cy = evt.clientY - rect.top;
   const pt = _trajRailNearestPoint(rail.pts, cx, cy);
@@ -34394,7 +34432,7 @@ function _trajRingMenuUseAddEvent() {
  *  placement menu. If a gizmo happens to be open, the document-level
  *  capture-phase _trajGizmoDocClick listener already closed it by the time
  *  this (bubble-phase inline onclick) fires, so the menu opens cleanly. */
-function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg) {
+function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg, lanDeg) {
   const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
   _trajJustDragged = false;
   if (dragged) return;
@@ -34412,7 +34450,7 @@ function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg) {
   if (_trajRingHover && _trajRingHover.missionId === id) {
     met = _trajRingHover.met; sx = _trajRingHover.x; sy = _trajRingHover.y;
   } else {
-    const rail = _trajRingHoverRail(id, body, periKm, apoKm, incDeg, rect);
+    const rail = _trajRingHoverRail(id, body, periKm, apoKm, incDeg, lanDeg, rect);
     if (rail && rail.pts.length) {
       const pt = _trajRailNearestPoint(rail.pts, evt.clientX - rect.left, evt.clientY - rect.top);
       if (pt) { met = pt.met; sx = pt.x; sy = pt.y; }

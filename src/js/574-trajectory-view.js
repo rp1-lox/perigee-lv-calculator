@@ -94,8 +94,20 @@ function _trajBodyFrameContent(body, m, scale, zoom, ox, oy, viewportDiagPx, vie
   // orbit rings (skip for Sun frame — heliocentric transit legs are drawn as
   // arcs between the planet rings, not as a new "orbit" of the Sun)
   if (!isSun) {
+    // Gizmo-attached ring stays emphasized (user-reported 2026-07-18: "the
+    // orbit deselects and is no longer highlighted when making a maneuver
+    // node"): selecting/creating an MNODE moves selAuthIdx to the node's own
+    // event, which owns no ring — so the very orbit being edited faded to the
+    // unselected wash mid-interaction. Match the open gizmo's node to a ring
+    // by body + mean radius (the gizmo's circular reconstruction radius IS
+    // the ring's mean radius, so 2% + 50 km covers float noise).
+    const _gz = (typeof _trajGizmo !== 'undefined') ? _trajGizmo : null;
+    const _gzRKm = (_gz && _gz.missionId === id && _gz.node && _gz.node.body === body && _gz.node.r)
+      ? Math.hypot(_gz.node.r[0], _gz.node.r[1], _gz.node.r[2] || 0) : null;
     sc.orbits.forEach(rec => {
-      const emphasized = selAuthIdx != null && rec.firstAuthIdx === selAuthIdx;
+      const _recRMean = (PROG_BODIES[body] ? PROG_BODIES[body].R : 0) + (rec.peri + rec.apo) / 2;
+      const gizmoOnRing = _gzRKm != null && Math.abs(_recRMean - _gzRKm) < Math.max(50, _gzRKm * 0.02);
+      const emphasized = (selAuthIdx != null && rec.firstAuthIdx === selAuthIdx) || gizmoOnRing;
       // C2: a ring whose owning vehicle(s) are ALL expended by viewTime dims
       // to history alpha, same treatment as an arrived leg.
       const isHistoryOrbit = rec.expendMet != null && viewT != null && rec.expendMet <= viewT;

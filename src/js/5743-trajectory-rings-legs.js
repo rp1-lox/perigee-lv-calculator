@@ -41,7 +41,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   // existing dblclick spawn. Thread the ring's own orbit basis (body/peri/
   // apo/inc) so the hover/menu handlers can build the same mean-motion rail
   // the gizmo's center-knob drag uses (_trajGizmoOrbitNodeAt/_trajRingHoverRail).
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',${rec.peri},${rec.apo},${rec.inc || 0})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)" onmousemove="_trajRingHoverMove(event,'${opts.missionId}','${body}',${rec.peri},${rec.apo},${rec.inc || 0},'${strokeColor}')" onmouseleave="_trajRingHoverLeave('${opts.missionId}')"` : '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',${rec.peri},${rec.apo},${rec.inc || 0},${rec.lan != null ? rec.lan : 'null'})" ondblclick="_trajGizmoRingDblClick('${opts.missionId}',${opts.authIdx},event)" onmousemove="_trajRingHoverMove(event,'${opts.missionId}','${body}',${rec.peri},${rec.apo},${rec.inc || 0},${rec.lan != null ? rec.lan : 'null'},'${strokeColor}')" onmouseleave="_trajRingHoverLeave('${opts.missionId}')"` : '';
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
@@ -240,7 +240,7 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   }
   const visRuns = _trajOcclusionSplitRuns(screenPts, zoom, _trajOccludeBodies);
   if (!visRuns.length) return '';
-  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',0,0,0)"` : '';
+  const clickAttr = opts.authIdx != null ? ` style="cursor:pointer" onclick="_trajRingClick('${opts.missionId}',${opts.authIdx},event,'${body}',0,0,0,null)"` : '';
   const fullD = visRuns.map(run => run.map((p, i) => (i ? 'L ' : 'M ') + p.x.toFixed(2) + ' ' + p.y.toFixed(2)).join(' ')).join(' ');
   const hitArea = opts.authIdx != null ? `<path d="${fullD}" fill="none" stroke="transparent" stroke-width="9"${clickAttr}/>` : '';
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;

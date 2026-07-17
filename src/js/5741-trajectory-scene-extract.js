@@ -119,6 +119,7 @@ function _trajExtractMission(m) {
       sc.orbits.set(key, {
         key, body, peri, apo,
         inc: inc || 0,   // authored inclination (deg) — drawn for real since R2 (Ω,ω assumed 0)
+        lan: (lanDeg != null ? lanDeg : null), // authored eq-frame LAN — threaded to the hover/click rail so the gizmo rail lives on the SAME plane as the drawn ring (it used to hardcode Ω=0: user-reported "node on a different place from the orbit")
         label: _trajOrbitLabel(body, peri, apo),
         colors: new Set(), names: new Set(),
         firstAuthIdx: authIdx != null ? authIdx : null,  // first authored event that put a vehicle in this orbit (for click-to-select)

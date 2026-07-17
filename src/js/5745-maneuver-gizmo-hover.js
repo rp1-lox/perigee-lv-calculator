@@ -58,11 +58,16 @@ function _trajRailNearestPoint(pts, x, y) {
  *  geometry and the gizmo's mean-anomaly reconstruction both already use),
  *  independent of any active gizmo. Mirrors _trajGizmoCenterDown's ringPts
  *  precompute 1:1 so hover/click-menu/drag all agree on the same rail. */
-function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, rect) {
+function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect) {
   const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[missionId] : null;
   const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
   if (!cam || !m || !rect || !(rect.width > 0)) return null;
-  const o = { body, perigee: Math.min(periKm, apoKm), apogee: Math.max(periKm, apoKm), inclination: incDeg || 0, lan: 0 };
+  // lanDeg threaded from rec.lan (2026-07-18): the rail used to hardcode
+  // lan:0, putting the hover ball / placement menu / drag rail on a DIFFERENT
+  // plane than any plane-matched ring (user-reported "node on a different
+  // place from the orbit"). Same eq-authored convention as the ring itself;
+  // orbitWorldState applies the seam.
+  const o = { body, perigee: Math.min(periKm, apoKm), apogee: Math.max(periKm, apoKm), inclination: incDeg || 0, lan: (lanDeg != null && isFinite(lanDeg)) ? lanDeg : 0 };
   const node0 = _trajGizmoOrbitNodeAt(o, 0);
   if (!node0) return null;
   const period = _trajGizmoOrbitPeriodMet(node0.mu, node0.r, node0.v);
@@ -109,7 +114,7 @@ function _trajRingHoverPaint(missionId) {
 
 /** Wired from the ring hit path's onmousemove. Throttled ~30ms; no-op while
  *  a gizmo drag/menu owns the pointer so the two affordances never fight. */
-function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, color) {
+function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, lanDeg, color) {
   if (typeof _trajGizmo !== 'undefined' && _trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
   const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
   if (now - _trajRingHoverLastMs < 30) return;
@@ -118,7 +123,7 @@ function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, color) 
   const svgEl = va && va.querySelector('svg.traj-svg');
   const rect = svgEl && svgEl.getBoundingClientRect();
   if (!rect || !(rect.width > 0)) return;
-  const rail = _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, rect);
+  const rail = _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect);
   if (!rail || !rail.pts.length) return;
   const cx = evt.clientX - rect.left, cy = evt.clientY - rect.top;
   const pt = _trajRailNearestPoint(rail.pts, cx, cy);
@@ -217,7 +222,7 @@ function _trajRingMenuUseAddEvent() {
  *  placement menu. If a gizmo happens to be open, the document-level
  *  capture-phase _trajGizmoDocClick listener already closed it by the time
  *  this (bubble-phase inline onclick) fires, so the menu opens cleanly. */
-function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg) {
+function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg, lanDeg) {
   const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
   _trajJustDragged = false;
   if (dragged) return;
@@ -235,7 +240,7 @@ function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg) {
   if (_trajRingHover && _trajRingHover.missionId === id) {
     met = _trajRingHover.met; sx = _trajRingHover.x; sy = _trajRingHover.y;
   } else {
-    const rail = _trajRingHoverRail(id, body, periKm, apoKm, incDeg, rect);
+    const rail = _trajRingHoverRail(id, body, periKm, apoKm, incDeg, lanDeg, rect);
     if (rail && rail.pts.length) {
       const pt = _trajRailNearestPoint(rail.pts, evt.clientX - rect.left, evt.clientY - rect.top);
       if (pt) { met = pt.met; sx = pt.x; sy = pt.y; }
