@@ -64,36 +64,30 @@ function missionGroupPick(id, i) {
   // reject if any event in range is already grouped
   for (let k = a; k <= b; k++) { if (m.log[k].groupId) { missionRenderDetail(); return; } }
   missionOpenGroupModal(id, a, b, '');
-  missionRenderDetail();
 }
+// Inline event-loop (repetition) authoring (2026-07-16): replaces the old
+// modal-mission-group pop-up. `_missionGroupPending` holds the in-progress
+// form state and is rendered inline in the events dock (_missionGroupFormHTML,
+// 570-mission-band.js) in place of the normal Add Event dock while active.
+// Kept the function name `missionOpenGroupModal` for the two existing call
+// sites (range-pick above, and the "click a loop label to edit" handler in
+// 570-mission-lifecycle.js) — it no longer opens a modal, just arms the form.
+let _missionGroupPending = null;   // { id, start, end, gid } | null
 function missionOpenGroupModal(id, start, end, gid) {
   const m = _missionGet(id); if (!m) return;
-  const g = (gid && m.groups && m.groups[gid]) || {};
-  const body = document.getElementById('mgroup-body'); if (!body) return;
-  const n = end - start + 1;
-  body.innerHTML = `
-    <input type="hidden" id="mgroup-id" value="${id}">
-    <input type="hidden" id="mgroup-start" value="${start}">
-    <input type="hidden" id="mgroup-end" value="${end}">
-    <input type="hidden" id="mgroup-gid" value="${gid || ''}">
-    <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;">${n} event${n!==1?'s':''} — repeated as one block during the simulation.</div>
-    <label class="cfg-label">Loop name</label>
-    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Loop').replace(/"/g,'&quot;')}" maxlength="40">
-    <label class="cfg-label">Repeat (×)</label>
-    <input id="mgroup-rep" type="number" class="field" min="1" max="99" value="${g.repeat||2}" style="width:90px;margin-bottom:12px;">
-    <div style="display:flex;justify-content:flex-end;gap:8px;">
-      <button class="act-btn" onclick="closeModal('modal-mission-group')">Cancel</button>
-      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Loop'}</button>
-    </div>`;
-  openModal('modal-mission-group');
+  _missionGroupPending = { id, start, end, gid: gid || '' };
+  missionRenderDetail();
   setTimeout(() => { const el = document.getElementById('mgroup-name'); if (el) { el.focus(); el.select(); } }, 30);
 }
+function missionGroupCancel() {
+  _missionGroupPending = null;
+  missionRenderDetail();
+}
 function missionGroupSave() {
-  const id = document.getElementById('mgroup-id')?.value;
+  if (!_missionGroupPending) return;
+  const { id, start, end } = _missionGroupPending;
+  let gid = _missionGroupPending.gid || '';
   const m = _missionGet(id); if (!m) return;
-  const start = parseInt(document.getElementById('mgroup-start')?.value, 10);
-  const end = parseInt(document.getElementById('mgroup-end')?.value, 10);
-  let gid = document.getElementById('mgroup-gid')?.value || '';
   const name = (document.getElementById('mgroup-name')?.value || 'Loop').trim().slice(0, 40);
   const repeat = Math.max(1, Math.min(99, parseInt(document.getElementById('mgroup-rep')?.value, 10) || 1));
   m.groups = m.groups || {};
@@ -102,7 +96,7 @@ function missionGroupSave() {
     for (let k = start; k <= end; k++) m.log[k].groupId = gid;
   }
   m.groups[gid] = { name, repeat };
-  closeModal('modal-mission-group');
+  _missionGroupPending = null;
   missionRecompute(m);
   missionRenderDetail();
 }

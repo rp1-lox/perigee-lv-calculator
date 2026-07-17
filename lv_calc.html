@@ -21099,8 +21099,30 @@ function missionSetAddEvt(id, type) {
   missionRenderDetail();
 }
 
+// Inline event-loop (repetition) form — replaces modal-mission-group. Takes over
+// the Add Event dock slot while a range is being configured (created via the
+// ⊞ Loop range-pick, or by clicking an existing loop's label to edit it).
+function _missionGroupFormHTML(m) {
+  const p = _missionGroupPending;
+  const g = (p.gid && m.groups && m.groups[p.gid]) || {};
+  const n = p.end - p.start + 1;
+  return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+      <button class="act-btn" style="padding:3px 8px;font-size:10px;background:var(--accent);color:#000;" onclick="missionGroupCancel()">✕ Close</button>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.1em;">EVENT LOOP</span>
+    </div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;">${n} event${n!==1?'s':''} — repeated as one block during the simulation.</div>
+    <label class="cfg-label">Loop name</label>
+    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Loop').replace(/"/g,'&quot;')}" maxlength="40" onkeydown="if(event.key==='Enter')missionGroupSave();if(event.key==='Escape')missionGroupCancel()">
+    <label class="cfg-label">Repeat (&times;)</label>
+    <input id="mgroup-rep" type="number" class="field" min="1" max="99" value="${g.repeat||2}" style="width:90px;margin-bottom:12px;" onkeydown="if(event.key==='Enter')missionGroupSave();if(event.key==='Escape')missionGroupCancel()">
+    <div style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="act-btn" onclick="missionGroupCancel()">Cancel</button>
+      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${p.gid?'Save':'Create Loop'}</button>
+    </div>`;
+}
 function _missionAddEventHTML(m) {
   const id = m.missionId;
+  if (typeof _missionGroupPending !== 'undefined' && _missionGroupPending) return _missionGroupFormHTML(m);
   if (_missionAddEvt == null) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
@@ -21126,8 +21148,15 @@ function _missionAddEventHTML(m) {
   if (_missionAddEvt === '__menu__') {
     form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// pick an event type above</div>`;
   } else if (_missionAddEvt === 'launch') {
-    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// pick the launch vehicle, payload &amp; target orbit in a pop-up, then launch (runs ascent staging)</div>
-      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionOpenLaunchModal('${id}')">▶ Select Parameters &amp; Launch…</button>`;
+    // Inline event authoring (2026-07-16): was a pop-up (modal-mission-launch /
+    // missionOpenLaunchModal, now removed); the exact same field-building code
+    // (_missionLaunchParamsHTML, 570-mission-manager.js) runs straight in the
+    // dock. missionExecLaunch reads m.fleetEntryId/m.payloadScIds/m.launchOrbit,
+    // which the fields below mutate live via missionPickLibVehicle /
+    // missionTogglePayload / missionSetOrbit — same apply path as before.
+    const can = !!m.fleetEntryId;
+    form = `${_missionLaunchParamsHTML(m)}
+      <button class="act-btn" style="width:100%;margin-top:8px;${can ? 'background:var(--accent);color:#000;font-weight:600;' : ''}" onclick="missionExecLaunch('${id}')"${can ? '' : ' disabled'}>▶ Launch</button>`;
   } else if (_missionAddEvt === 'deploy') {
     const scs = _scEdSC || [];
     if (scs.length) {
@@ -23644,36 +23673,30 @@ function missionGroupPick(id, i) {
   // reject if any event in range is already grouped
   for (let k = a; k <= b; k++) { if (m.log[k].groupId) { missionRenderDetail(); return; } }
   missionOpenGroupModal(id, a, b, '');
-  missionRenderDetail();
 }
+// Inline event-loop (repetition) authoring (2026-07-16): replaces the old
+// modal-mission-group pop-up. `_missionGroupPending` holds the in-progress
+// form state and is rendered inline in the events dock (_missionGroupFormHTML,
+// 570-mission-band.js) in place of the normal Add Event dock while active.
+// Kept the function name `missionOpenGroupModal` for the two existing call
+// sites (range-pick above, and the "click a loop label to edit" handler in
+// 570-mission-lifecycle.js) — it no longer opens a modal, just arms the form.
+let _missionGroupPending = null;   // { id, start, end, gid } | null
 function missionOpenGroupModal(id, start, end, gid) {
   const m = _missionGet(id); if (!m) return;
-  const g = (gid && m.groups && m.groups[gid]) || {};
-  const body = document.getElementById('mgroup-body'); if (!body) return;
-  const n = end - start + 1;
-  body.innerHTML = `
-    <input type="hidden" id="mgroup-id" value="${id}">
-    <input type="hidden" id="mgroup-start" value="${start}">
-    <input type="hidden" id="mgroup-end" value="${end}">
-    <input type="hidden" id="mgroup-gid" value="${gid || ''}">
-    <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:10px;">${n} event${n!==1?'s':''} — repeated as one block during the simulation.</div>
-    <label class="cfg-label">Loop name</label>
-    <input id="mgroup-name" class="mcc-field-input" style="width:100%;margin-bottom:10px;" value="${(g.name||'Loop').replace(/"/g,'&quot;')}" maxlength="40">
-    <label class="cfg-label">Repeat (×)</label>
-    <input id="mgroup-rep" type="number" class="field" min="1" max="99" value="${g.repeat||2}" style="width:90px;margin-bottom:12px;">
-    <div style="display:flex;justify-content:flex-end;gap:8px;">
-      <button class="act-btn" onclick="closeModal('modal-mission-group')">Cancel</button>
-      <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="missionGroupSave()">${gid?'Save':'Create Loop'}</button>
-    </div>`;
-  openModal('modal-mission-group');
+  _missionGroupPending = { id, start, end, gid: gid || '' };
+  missionRenderDetail();
   setTimeout(() => { const el = document.getElementById('mgroup-name'); if (el) { el.focus(); el.select(); } }, 30);
 }
+function missionGroupCancel() {
+  _missionGroupPending = null;
+  missionRenderDetail();
+}
 function missionGroupSave() {
-  const id = document.getElementById('mgroup-id')?.value;
+  if (!_missionGroupPending) return;
+  const { id, start, end } = _missionGroupPending;
+  let gid = _missionGroupPending.gid || '';
   const m = _missionGet(id); if (!m) return;
-  const start = parseInt(document.getElementById('mgroup-start')?.value, 10);
-  const end = parseInt(document.getElementById('mgroup-end')?.value, 10);
-  let gid = document.getElementById('mgroup-gid')?.value || '';
   const name = (document.getElementById('mgroup-name')?.value || 'Loop').trim().slice(0, 40);
   const repeat = Math.max(1, Math.min(99, parseInt(document.getElementById('mgroup-rep')?.value, 10) || 1));
   m.groups = m.groups || {};
@@ -23682,7 +23705,7 @@ function missionGroupSave() {
     for (let k = start; k <= end; k++) m.log[k].groupId = gid;
   }
   m.groups[gid] = { name, repeat };
-  closeModal('modal-mission-group');
+  _missionGroupPending = null;
   missionRecompute(m);
   missionRenderDetail();
 }
@@ -24024,7 +24047,7 @@ function missionRenderDetail() {
         </div>
         ${filterRow}
         <div class="mcc-events-list">${logHTML}</div>
-        <div class="mcc-panel-pad mcc-addevt-dock${_missionAddEvt != null ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
+        <div class="mcc-panel-pad mcc-addevt-dock${(_missionAddEvt != null || (typeof _missionGroupPending !== 'undefined' && _missionGroupPending)) ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
       </div>
     </div>
   `;
@@ -24083,7 +24106,7 @@ function missionSetOrbit(id, key, val) {
   if (m) m.launchOrbit[key] = val;
 }
 
-// ── Launch parameter UI (lives in a pop-up, opened from Add Event → Launch) ──
+// ── Launch parameter UI (rendered inline in the Add Event → Launch dock form) ──
 function _missionOrbitFieldsHTML(m) {
   const id = m.missionId;
   const bodies = ['Earth','Moon','Mars','Venus','Mercury','Titan'];
@@ -24121,7 +24144,6 @@ function missionPickLibVehicle(id, val) {
     fleetId = entry.fleetId;
   }
   missionSetFleet(id, fleetId);
-  _missionRefreshLaunchModal(id);
 }
 
 function _missionLvPickerOptsHTML(selectedFleetId) {
@@ -24147,7 +24169,7 @@ function _missionLaunchParamsHTML(m) {
   const payChecks = _scEdSC.map(sc => `
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
       <input type="checkbox"${m.payloadScIds.includes(sc.spacecraftId) ? ' checked' : ''}
-        onchange="missionTogglePayload('${id}','${sc.spacecraftId}',this.checked);_missionRefreshLaunchModal('${id}')">
+        onchange="missionTogglePayload('${id}','${sc.spacecraftId}',this.checked);missionRenderDetail()">
       <span style="font-family:var(--mono);font-size:11px;color:var(--text-bright)">${sc.name}</span>
       <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${_fleetScMassById(sc.spacecraftId).toLocaleString()} kg</span>
     </label>`).join('');
@@ -24165,29 +24187,11 @@ function _missionLaunchParamsHTML(m) {
     <div class="mcc-panel-pad" style="padding-top:4px;"><div class="panel" style="padding:8px 10px;">${_missionOrbitFieldsHTML(m)}</div></div>`;
 }
 
-function _missionLaunchModalBody(m) {
-  const id = m.missionId;
-  const can = !!m.fleetEntryId;
-  return `${_missionLaunchParamsHTML(m)}
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:10px;border-top:1px solid var(--border);">
-      <button class="act-btn" onclick="closeModal('modal-mission-launch')">Cancel</button>
-      <button class="act-btn" style="${can ? 'background:var(--accent);color:#000;font-weight:600;' : ''}" onclick="missionExecLaunch('${id}');closeModal('modal-mission-launch')"${can ? '' : ' disabled'}>▶ Launch</button>
-    </div>`;
-}
-
-function missionOpenLaunchModal(id) {
-  const m = _missionGet(id); if (!m) return;
-  const body = document.getElementById('mlaunch-body');
-  if (!body) return;
-  body.innerHTML = _missionLaunchModalBody(m);
-  openModal('modal-mission-launch');
-}
-
-function _missionRefreshLaunchModal(id) {
-  const m = _missionGet(id); if (!m) return;
-  const body = document.getElementById('mlaunch-body');
-  if (body) body.innerHTML = _missionLaunchModalBody(m);
-}
+// Inline event authoring (2026-07-16): _missionLaunchModalBody / missionOpenLaunchModal /
+// _missionRefreshLaunchModal (the modal-mission-launch pop-up + its refresh plumbing) are
+// removed — Add Event → Launch now renders _missionLaunchParamsHTML directly in the
+// events dock (570-mission-band.js, _missionAddEventHTML 'launch' branch) and calls
+// missionExecLaunch straight from there.
 
 // MISSION_MODEL_V2 Phase 2 S1 (F3 — deterministic replay identity): runtime
 // vehicleIds default to a fresh progUUID() per replay, which dirties the
@@ -36317,27 +36321,11 @@ document.addEventListener('mousemove',e=>{
   </div>
 </div>
 
-<!-- ── MODAL: Launch parameters ── -->
-<div class="modal-overlay" id="modal-mission-launch" style="display:none">
-  <div class="modal" style="max-width:560px;">
-    <div class="modal-header">
-      <span class="modal-title">Launch — Select Parameters</span>
-      <button class="modal-close" onclick="closeModal('modal-mission-launch')">✕</button>
-    </div>
-    <div class="modal-body" id="mlaunch-body" style="padding:14px;"></div>
-  </div>
-</div>
-
-<!-- ── MODAL: Event group ── -->
-<div class="modal-overlay" id="modal-mission-group" style="display:none">
-  <div class="modal" style="max-width:380px;">
-    <div class="modal-header">
-      <span class="modal-title">Event Loop</span>
-      <button class="modal-close" onclick="closeModal('modal-mission-group')">✕</button>
-    </div>
-    <div class="modal-body" id="mgroup-body" style="padding:14px;"></div>
-  </div>
-</div>
+<!-- modal-mission-launch and modal-mission-group removed (2026-07-16): Add Event → Launch
+     and the Event Loop (repetition) form are now authored inline in the events dock —
+     see _missionLaunchParamsHTML/_missionAddEventHTML (570-mission-band.js) and
+     _missionGroupFormHTML (570-mission-band.js) / missionOpenGroupModal (570-mission-
+     interaction-state.js). docs/MISSION_MODEL_V2.md §12 has the note. -->
 
 <!-- ── MODAL: Rename vehicle ── -->
 <div class="modal-overlay" id="modal-mission-rename" style="display:none">

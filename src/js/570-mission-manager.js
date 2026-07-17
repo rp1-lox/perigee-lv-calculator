@@ -35,7 +35,6 @@ function missionPickLibVehicle(id, val) {
     fleetId = entry.fleetId;
   }
   missionSetFleet(id, fleetId);
-  _missionRefreshLaunchModal(id);
 }
 
 function _missionLvPickerOptsHTML(selectedFleetId) {
@@ -61,7 +60,7 @@ function _missionLaunchParamsHTML(m) {
   const payChecks = _scEdSC.map(sc => `
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
       <input type="checkbox"${m.payloadScIds.includes(sc.spacecraftId) ? ' checked' : ''}
-        onchange="missionTogglePayload('${id}','${sc.spacecraftId}',this.checked);_missionRefreshLaunchModal('${id}')">
+        onchange="missionTogglePayload('${id}','${sc.spacecraftId}',this.checked);missionRenderDetail()">
       <span style="font-family:var(--mono);font-size:11px;color:var(--text-bright)">${sc.name}</span>
       <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${_fleetScMassById(sc.spacecraftId).toLocaleString()} kg</span>
     </label>`).join('');
@@ -79,29 +78,11 @@ function _missionLaunchParamsHTML(m) {
     <div class="mcc-panel-pad" style="padding-top:4px;"><div class="panel" style="padding:8px 10px;">${_missionOrbitFieldsHTML(m)}</div></div>`;
 }
 
-function _missionLaunchModalBody(m) {
-  const id = m.missionId;
-  const can = !!m.fleetEntryId;
-  return `${_missionLaunchParamsHTML(m)}
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:10px;border-top:1px solid var(--border);">
-      <button class="act-btn" onclick="closeModal('modal-mission-launch')">Cancel</button>
-      <button class="act-btn" style="${can ? 'background:var(--accent);color:#000;font-weight:600;' : ''}" onclick="missionExecLaunch('${id}');closeModal('modal-mission-launch')"${can ? '' : ' disabled'}>▶ Launch</button>
-    </div>`;
-}
-
-function missionOpenLaunchModal(id) {
-  const m = _missionGet(id); if (!m) return;
-  const body = document.getElementById('mlaunch-body');
-  if (!body) return;
-  body.innerHTML = _missionLaunchModalBody(m);
-  openModal('modal-mission-launch');
-}
-
-function _missionRefreshLaunchModal(id) {
-  const m = _missionGet(id); if (!m) return;
-  const body = document.getElementById('mlaunch-body');
-  if (body) body.innerHTML = _missionLaunchModalBody(m);
-}
+// Inline event authoring (2026-07-16): _missionLaunchModalBody / missionOpenLaunchModal /
+// _missionRefreshLaunchModal (the modal-mission-launch pop-up + its refresh plumbing) are
+// removed — Add Event → Launch now renders _missionLaunchParamsHTML directly in the
+// events dock (570-mission-band.js, _missionAddEventHTML 'launch' branch) and calls
+// missionExecLaunch straight from there.
 
 // MISSION_MODEL_V2 Phase 2 S1 (F3 — deterministic replay identity): runtime
 // vehicleIds default to a fresh progUUID() per replay, which dirties the

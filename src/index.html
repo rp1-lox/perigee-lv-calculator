@@ -1080,27 +1080,11 @@ document.addEventListener('mousemove',e=>{
   </div>
 </div>
 
-<!-- ── MODAL: Launch parameters ── -->
-<div class="modal-overlay" id="modal-mission-launch" style="display:none">
-  <div class="modal" style="max-width:560px;">
-    <div class="modal-header">
-      <span class="modal-title">Launch — Select Parameters</span>
-      <button class="modal-close" onclick="closeModal('modal-mission-launch')">✕</button>
-    </div>
-    <div class="modal-body" id="mlaunch-body" style="padding:14px;"></div>
-  </div>
-</div>
-
-<!-- ── MODAL: Event group ── -->
-<div class="modal-overlay" id="modal-mission-group" style="display:none">
-  <div class="modal" style="max-width:380px;">
-    <div class="modal-header">
-      <span class="modal-title">Event Loop</span>
-      <button class="modal-close" onclick="closeModal('modal-mission-group')">✕</button>
-    </div>
-    <div class="modal-body" id="mgroup-body" style="padding:14px;"></div>
-  </div>
-</div>
+<!-- modal-mission-launch and modal-mission-group removed (2026-07-16): Add Event → Launch
+     and the Event Loop (repetition) form are now authored inline in the events dock —
+     see _missionLaunchParamsHTML/_missionAddEventHTML (570-mission-band.js) and
+     _missionGroupFormHTML (570-mission-band.js) / missionOpenGroupModal (570-mission-
+     interaction-state.js). docs/MISSION_MODEL_V2.md §12 has the note. -->
 
 <!-- ── MODAL: Rename vehicle ── -->
 <div class="modal-overlay" id="modal-mission-rename" style="display:none">
