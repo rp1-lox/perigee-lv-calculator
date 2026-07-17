@@ -22890,11 +22890,30 @@ function _missionLaunchTargetHTML(m, idx, e) {
     ...planeEntries.map(o => `<option value="plane:${_tsEsc(o.id)}"${cur === 'plane:' + o.id ? ' selected' : ''}>${_tsEsc(o.name)}${o.lan != null ? '' : ' (LAN free)'}</option>`)].join('');
   const isDest = cur.startsWith('dest:');
   const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
-  const initReadout = e.planDest
-    ? `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`
-    : e.planeMatchTarget
-      ? `// plane matched to ${_mrEsc(e.planeMatchTarget)} &mdash; pick Target again to rematch`
-      : '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+  // Committed LAUNCH entries auto-apply (missionRecompute + missionRenderDetail)
+  // right after missionLaunchMatchPlane sets its rich live readout — which
+  // wipes the DOM and re-derives initReadout from scratch. Re-resolve the
+  // matched plane here so the essentials (inc/LAN/penalty) survive the
+  // re-render instead of collapsing to the generic "pick Target again" text;
+  // the window countdown itself is transient (already applied to launchTime_s
+  // by the time this re-render happens) so it's not reconstructed here.
+  let initReadout;
+  if (e.planDest) {
+    initReadout = `// planned for ${_mrEsc(e.planDest)} &mdash; click Optimize to recompute the ideal parking orbit`;
+  } else if (e.planeMatchTarget) {
+    const spec = (typeof _missionPlaneMatchTargetSpec === 'function') ? _missionPlaneMatchTargetSpec(e.planeMatchTarget) : null;
+    const site = _missionLaunchSiteFor(e);
+    const siteLat = site ? site.lat : 28.5;
+    const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+    const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
+    const res = (spec && typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget(spec, epochJD, t_s, siteLat) : null;
+    initReadout = res
+      ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to ${_mrEsc(e.planeMatchTarget)}`)
+        + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
+      : `// plane matched to ${_mrEsc(e.planeMatchTarget)} &mdash; pick Target again to rematch`;
+  } else {
+    initReadout = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
+  }
   return `
     <div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:flex-end;margin-bottom:8px;padding:8px;background:var(--accent-tint-faint);border-radius:3px;">
       <div class="cfg-item"><label class="cfg-label">Target</label>
@@ -22927,31 +22946,83 @@ function missionLaunchTargetChange(id, idx, val) {
     if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure, or a plane-match target to align inc/&Omega; only &mdash; every field stays editable';
   }
 }
-// Fills inc/LAN from the picked plane target. Warns (not clamps) if the
-// site latitude exceeds the plane's inclination — that combination is a
-// real dogleg/unreachable case, not something to silently fix up.
+// Resolves a plane:* target VALUE (as stored in the Target select / e.planeMatchTarget)
+// into the {inc,lan,name}-or-'Moon' shape progResolvePlaneTarget expects. Shared by
+// missionLaunchMatchPlane (initial solve) and missionLaunchGeoUpdate (staleness check).
+function _missionPlaneMatchTargetSpec(targetVal) {
+  if (!targetVal) return null;
+  if (targetVal === 'Moon') return 'Moon';
+  const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
+  return entry ? { inc: entry.inc, lan: entry.lan, name: entry.name } : null;
+}
+// Shared readout fragment for a resolved plane-match (matched inc/LAN,
+// unreachable/penalty framing). `winTxt` is an optional pre-formatted
+// " · launch window in ~Xh Ym" suffix — callers with no window to report
+// (e.g. the post-re-render initReadout, where the window was already
+// consumed into launchTime_s) pass ''.
+function _missionPlaneMatchReadoutHTML(res, siteLat, winTxt) {
+  return (res.unreachable
+    ? `<span style="color:var(--danger);">Plane match to ${_mrEsc(res.source)}: UNREACHABLE at site lat ${siteLat}&deg;</span> — parking at inc ${res.inc_deg.toFixed(1)}&deg; (min-penalty ${res.penalty_deg.toFixed(1)}&deg;), &Omega; ${res.lan_deg.toFixed(1)}&deg;`
+    : `<span style="color:var(--accent);">Plane matched to ${_mrEsc(res.source)}</span>: inc ${res.inc_deg.toFixed(1)}&deg;, &Omega; ${res.lan_deg.toFixed(1)}&deg;`)
+    + (winTxt || '');
+}
+// Fills inc/LAN from the picked plane target AND, since LAN is physically
+// determined by launch time (missionLaunchGeoUpdate recomputes it from
+// site+time and would otherwise clobber the match), solves the launch TIME
+// that achieves the matched LAN — same recipe as missionLaunchPlanOptimize:
+// progLaunchRaanFor at t=0 to find the RAAN a t=0 launch would reach, then
+// progLaunchNextWindowS to find the next window that lands on the target LAN.
+// Warns (not clamps) if the site latitude exceeds the plane's inclination —
+// that combination is a real dogleg/unreachable case, not something to
+// silently fix up; the min-penalty plane (res.inc_deg/res.lan_deg, pinned to
+// the achievable inc) still gets a solved window so the readout is honest
+// about the residual penalty rather than leaving the time unset.
 function missionLaunchMatchPlane(id, idx, targetVal) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH') return;
   if (!targetVal) return;
+  const readEl = document.getElementById('launch-plan-readout-' + id);
+  const setReadout = html => { if (readEl) readEl.innerHTML = html; };
   const siteShort = document.getElementById('edit-launch-site-' + id)?.value;
   const site = siteShort ? _missionLaunchSiteChoices().find(s => s.short === siteShort) : _missionLaunchSiteFor(e);
   const siteLat = site ? site.lat : 28.5;
   const tRaw = document.getElementById('edit-launch-time-' + id)?.dataset.rawS;
   const t_s = (tRaw !== '' && tRaw != null) ? +tRaw : 0;
   const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
-  let target = targetVal;
-  if (targetVal !== 'Moon') {
-    const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
-    if (!entry) return;
-    target = { inc: entry.inc, lan: entry.lan, name: entry.name };
-  }
+  const target = _missionPlaneMatchTargetSpec(targetVal);
+  if (!target) return;
   if (typeof progResolvePlaneTarget !== 'function') return;
   const res = progResolvePlaneTarget(target, epochJD, t_s, siteLat);
   if (!res) return;
   const setV = (fid, v) => { const el = document.getElementById(fid + '-' + id); if (el != null && v != null) el.value = v; };
   setV('edit-launch-inc', res.inc_deg.toFixed(2));
   setV('edit-launch-lan', res.lan_deg.toFixed(2));
+  const incField = document.getElementById('edit-launch-inc-' + id);
+  if (incField) missionLaunchOrbitDetach(id, idx);
+  // Solve the launch window that reaches the matched LAN, exactly like
+  // missionLaunchPlanOptimize does for the dest: path (415-launch-planner.js
+  // progLaunchRaanFor/progLaunchNextWindowS).
+  let winTxt = '';
+  if (site && site.lon != null && typeof progLaunchRaanFor === 'function' && typeof progLaunchNextWindowS === 'function') {
+    const rNow = progLaunchRaanFor(site.lat, site.lon, res.inc_deg, 0, _missionEarthSpinRad);
+    if (!rNow.unreachable) {
+      const dt = progLaunchNextWindowS(rNow.raan, res.lan_deg, 86164.1);
+      const win_t_s = Math.round(dt);
+      const tField = document.getElementById('edit-launch-time-' + id);
+      if (tField && typeof progMissionTimeToDate === 'function' && typeof progDateToLocalInputValue === 'function') {
+        tField.value = progDateToLocalInputValue(progMissionTimeToDate(win_t_s));
+        tField.dataset.rawS = win_t_s;
+      }
+      winTxt = ` &middot; launch window in ~${Math.floor(dt / 3600)}h ${Math.round((dt % 3600) / 60)}m`;
+    }
+  }
+  // missionLaunchGeoUpdate recomputes LAN from the now-solved site+time — it
+  // should land on the SAME res.lan_deg (that's the point of solving the
+  // window above), so it no longer clobbers the match. It also relabels the
+  // LAN field; overwrite that label below with the matched-plane wording
+  // (still calling it first so the LAN VALUE and readout caption it builds
+  // are consistent with the solved time).
+  missionLaunchGeoUpdate(id, idx);
   const lanField = document.getElementById('edit-launch-lan-' + id);
   const lanLabel = lanField && lanField.closest('.cfg-item')?.querySelector('.cfg-label');
   if (lanLabel) {
@@ -22959,14 +23030,14 @@ function missionLaunchMatchPlane(id, idx, targetVal) {
       ? `LAN &Omega; (deg) <span style="color:var(--danger);">(matched to ${_mrEsc(res.source)} — UNREACHABLE at site lat ${siteLat}&deg;, penalty ${res.penalty_deg.toFixed(1)}&deg;)</span>`
       : `LAN &Omega; (deg) <span style="color:var(--text-dim);">(matched to ${_mrEsc(res.source)})</span>`;
   }
-  const incField = document.getElementById('edit-launch-inc-' + id);
-  if (incField) missionLaunchOrbitDetach(id, idx);
-  // Write-through (root-cause fix): persist the matched plane into the entry
-  // NOW — a later card re-render (payload pick, ref pick, anything) rebuilds
-  // the fields from e.orbit and used to silently revert the match to the
-  // stale values. Committed entries also auto-apply (recompute) so picking a
-  // plane target on an already-launched card takes effect without hunting
-  // for Apply.
+  setReadout(_missionPlaneMatchReadoutHTML(res, siteLat, winTxt)
+    + `<br><span style="color:var(--text-dim);">launch time set to the next window achieving this plane — every field stays editable</span>`);
+  // Write-through (root-cause fix): persist the matched plane + solved time
+  // into the entry NOW — a later card re-render (payload pick, ref pick,
+  // anything) rebuilds the fields from e.orbit/e.launchTime_s and used to
+  // silently revert the match to the stale values. Committed entries also
+  // auto-apply (recompute) so picking a plane target on an already-launched
+  // card takes effect without hunting for Apply.
   _missionLaunchSyncDraft(id, idx);
   if (!e.pending) { missionRecompute(m); missionRenderDetail(); }
 }
@@ -23147,7 +23218,28 @@ function missionLaunchGeoUpdate(id, idx) {
     if (!r.unreachable && lanField) {
       lanField.value = r.raan.toFixed(2);
       lanField.style.color = 'var(--text-dim)';
-      if (lanLabel) lanLabel.innerHTML = 'LAN &Omega; (deg) <span style="color:var(--text-dim);">(from launch time)</span>';
+      // Staleness check (feedback item 6): if this LAUNCH entry has a plane
+      // match on file, re-resolve that target's plane right now and compare
+      // against the LAN this site+time actually reaches. A mismatch means
+      // the launch time was changed manually AFTER the match (or the target
+      // plane itself moved with epoch) — physically the match is broken, but
+      // fields stay editable per the §12 design note; just say so.
+      let staleTxt = '';
+      if (e.planeMatchTarget && typeof progResolvePlaneTarget === 'function' && typeof _missionPlaneMatchTargetSpec === 'function') {
+        const spec = _missionPlaneMatchTargetSpec(e.planeMatchTarget);
+        const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+        const expected = spec ? progResolvePlaneTarget(spec, epochJD, t, site.lat) : null;
+        if (expected) {
+          let dLan = Math.abs(r.raan - expected.lan_deg) % 360;
+          if (dLan > 180) dLan = 360 - dLan;
+          staleTxt = dLan > 0.5
+            ? ` <span style="color:var(--warn);">(launch time changed — plane match to ${_mrEsc(expected.source)} stale, re-pick target to re-solve)</span>`
+            : ` <span style="color:var(--text-dim);">(matched to ${_mrEsc(expected.source)})</span>`;
+        }
+      }
+      if (lanLabel) lanLabel.innerHTML = staleTxt
+        ? `LAN &Omega; (deg)${staleTxt}`
+        : 'LAN &Omega; (deg) <span style="color:var(--text-dim);">(from launch time)</span>';
     } else if (lanLabel) {
       lanLabel.innerHTML = 'LAN &Omega; (deg) <span style="color:var(--danger);">(unreachable at this inc)</span>';
     }
