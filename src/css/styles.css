@@ -295,6 +295,10 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
 .mevt-body{border-top:1px solid var(--border);padding:2px;}
 .mevt-body .mission-log-card{border:none;background:transparent;margin:0;}
 .mcc-evt-row.grpstart{box-shadow:inset 0 0 0 1px var(--accent3);}
+/* pending draft card (unify-create/edit, 2026-07-16): the SAME card, dashed +
+   accent-tinted so it reads as "not yet part of the log" until Commit. */
+.mcc-evt-row.mevt-pending{border-style:dashed;border-color:var(--accent);background:var(--accent-tint-faint);}
+.mevt-head .mevt-pending-badge{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.08em;color:var(--accent);border:1px solid var(--accent);border-radius:2px;padding:0 4px;flex-shrink:0;}
 
 /* repeatable event group block */
 .mcc-group{border:1px solid var(--accent3);margin-bottom:8px;background:rgba(176,224,128,.05);}

@@ -374,8 +374,112 @@ function _missionBandOpenEvent(id, idx) {
   }, 60);
 }
 
+// ── Unified create/edit (2026-07-16) ────────────────────────────────────────
+// Dock types that create a PENDING DRAFT card (same _missionLogCardHTML +
+// _missionEventEditFieldsHTML the edit accordion already uses) instead of an
+// inline dock form. commitLabel is the button shown on the pending card;
+// _MISSION_APPLY_BY_TYPE maps the resulting log entry's `.type` to the exact
+// missionApply*Edit function that already knows how to read its edit-fields
+// DOM and mutate the entry in place — Commit == that function, plus clearing
+// the `pending` flag first so the very same code path used for later edits
+// is what brings the event to life.
+const _MISSION_PENDING_TYPES = {
+  launch:       { commitLabel: '&#9654; Launch' },
+  deploy:       { commitLabel: '&oplus; Place in Orbit' },
+  separate:     { commitLabel: '&#8645; Separate' },
+  dock:         { commitLabel: '&oplus; Dock' },
+  expend:       { commitLabel: 'Expend Vehicle' },
+  coast:        { commitLabel: '&#8987; Add Coast' },
+  mnode:        { commitLabel: '&oplus; Add Vector Burn' },
+  proptransfer: { commitLabel: 'Transfer Propellant' },
+};
+const _MISSION_APPLY_BY_TYPE = {
+  LAUNCH: (id, idx) => missionApplyLaunchEdit(id, idx),
+  DEPLOY: (id, idx) => missionApplyDeployEdit(id, idx),
+  SEPARATE: (id, idx) => missionApplySeparateEdit(id, idx),
+  DOCK: (id, idx) => missionApplyDockEdit(id, idx),
+  EXPEND: (id, idx) => missionApplyExpendEdit(id, idx),
+  COAST: (id, idx) => missionApplyCoastEdit(id, idx),
+  MNODE: (id, idx) => missionApplyMnodeEdit(id, idx),
+  TRANSFER_PROPELLANT: (id, idx) => missionApplyPropTransferEdit(id, idx),
+};
+
+// Draft defaults for a freshly-opened pending card. The draft is appended to
+// the END of m.log (see missionSetAddEvt) so every "state before this event"
+// lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
+// resolves to the CURRENT live mission state — exactly like the old dock
+// forms computed their defaults, with zero new plumbing.
+function _missionPendingDraft(m, dockType) {
+  const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+  const activeKey = fv ? fv._originKey : null;
+  const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+  const label = (dockType === '__none__') ? '' : (_MISSION_PENDING_TYPES[dockType] || {}).commitLabel;
+  switch (dockType) {
+    case 'launch':
+      return { type: 'LAUNCH', pending: true, _commitLabel: label, label: m.name, fleetEntryId: null,
+        payloadScIds: [...(m.payloadScIds || [])], payloadMass: 0,
+        orbit: { ...m.launchOrbit }, launchOrbit: { ...m.launchOrbit } };
+    case 'deploy': {
+      const sc = (_scEdSC || [])[0];
+      return { type: 'DEPLOY', pending: true, _commitLabel: label, label: sc ? sc.name : '', spacecraftId: sc ? sc.spacecraftId : null,
+        orbit: { ...m.launchOrbit }, emptyTanks: false };
+    }
+    case 'separate':
+      return { type: 'SEPARATE', pending: true, _commitLabel: label, activeKey, parentVehicleId: m.vehicleId, sepIndex: 1 };
+    case 'dock': {
+      const other = live.find(x => x.id !== m.vehicleId);
+      return { type: 'DOCK', pending: true, _commitLabel: label, activeKey, targetKey: other ? other.fv._originKey : null };
+    }
+    case 'expend':
+      return { type: 'EXPEND', pending: true, _commitLabel: label, targetKey: activeKey, vehicleLevel: true };
+    case 'coast':
+      return { type: 'COAST', pending: true, _commitLabel: label, days: 30, label: null };
+    case 'mnode':
+      return { type: 'MNODE', pending: true, _commitLabel: label, at: { kind: 'met', value_s: Math.round(m._metTotal || 0) },
+        dvPro_ms: 0, dvRad_ms: 0, dvNrm_ms: 0 };
+    case 'proptransfer':
+      return { type: 'TRANSFER_PROPELLANT', pending: true, _commitLabel: label, activeKey, vehicleId: m.vehicleId,
+        sourceIndex: 0, destIndex: 0, mass_kg: 1000 };
+    default:
+      return null;
+  }
+}
+
+// Commit a pending draft: the SAME missionApply*Edit function every later
+// edit of that entry uses (reads the edit-fields DOM, mutates the entry,
+// missionRecompute + render) — clearing `pending` first so this is the exact
+// path a real event follows, not a parallel one.
+function missionCommitPendingEvent(id) {
+  if (!_missionPendingEvent || _missionPendingEvent.missionId !== id) return;
+  const m = _missionGet(id); if (!m) { _missionPendingEvent = null; return; }
+  const idx = _missionPendingEvent.idx;
+  const e = m.log[idx];
+  if (!e) { _missionPendingEvent = null; return; }
+  delete e.pending;
+  _missionPendingEvent = null;
+  const fn = _MISSION_APPLY_BY_TYPE[e.type];
+  if (typeof fn === 'function') fn(id, idx);
+  else { missionRecompute(m); missionRenderDetail(); }
+}
+
+// Cancel a pending draft: splice it back out — m.log is byte-identical to
+// before the draft was opened (no missionRecompute call at all, so no undo
+// step is captured — cancel costs exactly zero undo entries).
+function missionCancelPendingEvent(id) {
+  const pend = _missionPendingEvent;
+  _missionPendingEvent = null;
+  _missionAddEvt = null;
+  if (!pend || pend.missionId !== id) { missionRenderDetail(); return; }
+  const m = _missionGet(id);
+  if (m && m.log[pend.idx] && m.log[pend.idx].pending) m.log.splice(pend.idx, 1);
+  missionRenderDetail();
+}
+
 // ── Band view SVG renderer ─────────────────────────────────────────────────
 function missionSetAddEvt(id, type) {
+  // Starting/closing any dock interaction discards whatever draft was open
+  // (rule: only one pending event at a time; switching types replaces it).
+  if (_missionPendingEvent) missionCancelPendingEvent(_missionPendingEvent.missionId);
   _missionAddEvt = (type === _missionAddEvt) ? null : type;
   _missionAddMv = { from: null, to: null, steps: [] };   // fresh maneuver step draft each open
   _missionXferDest = null;                                // fresh prop-transfer destination each open
@@ -388,6 +492,16 @@ function missionSetAddEvt(id, type) {
     _missionBridgeFrom = null;
   } else {
     _missionBridgeMode = false;
+  }
+  if (_missionAddEvt && _MISSION_PENDING_TYPES[_missionAddEvt]) {
+    const m = _missionGet(id);
+    const draft = m ? _missionPendingDraft(m, _missionAddEvt) : null;
+    if (draft) {
+      m.log.push(draft);
+      const idx = m.log.length - 1;
+      m.log[idx]._expanded = true;
+      _missionPendingEvent = { missionId: id, idx };
+    }
   }
   missionRenderDetail();
 }
@@ -440,28 +554,12 @@ function _missionAddEventHTML(m) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   if (_missionAddEvt === '__menu__') {
     form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// pick an event type above</div>`;
-  } else if (_missionAddEvt === 'launch') {
-    // Inline event authoring (2026-07-16): was a pop-up (modal-mission-launch /
-    // missionOpenLaunchModal, now removed); the exact same field-building code
-    // (_missionLaunchParamsHTML, 570-mission-manager.js) runs straight in the
-    // dock. missionExecLaunch reads m.fleetEntryId/m.payloadScIds/m.launchOrbit,
-    // which the fields below mutate live via missionPickLibVehicle /
-    // missionTogglePayload / missionSetOrbit — same apply path as before.
-    const can = !!m.fleetEntryId;
-    form = `${_missionLaunchParamsHTML(m)}
-      <button class="act-btn" style="width:100%;margin-top:8px;${can ? 'background:var(--accent);color:#000;font-weight:600;' : ''}" onclick="missionExecLaunch('${id}')"${can ? '' : ' disabled'}>▶ Launch</button>`;
-  } else if (_missionAddEvt === 'deploy') {
-    const scs = _scEdSC || [];
-    if (scs.length) {
-      const o = scs.map(s => `<option value="${s.spacecraftId}">${s.name}</option>`).join('');
-      form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// places a SPACECRAFT directly in orbit — full tanks, no ascent (e.g. a station like the ISS)</div>
-        <label class="cfg-label">Spacecraft</label>
-        <select id="addev-deploy-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
-        <label class="cfg-label">Target Orbit</label>
-        <div style="margin-bottom:8px;">${_missionOrbitFieldsHTML(m)}</div>
-        <label style="display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--text-bright);margin-bottom:8px;cursor:pointer;"><input type="checkbox" id="addev-deploy-empty-${id}" style="accent-color:var(--accent);"> Deploy with empty tanks (depot to be refuelled)</label>
-        <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecDeploy('${id}',document.getElementById('addev-deploy-${id}').value)">⊕ Place in Orbit</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no spacecraft defined — add one in the Spacecraft tab</div>`;
+  } else if (_MISSION_PENDING_TYPES[_missionAddEvt]) {
+    // Unified create/edit (2026-07-16): this type creates a PENDING DRAFT card
+    // in the events list (same _missionLogCardHTML/_missionEventEditFieldsHTML
+    // an existing event's accordion uses) instead of a dock form — see
+    // missionSetAddEvt/_missionPendingDraft above. There is nothing to show here.
+    form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// editing the new event above, in the events list</div>`;
   } else if (_missionAddEvt === 'burn') {
     form = _missionBurnSectionHTML(m);
   } else if (_missionAddEvt === 'lowthrust') {
@@ -484,36 +582,6 @@ function _missionAddEventHTML(m) {
       <label class="cfg-label">Throttle</label>
       <input type="number" id="addev-lt-throttle-${id}" class="field" min="0" max="1" step="0.05" value="1" style="width:80px;margin-bottom:10px;">
       <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecLowThrust('${id}')">▶ Add Low-Thrust Burn</button>`;
-  } else if (_missionAddEvt === 'separate') {
-    if (fv && fv.stages.length >= 2) {
-      // quick per-payload detach buttons (separate at each spacecraft boundary)
-      const groups = _missionPayloadGroups(fv).filter(g => g.startIndex >= 1);
-      let quick = '';
-      if (groups.length) {
-        const btns = groups.map(g => {
-          const top = g.endIndex === fv.stages.length - 1;
-          return `<button class="act-btn" style="flex:1;min-width:0;font-size:10px;" title="Separate ${g.scName}${top ? '' : ' and everything above it'} off the stack" onclick="missionExecSeparate('${id}',${g.startIndex})">⇕ ${g.scName}</button>`;
-        }).join('');
-        quick = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:4px;">// quick-detach a payload:</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">${btns}</div>`;
-      }
-      form = `${quick}<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// …or drag the bar (click between stages) to set a custom split — everything above it detaches</div>
-        <div id="sep-pick-${id}">${_missionSepPickerHTML(m)}</div>
-        <button class="act-btn" style="width:100%;margin-top:8px;" onclick="missionExecSeparate('${id}',_missionSepIndex)">⇕ Separate at bar</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// active vehicle needs ≥ 2 stages</div>`;
-  } else if (_missionAddEvt === 'dock') {
-    const targets = live.filter(x => x.id !== m.vehicleId && x.fv.status !== 'EXPENDED');
-    if (targets.length) {
-      const o = targets.map(x=>`<option value="${x.id}">${_missionVehicleDisplayName(x.fv)}</option>`).join('');
-      form = `<select id="addev-dock-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
-        <button class="act-btn" style="width:100%;" onclick="missionExecDock('${id}',document.getElementById('addev-dock-${id}').value)">⊕ Dock</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// need another live vehicle to dock with</div>`;
-  } else if (_missionAddEvt === 'expend') {
-    if (live.length) {
-      const o = live.map(x=>`<option value="${x.id}">${_missionVehicleDisplayName(x.fv)}${x.fv.status==='EXPENDED'?' (expended)':''}</option>`).join('');
-      form = `<select id="addev-exp-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
-        <button class="act-btn" style="width:100%;" onclick="missionExecExpendVehicle('${id}',document.getElementById('addev-exp-${id}').value)">Expend Vehicle</button>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no vehicles yet</div>`;
   } else if (_missionAddEvt === 'maneuver') {
     const nodes = _missionNmNodes();
     const o = nodes.map(n=>`<option value="${n.id}">${n.label}${n.sub?' ('+n.sub+')':''}</option>`).join('');
@@ -524,37 +592,6 @@ function _missionAddEventHTML(m) {
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
-  } else if (_missionAddEvt === 'mnode') {
-    // P4: vector maneuver node — a raw Δv applied at a MET, propagated by the
-    // physics side (565) and drawn unconditionally (user-authored intent).
-    const os = fv && fv.orbitState;
-    const canFreeReturn = !!(os && os.body === 'Earth' && !os.surface && !os.transit);
-    // R6.1.2: a MET snapped from the trajectory-view ring hover menu ("Use
-    // time in Add Event") takes precedence over the current mission-time
-    // default when the dock's own input wasn't mounted yet to prefill directly.
-    const pendingMet = (typeof _missionPendingEventMet !== 'undefined') ? _missionPendingEventMet[id] : null;
-    const metDefault = Math.round((pendingMet != null ? pendingMet : m._metTotal) || 0);
-    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// a raw Δv vector applied at a mission time — burns propellant like a maneuver, trajectory propagated by the physics engine</div>
-      <label class="cfg-label">MET (s)</label>
-      <input type="number" id="addev-mnode-met-${id}" class="field" value="${metDefault}" min="0" step="any" style="width:100%;margin-bottom:6px;">
-      <label class="cfg-label">Prograde (m/s)</label>
-      <input type="number" id="addev-mnode-pro-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
-      <label class="cfg-label">Radial (m/s)</label>
-      <input type="number" id="addev-mnode-rad-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:6px;">
-      <label class="cfg-label">Normal (m/s) <span style="color:var(--text-dim);">(+ along the orbit normal ĥ)</span></label>
-      <input type="number" id="addev-mnode-nrm-${id}" class="field" value="0" step="any" style="width:100%;margin-bottom:8px;">
-      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;margin-bottom:8px;" onclick="missionExecMnodeFromDock('${id}')">⊕ Add Vector Burn</button>
-      <div style="border-top:1px solid var(--border);padding-top:8px;">
-        <button class="act-btn" style="width:100%;"${canFreeReturn ? '' : ' disabled title="Active vehicle must be in an Earth orbit"'} onclick="missionSolveFreeReturn('${id}')">☾ Solve free return…</button>
-        <div id="addev-mnode-msg-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;"></div>
-      </div>`;
-  } else if (_missionAddEvt === 'coast') {
-    form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// advance the mission clock without a burn (e.g. "loiter 30 days in NRHO") — boiloff applies to every live vehicle's cryo tanks over this span</div>
-      <label class="cfg-label">Days</label>
-      <input type="number" id="addev-coast-days-${id}" class="field" value="30" min="0" step="any" style="width:100%;margin-bottom:6px;">
-      <label class="cfg-label">Label <span style="color:var(--text-dim);">(optional)</span></label>
-      <input type="text" id="addev-coast-label-${id}" class="field" placeholder="e.g. Station-keeping" style="width:100%;margin-bottom:8px;" maxlength="60">
-      <button class="act-btn" style="width:100%;background:var(--accent);color:#000;font-weight:600;" onclick="missionExecCoast('${id}')">⏳ Add Coast</button>`;
   } else if (_missionAddEvt === 'rendezvous') {
     const others = live.filter(x => x.id !== m.vehicleId);
     if (others.length) {
@@ -562,25 +599,6 @@ function _missionAddEventHTML(m) {
       form = `<select id="addev-rend-${id}" class="mcc-field-select" style="margin-bottom:6px;">${o}</select>
         <button class="act-btn" style="width:100%;" onclick="missionExecRendezvous('${id}',document.getElementById('addev-rend-${id}').value)">Rendezvous</button>`;
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// need another live vehicle</div>`;
-  } else if (_missionAddEvt === 'proptransfer') {
-    const canIntra = fv && fv.stages.length >= 2;
-    const others = fv ? live.filter(x => x.fv !== fv) : [];
-    if (fv && fv.stages.length >= 1 && (canIntra || others.length)) {
-      // destination can be the active vehicle OR another live vehicle (e.g. a deployed depot)
-      const destKey = _missionXferDest || fv._originKey;
-      const destEntry = live.find(x => x.fv._originKey === destKey);
-      const destFv = destEntry ? destEntry.fv : fv;
-      const srcOpts = _missionStageOptions(fv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
-      const vehOpts = live.map(x => `<option value="${x.fv._originKey}"${x.fv._originKey === destKey ? ' selected' : ''}>${_missionVehicleDisplayName(x.fv)}${x.fv === fv ? ' (active)' : ''}</option>`).join('');
-      const dstOpts = _missionStageOptions(destFv, s => `${Math.round(progStageRemainingProp(s)).toLocaleString()} kg`);
-      form = `<label class="cfg-label">Source Stage <span style="color:var(--text-dim);">(active vehicle)</span></label><select id="xfer-src-${id}" class="mcc-field-select" style="margin-bottom:6px;">${srcOpts}</select>
-        <label class="cfg-label">Destination Vehicle</label><select id="xfer-destveh-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionXferSetDest('${id}',this.value)">${vehOpts}</select>
-        <label class="cfg-label">Destination Stage</label><select id="xfer-dst-${id}" class="mcc-field-select" style="margin-bottom:6px;">${dstOpts}</select>
-        <label class="cfg-label">Mass (kg)</label>
-        <div style="display:flex;gap:6px;margin-bottom:6px;"><input type="number" id="xfer-mass-${id}" class="field" value="1000" style="flex:1;"><button class="act-btn" style="flex-shrink:0;" onclick="missionPropXferMax('${id}')" title="Use the source stage's full remaining propellant">Max</button></div>
-        <button class="act-btn" style="width:100%;" onclick="missionExecPropTransfer('${id}')">Transfer Propellant</button>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// fill a deployed depot directly, or move propellant between two stages of one (docked) vehicle</div>`;
-    } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// transfer needs a second stage (dock) or another vehicle / depot in orbit</div>`;
   } else if (_missionAddEvt === 'crewtransfer') {
     if (fv && fv.stages.length >= 2) {
       const so = _missionStageOptions(fv, s => `${s.crewAboard || 0} crew`);
@@ -600,28 +618,24 @@ function _missionAddEventHTML(m) {
     } else form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no vehicles yet</div>`;
   }
   // forms that already have their own vehicle dropdown don't need the global Active Vehicle selector
-  const ownsVehiclePicker = ['expend', 'recover', 'coast'].includes(_missionAddEvt);
+  const ownsVehiclePicker = ['recover'].includes(_missionAddEvt);
   return `${header}${(_missionAddEvt!=='__menu__'&&_missionAddEvt!=='burn'&&!ownsVehiclePicker)?vehSel:''}${form}`;
 }
 
-// ── P4: Vector Burn (MNODE) dock handlers ───────────────────────────────────
-function missionExecMnodeFromDock(id) {
-  const gv = f => { const el = document.getElementById(`addev-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
-  missionExecManeuverNode(id, { value_s: Math.max(0, gv('met')), dvPro_ms: gv('pro'), dvRad_ms: gv('rad'), dvNrm_ms: gv('nrm') });
-}
-
 // Solve a free-return trajectory from the active vehicle's Earth orbit and
-// PREFILL the Vector Burn fields (never auto-pushes — the user hits Add).
+// PREFILL the pending MNODE card's Vector Burn fields (edit-mnode-* — the
+// same ids the MNODE edit-fields form uses for both creating the pending
+// draft AND editing a committed MNODE; never auto-pushes — Commit authors it).
 function missionSolveFreeReturn(id) {
   const m = _missionGet(id); if (!m) return;
-  const msgEl = document.getElementById('addev-mnode-msg-' + id);
+  const msgEl = document.getElementById('edit-mnode-msg-' + id);
   const say = (t, warn) => { if (msgEl) { msgEl.textContent = t; msgEl.style.color = warn ? 'var(--warn)' : 'var(--text-dim)'; } };
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const os = fv && fv.orbitState;
   if (!os || os.body !== 'Earth' || os.surface || os.transit) { say('// active vehicle must be in an Earth orbit', true); return; }
   if (typeof physFreeReturnSolve !== 'function') { say('// physics module unavailable', true); return; }
   const alt = ((os.perigee ?? 185) + (os.apogee ?? os.perigee ?? 185)) / 2;
-  const metEl = document.getElementById('addev-mnode-met-' + id);
+  const metEl = document.getElementById('edit-mnode-met-' + id);
   const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
   let sol = null; // R1: calibration overrides retired — real ephemeris rails
   // R3: solve in the active vehicle's authored orbit plane
@@ -631,9 +645,9 @@ function missionSolveFreeReturn(id) {
     return;
   }
   if (metEl) metEl.value = Math.round(sol.met_s);
-  const proEl = document.getElementById('addev-mnode-pro-' + id);
+  const proEl = document.getElementById('edit-mnode-pro-' + id);
   if (proEl) proEl.value = Math.round(sol.dv_ms);
-  const radEl = document.getElementById('addev-mnode-rad-' + id);
+  const radEl = document.getElementById('edit-mnode-rad-' + id);
   if (radEl) radEl.value = 0;
   say(`// free return solved: ${Math.round(sol.dv_ms).toLocaleString()} m/s prograde at MET ${Math.round(sol.met_s).toLocaleString()} s — return perigee ${Math.round(sol.periAlt_km)} km (hit Add to author it)`);
 }

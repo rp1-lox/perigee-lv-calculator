@@ -120,6 +120,14 @@ document.addEventListener('keydown', e => {
   const visible = cc && pageProgram
     && getComputedStyle(pageProgram).display !== 'none';
   if (!visible) return;   // mission command center not visible
+  // Unify-create/edit (2026-07-16): Escape discards the open pending event
+  // card, even while focus sits in one of its inputs — checked BEFORE the
+  // INPUT/TEXTAREA/SELECT early-return below (which guards the Ctrl+Z/Y path).
+  if (e.key === 'Escape' && typeof _missionPendingEvent !== 'undefined' && _missionPendingEvent) {
+    e.preventDefault();
+    missionCancelPendingEvent(_missionPendingEvent.missionId);
+    return;
+  }
   const t = e.target;
   const tag = t && t.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;

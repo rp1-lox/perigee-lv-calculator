@@ -54,35 +54,15 @@ function _missionLvPickerOptsHTML(selectedFleetId) {
   return html;
 }
 
-function _missionLaunchParamsHTML(m) {
-  const id = m.missionId;
-  const lvOpts = _missionLvPickerOptsHTML(m.fleetEntryId);
-  const payChecks = _scEdSC.map(sc => `
-    <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;">
-      <input type="checkbox"${m.payloadScIds.includes(sc.spacecraftId) ? ' checked' : ''}
-        onchange="missionTogglePayload('${id}','${sc.spacecraftId}',this.checked);missionRenderDetail()">
-      <span style="font-family:var(--mono);font-size:11px;color:var(--text-bright)">${sc.name}</span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim)">${_fleetScMassById(sc.spacecraftId).toLocaleString()} kg</span>
-    </label>`).join('');
-  const payMass = (m.payloadScIds || []).reduce((s, scId) => s + _fleetScMassById(scId), 0);
-  return `
-    <div class="mcc-section-header" style="padding-top:0;">Launch Vehicle</div>
-    <div class="mcc-panel-pad" style="padding-top:4px;"><div class="panel" style="padding:8px 10px;">
-      <select class="mcc-field-select" onchange="missionPickLibVehicle('${id}',this.value)">${lvOpts}</select>
-    </div></div>
-    <div class="mcc-section-header">Payload Manifest${payMass ? ` <span style="color:var(--text-dim);text-transform:none;letter-spacing:0;">— ${payMass.toLocaleString()} kg</span>` : ''}</div>
-    <div class="mcc-panel-pad" style="padding-top:4px;"><div class="panel" style="padding:8px 10px;">
-      ${payChecks || '<span style="color:var(--text-dim);font-family:var(--mono);font-size:10px;">No spacecraft defined. Add spacecraft in the Spacecraft tab.</span>'}
-    </div></div>
-    <div class="mcc-section-header">Launch Orbit</div>
-    <div class="mcc-panel-pad" style="padding-top:4px;"><div class="panel" style="padding:8px 10px;">${_missionOrbitFieldsHTML(m)}</div></div>`;
-}
-
-// Inline event authoring (2026-07-16): _missionLaunchModalBody / missionOpenLaunchModal /
-// _missionRefreshLaunchModal (the modal-mission-launch pop-up + its refresh plumbing) are
-// removed — Add Event → Launch now renders _missionLaunchParamsHTML directly in the
-// events dock (570-mission-band.js, _missionAddEventHTML 'launch' branch) and calls
-// missionExecLaunch straight from there.
+// Unify-create/edit (2026-07-16): _missionLaunchParamsHTML (the dock's own
+// launch-authoring form) is REMOVED — Add Event → Launch now creates a
+// PENDING DRAFT card in the events list rendered through the exact same
+// _missionEventEditFieldsHTML LAUNCH branch (570-mission-cards.js) an
+// existing LAUNCH event's accordion uses. See _missionPendingDraft/
+// missionSetAddEvt/missionCommitPendingEvent (570-mission-band.js).
+// (Earlier still: _missionLaunchModalBody / missionOpenLaunchModal /
+// _missionRefreshLaunchModal, a pop-up form, were removed in favor of the
+// dock form this comment used to describe.)
 
 // MISSION_MODEL_V2 Phase 2 S1 (F3 — deterministic replay identity): runtime
 // vehicleIds default to a fresh progUUID() per replay, which dirties the

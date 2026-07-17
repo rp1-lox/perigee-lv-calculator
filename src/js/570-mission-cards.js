@@ -480,6 +480,19 @@ function _missionEventEditFieldsHTML(m, idx) {
           </div>
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
+        ${(() => {
+          // Unify-create/edit (2026-07-16): "Solve free return" used to be a
+          // dock-only affordance — now lives right on the (shared) MNODE
+          // form, so it works identically whether this is the pending draft
+          // or an already-committed MNODE being re-edited.
+          const _fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
+          const _os = _fv && _fv.orbitState;
+          const canFreeReturn = !!(_os && _os.body === 'Earth' && !_os.surface && !_os.transit);
+          return `<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px;">
+            <button class="act-btn" style="width:100%;"${canFreeReturn ? '' : ' disabled title="Active vehicle must be in an Earth orbit"'} onclick="missionSolveFreeReturn('${id}')">&#9789; Solve free return&hellip;</button>
+            <div id="edit-mnode-msg-${id}" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;"></div>
+          </div>`;
+        })()}
       </div>`;
   }
 

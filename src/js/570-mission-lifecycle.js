@@ -29,6 +29,9 @@ function missionDelete(id) {
 }
 
 function missionSelect(id) {
+  // Switching missions silently discards any pending create/edit draft on the
+  // mission we're leaving (rule: a draft never survives navigating away).
+  if (_missionPendingEvent) missionCancelPendingEvent(_missionPendingEvent.missionId);
   _missionSel = id;
   missionRender();
 }
@@ -78,31 +81,42 @@ function missionRenderDetail() {
   const effVeh  = _missionEvtFilter.veh || 'ALL';
   const matchEvt = e => (effType === 'ALL' || e.type === effType) && (effVeh === 'ALL' || e.vehicleId === effVeh);
   const card = (e, i) => {
-    if (!grpSel && !matchEvt(e)) return '';   // hidden by filter (never hide while picking a group)
-    const expanded = !!e._expanded;
+    if (!grpSel && !e.pending && !matchEvt(e)) return '';   // hidden by filter (never hide while picking a group, and never hide the pending draft)
+    const expanded = e.pending || !!e._expanded;   // a pending draft is ALWAYS shown expanded (it IS the create form)
     const upDis = (i <= 0) ? ' disabled' : '';
     const dnDis = (i >= m.log.length - 1) ? ' disabled' : '';
     const sub = e.burnLabel || e.toLabel || e.vehicleName || e.label || e.targetName || '';
-    const ctl = `<div class="mevt-ctlbar"><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},-1)" title="Move up"${upDis}>▲</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},1)" title="Move down"${dnDis}>▼</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEventToEnd('${id}',${i})" title="Send to end"${dnDis}>⤓</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionDeleteEvent('${id}',${i})" title="Delete event">✕</button></div>`;
+    // Unify-create/edit (2026-07-16): a pending draft's ctlbar is Commit/Cancel
+    // instead of the usual move/delete controls — Commit runs the SAME
+    // missionApply*Edit function a later edit of that entry would use (see
+    // missionCommitPendingEvent, 570-mission-band.js); Cancel splices the
+    // draft back out with no recompute (m.log stays byte-identical).
+    const ctl = e.pending
+      ? `<div class="mevt-ctlbar"><button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="event.stopPropagation();missionCommitPendingEvent('${id}')">${e._commitLabel || 'Commit'}</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionCancelPendingEvent('${id}')" title="Discard (Esc)">Cancel</button></div>`
+      : `<div class="mevt-ctlbar"><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},-1)" title="Move up"${upDis}>▲</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},1)" title="Move down"${dnDis}>▼</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEventToEnd('${id}',${i})" title="Send to end"${dnDis}>⤓</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionDeleteEvent('${id}',${i})" title="Delete event">✕</button></div>`;
     const grpMark = grpSel ? (_missionGroupStart === i ? '◉ ' : '○ ') : '';
-    const onclick = grpSel ? `missionGroupPick('${id}',${i})` : `missionSelectEvent('${id}',${i})`;
-    const dragAttrs = grpSel ? '' : ` draggable="true" ondragstart="missionEvtDragStart(event,${i})" ondragover="missionEvtDragOver(event)" ondragleave="missionEvtDragLeave(event)" ondrop="missionEvtDrop(event,'${id}',${i})"`;
+    const onclick = e.pending ? '' : (grpSel ? `missionGroupPick('${id}',${i})` : `missionSelectEvent('${id}',${i})`);
+    const dragAttrs = (grpSel || e.pending) ? '' : ` draggable="true" ondragstart="missionEvtDragStart(event,${i})" ondragover="missionEvtDragOver(event)" ondragleave="missionEvtDragLeave(event)" ondrop="missionEvtDrop(event,'${id}',${i})"`;
     // Deliverable A: flight-readiness findings anchored to this authored index
     // render as a small dot badge in the header row and — only while the card
     // is expanded — their full text inline in the body (re-homed off the
     // retired standalone FLIGHT READINESS panel).
-    const checkBadge = (typeof _missionChecksEventBadgeHTML === 'function') ? _missionChecksEventBadgeHTML(m, i) : '';
-    const checkInline = (expanded && typeof _missionChecksInlineHTML === 'function') ? _missionChecksInlineHTML(m, i) : '';
-    return `<div id="mlog-${id}-${i}" class="mcc-evt-row${expanded?' sel':''}${grpSel&&_missionGroupStart===i?' grpstart':''}"${dragAttrs}>
+    const checkBadge = (!e.pending && typeof _missionChecksEventBadgeHTML === 'function') ? _missionChecksEventBadgeHTML(m, i) : '';
+    const checkInline = (!e.pending && expanded && typeof _missionChecksInlineHTML === 'function') ? _missionChecksInlineHTML(m, i) : '';
+    // The pending draft has no committed state to summarize yet — show ONLY
+    // the (shared) edit-fields form, i.e. exactly the create form; a
+    // committed card shows its read-only summary PLUS the edit-fields form.
+    const bodyHTML = e.pending ? _missionEventEditFieldsHTML(m, i) : `${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}${checkInline}`;
+    return `<div id="mlog-${id}-${i}" class="mcc-evt-row${expanded?' sel':''}${grpSel&&_missionGroupStart===i?' grpstart':''}${e.pending?' mevt-pending':''}"${dragAttrs}>
       <div class="mevt-head" onclick="${onclick}">
-        <span class="mevt-caret">${grpSel ? grpMark : (expanded ? '▾' : '▸')}</span>
+        <span class="mevt-caret">${e.pending ? '<span class="mevt-pending-badge">NEW</span>' : (grpSel ? grpMark : (expanded ? '▾' : '▸'))}</span>
         <span class="mission-log-type">${e.type}</span>
         ${checkBadge}
         ${e.metStart!=null?`<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${_metFmt(e.metStart)}</span>`:''}
         <span class="mevt-sub">${sub}</span>
         ${grpSel ? '' : ctl}
       </div>
-      ${(!grpSel && expanded) ? `<div class="mevt-body">${_missionLogCardHTML(e, id, i)}${_missionEventEditFieldsHTML(m, i)}${checkInline}</div>` : ''}
+      ${(!grpSel && expanded) ? `<div class="mevt-body">${bodyHTML}</div>` : ''}
     </div>`;
   };
   let logHTML = '';

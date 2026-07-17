@@ -7,6 +7,16 @@
 // Load restores all of them and re-simulates each mission so the runtime
 // vehicles in PROG_ACTIVE_PROGRAM are rebuilt from each mission's log.
 
+// Unify-create/edit (2026-07-16): a mission's log may momentarily hold a
+// PENDING draft event (mid-creation, appended to the end of m.log — see
+// 570-mission-band.js) for the accordion/card machinery to render through.
+// It must never reach a saved blob (autosave OR .program export both funnel
+// through this function) — strip any `.pending` entries from a shallow copy,
+// leaving the live `_missions` array itself untouched.
+function _missionsSansPending() {
+  return _missions.map(m => (m.log && m.log.some(e => e.pending)) ? { ...m, log: m.log.filter(e => !e.pending) } : m);
+}
+
 function buildProgramObject() {
   return {
     kind: 'rocket-playground-program',
@@ -14,7 +24,7 @@ function buildProgramObject() {
     savedAt: new Date().toISOString(),
     spacecraft: _scEdSC,
     fleet: _fleetEntries,
-    missions: _missions,
+    missions: _missionsSansPending(),
     scStageLib: _scStageLib,
     // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog + any
     // program one-offs (both live in PROG_ORBIT_CATALOG_USER; there is no

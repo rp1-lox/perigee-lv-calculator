@@ -116,7 +116,12 @@ function _missionEffectiveLog(m) {
       }
     } else { e._authIdx = i; e._rep = 0; e._clone = false; out.push(e); i++; }
   }
-  return out;
+  // Unify-create/edit (2026-07-16): a PENDING draft (mid-creation, fields not
+  // yet applied) sits at the end of m.log so it renders through the normal
+  // card machinery, but it must never be replayed — it has no effect on the
+  // mission until Commit clears the flag. Filtered here (the single choke
+  // point every recompute goes through) rather than at each call site.
+  return out.filter(e => !e.pending);
 }
 
 // authored index range [start,end] of a group's events.

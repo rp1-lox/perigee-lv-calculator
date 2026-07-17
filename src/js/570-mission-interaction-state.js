@@ -115,6 +115,13 @@ function missionUngroup(id, gid) {
 }
 let _missionAddEvt = null;   // null = closed; '__menu__' = picker; or a type          // scrubbed event index for the band view (null = last event)
 let _missionSelEvt = null;   // selected event index for event detail panel
+// Unify-create/edit (2026-07-16): a pending event is a DRAFT log entry, pushed onto
+// the END of m.log (flagged `pending:true`) so it renders through the exact same
+// card/edit-fields renderers a committed event uses — Commit clears the flag +
+// applies via the normal missionApply*Edit path; Cancel splices it back out with
+// NO recompute (m.log stays byte-identical to before it was opened). Tracked here
+// so exactly one can exist at a time and it can be discarded on mission switch.
+let _missionPendingEvent = null;   // { missionId, idx } | null
 // Maneuver add-form draft: the composite step program being built (BURN / SEPARATE steps).
 // [] = a single full burn from the default stage. Reset whenever the maneuver form opens.
 let _missionAddMv = { from: null, to: null, steps: [] };
