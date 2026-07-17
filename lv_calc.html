@@ -4239,7 +4239,25 @@ function _tsCollectBase(){
   const fairingJ=parseInt(document.getElementById('fairing-jettison').value);
   const siteLat=gv('site-lat'),azMin=gv('az-min'),azMax=gv('az-max');
   const stages=[];
-  for(let s=0;s<numStages;s++)stages.push({dry:gv(`s${s+1}_dry`),prop:gv(`s${s+1}_prop`),thrust:gv(`s${s+1}_thrust`),isp:parseFloat(document.getElementById(`s${s+1}_isp`).value)||1,res:gv(`s${s+1}_res`)});
+  for(let s=0;s<numStages;s++){
+    const st={dry:gv(`s${s+1}_dry`),prop:gv(`s${s+1}_prop`),thrust:gv(`s${s+1}_thrust`),isp:parseFloat(document.getElementById(`s${s+1}_isp`).value)||1,res:gv(`s${s+1}_res`)};
+    // S1.5 stage-and-a-half fields live in stageStore, NOT the standard DOM rows.
+    // Carry them through (mirroring _tsVehicleToBase) so _tsExpandStages can
+    // BECO-split the stage before lvPerformance/lvMaxPayload — the same HARD
+    // INVARIANT calculateWithS15()/_fleetExpandStages honor. Dropping them made
+    // the worksheet trade-study numbers diverge from the Orbits-page calculator
+    // for every S1.5 vehicle (shipped-a-third-time S1.5 splitter bug).
+    const sd=(typeof stageStore!=='undefined'&&stageStore[s])?stageStore[s]:null;
+    if(sd&&sd.s15){
+      st.s15=true;
+      st.s15_sust_thrust=sd.s15_sust_thrust||0;
+      st.s15_sust_isp=sd.s15_sust_isp||0;
+      st.s15_jet_mass=sd.s15_jet_mass||0;
+      st.s15_beco_twr=sd.s15_beco_twr||1.2;
+      st.s15_boost_isp=sd.s15_boost_isp||0;
+    }
+    stages.push(st);
+  }
   const boosterArg=useBooster?lvBoosterGroups():null;
   const parkingAlt=destMode==='orbit'?gv('parking-alt'):gv('escape-perigee');
   const payload=gv('payload-mass');

@@ -4799,6 +4799,119 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Trade-study ⇄ Orbits-page PATH EQUALITY (S1.5 splitter carry-through)
+//
+// Guards the shipped-a-third-time S1.5 bug: the worksheet trade-study base
+// assembler `_tsCollectBase()` (165) used to build its stage list from the
+// standard DOM rows ONLY, dropping the s15/s15_* fields (which live in
+// stageStore, not those rows). `_tsExpandStages` therefore could not BECO-split
+// the stage, so lvMaxPayload saw a single un-split stage and produced a payload
+// that DIVERGED from the Orbits-page calculator (calculateWithS15 → _s15BecoSplit,
+// which DOES split) for every S1.5 vehicle.
+//
+// This block drives the REAL `_tsCollectBase()` through a controlled DOM/global
+// stub for every builtin preset that carries no separate booster (so the
+// comparison isolates the stage list), and asserts its max payload equals the
+// vehicle-object assembler `_tsVehicleToBase()` path (the same chain the Orbits
+// page + trade-study compare-chips use) across a representative destination set.
+// A dedicated sandbox is used because the preset/resolver modules aren't in the
+// main FILES list (mirrors the ghost-stage guard).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const tsFiles = ['src/js/010-constants.js', 'src/js/050-builtin-presets.js',
+    'src/js/060-orbit-categories.js', 'src/js/140-physics.js', 'src/js/145-dest-dv.js',
+    'src/js/150-stage-and-a-half.js', 'src/js/165-trade-study.js',
+    'src/js/210-stage-library.js', 'src/js/330-stage-resolver.js'];
+  const tsSrc = tsFiles.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
+  // Mutable DOM store: getElementById(id) → {value}. numStages/stageStore/
+  // useBooster/destMode are provided as context globals (none of the loaded
+  // modules declare them, so free-variable lookups resolve to these props),
+  // mutated per-preset from Node.
+  const domStore = {};
+  const tsb = {
+    document: { getElementById: id => (id in domStore) ? { value: domStore[id] } : null },
+    console, window: {},
+    numStages: 0, stageStore: [], useBooster: false, destMode: 'orbit',
+  };
+  vm.createContext(tsb);
+  let tsLoadOk = true;
+  try { vm.runInContext(tsSrc, tsb, { filename: 'ts-pathcheck-modules.js' }); }
+  catch (e) { tsLoadOk = false; console.error('ts-pathcheck load error: ' + e.message); }
+  ok('S1.5 path-check modules load in vm', tsLoadOk);
+
+  const PRESETS = vm.runInContext('typeof BUILTIN_PRESETS!=="undefined"?BUILTIN_PRESETS:null', tsb);
+  const _tsVehicleToBase = vm.runInContext('_tsVehicleToBase', tsb);
+  const _tsCollectBase = vm.runInContext('_tsCollectBase', tsb);
+  const _tsExpandStages = vm.runInContext('_tsExpandStages', tsb);
+  const resolvePresetStages = vm.runInContext('resolvePresetStages', tsb);
+  const resolvePresetBooster = vm.runInContext('resolvePresetBooster', tsb);
+  const lvMaxPayload_ts = vm.runInContext('lvMaxPayload', tsb);
+  const destOnOrbitDV_ts = vm.runInContext('destOnOrbitDV', tsb);
+  ok('S1.5 path-check exports resolved', !!PRESETS && !!_tsVehicleToBase && !!_tsCollectBase);
+
+  const TS_DESTS = [
+    { label: 'LEO200', arg: { mode: 'orbit', apogee: 200, perigee: 200, inc: 28.5, parkingAlt: 185 } },
+    { label: 'GTO',    arg: { mode: 'orbit', apogee: 35786, perigee: 185, inc: 28.5, parkingAlt: 185 } },
+    { label: 'SSO700', arg: { mode: 'orbit', apogee: 700, perigee: 700, inc: 98.2, parkingAlt: 185 } },
+    { label: 'TLI',    arg: { mode: 'escape', c3: -1.9, decl: 28.5, perigee: 185 } },
+  ];
+  const maxPayVia = (base, destArg) => {
+    const ddv = destOnOrbitDV_ts(destArg, base.siteLat);
+    if (ddv.error) return null;
+    const st = _tsExpandStages(base.stages);
+    return lvMaxPayload_ts(st, base.boosterArg, base.fairingM, base.fairingJ, ddv.parkingAlt, ddv.onOrbitDV, base.siteLat, base.azMin, base.azMax);
+  };
+
+  if (PRESETS && _tsCollectBase) {
+    let s15Covered = 0, checked = 0;
+    const mism = [];
+    PRESETS.forEach(p => {
+      // Isolate the stage list: skip presets with a separate booster group (the
+      // worksheet path would pull booster from lvBoosterGroups/DOM, which this
+      // stub doesn't populate). No-booster presets keep boosterArg=null on both
+      // sides, so any divergence is purely the S1.5 stage carry-through.
+      if (resolvePresetBooster(p) || (Array.isArray(p.boosterGroups) && p.boosterGroups.length)) return;
+      const resolved = resolvePresetStages(p);
+      // Drive the REAL _tsCollectBase: standard DOM rows + stageStore (s15 fields).
+      tsb.numStages = resolved.length;
+      tsb.stageStore = resolved.map(s => ({ ...s }));
+      tsb.useBooster = false;
+      tsb.destMode = 'orbit';
+      const site = p.site || {};
+      domStore['fairing-mass'] = p.fairingMass || 0;
+      domStore['fairing-jettison'] = p.fairingJettison || 0;
+      domStore['site-lat'] = site.lat != null ? site.lat : 28.5;
+      domStore['az-min'] = site.azMin != null ? site.azMin : 37;
+      domStore['az-max'] = site.azMax != null ? site.azMax : 112;
+      domStore['parking-alt'] = 185; domStore['escape-perigee'] = 185;
+      domStore['payload-mass'] = 0;
+      resolved.forEach((s, i) => {
+        domStore[`s${i + 1}_dry`] = s.dry; domStore[`s${i + 1}_prop`] = s.prop;
+        domStore[`s${i + 1}_thrust`] = s.thrust; domStore[`s${i + 1}_isp`] = s.isp;
+        domStore[`s${i + 1}_res`] = s.res != null ? s.res : 2;
+      });
+      const wkBase = _tsCollectBase();       // worksheet trade-study path (fixed)
+      const vehBase = _tsVehicleToBase(p);   // orbits / compare-chip path
+      const isS15 = resolved.some(s => s.s15);
+      if (isS15) s15Covered++;
+      checked++;
+      TS_DESTS.forEach(d => {
+        const a = maxPayVia(vehBase, d.arg), b = maxPayVia(wkBase, d.arg);
+        if (a == null && b == null) return;
+        // exact equality expected: identical inputs → identical bisection.
+        if (!(Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 0.5))
+          mism.push(`${p.name} @ ${d.label}: orbits=${a} trade=${b}`);
+      });
+    });
+    ok(`trade-study worksheet path == orbits path for all no-booster presets (${checked} presets)` +
+       (mism.length ? ' — MISMATCH: ' + mism.slice(0, 6).join('; ') : ''), mism.length === 0);
+    // Guard the guard: the sweep must actually exercise S1.5 presets, else a
+    // future _tsCollectBase regression on s15 would slip through unmeasured.
+    ok(`S1.5 presets exercised by the path-equality check (covered ${s15Covered})`, s15Covered >= 3);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // summary
 // ═══════════════════════════════════════════════════════════════════════════
 
