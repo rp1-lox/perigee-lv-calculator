@@ -266,3 +266,238 @@ a fragmentation** — leave as is. (Recorded here so the refactor series does no
 
 Items 1-3 are the spine (they retire the shipped-bug class). 5 runs in parallel. 4, 6, 7
 are follow-on hygiene.
+
+---
+---
+
+# Part 2 — Calculator / Trades / Libraries (2026-07-18)
+
+Read-only audit, same method (grep-driven breadth-first). Part 1 above covered the
+physics/mission side; the user flagged that it "never really touched the LV calculator /
+trade studies stuff." This part covers the worksheet→calculate pipeline (080-168), trade
+studies (165), libraries (050/110/170/210/221/310-350), the orbits page (060/167/230), and
+the spacecraft editor (580/585). Same severity legend (**SHIPPED** / **LATENT**). Module
+numbers verified against `src/js`. **No code changed.**
+
+Precedents cited below (all calculator-side): the S1.5-splitter "shipped 3×" family
+(CLAUDE.md hard invariant), the trades-vs-orbits payload divergence (00b720710), the
+ghost-stage zero-mass bug (`resolvePresetStages` `_missing`), the `buildPresets` shadowing
+incident.
+
+## Executive summary — top 5 calculator-side offenders (severity × blast radius)
+
+1. **S1.5 BECO expansion is triplicated — three hand-kept-parallel implementations with
+   DIVERGENT output shapes.** `calculateWithS15` (150-stage-and-a-half.js:74),
+   `_fleetExpandStages` (560-fleet-editor.js:72), and `_tsExpandStages`
+   (165-trade-study.js:113) each loop stages, call `_s15BecoSplit`, and emit a Ph.1/Ph.2
+   pair — but produce **different records**: 150 wraps every field in `mathValue()` and
+   appends a `label`; 560 stamps `_src/_phase/_err` provenance and pushes the raw stage on
+   error; 165 emits bare `{dry,prop,thrust,isp,res}` and *falls back to the unsplit stage*
+   on error (silently under-modeling an invalid S1.5). This is the **exact bug CLAUDE.md
+   says "shipped twice / a third time"** — every splitter is a place a new consumer must
+   rediscover the obligation, and 165's comment (:39-44) is a tombstone for the third
+   shipping (worksheet trades diverged from the Orbits calculator). C4 unified the *field
+   carriage* (`stageCarryS15`), NOT the *expansion*. **SHIPPED ×3.** Blast radius: 3 (any
+   new consumer of vehicle stage data = 4). Cost: **S–M** (one `stageExpandS15(stages)`
+   boundary + a grep gate). Highest severity on this side.
+
+2. **The "vehicle → physics args" base bundle is assembled 3 independent ways.** The shape
+   `{fairingM,fairingJ,siteLat,azMin,azMax,stages,boosterArg,parkingAlt,payload}` is built
+   by `_tsCollectBase` (165:32, from the live DOM), `_tsVehicleToBase` (165:404, from a
+   saved/preset object), and a **fourth**, inline read inside the frozen `calculate()`
+   (160). 167's orbit-page path and every trade sweep depend on these staying byte-aligned
+   with `calculate()`; when they drifted, the **trades-vs-orbits payload divergence
+   (00b720710)** shipped. No shared "collect base spec" boundary; the DOM-vs-object split
+   is copied field-by-field including the S1.5 carry (:38-47 vs :405) and the
+   booster-precedence logic (`boosterGroups` vs single group, duplicated at 165:408-414 and
+   the live `lvBoosterGroups`). **SHIPPED.** Blast radius: ~4 (+150, +167). Cost: **M**.
+
+3. **The results panel is rendered by two independent builders that can (and already do)
+   drift.** `renderResults()` inside the frozen `calculate()` (160) and
+   `orbCalcSelectedVehicle()` (167:92-156) each hand-assemble the same panel — same
+   `result-row` rows, same STG ΔV bars, same breakdown list — from the same `lvPerformance`
+   result object. 167 already uses a *different* `fM` (see #4) than the worksheet path, so
+   the "Est. Max Payload" line can format differently depending on which vehicle selector
+   drove it. `condenseResultsPanel()` (168) then post-processes *both*, and
+   `calculateWithS15` (150:165-176) does string-replace surgery on the innerHTML of
+   whichever one ran. Three layers editing one panel's HTML by hand. **LATENT** (cosmetic
+   drift observed, no numeric bug). Blast radius: 3 (150/160/167/168). Cost: **M**.
+
+4. **Formatter fragmentation with a same-name / different-meaning collision.**
+   `290-shared-formatters.js` defines global `fM`/`fT` — but `fM` there means
+   *tonnes-or-kg* (`v>=1000?(v/1000).toFixed(0)+'t':v+' kg'`), while `orbCalcSelectedVehicle`
+   (167:122) defines a **local** `fM` meaning *comma-grouped kg*
+   (`Math.round(v).toLocaleString()+' kg'`). Two functions, one name, incompatible output,
+   one shadowing the other by scope. Add ~348 inline `toFixed()`/`toLocaleString()` sites
+   across 46 modules and local `fD`/`fS`/`fD` redefinitions (167:121-123, 121-elsewhere)
+   and there is no single mass/ΔV/Isp/time formatter. **LATENT** (footgun, not yet a bug).
+   Blast radius: ~46. Cost: **M** (mechanical, but wide).
+
+5. **Five HTML-escape helpers, in two incompatible strengths.** `_tsEsc` (165:273) and
+   `_orbVehEsc` (167:11) are **byte-identical** 4-char escapers (`& < > "`). `_mrEsc`
+   (577:7) is the mission-report variant. But `esc` in 170-save-load-lv.js:149 and `esc` in
+   220-launch-sites.js:477 are **3-char** (`& < >` only — they do NOT escape `"`), so a
+   user vehicle/site name containing a double-quote interpolated into an HTML *attribute*
+   is a latent injection / broken-markup vector. Part 1 §8 counted the mission-side key
+   sprawl; this is the calculator-side escaper sprawl. **LATENT** (needs a quote in a saved
+   name to trigger). Blast radius: 5 helpers across 5 modules. Cost: **S** (one `escHtml`,
+   delete the rest).
+
+---
+
+## P2.1 — S1.5 BECO expansion (triplicated splitter)
+
+### Duplicate table
+| Impl | File:line | Input read | Output record | Error behavior |
+|---|---|---|---|---|
+| `calculateWithS15` | 150:91-111 | `stageStore` (DOM strings, via `mathValue`) | `{dry,prop,thrust,isp,res}` + parallel `stageLabels[]` | renders error to `#results-panel`, aborts |
+| `_fleetExpandStages` | 560:72-85 | fleet `stageData` (numbers) | `{dry,prop,thrust,isp,res,_src,_phase}` | pushes raw stage w/ `_err`, continues |
+| `_tsExpandStages` | 165:113-126 | base `stages` (numbers) | bare `{dry,prop,thrust,isp,res}` | pushes **unsplit** stage, continues |
+
+All three call the single `_s15BecoSplit` (150:15) — the *math* is unified; the *iteration
++ record assembly + error policy* is not. The three error policies are genuinely different
+behavior, not just style: 165 silently under-models an invalid S1.5 vehicle as a single
+stage, which is precisely how a divergence hides.
+
+### Converters / copies
+Each splitter is its own converter; there is no shared one. C4's `stageCarryS15` unified the
+*carriage* of the `s15` sextet between stage records (gate-guarded), but the *expansion*
+(sextet → two virtual stages) has no boundary and no gate.
+
+### Severity / blast radius
+**SHIPPED ×3** (CLAUDE.md: "this bug shipped twice"; 165:44 documents the third). Any new
+consumer of vehicle stage data that forgets to expand produces wrong ΔV for every S1.5
+vehicle. Blast radius 3 today.
+
+### Proposal
+One `stageExpandS15(stages, {labels?, provenance?})` in 140/150 returning a canonical
+virtual-stage array (+ optional parallel label/provenance side-array so 150's relabel and
+560's `_phase` survive). All three call sites route through it; add a source-grep gate
+(same pattern as C4's `s15_*` dot-assign guard) failing the build if any module outside the
+boundary calls `_s15BecoSplit` directly. **Cost: S–M.** Do right after C4 — it is the other
+half of the same shipped-bug class.
+
+## P2.2 — Vehicle → physics-args base bundle (assembled 3×)
+
+Canonical-ish shape `{fairingM,fairingJ,siteLat,azMin,azMax,stages,boosterArg,parkingAlt,
+payload}`. Producers:
+- `_tsCollectBase` (165:32) — reads the live DOM (`gv('s${n}_dry')` …), carries S1.5 from
+  `stageStore` (:45-46).
+- `_tsVehicleToBase` (165:404) — reads a saved/preset object via `resolvePresetStages` +
+  `resolvePresetBooster`, re-derives booster precedence (:408-414), defaults site/parking
+  inline (:417-419).
+- `calculate()` (160, FROZEN) — its own inline DOM read of the same fields; the two 165
+  builders exist to *reproduce* it. `destOnOrbitDV` (145) was extracted precisely because
+  of this pin, but the stage/booster/fairing/site read was not.
+
+Notable seam inside the bundle: **`isp` bypasses expression parsing** everywhere. `gv()` /
+`mathValue()` run `parseMathExpression` for dry/prop/thrust/res, but isp is read as
+`parseFloat(document.getElementById(...).value)||1` in both `_tsCollectBase` (165:38) and
+`calculateWithS15` (150:108) — so "290+5" works in the Dry field but not the Isp field.
+LATENT inconsistency.
+
+**SHIPPED** (00b720710). Proposal: extract `collectBaseSpec(source)` where `source` is
+`{kind:'dom'}` or `{kind:'vehicle', obj}` — one field list, one booster-precedence rule,
+one S1.5 carry, one isp-parse decision. `calculate()` stays frozen but the two 165 builders
+collapse to one. **Cost: M.**
+
+## P2.3 — Results-panel double render
+
+`renderResults()` (in frozen 160) and `orbCalcSelectedVehicle` (167:133-149) independently
+emit the same panel from the same `lvPerformance` result. `condenseResultsPanel` (168)
+post-processes both; `calculateWithS15` (150:167-176) string-replaces STG labels in
+whichever ran. The 167 copy has already drifted (local `fM`, hard-coded `✓ YES`/`✗ NO`
+glyphs, its own feasibility threshold `margin >= -50` vs the worksheet's). **LATENT.**
+Proposal: a single `renderPerformancePanel(res, meta)` that both the frozen-path wrapper
+and 167 call; since 160 is frozen, put it in 168 (already the post-processor) and have 167
+call it directly instead of hand-building. **Cost: M.** Depends on #4 (shared formatter) to
+be a clean win.
+
+## P2.4 — Formatters
+
+| Name | File | Meaning | Collision |
+|---|---|---|---|
+| `fM` | 290:4 (global) | `>=1000 → t`, else `kg` | — |
+| `fM` | 167:122 (local) | `toLocaleString kg` | **shadows 290's `fM`, different output** |
+| `fT` | 290:3 (global) | `>=1000 → MN`, else `kN` | — |
+| `fD`,`fS` | 167:121,123 (local) | km/s, s | re-defined per builder |
+
+Plus ~348 inline `toFixed`/`toLocaleString` across 46 modules (mass, ΔV, Isp, T:W, %,
+burn-time all formatted ad hoc). No canonical `fmtMass/fmtDv/fmtIsp/fmtPct`. **LATENT** but
+the same-name collision is a genuine footgun (a future edit to 290's `fM` silently does
+nothing on the orbits page). Proposal: a `fmt.*` namespace in 290; migrate the high-traffic
+mass/ΔV sites first. **Cost: M** (wide, low-risk).
+
+## P2.5 — HTML escapers
+
+| Helper | File:line | Escapes | Note |
+|---|---|---|---|
+| `_tsEsc` | 165:273 | `& < > "` | canonical-strength |
+| `_orbVehEsc` | 167:11 | `& < > "` | **byte-identical to `_tsEsc`** |
+| `_mrEsc` | 577:7 | `& < > "` (+ multiline) | mission report |
+| `esc` | 170:149 | `& < >` | **no `"` — attribute-unsafe** |
+| `esc` | 220:477 | `& < >` | **no `"` — attribute-unsafe** |
+
+Vehicle names (170) and launch-site names (220) are user-authored and interpolated into
+markup; the 3-char escapers are attribute-context-unsafe. **LATENT** (needs a `"` in a saved
+name). Proposal: one `escHtml(s)` (4-char) exported early (000/010), delete the other four.
+**Cost: S.** Mirrors Part 1's "one boundary" theme.
+
+## P2.6 — On-orbit ΔV re-implemented inside trades
+
+`destOnOrbitDV` (145) is the pinned canonical destination-ΔV. Trades adds **two partial
+replicas**: `_tsOnOrbitDVCircular` (165:58) and `_tsOnOrbitDVEscapeC3` (165:83), each a
+"term-for-term replica" (their own comments) of a branch of `destOnOrbitDV`. They exist for
+the sweep's per-point speed and are gate-pinned against `destOnOrbitDV` (165:80-82), so this
+is the *disciplined* version of duplication — but it is still two more places to edit if
+145's model changes, and 145 itself is a pinned transcription of the frozen `calculate()`.
+So the destination-ΔV logic now lives in **three** synchronized copies (160 → 145 → 165).
+**LATENT** (gate-pinned). Proposal: have the sweep call `destOnOrbitDV` directly for the
+circular/escape points (profile first — the replicas were a speed optimization; confirm the
+sweep actually needs them before deleting). **Cost: S**, low priority — the gate holds.
+
+## P2.7 — Stage-record dialects (the mass/prop gap C4 left open)
+
+Part 1 §4 named this and C4 closed only the S1.5-sextet half. The residual on the
+calculator side: `stageStore` holds **DOM string values** (080:6 copies `el.value` verbatim),
+while `resolvePresetStages`/library entries (330:21) and fleet `stageData` hold **numbers**.
+`_s15BecoSplit` defensively `parseFloat`s every field (150:17-21) *because* it may be handed
+either. `_tsCollectBase` re-parses via `gv()`; `_tsVehicleToBase` assumes numbers. So "is a
+stage's `dry` a string or a number?" depends on provenance, and every consumer guards (or
+forgets to). **LATENT** (guarded by defensive parsing). Proposal: `stageMassNormalize` at
+the DOM→store boundary (080) so `stageStore` holds numbers like every other layer; folds
+into Part 1 §4's `StageMass` shape. **Cost: M.**
+
+## P2.8 — Things that are already unified (recorded so the series doesn't re-audit)
+
+- **Metric definitions** — `TS_METRICS` + `TS_METRIC_ORDER` (165:95-103) are a single
+  source; `TS_VARS` (165:67) likewise. Good model. `_tsMetricAt` (165:135) computes all six
+  from one `lvPerformance` call — no per-metric duplication. **Not a fragmentation.**
+- **Stage resolution / ghost-stage guard** — `resolvePresetStages`/`resolvePresetBooster`/
+  `findStageByName` (330) are single-sourced; the `_missing` ghost-stage sentinel (330:20)
+  is gate-guarded. **Not a fragmentation.**
+- **Library card factories** — `libCardNode` (221:110) dispatches to `makeCard` (210:1667,
+  stages) and `libMakeVehicleCard` (221:57, vehicles); 221's header comment explicitly says
+  it *reuses* the existing factories rather than re-rolling. The spacecraft/comp-view cards
+  (270:128 `makeCompCard`, 580) are a genuinely different layout, not a duplicate of the
+  library card. Card rendering is **less duplicated than feared** — leave it.
+- **No file-scope function shadowing found** — a `grep | uniq -d` over all top-level
+  `function` names returned empty; the `buildPresets` shadowing was a *local* reassignment,
+  and no analogous top-level collision exists on this side.
+
+## Proposed refactor order (Part 2), with dependencies on the C-series
+
+1. **P2.1 `stageExpandS15` boundary + gate** — closes the other half of the shipped-bug
+   class C4 started. Independent of the orbit/C1-C2 work. **Do first.** (S–M)
+2. **P2.5 `escHtml`** — trivial, high-hygiene, unblocks nothing but removes the attribute
+   XSS latent. Can land anytime. (S)
+3. **P2.2 `collectBaseSpec`** — depends on P2.1 (base.stages should already be
+   expand-ready). Retires the trades-vs-orbits divergence class. (M)
+4. **P2.4 `fmt.*` + P2.3 shared panel renderer** — P2.3 depends on P2.4 for a clean formatter
+   story; both depend on nothing in the C-series. (M each)
+5. **P2.7 `stageMassNormalize`** — folds into Part 1 §4 `StageMass`; do together. (M)
+6. **P2.6 dedupe on-orbit ΔV** — lowest priority, gate holds; do opportunistically. (S)
+
+P2.1 and P2.5 are self-contained quick wins. P2.2/P2.3/P2.4 are the "one boundary per
+concept" spine for the calculator side, mirroring Part 1's §1-§2 spine. P2.7 explicitly
+continues Part 1 §4 / C4.
