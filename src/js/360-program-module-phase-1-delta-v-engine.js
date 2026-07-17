@@ -37,19 +37,27 @@ const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centr
 // -cos(node)*sin(obliquity), cos(obliquity)] in the WORLD (ecliptic) frame —
 // i.e. "obliquity" plays the role of an orbital inclination of the body's
 // equator against the ecliptic, "node" the role of that equator's RAAN.
-// v1: node=0 for every entry (each body's equinox direction is taken to
-// coincide with the ecliptic +x reference direction — true by construction
-// for Earth/J2000; an approximation, undocumented real value, for the
-// others, same "hand-tuned constant" category as other MATH.md critiques).
-// Moon: 6.68 deg is the figure this project is using for the lunar pole's
-// obliquity TO THE ECLIPTIC (not to Earth's equator, and not the ~5.14 deg
-// inclination of the Moon's ORBIT to the ecliptic — a different angle from a
-// different vector). The real lunar pole precesses on an 18.6-year cycle
-// (Cassini's laws); this is a STATIC v1 value — see MATH.md §7al.
+// node values (SIGN BUG FIXED 2026-07-18, MATH.md critique 120): the v1
+// claim that node=0 was "true by construction for Earth/J2000" was WRONG
+// under this exact formula — node 0 yields pole (0, -sin eps, cos eps), the
+// MIRROR of the real north celestial pole (0, +sin eps, cos eps) at ecliptic
+// longitude 90. The whole seam was reflected: every self-consistency check
+// passed (rings/gizmo/plane-match all mirrored together) but external truth
+// failed — the Moon's inclination-to-equator came out phase-INVERTED against
+// the real standstill calendar (app said 18.3 deg in 1969 when Apollo's
+// near-coplanar 28.6-deg launches happened; 28.6 in 2015's minor
+// standstill). Under this convention the correct node = (pole ecliptic
+// longitude) + 90:
+//   Earth  -> pole lon 90.0  -> node 180   (anchored by the standstill calendar)
+//   Mars   -> pole lon 352.9 -> node 82.9  (IAU pole RA/dec 317.68/52.89)
+//   Saturn -> pole lon 79.5  -> node 169.5 (IAU pole RA/dec 40.59/83.54)
+//   Moon   -> UNANCHORED static v1 (real pole precesses with the 18.6-yr
+//             Cassini cycle; 6.68 deg obliquity-to-ecliptic is itself a
+//             hand-tuned static stand-in — left at node 0, documented debt).
 const PROG_BODY_POLES = {
-  Earth:  { obliquity_deg: 23.44, node_deg: 0 },
-  Mars:   { obliquity_deg: 25.19, node_deg: 0 },
-  Saturn: { obliquity_deg: 26.73, node_deg: 0 },
+  Earth:  { obliquity_deg: 23.44, node_deg: 180 },
+  Mars:   { obliquity_deg: 25.19, node_deg: 82.9 },
+  Saturn: { obliquity_deg: 26.73, node_deg: 169.5 },
   Moon:   { obliquity_deg: 6.68,  node_deg: 0 },
 };
 /** Unit pole vector (world/ecliptic frame) for `body`. Bodies absent from

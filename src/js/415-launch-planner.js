@@ -368,7 +368,19 @@ function progPlanLaunchToDestination(args) {
  * authored equator orbit" for this call site to route through.
  */
 function progMoonPlaneAt(epochJD, t_s) {
-  const st = progBodyLocalEphemState('Moon', t_s || 0);
+  // The canonical ephemeris (progBodyLocalEphemState) evaluates at the GLOBAL
+  // program epoch + MET (the one-position-source invariant — epoch lives on
+  // PROG_ACTIVE_PROGRAM, MET is the offset). Honor an explicit epochJD argument
+  // by folding (epochJD - globalEpoch) into the MET so a caller can query the
+  // plane at any absolute epoch WITHOUT mutating the global — the argument used
+  // to be silently ignored (dead), which also masked a latent bug: a caller
+  // passing an epochJD different from the global got the GLOBAL epoch's plane.
+  // When epochJD is absent/non-finite, fall back to the global epoch (met=t_s,
+  // byte-identical to the pre-fix behavior for every normal caller that already
+  // passes epochJD == the program epoch). See MATH.md §7al / critique 120.
+  const base = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const met = (t_s || 0) + (isFinite(epochJD) ? (epochJD - base) * 86400 : 0);
+  const st = progBodyLocalEphemState('Moon', met);
   const h = physCross(st.r, st.v);
   const hMag = physMag(h);
   if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };

@@ -1270,9 +1270,20 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     ok('P4 shooter: returns a solution record for LEO→TLC', !!sol);
     ok(`P4 shooter: Earth→Moon converged (miss ${sol && sol.missKm.toFixed(0)} km < SOI/3 ${(soiMoon / 3).toFixed(0)} km) in ${sol && sol.iters} iters`,
       !!sol && sol.converged && sol.missKm < soiMoon / 3 && sol.iters <= 12);
-    // the solved aim actually enters the Moon's SOI when propagated normally
+    // the solved aim actually enters the Moon's SOI when propagated normally.
+    // §20/critique-120: the shooter aims via aimBurnEq, which rotates the
+    // AUTHORED equatorial (inc, raan) ring into the WORLD frame through
+    // orbitWorldElements before building the burn state — so this verification
+    // MUST reconstruct that same world ring (fromOrbit is equatorial inc 0, the
+    // solved sol.raan is the equatorial RAAN root). Pre-fix this rebuilt a bare
+    // equatorial inc=0/raan=0 WORLD ring (no seam), which only coincidentally
+    // matched under the mirrored pole; under the corrected pole the authored
+    // inc0 ring maps to world {inc 23.44, lan 180} and THAT is what the shooter
+    // actually flew. Rebuilding the true world ring, the solved aim enters SOI
+    // (closest ~954 km); the bare-ring rebuild does not (closest ~362,583 km).
     if (sol && sol.converged) {
-      const bs = physAimBurnState('Earth', r1, sol.theta, sol.pitch, dvHoh);
+      const wp = orbitWorldElements({ body: 'Earth', inc_deg: 0, lan_deg: (sol.raan || 0) * 180 / Math.PI });
+      const bs = physAimBurnState('Earth', r1, sol.theta, sol.pitch, dvHoh, wp.incDeg * Math.PI / 180, 0, wp.lanDeg * Math.PI / 180);
       const res = physPropagateSegment({ r: bs.r, v: bs.v }, 86400 * 5, 86400 * 5 + 1.5 * 430000,
         { center: 'Earth', bodies: ['Earth', 'Moon', 'Sun'] }, { maxSamples: 128 });
       ok('P4 shooter: solved aim enters the Moon SOI', res.events.some(ev => ev.type === 'soi' && ev.to === 'Moon'));
@@ -1316,44 +1327,35 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // The explicit incDeg=0 solve stays in the old bands (perigee ≈ 195 km
   // with the scanned seed).
   //
-  // §20 O1b RE-GOLDEN (2026-07-16, honest non-convergence, NOT a regression):
-  // physFreeReturnSolve's default 28.5° case was, pre-O1b, the SAME bug class
-  // documented for physShootLegAim's Apollo leg in §7al's "measured impact"
-  // section — the authored 28.5° was fed straight into physAimBurnState as a
-  // WORLD-frame inclination (i.e. an ECLIPTIC-referenced 28.5° ring). O1b
-  // routes it through progEqToWorldElements like every other site in this
-  // audit, so the SAME authored 28.5° now becomes a 51.940° WORLD ring
-  // (Earth's real equator-to-ecliptic obliquity, verified: progEqToWorldElements
-  // ('Earth', 28.5, 0) = {inc_deg: 51.940...}). This solver has NO RAAN
-  // degree of freedom (fixed raan=0, fixed t0=0 in this test) — unlike
-  // physShootLegAim/physSolveNrhoTransfer, which solve for RAAN against the
-  // Moon's actual instantaneous position, physFreeReturnSolve's deterministic
-  // apogee x phi seed lattice was hand-tuned (2026-07-10 comment above) to the
-  // OLD (wrong, ecliptic-28.5°) ring's specific free-return corridor. At the
-  // physically-correct 51.940° world ring the real corridor exists (measured,
-  // scratchpad diag4.js: a coarse 96-pt phi x 380-480Mm apogee scan finds a
-  // ~1,088 km lunar approach near apo=480,000 km / phi=6.218 rad) but sits
-  // OUTSIDE the current hand-tuned lattice's effective reach — widening the
-  // lattice (scratchpad diag5/6/7.js, up to 72 pts x 13 apogees) still could
-  // not out-compete a false-positive "returns but 250,000+ km off" seed the
-  // existing scoreOf() picks first (periAlt-only scoring has no way to prefer
-  // a close Moon flyby that DOESN'T yet cross back over one that technically
-  // "returns" at a wildly wrong distance) — genuinely re-tuning this heuristic
-  // for the new geometry is a real solver project, out of O1b's scope (closing
-  // the obliquity seam, not rebuilding the free-return seed search). Per the
-  // same precedent §7al set for the Apollo TLI leg: report the honest,
-  // measured non-convergence rather than silently re-pinning or forcing a fix.
-  // The explicit incDeg=0 path (no tilt applied, ring stays ecliptic) is
-  // BYTE-IDENTICAL to pre-O1b and still converges — confirms this is the
-  // seam moving a real geometric quantity, not a general regression.
+  // POLE SIGN FIX (2026-07-18, MATH.md critique 120) — GOOD-NEWS FLIP of the
+  // O1b non-convergence, and RESOLUTION of the free-return seed-lattice debt
+  // (critique 118). BACKGROUND: the §20 O1b pin below used to assert honest
+  // NON-convergence for the default 28.5°-authored ring. Its reasoning was
+  // correct given the geometry it saw, but that geometry was itself wrong: the
+  // pole node was MIRRORED (node=0), so the authored 28.5° ring rotated to a
+  // WORLD ring of {inc 51.940°, lan 0} whose free-return corridor sat outside
+  // the hand-tuned apogee×phi seed lattice. The pole fix (node 180) leaves the
+  // inclination MAGNITUDE identical (still 51.940°) but flips the world LAN to
+  // 180 (progEqToWorldElements('Earth',28.5,0) = {inc 51.940, lan 180}). That
+  // 180° node flip is the mirror correction — and it rotates the corridor back
+  // INTO the existing seed lattice's reach, so the SAME solver now CONVERGES
+  // with NO lattice retune: measured periAlt 353.9 km, dv 3148.4 m/s, met
+  // 2460.5 s (well inside the [0,2000] km return-perigee band). The
+  // seed-lattice-retune "real solver project" flagged in critique 118 is
+  // therefore NOT needed — the debt was an artifact of the mirrored seam, and
+  // closing the seam closed the debt. The explicit incDeg=0 path (no tilt,
+  // ecliptic ring — untouched by the pole node) still converges, unchanged.
   {
     const fr = physFreeReturnSolve(185, 0, {});
-    ok('O1b free return: solve does not throw / returns a shaped record for the default 28.5° (now 51.94° world) ring',
+    ok('critique-120 free return: solve returns a shaped record for the default 28.5° (51.94° world) ring',
       !!fr && typeof fr.converged === 'boolean' && fr.periAlt_km != null && fr.dv_ms > 0);
-    ok('O1b free return: honest non-convergence at the default 28.5°-authored ring post-obliquity-seam (documented above, not a silent re-pin)',
-      !!fr && fr.converged === false);
+    // FLIPPED from converged:false — the pole node flip (0->180) rotated the
+    // free-return corridor back into the seed lattice's reach (critique 120 /
+    // 118-resolved). periAlt ~354 km, a physical low-perigee free return.
+    ok('critique-120 free return: default 28.5°-authored ring now CONVERGES post-pole-fix (seed-lattice debt resolved, no retune needed)',
+      !!fr && fr.converged === true && fr.periAlt_km >= 0 && fr.periAlt_km <= 2000);
     const fr2 = physFreeReturnSolve(185, 0, {});
-    ok('O1b free return: still deterministic (identical repeat solve, even though non-convergent)',
+    ok('critique-120 free return: still deterministic (identical repeat solve)',
       !!fr && !!fr2 && fr.met_s === fr2.met_s && fr.dv_ms === fr2.dv_ms && fr.periAlt_km === fr2.periAlt_km);
     const fr0 = physFreeReturnSolve(185, 0, {}, 0);
     ok(`R3/O1b free return: explicit incDeg=0 (no tilt applied — untilted ring) still converges in the ecliptic (perigee ${fr0 && fr0.periAlt_km != null ? fr0.periAlt_km.toFixed(0) : '?'} km) — proves the seam, not a general regression, moved the default case`,
@@ -2665,14 +2667,17 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // rotated into Earth's equator frame internally before the DLA/LAN algebra.
   // These golden vectors are re-expressed accordingly; see MATH.md §7al for
   // the re-derivation and re-pin cause.
-  const EARTH_EPS = 23.44 * Math.PI / 180;
-  // world-frame vector whose EQUATORIAL-frame representation is [x,y,z]
-  // (Earth, node=0: xEq=[1,0,0], yEq=[0,cosE,sinE], zEq=[0,-sinE,cosE]).
-  const eqToWorldVec = ([x, y, z]) => [
-    x,
-    y * Math.cos(EARTH_EPS) - z * Math.sin(EARTH_EPS),
-    y * Math.sin(EARTH_EPS) + z * Math.cos(EARTH_EPS),
-  ];
+  // World-frame vector whose EQUATORIAL-frame representation is [x,y,z], built
+  // CONVENTION-PROOF through physEqBasis('Earth') so it tracks PROG_BODY_POLES
+  // rather than hardcoding a basis. This replaces the pre-fix hardcode
+  // (node=0: xEq=[1,0,0], yEq=[0,cosE,sinE], zEq=[0,-sinE,cosE]) which was the
+  // MIRRORED basis (MATH.md critique 120 — the pole sign bug). The invariant is
+  // unchanged: a vInf lying in Earth's equator plane still has dla~0, etc. — the
+  // fixture just constructs its inputs from the corrected basis now.
+  const _earthEqB = physEqBasis('Earth');
+  const eqToWorldVec = ([x, y, z]) => physAdd(
+    physAdd(physScale(_earthEqB.xEq, x), physScale(_earthEqB.yEq, y)),
+    physScale(_earthEqB.zEq, z));
 
   // DLA: a vInf purely in EARTH'S EQUATOR plane (z_eq=0) -> dla ~ 0.
   const flat = progIdealParkingOrbit({ vInfVec: eqToWorldVec([3, 4, 0]), siteLatDeg: 28.5, altKm: 185 });
@@ -3454,11 +3459,24 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // N2 re-pin (2026-07-14): old band 3.0-5.5 km/s (old seed apolune ~60,000
   // km). New measurement against the true-9:2 nrho-nominal (apolune
   // ~64,000-70,000 km, more eccentric): mcc_ms=151.2, ins_ms=4206.3,
-  // total=7500.5 m/s (7.5 km/s) — cause: inserting into a bigger, more
-  // eccentric NRHO costs a genuinely bigger insertion burn; MCC stayed small
-  // (still < 700 m/s, unchanged assertion below).
-  ok('5a: total dv (TLI+MCC+insertion) in a loose ~3.0-8.0 km/s band (approximate)', total5a > 3000 && total5a < 8000);
-  ok('5a: MCC is a genuinely small correction (< 700 m/s at the canonical epoch)', s5a && s5a.mcc_ms > 0 && s5a.mcc_ms < 700);
+  // total=7500.5 m/s (7.5 km/s).
+  // POLE SIGN FIX re-pin (2026-07-18, MATH.md critique 120): the authored 28.5°
+  // LEO's WORLD node flipped 0->180 (inclination magnitude unchanged, 51.940°)
+  // when Earth's pole node was corrected. That repositions the departure plane
+  // relative to the (fixed-in-world) nrho-nominal target, so the solved
+  // Stage-1/Stage-2 split shifted: ins_ms 4206.3 -> 3128.4 (the flipped node
+  // ALIGNS the arrival plane better -> cheaper insertion) while mcc_ms
+  // 151.2 -> 2454.2 (the fixed-|Δv| Stage-1 departure now needs a larger
+  // mid-course to reach the repositioned target) — net total 7500.5 -> 8725.6
+  // m/s. CROSS-CHECK this is corrected physics, NOT a double-application
+  // blowup: the solve still CONVERGES tightly (miss 46.99 km, deep inside the
+  // 2,000 km window — a double-application would blow the miss to thousands of
+  // km, cf. the Apollo leg 129k->217k km in §7al), and the reality-anchor gate
+  // block (progMoonPlaneAt 1969/2015/2025) independently confirms the pole is
+  // now correct. The MCC is no longer "small" — the assertion is re-pinned to a
+  // bounded band and reworded accordingly.
+  ok('5a: total dv (TLI+MCC+insertion) in a loose ~5.0-10.0 km/s band (approximate)', total5a > 5000 && total5a < 10000);
+  ok('5a: MCC is a bounded mid-course correction (< 3,000 m/s at the canonical epoch, post-pole-fix)', s5a && s5a.mcc_ms > 0 && s5a.mcc_ms < 3000);
   ok('5a: carries a note either way', s5a && s5a.hasNote);
   ok('5a: gate runtime stays sane (<15s for one full cold solve)', nrhoSolve.elapsedMs < 15000);
   // §20 O1b (2026-07-16): 565-physics-nrho.js's RAAN-solve cone-axis equation
@@ -3479,7 +3497,11 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // fixed without also fixing the state-construction site, or reverted to
   // needing a materially different dv/tof band).
   ok('O1b regression guard: Gateway-class NRHO transfer STILL converges post-obliquity-seam (no double-application blowup)', s5a && s5a.converged === true);
-  ok('O1b regression guard: miss stays in a tight band around the pre-seam value (101-108 km, not a multi-thousand-km blowup)', s5a && s5a.missKm > 50 && s5a.missKm < 500);
+  // POLE SIGN FIX re-pin (2026-07-18, critique 120): the world-node flip (see
+  // the total-dv comment above) moved the converged miss from 101.06 km to
+  // 46.99 km — still a tight, sub-500-km lunar approach (NOT a multi-thousand-km
+  // blowup), just a different point on the corrected departure geometry.
+  ok('O1b regression guard: miss stays in a tight band (~20-200 km post-pole-fix, not a multi-thousand-km blowup)', s5a && s5a.missKm > 20 && s5a.missKm < 200);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5154,6 +5176,50 @@ ok('_missionMigrateLaunchOrbitEntry: legacy-shaped e.orbit field-renamed to cano
     return picked && picked.s15 === true && picked.s15_sust_thrust === 270 && picked.s15_boost_isp === 282 &&
       full.dry === 100 && noS15 === null;
   })());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REALITY ANCHOR — Moon plane inclination-to-equator vs the standstill calendar
+// (MATH.md critique 120, 2026-07-18)
+// ═══════════════════════════════════════════════════════════════════════════
+// The lesson of the mirrored-pole bug: every SELF-consistency check passed
+// while the whole obliquity seam was reflected — only an EXTERNAL truth anchor
+// caught it. These pins are that anchor. The Moon's inclination TO EARTH'S
+// EQUATOR oscillates ~18.3-28.6° over the 18.6-yr nodal cycle: it is ~28.6° at
+// a MAJOR standstill (Moon's node aligned so ecliptic-inclination ~5.15° ADDS
+// to the 23.44° obliquity) and ~18.3° at a MINOR standstill (subtracts). The
+// pre-fix (mirrored-pole) app read these PHASE-INVERTED — 18.3° in 1969 (when
+// Apollo's near-coplanar ~28.6° launches prove the true figure was 28.6°) and
+// 28.6° at the 2015 minor standstill. Threaded exactly as the app threads it:
+// PROG_ACTIVE_PROGRAM.epochJD carries the epoch, progMoonPlaneAt's epochJD
+// argument (now LIVE — it folds (epochJD - globalEpoch) into the MET, see
+// 415-launch-planner.js / critique 120) agrees. Both are set here so the pin
+// guards both threading paths.
+{
+  const _savedActive = sandbox.PROG_ACTIVE_PROGRAM;
+  const moonIncAt = (jd) => {
+    sandbox.PROG_ACTIVE_PROGRAM = { epochJD: jd };
+    return progMoonPlaneAt(jd, 0).inc_deg;
+  };
+  // 1969-07-16 (Apollo 11 launch), a MAJOR standstill -> ~28.6° (Apollo anchor).
+  const inc1969 = moonIncAt(2440419.06);
+  ok(`reality anchor: Moon inc-to-eq 1969-07-16 in [28.0,28.8] (Apollo major-standstill anchor) — got ${inc1969.toFixed(3)}`,
+    inc1969 >= 28.0 && inc1969 <= 28.8);
+  // 2015-06, a MINOR standstill -> ~18.3°.
+  const inc2015 = moonIncAt(2457205);
+  ok(`reality anchor: Moon inc-to-eq 2015-06 in [18.1,18.7] (minor standstill) — got ${inc2015.toFixed(3)}`,
+    inc2015 >= 18.1 && inc2015 <= 18.7);
+  // 2025-01, approaching a MAJOR standstill -> ~28.6°.
+  const inc2025 = moonIncAt(2460680);
+  ok(`reality anchor: Moon inc-to-eq 2025-01 in [28.0,28.8] — got ${inc2025.toFixed(3)}`,
+    inc2025 >= 28.0 && inc2025 <= 28.8);
+  // The exact component whose SIGN was wrong: Earth's north pole must point to
+  // POSITIVE ecliptic-y (real north celestial pole ~ (0, +sin ε, cos ε)); the
+  // mirrored pole had y = -sin ε < 0 (ecliptic longitude 270 instead of 90).
+  const earthPole = physBodyPoleAt('Earth');
+  ok(`reality anchor: Earth pole y-component > 0 (the sign that was mirrored) — got ${earthPole[1].toFixed(4)}`,
+    earthPole[1] > 0);
+  sandbox.PROG_ACTIVE_PROGRAM = _savedActive;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
