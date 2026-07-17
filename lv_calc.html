@@ -389,7 +389,7 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    authored in literal CSS px and never counter-scale. pointer-events:none on
    the root lets world-layer pan/drag through; interactive symbols opt back in
    individually via inline style="pointer-events:auto" (see 574's hit circles). */
-.traj-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.traj-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;} /* MUST stack above .traj-svg (z-index:1) — the overlay hosts the gizmo handles/labels; below the world svg they are covered by the globe and unreachable by real pointer hit-testing (user-reported 2026-07-17) */
 .traj-footer{flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--text-dim);text-align:right;padding:4px 2px 0;}
 /* Scrubbable-MET bar (backlog item 3) — slim track above the footer, event
    ticks + draggable thumb + T+ readout, theme vars only per the theming rule. */
@@ -31795,9 +31795,16 @@ function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
     if (rMean > 0 && mu > 0) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * met) % (2 * Math.PI);
-      const incRad = ((o.inclination || 0) * Math.PI) / 180;
-      const raan = o.lan_deg != null ? (o.lan_deg * Math.PI) / 180 : (o.lan != null ? (o.lan * Math.PI) / 180 : 0);
-      const bs = physAimBurnState(body, rMean, theta, 0, 0, incRad, 0, raan);
+      // §20 seam: same equator->world conversion as _trajGizmoOrbitNodeAt
+      // (5745-hover) — authored elements fed to physAimBurnState as if
+      // world-frame put passive event nodes off their (seam-rotated) rings.
+      let incDeg = o.inclination || 0;
+      let lanDeg = o.lan_deg != null ? o.lan_deg : (o.lan != null ? o.lan : 0);
+      if (typeof progEqToWorldElements === 'function') {
+        const wEl = progEqToWorldElements(body, incDeg, lanDeg);
+        if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
+      }
+      const bs = physAimBurnState(body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
       if (bs && bs.r) {
         const q = _trajProj3(bs.r[0] * scale, bs.r[1] * scale, (bs.r[2] || 0) * scale);
         if (isFinite(q.x) && isFinite(q.y)) return { x: ox + q.x, y: oy + q.y };
@@ -33821,9 +33828,18 @@ function _trajGizmoOrbitNodeAt(o, met) {
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);
-  const incRad = ((o.inclination || 0) * Math.PI) / 180;
-  const raan = o.lan != null ? (o.lan * Math.PI) / 180 : 0;
-  const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incRad, 0, raan);
+  // §20 seam (2026-07-17, user: gizmo "not on a real orbit... covered up by
+  // the Earth"): authored inc/lan are EQUATOR-referenced; physAimBurnState
+  // wants world-frame. This reconstruction — the single source for the gizmo
+  // node, center-knob rail, and hover ball — was never in the §7al audit, so
+  // after O2/O2b tilted the rendered rings the gizmo sat on a phantom orbit
+  // ~obliquity away from the ring the user sees (often behind the disc).
+  let incDeg = o.inclination || 0, lanDeg = o.lan != null ? o.lan : 0;
+  if (typeof progEqToWorldElements === 'function') {
+    const wEl = progEqToWorldElements(o.body, incDeg, lanDeg);
+    if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
+  }
+  const bs = physAimBurnState(o.body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
   return { body: o.body, mu, r: bs.r, v: bs.v, rHat: bs.rHat, vHat: bs.vHat, hHat: bs.hHat };
 }
 

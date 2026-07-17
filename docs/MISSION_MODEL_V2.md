@@ -732,6 +732,15 @@ Sequencing: single Sonnet build pass (C1-C3 together — they are one coherent c
 
 ---
 
+## 23b. MANEUVER GIZMO — phantom-orbit seam + overlay stacking (user-reported 2026-07-17, root-caused directly)
+
+Second round of "the gizmo doesn't work": user could not see or grab the handles, the node "isn't on a real orbit," and it "gets covered up by the Earth." Two independent proven mechanisms:
+
+1. **Un-seamed gizmo orbit reconstruction (§7al bug class, two more twins).** `_trajGizmoOrbitNodeAt` (5745-maneuver-gizmo-hover.js — the SINGLE source for the gizmo node, center-knob rail, and hover ball) and `_trajEventNodePos` branch (b) (5744-trajectory-eventnodes.js) both fed authored EQUATOR-referenced inc/lan straight into `physAimBurnState` as world-frame. After O2/O2b tilted the rendered rings, the gizmo lived on a phantom orbit exactly **23.44 deg** (Earth's obliquity) away from the drawn ring — measured live; post-fix the gizmo rail is **0.0000 deg** out of the seam-converted ring plane. Fix: `progEqToWorldElements` conversion in both, mirroring every other seam site.
+2. **Overlay stacked UNDER the world.** `.traj-svg` had `z-index:1` while `.traj-overlay` (which hosts `g.traj-gizmo-layer`) had none — the globe/rings covered the gizmo visually AND for pointer hit-testing (measured: `document.elementFromPoint` at the knob returned a `.traj-svg` path, so real mouse events could never reach the handles; earlier agent verifications passed only because synthetic events were dispatched directly to elements, bypassing hit-testing). Fix: `.traj-overlay{z-index:2}`. The gizmo now draws above the globe — "the maneuver node should always be visible," as directed.
+
+Verified with real hit-tested input: `elementFromPoint` at the knob returns a gizmo element; a mousedown/move/up sequence dispatched to that hit-tested element slides the node (the MNODE's authored `at.value_s` changed in `m.log`); zero console errors. Gate 926/926. Lesson recorded: interaction verifications must use hit-tested dispatch (`elementFromPoint`), not direct element dispatch.
+
 ## 23. MANEUVER GIZMO — camera-follow fix (interaction bug, user-reported 2026-07-17)
 
 **The complaint:** "The maneuver node isn't really grabbable or draggable right now. It's also disappearing pretty easily when I zoom in."

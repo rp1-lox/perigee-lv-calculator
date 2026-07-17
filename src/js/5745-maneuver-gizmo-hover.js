@@ -27,9 +27,18 @@ function _trajGizmoOrbitNodeAt(o, met) {
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);
-  const incRad = ((o.inclination || 0) * Math.PI) / 180;
-  const raan = o.lan != null ? (o.lan * Math.PI) / 180 : 0;
-  const bs = physAimBurnState(o.body, rMean, theta, 0, 0, incRad, 0, raan);
+  // §20 seam (2026-07-17, user: gizmo "not on a real orbit... covered up by
+  // the Earth"): authored inc/lan are EQUATOR-referenced; physAimBurnState
+  // wants world-frame. This reconstruction — the single source for the gizmo
+  // node, center-knob rail, and hover ball — was never in the §7al audit, so
+  // after O2/O2b tilted the rendered rings the gizmo sat on a phantom orbit
+  // ~obliquity away from the ring the user sees (often behind the disc).
+  let incDeg = o.inclination || 0, lanDeg = o.lan != null ? o.lan : 0;
+  if (typeof progEqToWorldElements === 'function') {
+    const wEl = progEqToWorldElements(o.body, incDeg, lanDeg);
+    if (wEl) { incDeg = wEl.inc_deg; lanDeg = wEl.lan_deg; }
+  }
+  const bs = physAimBurnState(o.body, rMean, theta, 0, 0, (incDeg * Math.PI) / 180, 0, (lanDeg * Math.PI) / 180);
   return { body: o.body, mu, r: bs.r, v: bs.v, rHat: bs.rHat, vHat: bs.vHat, hHat: bs.hHat };
 }
 

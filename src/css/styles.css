@@ -382,7 +382,7 @@ select option,select optgroup{background:var(--input);color:var(--text-bright);}
    authored in literal CSS px and never counter-scale. pointer-events:none on
    the root lets world-layer pan/drag through; interactive symbols opt back in
    individually via inline style="pointer-events:auto" (see 574's hit circles). */
-.traj-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.traj-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;} /* MUST stack above .traj-svg (z-index:1) — the overlay hosts the gizmo handles/labels; below the world svg they are covered by the globe and unreachable by real pointer hit-testing (user-reported 2026-07-17) */
 .traj-footer{flex-shrink:0;font-family:var(--mono);font-size:9px;color:var(--text-dim);text-align:right;padding:4px 2px 0;}
 /* Scrubbable-MET bar (backlog item 3) — slim track above the footer, event
    ticks + draggable thumb + T+ readout, theme vars only per the theming rule. */
