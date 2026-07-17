@@ -236,7 +236,7 @@ function missionRenderDetail() {
         </div>
         ${filterRow}
         <div class="mcc-events-list">${logHTML}</div>
-        <div class="mcc-panel-pad mcc-addevt-dock${_missionAddEvt != null ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
+        <div class="mcc-panel-pad mcc-addevt-dock${(_missionAddEvt != null || (typeof _missionGroupPending !== 'undefined' && _missionGroupPending)) ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
       </div>
     </div>
   `;
@@ -295,4 +295,4 @@ function missionSetOrbit(id, key, val) {
   if (m) m.launchOrbit[key] = val;
 }
 
-// ── Launch parameter UI (lives in a pop-up, opened from Add Event → Launch) ──
+// ── Launch parameter UI (rendered inline in the Add Event → Launch dock form) ──

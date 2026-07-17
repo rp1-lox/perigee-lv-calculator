@@ -198,7 +198,7 @@ function _missionApplyLaunch(m, e) {
   }
 
   fv.stages = fv.stages.filter(s => !stagesToDrop.includes(s.stageDefinitionId));
-  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, epoch: 0, surface: false };
+  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
 
   // Verdict + capacity come straight from the LV calculator's math: feasibility is
   // its ΔV margin, and max payload is its binary search (lvMaxPayload), so the

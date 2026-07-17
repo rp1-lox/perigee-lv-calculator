@@ -1570,9 +1570,21 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const derived = _trajRingOrientationFor({ inc: 45, elements: { i: 0.5, raan: 1.1, argp: 0, source: 'flight' } });
     ok('R3.2 render precedence: flight-derived source when no authored elements present',
       derived.source === 'flight' && Math.abs(derived.raan - 1.1) < 1e-12);
-    const dflt = _trajRingOrientationFor({ inc: 28.5 });
-    ok('R3.2 render precedence: default (Ω=ω=0) when neither authored nor derived',
-      dflt.source === 'default' && dflt.raan === 0 && dflt.argp === 0 && Math.abs(dflt.i - 28.5 * Math.PI / 180) < 1e-9);
+    // §20 (2026-07-16): the tier-3 default now rotates the EQUATOR-referenced
+    // authored inclination (Ω=0 in the equator frame) through progEqToWorldElements
+    // so a default ring hugs the body's tilted equator on screen, not the
+    // ecliptic (MATH.md §7al O2). Ω=ω=0 is still the CONVENTION — it's just
+    // expressed in the world frame the ring actually draws in.
+    const dflt = _trajRingOrientationFor({ inc: 28.5, body: 'Earth' });
+    const wDflt = progEqToWorldElements('Earth', 28.5, 0);
+    ok('R3.2 render precedence: default source, §20 seam-rotated to WORLD frame',
+      dflt.source === 'default' && dflt.argp === 0
+      && Math.abs(dflt.i - wDflt.inc_deg * Math.PI / 180) < 1e-9
+      && Math.abs(dflt.raan - wDflt.lan_deg * Math.PI / 180) < 1e-9);
+    // untilted body (no PROG_BODY_POLES entry): seam is identity, Ω stays 0.
+    const dfltFlat = _trajRingOrientationFor({ inc: 28.5, body: 'Jupiter' });
+    ok('R3.2 render precedence: default for an untilted body is identity (Ω=0, inc unchanged)',
+      dfltFlat.source === 'default' && dfltFlat.raan === 0 && Math.abs(dfltFlat.i - 28.5 * Math.PI / 180) < 1e-9);
   }
 
   // 3) departure-plane fixing: an authored fromOrbit.lan_deg is NOT re-solved —
@@ -2841,6 +2853,38 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
     const idW = progEqToWorldElements('Jupiter', 28.5, 120);
     approx('S20: untilted-body (Jupiter) eq->world is identity (inc)', idW.inc_deg, 28.5, 1e-9);
     approx('S20: untilted-body (Jupiter) eq->world is identity (lan)', idW.lan_deg, 120, 1e-9);
+  }
+
+  // §20 gate (regression pin for the 2026-07-16 "plane-match does nothing"
+  // World-view render bug, MATH.md §7al O2b): the orbit ring (5741
+  // addOrbitRing) samples/projects in the WORLD (ecliptic) frame, so an
+  // AUTHORED (equator-referenced) plane-match must be rotated through
+  // progEqToWorldElements BEFORE it becomes ring elements -- exactly as the
+  // physics state path (566) does. Two bugs hid the matched plane: (a) the
+  // replay snapshot dropped lan_deg (RAAN never reached the ring); (b) the
+  // ring stamped raw equatorial inc/lan as if world-frame (no seam). This
+  // block pins the pure-math invariant the ring now relies on -- a Moon
+  // plane-match's SEAM-TRANSFORMED normal coincides with the Moon's own
+  // world-frame plane normal -- and proves the seam is load-bearing (the raw
+  // un-seamed elements are ~obliquity off, the visible symptom the user saw).
+  {
+    const dotAbs = (a, b) => Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+    const planeAngle = (n1, n2) => Math.acos(Math.min(1, dotAbs(n1, n2))) * 180 / Math.PI;
+    for (const epochJD of [PROG_DEFAULT_EPOCH_JD, 2440419.0639]) {
+      const res = progResolvePlaneTarget('Moon', epochJD, 0, 28.5); // picker: unclamped inc
+      const wPark = progEqToWorldElements('Earth', res.inc_deg, res.lan_deg);
+      const nPark = physNormalFromIncLan(wPark.inc_deg, wPark.lan_deg);
+      const mp = progMoonPlaneAt(epochJD, 0);
+      const wMoon = progEqToWorldElements('Earth', mp.inc_deg, mp.lan_deg);
+      const nMoon = physNormalFromIncLan(wMoon.inc_deg, wMoon.lan_deg);
+      approx(`S20: Moon plane-match world ring coincides with Moon world plane (epoch ${epochJD})`,
+        planeAngle(nPark, nMoon), 0, 1e-4);
+      // Raw (un-seamed) equatorial elements drawn as world would be ~obliquity
+      // off -- guards against a future removal of the ring/snapshot seam.
+      const nRaw = physNormalFromIncLan(res.inc_deg, res.lan_deg);
+      ok(`S20: un-seamed equatorial plane-match is >10 deg off Moon (seam is load-bearing, epoch ${epochJD})`,
+        planeAngle(nRaw, nMoon) > 10);
+    }
   }
 
   // §20 gate: ring-tilt table consistency -- _trajRingPlaneBasis(Saturn)'s

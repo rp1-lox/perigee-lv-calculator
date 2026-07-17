@@ -221,7 +221,20 @@ function _trajRingOrientationFor(rec) {
     return { i: rec.elements.i || 0, raan: rec.elements.raan || 0, argp: rec.elements.argp || 0,
       source: rec.elements.source || 'flight' };
   }
-  return { i: ((rec && rec.inc) || 0) * Math.PI / 180, raan: 0, argp: 0, source: 'default' };
+  // Tier 3 (default, Ω=ω=0): the authored inclination is EQUATOR-referenced,
+  // but the ring is sampled/projected in the WORLD (ecliptic) frame, so a raw
+  // draw hugs the ecliptic instead of the body's (now-tilted, §20 O2) equator.
+  // Rotate through the SAME seam (progEqToWorldElements, 385) the physics state
+  // path uses — Ω=0 in the equator frame becomes a body-specific world Ω, and
+  // the ring visibly rides ±inc of the tilted equator on screen (MATH.md §7al
+  // O2 line "28.5°-ring-vs-tilted-equator agreement" — now true in the render
+  // path, not just the physics path). Identity for untilted bodies.
+  const incEq = (rec && rec.inc) || 0;
+  const body = (rec && rec.body) || 'Earth';
+  const w = (typeof progEqToWorldElements === 'function')
+    ? progEqToWorldElements(body, incEq, 0)
+    : { inc_deg: incEq, lan_deg: 0 };
+  return { i: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180, argp: 0, source: 'default' };
 }
 
 /** R6.5 (2026-07-11): pure apsides finder — samples orbit `elements`

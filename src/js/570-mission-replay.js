@@ -65,7 +65,15 @@ function _missionCaptureSnapshot(live, baseOf) {
       vehicleId: v.vehicleId,
       originKey: v._originKey || null,
       name, status: v.status || 'ORBIT',
-      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination, surface: !!os.surface,
+      // §20 OBLIQUITY (MATH.md §7al): carry lan_deg into the snapshot ONLY when
+      // it was genuinely authored (plane-match / plan-for-destination / launch-
+      // time-derived RAAN — os.lanAuthored). Otherwise leave it null so the
+      // trajectory ring extractor (5741) keeps its flight-derived (tier-2) /
+      // Ω=0 default (tier-3) orientation instead of pinning a meaningless
+      // default LAN. This is what lets a matched parking plane actually reach
+      // the World-view ring (with the eq->world seam applied there).
+      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination,
+        lan_deg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
         propagated: !!os.propagated, refId: os.refId || null } : null,
       alt,
       owners: [...new Set(v.stages.map(st => st._ownerKey || _missionStageOwnerKey(st.stageDefinitionId)))],

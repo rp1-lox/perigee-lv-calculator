@@ -24313,7 +24313,7 @@ function _missionApplyLaunch(m, e) {
   }
 
   fv.stages = fv.stages.filter(s => !stagesToDrop.includes(s.stageDefinitionId));
-  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, epoch: 0, surface: false };
+  fv.orbitState = { body: launchOrbit.body, perigee: launchOrbit.alt_km, apogee: (launchOrbit.apo_km ?? launchOrbit.alt_km), inclination: launchOrbit.inc_deg, lan: launchOrbit.lan_deg, lanAuthored: !!launchOrbit._lanFromLaunchTime, epoch: 0, surface: false };
 
   // Verdict + capacity come straight from the LV calculator's math: feasibility is
   // its ΔV margin, and max payload is its binary search (lvMaxPayload), so the
@@ -26629,7 +26629,15 @@ function _missionCaptureSnapshot(live, baseOf) {
       vehicleId: v.vehicleId,
       originKey: v._originKey || null,
       name, status: v.status || 'ORBIT',
-      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination, surface: !!os.surface,
+      // §20 OBLIQUITY (MATH.md §7al): carry lan_deg into the snapshot ONLY when
+      // it was genuinely authored (plane-match / plan-for-destination / launch-
+      // time-derived RAAN — os.lanAuthored). Otherwise leave it null so the
+      // trajectory ring extractor (5741) keeps its flight-derived (tier-2) /
+      // Ω=0 default (tier-3) orientation instead of pinning a meaningless
+      // default LAN. This is what lets a matched parking plane actually reach
+      // the World-view ring (with the eq->world seam applied there).
+      orbit: os ? { body: os.body, perigee: os.perigee, apogee: os.apogee, inclination: os.inclination,
+        lan_deg: os.lanAuthored ? os.lan : null, surface: !!os.surface,
         propagated: !!os.propagated, refId: os.refId || null } : null,
       alt,
       owners: [...new Set(v.stages.map(st => st._ownerKey || _missionStageOwnerKey(st.stageDefinitionId)))],
@@ -29796,7 +29804,20 @@ function _trajExtractMission(m) {
     // write order: authored (here) -> flight-derived (§7i pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
     if (!rec.elements && lan_deg != null) {
-      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
+      // §20 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are AUTHORED,
+      // i.e. EQUATOR-referenced (os.inclination/os.lan — the program's authoring
+      // convention). The ring is sampled + projected in the WORLD (ecliptic)
+      // frame the tilted globe and the Moon are drawn in, so rotate through the
+      // SAME seam the physics-state path uses (progEqToWorldElements, 385)
+      // BEFORE stamping. Without this, a plane-matched parking orbit drew
+      // ~23.44 deg (Earth's obliquity) off its own physics plane and off the
+      // Moon — the reported "plane-match does nothing" bug, made visible once
+      // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
+      // §7al assumed world==equator, which O2 retired).
+      const _w20 = (typeof progEqToWorldElements === 'function')
+        ? progEqToWorldElements(body, inc || 0, lan_deg)
+        : { inc_deg: inc || 0, lan_deg: lan_deg };
+      rec.elements = { i: _w20.inc_deg * Math.PI / 180, raan: _w20.lan_deg * Math.PI / 180,
         argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
     }
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
@@ -30197,7 +30218,20 @@ function _trajRingOrientationFor(rec) {
     return { i: rec.elements.i || 0, raan: rec.elements.raan || 0, argp: rec.elements.argp || 0,
       source: rec.elements.source || 'flight' };
   }
-  return { i: ((rec && rec.inc) || 0) * Math.PI / 180, raan: 0, argp: 0, source: 'default' };
+  // Tier 3 (default, Ω=ω=0): the authored inclination is EQUATOR-referenced,
+  // but the ring is sampled/projected in the WORLD (ecliptic) frame, so a raw
+  // draw hugs the ecliptic instead of the body's (now-tilted, §20 O2) equator.
+  // Rotate through the SAME seam (progEqToWorldElements, 385) the physics state
+  // path uses — Ω=0 in the equator frame becomes a body-specific world Ω, and
+  // the ring visibly rides ±inc of the tilted equator on screen (MATH.md §7al
+  // O2 line "28.5°-ring-vs-tilted-equator agreement" — now true in the render
+  // path, not just the physics path). Identity for untilted bodies.
+  const incEq = (rec && rec.inc) || 0;
+  const body = (rec && rec.body) || 'Earth';
+  const w = (typeof progEqToWorldElements === 'function')
+    ? progEqToWorldElements(body, incEq, 0)
+    : { inc_deg: incEq, lan_deg: 0 };
+  return { i: w.inc_deg * Math.PI / 180, raan: w.lan_deg * Math.PI / 180, argp: 0, source: 'default' };
 }
 
 /** R6.5 (2026-07-11): pure apsides finder — samples orbit `elements`

@@ -132,7 +132,20 @@ function _trajExtractMission(m) {
     // write order: authored (here) -> flight-derived (§7i pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
     if (!rec.elements && lan_deg != null) {
-      rec.elements = { i: (inc || 0) * Math.PI / 180, raan: lan_deg * Math.PI / 180,
+      // §20 OBLIQUITY (MATH.md §7al, site 11): inc/lan_deg here are AUTHORED,
+      // i.e. EQUATOR-referenced (os.inclination/os.lan — the program's authoring
+      // convention). The ring is sampled + projected in the WORLD (ecliptic)
+      // frame the tilted globe and the Moon are drawn in, so rotate through the
+      // SAME seam the physics-state path uses (progEqToWorldElements, 385)
+      // BEFORE stamping. Without this, a plane-matched parking orbit drew
+      // ~23.44 deg (Earth's obliquity) off its own physics plane and off the
+      // Moon — the reported "plane-match does nothing" bug, made visible once
+      // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
+      // §7al assumed world==equator, which O2 retired).
+      const _w20 = (typeof progEqToWorldElements === 'function')
+        ? progEqToWorldElements(body, inc || 0, lan_deg)
+        : { inc_deg: inc || 0, lan_deg: lan_deg };
+      rec.elements = { i: _w20.inc_deg * Math.PI / 180, raan: _w20.lan_deg * Math.PI / 180,
         argp: (argp_deg || 0) * Math.PI / 180, source: 'authored' };
     }
     if (lane) { rec.colors.add(lane.color); rec.names.add(lane.label); }
