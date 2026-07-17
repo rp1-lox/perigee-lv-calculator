@@ -35,7 +35,7 @@ function _tsCollectBase(){
   const siteLat=gv('site-lat'),azMin=gv('az-min'),azMax=gv('az-max');
   const stages=[];
   for(let s=0;s<numStages;s++){
-    const st={dry:gv(`s${s+1}_dry`),prop:gv(`s${s+1}_prop`),thrust:gv(`s${s+1}_thrust`),isp:parseFloat(document.getElementById(`s${s+1}_isp`).value)||1,res:gv(`s${s+1}_res`)};
+    const st={dry:gv(`s${s+1}_dry`),prop:gv(`s${s+1}_prop`),thrust:gv(`s${s+1}_thrust`),isp:gv(`s${s+1}_isp`)||1,res:gv(`s${s+1}_res`)};
     // S1.5 stage-and-a-half fields live in stageStore, NOT the standard DOM rows.
     // Carry them through (mirroring _tsVehicleToBase) so _tsExpandStages can
     // BECO-split the stage before lvPerformance/lvMaxPayload — the same HARD
@@ -110,19 +110,13 @@ const TS_METRIC_ORDER=['maxpay','margin','payfrac','tdv','tbt','tw'];
 // calculator and fleet views. Non-s15 stages pass through unchanged. Re-run on every
 // evaluation (never cached) so perturbing an authored s15 field re-derives the split,
 // which is the physically-correct behavior (the BECO point is a function of those fields).
+// Thin wrapper over the ONE S1.5 expansion boundary (stageExpandS15,
+// 140-physics.js — UNIFICATION_AUDIT P2.1). This used to silently fall back
+// to the raw unsplit stage on a split error (under-modeling an invalid S1.5
+// vehicle without any visible signal); now uses 'annotate' like the other
+// callers, so a bad S1.5 config is flagged (`_err`) instead of hidden.
 function _tsExpandStages(stages){
-  const out=[];
-  (stages||[]).forEach(st=>{
-    if(st.s15&&typeof _s15BecoSplit==='function'){
-      const sp=_s15BecoSplit(st);
-      if(sp.error){out.push(st);return;}   // fall back to the raw (invalid-config) stage rather than dropping it
-      out.push({dry:st.dry||0,prop:sp.prop_ph1,thrust:st.thrust||0,isp:sp.isp_ph1,res:st.res||0});
-      out.push({dry:sp.dry_ph2,prop:sp.prop_ph2,thrust:st.s15_sust_thrust||0,isp:sp.isp_ph2,res:st.res||0});
-    }else{
-      out.push(st);
-    }
-  });
-  return out;
+  return stageExpandS15(stages||[], { onError: 'annotate' });
 }
 
 // Compute the chosen metric for a base vehicle at a given payload + orbit params.
@@ -270,7 +264,8 @@ function _tsCompareOptionsHTML(){
   return opts.join('');
 }
 
-function _tsEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+function _tsEsc(s){return escHtml(s);}
 
 function _tsWorksheetLabel(){return (typeof loadedVehicleName!=='undefined'&&loadedVehicleName)?loadedVehicleName:'Worksheet';}
 

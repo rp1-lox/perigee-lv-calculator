@@ -392,6 +392,23 @@ virtual-stage array (+ optional parallel label/provenance side-array so 150's re
 boundary calls `_s15BecoSplit` directly. **Cost: S–M.** Do right after C4 — it is the other
 half of the same shipped-bug class.
 
+**STATUS: DONE (2026-07-17).** `stageExpandS15(stages, opts)` added to 140-physics.js next
+to `_s15BecoSplit` (also moved there from 150). `calculateWithS15` (150), `_fleetExpandStages`
+(560), and `_tsExpandStages` (165) are now thin wrappers; 150 keeps its mathValue/label
+wrap and 560 keeps its default-res=2 normalization as caller-side decoration on top of the
+shared core. `310-stage-edit-wrench.js`'s live BECO-split preview was also switched from
+calling `_s15BecoSplit` directly to `stageExpandS15` (the only other in-tree caller found).
+Error policy: `opts.onError` is `'throw'` (default, used by 150 — aborts and renders the
+error to `#results-panel`, preserving its pre-existing behavior) or `'annotate'` (used by
+560 and now 165 — pushes the raw unsplit stage decorated with `_err` and continues). 165's
+old THIRD policy — silently falling back to the unsplit stage with no annotation — is
+retired; it now uses `'annotate'` like 560, so an invalid S1.5 vehicle is visibly flagged
+instead of silently under-modeled. Gate: `tests/suites/10-canonical-migrations.js` "C5"
+block fails the build if any module outside 140-physics.js calls `_s15BecoSplit` directly,
+plus 5 new pins on `stageExpandS15`'s error-policy/`_src` bookkeeping. Gate count after:
+974 assertions (was 933 pre-change), all pre-existing pins byte-stable (Saturn V/Atlas
+goldens, S1.5 path-equality, ghost-stage guard untouched).
+
 ## P2.2 — Vehicle → physics-args base bundle (assembled 3×)
 
 Canonical-ish shape `{fairingM,fairingJ,siteLat,azMin,azMax,stages,boosterArg,parkingAlt,
@@ -410,6 +427,28 @@ Notable seam inside the bundle: **`isp` bypasses expression parsing** everywhere
 `parseFloat(document.getElementById(...).value)||1` in both `_tsCollectBase` (165:38) and
 `calculateWithS15` (150:108) — so "290+5" works in the Dry field but not the Isp field.
 LATENT inconsistency.
+
+**STATUS: DONE (2026-07-17).** Root cause: the worksheet/modal Isp `<input>`s were
+`type="number"` (080-build-table.js's `allowsMath` list, plus the static `stg-isp` field in
+src/index.html) — a browser `type="number"` field rejects non-numeric text outright, so no
+amount of downstream `gv()`/`mathValue()` plumbing could have helped; expressions never
+reached the DOM value at all. Fixed at the source: `'isp'` added to `allowsMath` in
+080-build-table.js (covers both the per-stage worksheet rows AND the booster row, built from
+the same loop), and `stg-isp` in src/index.html switched to
+`type="text" class="math-input"`. Because `calculate()`'s own (frozen) first line already
+does `[...document.querySelectorAll('#stage-tbody .math-input')].forEach(commitMathInput)`,
+giving Isp fields the `math-input` class was sufficient to make the frozen calculator commit
+Isp expressions correctly too — **no frozen-file exception was needed**. Every non-frozen
+`parseFloat(...isp...)` DOM/stored-value read was also switched to `gv()`/`mathValue()` for
+consistency and to cover the "type Isp expression then hit Calculate without blurring" edge
+case: `lvBoosterGroups` (140), `_tsCollectBase` (165), `_fleetExpandStages`/booster snapshot
+(560), stage-composition preview + card-save (270/320), stage-library add/edit (310/350).
+The two S1.5-optional Isp fields (`stg-s15-isp` "same as stage", `stg-s15-boost-isp` "blank
+= use stage Isp") were made `type="text"` but deliberately **NOT** given the `math-input`
+class: the global focusout auto-committer coerces a blank `math-input` field to `"0"`, which
+would have destroyed their blank-means-"use default" sentinel; their reads still route
+through `mathValue()` directly so expressions still work, just without the
+auto-commit-on-blur normalization the required fields get.
 
 **SHIPPED** (00b720710). Proposal: extract `collectBaseSpec(source)` where `source` is
 `{kind:'dom'}` or `{kind:'vehicle', obj}` — one field list, one booster-precedence rule,
@@ -457,6 +496,16 @@ Vehicle names (170) and launch-site names (220) are user-authored and interpolat
 markup; the 3-char escapers are attribute-context-unsafe. **LATENT** (needs a `"` in a saved
 name). Proposal: one `escHtml(s)` (4-char) exported early (000/010), delete the other four.
 **Cost: S.** Mirrors Part 1's "one boundary" theme.
+
+**STATUS: DONE (2026-07-17).** Canonical `escHtml(s)` (5-char: `& < > " '`) added to
+015-version.js (loads before every consumer). `_tsEsc`, `_orbVehEsc`, and `_mrEsc` are now
+one-line aliases onto it; the two 3-char `esc` locals (170-save-load-lv.js:149,
+220-launch-sites.js:477) now also alias `escHtml` instead of hand-rolling `& < >` only, so
+both pick up the quote-escaping fix — old call sites were left in place per the "alias, don't
+hunt down call sites" plan. Grepped for other ad-hoc `replace(/&/g` recipes; found none beyond
+the five already documented here. Verified in-browser: `x" onmouseover="1"` escapes
+byte-identically through `escHtml`/`_tsEsc`/`_orbVehEsc`/`_mrEsc` to
+`x&quot; onmouseover=&quot;1`.
 
 ## P2.6 — On-orbit ΔV re-implemented inside trades
 

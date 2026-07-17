@@ -4,14 +4,8 @@
 // so it does NOT use the app's CSS custom properties (exempt by design: it's
 // meant to be printed / saved / opened outside the tool).
 
-function _mrEsc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+function _mrEsc(s) { return escHtml(s); }
 
 function _mrNum(v, digits) {
   if (v == null || isNaN(v)) return '—';

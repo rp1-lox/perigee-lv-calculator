@@ -18,7 +18,7 @@ const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
-  _s15BecoSplit, stageCarryS15, stageClearS15, stagePickS15, progBodyAngleAt, progBodyWorldPos,
+  _s15BecoSplit, stageExpandS15, stageCarryS15, stageClearS15, stagePickS15, progBodyAngleAt, progBodyWorldPos,
   progBodyWorldPosCalibrated, progBodyEphemState, progBodyLocalEphemState,
   progKeplerSolveE, progEpochJD, progHelioPos, progHelioVel, progPorkchopGrid,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
@@ -288,6 +288,69 @@ ok('_missionMigrateLaunchOrbitEntry: legacy-shaped e.orbit field-renamed to cano
     const noS15 = stagePickS15({ dry: 1 });
     return picked && picked.s15 === true && picked.s15_sust_thrust === 270 && picked.s15_boost_isp === 282 &&
       full.dry === 100 && noS15 === null;
+  })());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// C5 — ONE S1.5 BECO expansion boundary (UNIFICATION_AUDIT P2.1)
+//
+// calculateWithS15 (150), _fleetExpandStages (560), and _tsExpandStages (165)
+// used to each hand-roll their own stage-iteration + _s15BecoSplit call with
+// DIVERGENT output records and error policies — the exact bug class CLAUDE.md
+// flags as "shipped 3x". stageExpandS15 (140-physics.js) is now the ONE
+// boundary; gate: no module outside 140-physics.js may call `_s15BecoSplit`
+// directly (that is precisely the reimplementation pattern that shipped the
+// bug 3 times).
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const JS_DIR = path.join(ROOT, 'src', 'js');
+  const allJsFiles = fs.readdirSync(JS_DIR).filter(f => f.endsWith('.js'));
+  const ALLOWED_S15_SPLIT_CALL = new Set(['140-physics.js']);
+  const splitCallRe = /\b_s15BecoSplit\s*\(/;
+  const violations = [];
+  allJsFiles.forEach(f => {
+    if (ALLOWED_S15_SPLIT_CALL.has(f)) return;
+    const text = fs.readFileSync(path.join(JS_DIR, f), 'utf8');
+    if (splitCallRe.test(text)) violations.push(f);
+  });
+  ok('C5 gate: no module outside 140-physics.js calls _s15BecoSplit directly (must route through stageExpandS15)' +
+     (violations.length ? ' — VIOLATIONS: ' + violations.join('; ') : ''), violations.length === 0);
+}
+
+// stageExpandS15 error-policy pins: 'throw' aborts with stageIndex/s15Error
+// set (calculateWithS15's abort-and-render behavior); 'annotate' pushes the
+// raw unsplit stage decorated with _err and keeps going (_fleetExpandStages'
+// and now _tsExpandStages' behavior — the latter used to silently drop the
+// error and fall back with NO annotation, which is the policy retired here).
+{
+  const badStage = { dry: 5000, prop: 40000, thrust: 2000, isp: 300, res: 2,
+    s15: true, s15_sust_thrust: 0, s15_sust_isp: 309, s15_jet_mass: 3000, s15_beco_twr: 1.2 };
+  const goodStage = { dry: 5657, prop: 90000, thrust: 1800, isp: 282, res: 2,
+    s15: true, s15_sust_thrust: 362, s15_sust_isp: 309, s15_jet_mass: 3050, s15_beco_twr: 1.2 };
+  const plainStage = { dry: 4000, prop: 90000, thrust: 900, isp: 421, res: 2 };
+
+  ok("stageExpandS15: onError:'throw' (default) throws with .stageIndex/.s15Error on a bad S1.5 stage", (() => {
+    try { stageExpandS15([badStage]); return false; }
+    catch (e) { return e.stageIndex === 0 && typeof e.s15Error === 'string' && e.s15Error.length > 0; }
+  })());
+  ok("stageExpandS15: onError:'annotate' does not throw on a bad S1.5 stage — pushes one raw record with _err", (() => {
+    const out = stageExpandS15([badStage], { onError: 'annotate' });
+    return out.length === 1 && out[0]._src === 0 && typeof out[0]._err === 'string' && !('_phase' in out[0]);
+  })());
+  ok('stageExpandS15: a valid S1.5 stage always splits into 2 records (Ph.1/Ph.2) regardless of onError', (() => {
+    const outThrow = stageExpandS15([goodStage], { onError: 'throw' });
+    const outAnnotate = stageExpandS15([goodStage], { onError: 'annotate' });
+    return outThrow.length === 2 && outThrow[0]._phase === 'Ph.1' && outThrow[1]._phase === 'Ph.2' &&
+      outAnnotate.length === 2 && outAnnotate[0]._phase === 'Ph.1' && outAnnotate[1]._phase === 'Ph.2';
+  })());
+  ok('stageExpandS15: a non-s15 stage passes through as one record, _src set, no _phase/_err', (() => {
+    const out = stageExpandS15([plainStage]);
+    return out.length === 1 && out[0]._src === 0 && !('_phase' in out[0]) && !('_err' in out[0]) &&
+      out[0].dry === plainStage.dry && out[0].prop === plainStage.prop;
+  })());
+  ok('stageExpandS15: mixed stage array — index math (_src) stays correct across a split', (() => {
+    const out = stageExpandS15([goodStage, plainStage], { onError: 'annotate' });
+    return out.length === 3 && out[0]._src === 0 && out[1]._src === 0 && out[2]._src === 1;
   })());
 }
 

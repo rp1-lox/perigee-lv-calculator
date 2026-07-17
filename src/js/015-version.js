@@ -1,4 +1,24 @@
 
+// ─── SHARED HTML ESCAPER ──────────────────────
+// Canonical HTML escaper (UNIFICATION_AUDIT item 5). Five ad-hoc escapers used
+// to exist: _tsEsc (165) and _orbVehEsc (167) were byte-identical 4-char
+// escapers (& < > "); _mrEsc (577) additionally escaped '; but the 3-char
+// `esc` locals in 170-save-load-lv.js and 220-launch-sites.js did NOT escape
+// double-quotes — an attribute-context injection / broken-markup vector for
+// any user-authored name interpolated into an HTML attribute. escHtml() is
+// the ONE escaper now (all five entities); the old names are thin aliases
+// (kept rather than hunting down every call site) so every one of them picks
+// up the quote-safe behavior. Loads first (015) so every later consumer can
+// reference it.
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ─── VERSION & CHANGELOG ──────────────────────
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.

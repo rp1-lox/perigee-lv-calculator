@@ -69,19 +69,14 @@ function _fleetStageCopy(s) {
 // Expand stageData into the virtual stage sequence used for ΔV math: a S1.5
 // stage splits into Phase 1 (booster pack) + Phase 2 (sustainer), mirroring
 // calculateWithS15() so fleet numbers match the LV calculator.
+// Thin wrapper over the ONE S1.5 expansion boundary (stageExpandS15,
+// 140-physics.js — UNIFICATION_AUDIT P2.1). Normalizes the fleet's stage
+// records (default res=2, matching this caller's pre-existing behavior) and
+// keeps the 'annotate' error policy this module already had (push the raw
+// unsplit stage decorated with _err, continue).
 function _fleetExpandStages(stageData) {
-  const out = [];
-  (stageData || []).forEach((st, i) => {
-    if (st.s15 && typeof _s15BecoSplit === 'function') {
-      const sp = _s15BecoSplit(st);
-      if (sp.error) { out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i, _err: sp.error }); return; }
-      out.push({ dry: st.dry||0,   prop: sp.prop_ph1, thrust: st.thrust||0,          isp: sp.isp_ph1, res: st.res||2, _src: i, _phase: 'Ph.1' });
-      out.push({ dry: sp.dry_ph2,  prop: sp.prop_ph2, thrust: st.s15_sust_thrust||0, isp: sp.isp_ph2, res: st.res||2, _src: i, _phase: 'Ph.2' });
-    } else {
-      out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i });
-    }
-  });
-  return out;
+  const normalized = (stageData || []).map(st => ({ ...st, dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2 }));
+  return stageExpandS15(normalized, { onError: 'annotate' });
 }
 
 // Resolve a library vehicle (source 'builtin'|'user', index) into a fleet-entry
@@ -313,7 +308,7 @@ function fleetSnapshotCurrent() {
   const names  = [];
   for (let s = 0; s < (typeof numStages !== 'undefined' ? numStages : 0); s++) {
     const st = stageStore[s] || {};
-    const base = { dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: parseFloat(st.isp)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2 };
+    const base = { dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: mathValue(st.isp,0)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2 };
     stageCarryS15(base, st);
     stages.push(_fleetStageCopy(base));
     names.push((typeof currentStageNames !== 'undefined' && currentStageNames[s]) ? currentStageNames[s] : ('Stage ' + (s+1)));
@@ -328,7 +323,7 @@ function fleetSnapshotCurrent() {
     boosterName: (typeof currentBoosterName !== 'undefined' && currentBoosterName) ? currentBoosterName : null,
     boosterData: (typeof useBooster !== 'undefined' && useBooster) ? (() => {
       const b = document.getElementById('b_dry');
-      return b ? { dry: parseFloat(document.getElementById('b_dry').value)||0, prop: parseFloat(document.getElementById('b_prop').value)||0, isp: parseFloat(document.getElementById('b_isp').value)||1, thrust: parseFloat(document.getElementById('b_thrust').value)||0, res: parseFloat(document.getElementById('b_res').value)||0, count: parseInt(document.getElementById('num-boosters').value)||0, ...(typeof boosterModeFromDOM==='function'?boosterModeFromDOM():{}) } : null;
+      return b ? { dry: parseFloat(document.getElementById('b_dry').value)||0, prop: parseFloat(document.getElementById('b_prop').value)||0, isp: mathValue(document.getElementById('b_isp').value,0)||1, thrust: parseFloat(document.getElementById('b_thrust').value)||0, res: parseFloat(document.getElementById('b_res').value)||0, count: parseInt(document.getElementById('num-boosters').value)||0, ...(typeof boosterModeFromDOM==='function'?boosterModeFromDOM():{}) } : null;
     })() : null,
     boosterGroups: (typeof useBooster !== 'undefined' && useBooster && typeof lvBoosterGroups === 'function') ? (() => { const g = lvBoosterGroups(); return g.length > 1 ? g : null; })() : null,
     payloads: [],

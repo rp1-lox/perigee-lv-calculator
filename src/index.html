@@ -803,7 +803,7 @@
         </div>
         <div>
           <label>Isp (s)</label>
-          <input type="number" id="stg-isp" placeholder="300" min="1" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
+          <input type="text" inputmode="decimal" class="math-input" id="stg-isp" placeholder="300 or 311*0.98" title="Calculations supported: +, -, *, /, and parentheses" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
         </div>
         <div>
           <label>Residuals (%)</label>
@@ -844,7 +844,12 @@
               </div>
               <div>
                 <label>Sustainer Isp (s) <span style="color:var(--text-dim);font-size:9px;">// blank = same as stage</span></label>
-                <input type="number" id="stg-s15-isp" placeholder="(same as stage)" min="1" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
+                <!-- NOT class="math-input": this field is optional (blank = "use stage Isp"
+                     sentinel) and the global focusout auto-committer coerces a blank
+                     math-input to "0", which would destroy that sentinel. type=text +
+                     inputmode=decimal is enough to allow typing an expression; the JS
+                     read side (_s15UpdatePreview/doEditStage) parses it via mathValue(). -->
+                <input type="text" inputmode="decimal" id="stg-s15-isp" placeholder="(same as stage) or 309*1.02" title="Calculations supported: +, -, *, /, and parentheses" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
               </div>
               <div>
                 <label>Booster Pack Mass (kg) <span style="color:var(--text-dim);font-size:9px;">// engines + skirt jettisoned</span></label>
@@ -856,7 +861,8 @@
               </div>
               <div style="grid-column:1/-1;">
                 <label>Booster-engine Isp (s), optional — blends Phase-1 Isp by mass flow <span class="info-tip" onclick="event.stopPropagation()">i<span class="tip-text" style="white-space:normal;max-width:260px;line-height:1.6;">If set, Phase-1 Isp is computed as the thrust-weighted harmonic mean of this booster-engine Isp and the sustainer Isp (both burn together in Phase 1), instead of using the stage's authored Isp verbatim. Leave blank to keep today's behavior.</span></span></label>
-                <input type="number" id="stg-s15-boost-isp" placeholder="(blank = use stage Isp)" min="1" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
+                <!-- NOT class="math-input" — see the stg-s15-isp comment above (blank sentinel). -->
+                <input type="text" inputmode="decimal" id="stg-s15-boost-isp" placeholder="(blank = use stage Isp) or 282*1.01" title="Calculations supported: +, -, *, /, and parentheses" oninput="_s15UpdatePreview()" style="width:100%;background:rgba(0,0,0,.4);border:1px solid var(--border);color:var(--text-bright);font-family:var(--mono);font-size:12px;padding:6px 10px;margin-bottom:0;">
               </div>
             </div>
             <div id="stg-s15-preview" style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:8px;padding:6px 8px;background:rgba(0,0,0,.25);border:1px solid var(--border);letter-spacing:.04em;"></div>

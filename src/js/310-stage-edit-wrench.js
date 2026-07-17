@@ -137,28 +137,35 @@ function _s15UpdatePreview(_stageIdx) {
   if (!pre || !document.getElementById('stg-s15')?.checked) return;
   const dry    = mathValue(document.getElementById('stg-dry')?.value,0);
   const prop   = mathValue(document.getElementById('stg-prop')?.value,0);
-  const isp    = parseFloat(document.getElementById('stg-isp')?.value)    || 1;
+  const isp    = mathValue(document.getElementById('stg-isp')?.value,0)    || 1;
   const thrust = mathValue(document.getElementById('stg-thrust')?.value,0);
   const sThrust = parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0;
-  const sIsp    = parseFloat(document.getElementById('stg-s15-isp')?.value)    || isp;
+  const sIsp    = mathValue(document.getElementById('stg-s15-isp')?.value, isp) || isp;
   const jetM    = parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0;
   const twr     = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
-  const boostIsp = parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0;
-  const split   = _s15BecoSplit({ dry, prop, isp, thrust,
-    s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr, s15_boost_isp: boostIsp });
-  if (split.error) { pre.textContent = '// ' + split.error; pre.style.color='var(--accent2)'; return; }
+  const boostIsp = mathValue(document.getElementById('stg-s15-boost-isp')?.value,0) || 0;
+  // Route through the ONE S1.5 expansion boundary (stageExpandS15,
+  // 140-physics.js — UNIFICATION_AUDIT P2.1) rather than calling
+  // _s15BecoSplit directly, so this preview stays byte-identical to what the
+  // calculator will actually do with the stage (source-grep-gated: no module
+  // outside 140-physics.js may call _s15BecoSplit directly).
+  const expanded = stageExpandS15([{ dry, prop, isp, thrust,
+    s15: true, s15_sust_thrust: sThrust, s15_sust_isp: sIsp, s15_jet_mass: jetM, s15_beco_twr: twr, s15_boost_isp: boostIsp }],
+    { onError: 'annotate' });
+  if (expanded[0]._err) { pre.textContent = '// ' + expanded[0]._err; pre.style.color='var(--accent2)'; return; }
+  const [ph1, ph2] = expanded;
   pre.style.color = 'var(--text-dim)';
   const fM = v => Math.round(v).toLocaleString() + ' kg';
   pre.textContent =
-    `Ph.1 → Ph.2 prop split:  ${fM(split.prop_ph1)}  →  ${fM(split.prop_ph2)}`+
-    `   |   dry after BECO: ${fM(dry - jetM)}`+
+    `Ph.1 → Ph.2 prop split:  ${fM(ph1.prop)}  →  ${fM(ph2.prop)}`+
+    `   |   dry after BECO: ${fM(ph2.dry)}`+
     `   |   booster thrust: ${(thrust - sThrust).toFixed(1)} kN`+
-    (split.boostIspUsed ? `   |   Ph.1 Isp (blended): ${split.isp_ph1.toFixed(1)} s` : '');
+    (boostIsp > 0 ? `   |   Ph.1 Isp (blended): ${ph1.isp.toFixed(1)} s` : '');
 }
 
 function doEditStage(){
   if(!_editSlot)return;
-  const invalidMath=['stg-dry','stg-prop','stg-thrust','stg-res']
+  const invalidMath=['stg-dry','stg-prop','stg-thrust','stg-isp','stg-res']
     .map(id=>document.getElementById(id)).find(input=>!commitMathInput(input));
   if(invalidMath){invalidMath.reportValidity();return;}
   const {stageIdx,isBooster,extraIdx}=_editSlot;
@@ -166,7 +173,7 @@ function doEditStage(){
   const dry=mathValue(document.getElementById('stg-dry').value,0);
   const prop=mathValue(document.getElementById('stg-prop').value,0);
   const thrust=mathValue(document.getElementById('stg-thrust').value,0);
-  const isp=parseFloat(document.getElementById('stg-isp').value)||1;
+  const isp=mathValue(document.getElementById('stg-isp').value,0)||1;
   const res=mathValue(document.getElementById('stg-res').value,2);
   const engines=document.getElementById('stg-engines').value.trim();
   const note=document.getElementById('stg-note').value.trim();
@@ -223,10 +230,10 @@ function doEditStage(){
       stageCarryS15(stageStore[stageIdx],{
         s15:true,
         s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value) || 0,
-        s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)    || 0,
+        s15_sust_isp:   mathValue(document.getElementById('stg-s15-isp')?.value,0)    || 0,
         s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)    || 0,
         s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2,
-        s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value) || 0,
+        s15_boost_isp:  mathValue(document.getElementById('stg-s15-boost-isp')?.value,0) || 0,
       });
     } else {
       // Clear any previous s15 data

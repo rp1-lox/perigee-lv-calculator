@@ -474,7 +474,9 @@ function launchSiteStripRefresh(){
   const site=(typeof getCurrentSite==='function')?getCurrentSite():null;
   const name=site?site.name:'Custom';
   const latStr=isFinite(lat)?lat.toFixed(1):'--';
-  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+  // The old local `esc` here did NOT escape double-quotes (attribute-context unsafe).
+  const esc=s=>escHtml(s);
   textEl.innerHTML='&#9873; Launch Site: '+esc(name)+' &middot; '+latStr+'&deg;N &middot; Az '+esc(azMin)+'&ndash;'+esc(azMax)+'&deg;';
 }
 

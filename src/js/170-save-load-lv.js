@@ -146,7 +146,9 @@ function libDeleteVehicleCard(key){
 function refreshLVSaveSummary(){
   const el=document.getElementById('lv-save-summary');
   if(!el)return;
-  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+  // The old local `esc` here did NOT escape double-quotes (attribute-context unsafe).
+  const esc=s=>escHtml(s);
   const stages=(typeof numStages!=='undefined')?numStages:1;
   let boosterStr='none';
   if(typeof useBooster!=='undefined' && useBooster){

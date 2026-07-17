@@ -8,7 +8,8 @@
 //   {kind,idx,name}= a library vehicle -> pure orbCalcSelectedVehicle() path.
 let _orbVehSel = null;
 
-function _orbVehEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+function _orbVehEsc(s){return escHtml(s);}
 
 // Build the <select> options: Worksheet + optgroups for presets / user vehicles.
 function _orbVehSelectorOptionsHTML(){

@@ -238,7 +238,7 @@ function buildStageComposition(){
       parseFloat(document.getElementById('b_dry')?.value)||0,
       parseFloat(document.getElementById('b_prop')?.value)||0,
       parseFloat(document.getElementById('b_thrust')?.value)||0,
-      parseFloat(document.getElementById('b_isp')?.value)||0,
+      mathValue(document.getElementById('b_isp')?.value,0),
       null,true
     ));
     // additional booster groups (Group 2+) as cards
@@ -268,7 +268,7 @@ function buildStageComposition(){
       mathValue(store.dry,0),
       mathValue(store.prop,0),
       mathValue(store.thrust,0),
-      parseFloat(store.isp)||0,
+      mathValue(store.isp,0),
       s,false
     ));
   }

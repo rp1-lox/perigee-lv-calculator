@@ -70,7 +70,14 @@ function buildTable(){
   tbody.innerHTML='';
   ROWS.forEach(row=>{
     const tr=document.createElement('tr');
-    const allowsMath=['dry','prop','thrust','res'].includes(row.key);
+    // Isp now routes through the same expression parser as the mass/thrust
+    // fields (UNIFICATION_AUDIT item — Isp inputs used to be a bare
+    // type="number" field, so "311*0.98"-style expressions silently failed
+    // where they work in mass fields). commitMathInput()/the global focusout
+    // handler (590-init.js) already generically handle any `.math-input`
+    // field, so this is the one place that needed to change for both the
+    // stage row AND the booster row (both built from this same loop).
+    const allowsMath=['dry','prop','thrust','res','isp'].includes(row.key);
     const inputAttrs=allowsMath?'type="text" inputmode="decimal" class="math-input" title="Calculations supported: +, -, *, /, and parentheses"':'type="number" min="0" step="any"';
     let html=`<td class="rl">${row.label}</td>`;
     // Booster cell (before Stage 1)

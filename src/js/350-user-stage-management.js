@@ -120,7 +120,7 @@ function doAddStage(andSave){
     dry:    parseFloat(document.getElementById('stg-dry').value)||0,
     prop:   parseFloat(document.getElementById('stg-prop').value)||0,
     thrust: parseFloat(document.getElementById('stg-thrust').value)||0,
-    isp:    parseFloat(document.getElementById('stg-isp').value)||1,
+    isp:    mathValue(document.getElementById('stg-isp').value,0)||1,
     res:    parseFloat(document.getElementById('stg-res').value)||2,
     engines:document.getElementById('stg-engines').value.trim()||'—',
     note:   document.getElementById('stg-note').value.trim(),
@@ -133,10 +133,10 @@ function doAddStage(andSave){
     stageCarryS15(stage,{
       s15:true,
       s15_sust_thrust:parseFloat(document.getElementById('stg-s15-thrust')?.value)||0,
-      s15_sust_isp:   parseFloat(document.getElementById('stg-s15-isp')?.value)   ||0,
+      s15_sust_isp:   mathValue(document.getElementById('stg-s15-isp')?.value,0)   ||0,
       s15_jet_mass:   parseFloat(document.getElementById('stg-s15-jet')?.value)   ||0,
       s15_beco_twr:   parseFloat(document.getElementById('stg-s15-twr')?.value)   ||1.2,
-      s15_boost_isp:  parseFloat(document.getElementById('stg-s15-boost-isp')?.value)||0,
+      s15_boost_isp:  mathValue(document.getElementById('stg-s15-boost-isp')?.value,0)||0,
     });
   }
   if(!userStagesByCategory[cat])userStagesByCategory[cat]=[];

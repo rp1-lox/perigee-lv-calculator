@@ -46,6 +46,132 @@ function stagePickS15(src){
   return out;
 }
 
+// ─── S1.5 (STAGE-AND-A-HALF) EXPANSION BOUNDARY ─────────────────────────
+// Compute the Phase-1 / Phase-2 propellant split for a stage-and-a-half.
+// Uses a stage-mass-only approximation: the mass of upper stages and payload
+// above this stage is ignored when locating the BECO point.  The rocket-equation
+// accounting in evalAtPayload still runs with the full mass stack, so the ΔV
+// error from this approximation is small (< 5 % for typical Atlas-class vehicles).
+//
+// @param {object} s  - stage record with {dry, prop, isp, thrust,
+//                      s15_sust_thrust, s15_sust_isp, s15_jet_mass, s15_beco_twr,
+//                      s15_boost_isp}
+// @returns {object}  - {prop_ph1, prop_ph2, isp_ph1, isp_ph2, dry_ph2, boostIspUsed} or {error}
+function _s15BecoSplit(s) {
+  const F_sust   = (s.s15_sust_thrust || 0) * 1000;   // N
+  const isp_ph2  = s.s15_sust_isp > 0 ? s.s15_sust_isp : (parseFloat(s.isp) || 1);
+  const jet      = s.s15_jet_mass   || 0;
+  const twr      = s.s15_beco_twr   || 1.2;
+  const dry      = parseFloat(s.dry)  || 0;
+  const prop     = parseFloat(s.prop) || 0;
+
+  if (F_sust <= 0)  return { error: 'Sustainer thrust must be > 0' };
+  if (jet   <= 0)   return { error: 'Booster pack mass must be > 0' };
+  if (jet   >= dry) return { error: 'Booster pack mass ≥ stage dry mass' };
+  if ((s.s15_sust_thrust || 0) >= (parseFloat(s.thrust) || 0))
+                    return { error: 'Sustainer thrust ≥ total thrust — no booster engines' };
+
+  // At BECO: sustainer TWR on stage-only mass = F_sust / (m_after × G0) = twr
+  // → m_after = F_sust / (twr × G0)   [stage mass after jettison, no payload]
+  const m_after  = F_sust / (twr * G0);
+  const m_beco   = m_after + jet;               // stage mass at BECO (before jettison)
+  const m_stage0 = dry + prop;                  // stage mass at ignition
+
+  if (m_beco >= m_stage0) return { error: 'BECO TWR too low — stage never reaches jettison point (increase TWR)' };
+
+  const prop_ph1 = Math.max(0, m_stage0 - m_beco);
+  const prop_ph2 = Math.max(0, prop - prop_ph1);
+
+  if (prop_ph2 <= 0) return { error: 'No propellant left for Phase 2 — lower BECO TWR or add more propellant' };
+
+  // Optional mass-flow-blended Phase-1 Isp: thrust-weighted harmonic mean of the
+  // booster engines' Isp and the sustainer's Isp, since both burn together in Phase 1.
+  // Isp_eff = F_tot / (F_boost/Isp_boost + F_sust/Isp_sust), F_boost = F_tot - F_sust.
+  const authoredIsp = parseFloat(s.isp) || 1;
+  const boostIsp     = s.s15_boost_isp > 0 ? s.s15_boost_isp : 0;
+  let isp_ph1 = authoredIsp;
+  let boostIspUsed = null;
+  if (boostIsp > 0) {
+    const F_tot   = (parseFloat(s.thrust) || 0) * 1000;   // N
+    const F_boost = F_tot - F_sust;                       // guarded > 0 above
+    if (F_boost > 0) {
+      isp_ph1 = F_tot / (F_boost / boostIsp + F_sust / isp_ph2);
+      boostIspUsed = boostIsp;
+    }
+  }
+
+  return {
+    prop_ph1,
+    prop_ph2,
+    isp_ph1,
+    isp_ph2,
+    dry_ph2:  dry - jet,
+    boostIspUsed,
+  };
+}
+
+// ONE S1.5 expansion boundary (UNIFICATION_AUDIT P2.1 — "S1.5 splitter shipped
+// 3x": calculateWithS15 (150), _fleetExpandStages (560), and _tsExpandStages
+// (165) used to each hand-roll their own stage/BECO iteration with DIVERGENT
+// output records and error policies). Every consumer of vehicle stage data now
+// routes through this ONE function; a source-grep gate (tests/suites/
+// 10-canonical-migrations.js) fails the build if any module outside this file
+// calls `_s15BecoSplit` directly.
+//
+// Input: `stages` — an array of stage records, already numerically normalized
+// by the caller (mass/thrust/isp/res coerced to numbers — e.g. via mathValue()
+// for DOM-sourced fields). s15 stages must carry the s15 sextet (stageCarryS15).
+// This function does NOT do unit coercion or defaulting beyond `||0`/`||1`
+// safety nets — that is caller-side responsibility, same as the field-wrap
+// decorations (150's mathValue/label wrap, 560's extra provenance) each caller
+// applies on top of the returned records.
+//
+// Output: one record per input stage (non-s15, or s15-with-split-error under
+// 'annotate'), or TWO records (Ph.1 + Ph.2) per split s15 stage. Every record
+// carries `_src` (index of the originating input stage) so callers can rebuild
+// per-source labels/provenance; split records additionally carry `_phase`
+// ('Ph.1'|'Ph.2'); an annotated split failure carries `_err`.
+//
+// opts.onError:
+//   'throw'    (default) — throws an Error with .stageIndex/.s15Error set, for
+//              a caller that wants to abort the whole calculation and surface
+//              the problem before computing anything wrong (calculateWithS15's
+//              pre-existing abort-and-render-to-#results-panel behavior).
+//   'annotate' — pushes the RAW unsplit stage decorated with `_err` and keeps
+//              going (matches _fleetExpandStages' pre-existing behavior).
+//              _tsExpandStages previously had a THIRD policy here — silently
+//              falling back to the unsplit stage with NO annotation, i.e.
+//              quietly under-modeling an invalid S1.5 vehicle as single-stage.
+//              That silent policy is retired: _tsExpandStages now also uses
+//              'annotate', so an invalid S1.5 vehicle is visibly flagged
+//              (via `_err`) instead of hiding the misconfiguration.
+function stageExpandS15(stages, opts){
+  opts = opts || {};
+  const onError = opts.onError || 'throw';
+  const out = [];
+  (stages || []).forEach((raw, i) => {
+    const st = raw || {};
+    if (st.s15) {
+      const sp = _s15BecoSplit(st);
+      if (sp.error) {
+        if (onError === 'throw') {
+          const err = new Error(sp.error);
+          err.stageIndex = i;
+          err.s15Error = sp.error;
+          throw err;
+        }
+        out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||0, _src: i, _err: sp.error });
+        return;
+      }
+      out.push({ dry: st.dry||0, prop: sp.prop_ph1, thrust: st.thrust||0, isp: sp.isp_ph1, res: st.res||0, _src: i, _phase: 'Ph.1' });
+      out.push({ dry: sp.dry_ph2, prop: sp.prop_ph2, thrust: st.s15_sust_thrust||0, isp: sp.isp_ph2, res: st.res||0, _src: i, _phase: 'Ph.2' });
+    } else {
+      out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||0, _src: i });
+    }
+  });
+  return out;
+}
+
 // Parse editable stage quantities without eval. Supports decimal numbers,
 // scientific notation, parentheses, unary signs, and + - * /.
 function parseMathExpression(value){
@@ -232,7 +358,7 @@ function boosterModeFromDOM(){
 function lvBoosterGroups(){
   if(!useBooster) return [];
   const g0={ dry:gv('b_dry'), prop:gv('b_prop'), thrust:gv('b_thrust'),
-    isp:parseFloat(document.getElementById('b_isp')?.value)||1, res:gv('b_res'),
+    isp:gv('b_isp')||1, res:gv('b_res'),
     count:parseInt(document.getElementById('num-boosters')?.value)||0, ignition:'ground',
     ...boosterModeFromDOM() };
   const extra=(typeof _extraBoosterGroups!=='undefined'&&Array.isArray(_extraBoosterGroups))?_extraBoosterGroups:[];

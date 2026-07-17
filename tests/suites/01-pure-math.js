@@ -18,7 +18,7 @@ const {
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
-  _s15BecoSplit, stageCarryS15, stageClearS15, stagePickS15, progBodyAngleAt, progBodyWorldPos,
+  _s15BecoSplit, stageExpandS15, stageCarryS15, stageClearS15, stagePickS15, progBodyAngleAt, progBodyWorldPos,
   progBodyWorldPosCalibrated, progBodyEphemState, progBodyLocalEphemState,
   progKeplerSolveE, progEpochJD, progHelioPos, progHelioVel, progPorkchopGrid,
   _trajArcRotationForTarget, _trajLegPathFraction, _trajArcPointAt, _trajLodOpacity,
@@ -387,23 +387,11 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   ok('_s15BecoSplit: nonsense stage (sustainer thrust 0) returns error, does not throw',
     !badThrew && !!(badResult && badResult.error));
 
-  // ── Expansion: mirrors _fleetExpandStages() (src/js/560-fleet-editor.js) ──
-  function expandStages(stageData) {
-    const out = [];
-    (stageData || []).forEach((st, i) => {
-      if (st.s15) {
-        const sp = _s15BecoSplit(st);
-        if (sp.error) { out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i, _err: sp.error }); return; }
-        out.push({ dry: st.dry||0,  prop: sp.prop_ph1, thrust: st.thrust||0,          isp: sp.isp_ph1, res: st.res||2, _src: i, _phase: 'Ph.1' });
-        out.push({ dry: sp.dry_ph2, prop: sp.prop_ph2, thrust: st.s15_sust_thrust||0, isp: sp.isp_ph2, res: st.res||2, _src: i, _phase: 'Ph.2' });
-      } else {
-        out.push({ dry: st.dry||0, prop: st.prop||0, thrust: st.thrust||0, isp: st.isp||1, res: st.res||2, _src: i });
-      }
-    });
-    return out;
-  }
-
-  const expanded = expandStages([atlasD, upperStage]);
+  // ── Expansion: the ONE S1.5 expansion boundary (stageExpandS15,
+  // src/js/140-physics.js, UNIFICATION_AUDIT P2.1) — exercised directly here
+  // rather than a locally-duplicated mirror, so this pin also covers the
+  // shared boundary all three real callers (150/560/165) now route through.
+  const expanded = stageExpandS15([atlasD, upperStage], { onError: 'annotate' });
   ok('S1.5 expansion: 3 virtual stages produced (Ph.1 + Ph.2 + upper stage)', expanded.length === 3);
   ok('S1.5 expansion: first two phases both trace back to source stage 0',
     expanded[0]._src === 0 && expanded[1]._src === 0 && expanded[0]._phase === 'Ph.1' && expanded[1]._phase === 'Ph.2');
