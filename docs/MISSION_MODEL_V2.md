@@ -1092,3 +1092,46 @@ needed no change — its NRHO leg (`physSolveNrhoTransfer`, 565-physics-nrho.js)
 own departure geometry rather than inheriting a hand-tuned LAN, and converges at ~59.5 km miss.
 Gate: 978/978 assertions unchanged (no test pinned the old seed's non-convergent numbers, so no
 re-pin was needed).
+
+## 26. ARCHITECTURE PAGE (A-series) — spec, 2026-07-18, user-approved direction; layout for review before implementation
+
+The mission-planning stage that comes BEFORE events: a dedicated top-level page where the user authors the mission's orbit ladder (named orbits) and transfer edges (with chain decomposition), producing a dV budget the Mission page then executes against. Discussed and shaped with the user 2026-07-18.
+
+### Hard invariant — KSP mode (user, verbatim spirit: "if someone wants to play it like KSP, they should be able to")
+The Mission page MUST remain fully usable with NO architecture: launch, dock, maneuver, everything — exactly as today. The architecture is purely additive; it exists to make missions COHERENT, never to gate them. No feature currently reachable without an architecture may grow an architecture dependency. Dev seeds stay architecture-free. Acceptance for every A-step includes "fresh program, no architecture, full mission flow unchanged."
+
+### Navigation — six tabs, two triads
+| Rocket triad | Flight triad |
+|---|---|
+| Vehicles - Orbits - Trade Studies | Spacecraft - Architecture - Mission |
+Each triad ends in its synthesis page (Trades synthesizes vehicles+orbits; Mission synthesizes spacecraft+architecture). New page id `page-architecture`, nav label "Architecture", inserted between Spacecraft and Mission. (Future UI idea, parked: visual triad grouping in the header.)
+
+### Page layout (mirrors the Mission page deliberately — sibling feel)
+- CENTER STAGE: the node map, mounted as the page's primary surface (the same renderer the Mission Plan surface uses — one renderer, two mounts). Nodes = the ladder's orbits; edges = transfers, drawn via the existing bridge-draw interaction. Edge sub-segments show the chain decomposition (depart / MCC / insert — e.g. TLI -> MCC -> LOI for a Moon edge) with per-segment dV.
+- RIGHT RAIL: the ORBIT LADDER — one card per node, in ladder order. Cards use the SAME accordion/inline-edit pattern as event cards (same comboboxes, same canonical orbit fields periKm/apoKm/incDeg/lanDeg + body + name). Reorder, delete, add. Below the ladder: the preset/catalog picker (refOrbitCatalogList) — click a preset to add it as a node (bound by orbitRefId where applicable, fork-on-edit semantics identical to T2/T4).
+- RAIL FOOTER: the running mission dV budget (sum of edge chains) — the page's headline number.
+- NO events, no vehicles, no time on this page. It is pure geometry + budget.
+
+### Data model
+`PROG_ACTIVE_PROGRAM.architecture = { nodes: [ { id, name, body, orbit: <canonical>, orbitRefId? } ], edges: [ { id, fromId, toId, chain: [ { role: 'depart'|'mcc'|'insert', dv_ms, ... } ] } ] }`
+- PROGRAM-level state (not mission state): persists via buildProgramObject/applyProgramObject (450) + autosave/session (455 nests it for free), with a legacy-blob guard (absent -> null/empty, no migration needed — the field is new).
+- Orbits are CANONICAL objects (384) — no new dialect, ever. Edge dv comes from progNmComputeEdgeDv (the one accounting source); the chain decomposition reuses the s22 transfer-chain machinery.
+- Undo: architecture edits captured in the same per-mission undo stream? NO — architecture is program-level; it gets its OWN small undo stack (same snapshot pattern as 575, scoped to the page) so mission undo and plan undo do not interleave confusingly.
+
+### Carry-over into Mission (the payoff)
+- The Mission page's Plan surface becomes a READ-mostly view of the architecture when one exists (edit affordance = jump to the Architecture tab; one writable surface, no dual authority). With no architecture, the Plan surface behaves exactly as today (KSP invariant).
+- LAUNCH card's Target select lists architecture nodes first (then the 8 bodies as today). Picking a node runs the existing complete solve against that node's plane.
+- New event affordance on an architecture edge: "transfer along this edge" -> generates the s22 chain as real event cards (depart burn, MCC, insertion), each charged/editable/deletable (delete insertion = flyby, unchanged semantics).
+- Readiness (572): new cheap check family — flown-vs-planned deviation badges (event orbit vs its architecture node, chain dv vs budget). INFO/amber only, never blocking (KSP invariant).
+- Trade studies (LATER, out of A-series scope): score a vehicle against the architecture budget — noted as the triad-crossing follow-up, not built now.
+
+### Module plan (the de-scoping win)
+New modules 6xx (next free prefixes): 600-architecture-model.js (data model, persistence hooks, undo), 605-architecture-page.js (page shell + ladder rail), 610-architecture-map.js (node-map mount + edge/chain display glue). Authoring code currently living in the 570 cluster (430 custom-node authoring pieces, 5746 node-editing paths, mission-nodemap orbit-spec writers) migrates toward the 6xx home INCREMENTALLY (each A-step moves only what it needs — no big-bang relocation). The Mission page sheds its ORBITS catalog rail (superseded by the Architecture ladder) in A4.
+
+### Sequencing (each step its own gated commit, lightweight verification)
+- A1: nav + empty page-architecture + architecture data model with persistence round-trip (+pins) + KSP-invariant acceptance run.
+- A2: ladder rail — node cards (canonical inline edit), preset picker, add/delete/reorder, program-level undo.
+- A3: node-map stage — mount, node placement from ladder, edge drawing, chain decomposition + per-edge dV + budget footer.
+- A4: mission-side wiring — Target-from-node, transfer-along-edge -> s22 chain events, Plan surface read-mostly mode, Mission ORBITS rail retired.
+- A5: polish — flown-vs-planned readiness badges, empty-state hints, docs/screens.
+Non-goals (parked): 3D node map + 2D/3D switcher (explicitly deferred by user); trade-study budget scoring; multi-mission architectures.
