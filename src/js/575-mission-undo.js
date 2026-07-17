@@ -35,6 +35,12 @@ function _missionUndoSerialize(m) {
     fleetEntryId: m.fleetEntryId,
     payloadScIds: m.payloadScIds || [],
     laneColors: m.laneColors || {},
+    // R1 (mission epoch UI): epochJD lives on PROG_ACTIVE_PROGRAM (a program-
+    // wide setting, not per-mission), but is captured here so an epoch change
+    // is an undoable step like any other authored mutation. Guarded so a
+    // pre-epoch-feature snapshot (this field simply absent) still round-trips.
+    epochJD: (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && isFinite(PROG_ACTIVE_PROGRAM.epochJD))
+      ? PROG_ACTIVE_PROGRAM.epochJD : null,
   });
 }
 
@@ -59,6 +65,11 @@ function _missionUndoApply(m, snapStr) {
   m.fleetEntryId = data.fleetEntryId;
   m.payloadScIds = data.payloadScIds;
   m.laneColors = data.laneColors || {};
+  // Legacy snapshots (pre-epoch-feature) have epochJD absent/null — leave the
+  // current program epoch alone rather than clobbering it with null.
+  if (isFinite(data.epochJD) && typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM) {
+    PROG_ACTIVE_PROGRAM.epochJD = data.epochJD;
+  }
   _missionUndoRestoring = true;
   try {
     missionRecompute(m);
