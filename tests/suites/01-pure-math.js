@@ -136,7 +136,10 @@ ok('lvPerformance: all stage burn times positive', res1.sBTs.every(bt => bt > 0)
 // baseline. If a future physics refactor changes these values, this test will
 // fail and must be re-evaluated deliberately (not silently updated).
 approx('lvPerformance: golden tDV snapshot', res1.tDV, 10074.710, 0.01);
-approx('lvPerformance: golden margin snapshot', res1.margin, 909.813, 0.01);
+// Re-pinned 2026-07-18 (was 909.813): LV_MSCORR_* multi-stage ascent
+// correction (MATH.md critique 121, Silverbird-fitted) raises DVpen for
+// multi-stage stacks; margin drops by the correction.
+approx('lvPerformance: golden margin snapshot', res1.margin, 500.769, 0.01);
 
 // ── Booster equivalence: single object vs array-of-one ─────────────────────
 const boosterGroup = { dry: 2000, prop: 40000, thrust: 1500, isp: 280, res: 2, count: 2, ignition: 'ground' };
@@ -223,11 +226,11 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 
   // goldens from browser calculate() runs (rendered values are rounded → ±2 kg)
   approx('destOnOrbitDV pin: GTO 185×35786 @28.5° max payload matches calculate()',
-    maxPayFor({ mode: 'orbit', apogee: 35786, perigee: 185, inc: 28.5, parkingAlt: 185 }), 57105, 2);
+    maxPayFor({ mode: 'orbit', apogee: 35786, perigee: 185, inc: 28.5, parkingAlt: 185 }), 44786.45, 2); // re-pinned 2026-07-18 (was 57105): critique 121 correction
   approx('destOnOrbitDV pin: circular 800 km @0° (plane change) matches calculate()',
-    maxPayFor({ mode: 'orbit', apogee: 800, perigee: 800, inc: 0, parkingAlt: 185 }), 24350, 2);
+    maxPayFor({ mode: 'orbit', apogee: 800, perigee: 800, inc: 0, parkingAlt: 185 }), 16582.49, 2); // re-pinned 2026-07-18 (was 24350): critique 121
   approx('destOnOrbitDV pin: escape C3=0 matches calculate()',
-    maxPayFor({ mode: 'escape', c3: 0, decl: 28.5, perigee: 185 }), 40549, 2);
+    maxPayFor({ mode: 'escape', c3: 0, decl: 28.5, perigee: 185 }), 30521.39, 2); // re-pinned 2026-07-18 (was 40549): critique 121
 
   // escape below minimum C3 → error, no crash
   ok('destOnOrbitDV: impossible C3 returns error field',
@@ -413,7 +416,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // If a future physics refactor changes this value, re-evaluate deliberately
   // — do not silently update the number.
   approx('S1.5: golden max-payload snapshot (expanded Atlas D Sust. + upper stage)',
-    s15MaxPay, 2329.83, 1);
+    s15MaxPay, 1750.95, 1); // re-pinned 2026-07-18 (was 2329.83): critique 121 correction applies to the expanded 2-stage S1.5 stack
 
   // ── UNexpanded stage must give a DIFFERENT max payload ──────────────────
   // Feeding the raw (unsplit) S1.5 stage directly into lvPerformance/
@@ -736,6 +739,27 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // pins retired with the calibration itself — real ephemeris rails need no
   // offsets; progBodyWorldPosCalibrated is a thin alias, pinned in the R1
   // ephemeris block above.)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SILVERBIRD ANCHORS (2026-07-18, MATH.md critique 121) — the LV calculator's
+// correctness standard is fidelity to Silverbird Astronautics (user directive).
+// Reference: 30-probe black-box campaign, tests/fixtures/silverbird-probes-
+// 2026-07-18.md. Silverbird raw, OUR stage data, SatV 185x185@28.5: 119,002 kg.
+// Our corrected model must stay within the validated band of that reference,
+// and the multi-stage correction must stay ON for stacks / OFF for singles.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const satst=[{dry:130980,prop:2169290,thrust:34020,isp:304,res:2},{dry:34450,prop:451830,thrust:5165,isp:425,res:2},{dry:15090,prop:108110,thrust:876,isp:425,res:2}];
+  const mp=lvMaxPayload(satst,null,0,0,185,0,28.5,37,112);
+  approx('SB anchor: Saturn V 185x185@28.5 corrected max payload (headline golden)', mp, 125893, 5);
+  const sbRaw=119002;
+  ok('SB anchor: corrected SatV within +8%/-2% of Silverbird raw (119,002)', mp>sbRaw*0.98 && mp<sbRaw*1.08);
+  const perf=lvPerformance(satst,null,mp,0,0,185,0,28.5,37,112);
+  ok('SB anchor: multi-stage correction active on SatV (msCorr 500-800 m/s band)', perf.msCorr>500 && perf.msCorr<800);
+  const ss=lvPerformance([{dry:5000,prop:100000,thrust:2500,isp:350,res:0}],null,3948,0,0,185,0,28.5,37,112);
+  ok('SB anchor: single-stage msCorr gated off (exactly 0)', ss.msCorr===0);
+  ok('SB anchor: DVpen decomposes (DVpenBase + msCorr, exact)', Math.abs(perf.DVpenBase+perf.msCorr-perf.DVpen)<1e-9);
 }
 
   return counts();

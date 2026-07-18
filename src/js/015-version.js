@@ -22,9 +22,9 @@ function escHtml(s) {
 // ─── VERSION & CHANGELOG ──────────────────────
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
-const APP_VERSION='2.0.1';
+const APP_VERSION='2.1.0';
 const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
-const APP_CHANGELOG=[
+const APP_CHANGELOG=[{v:'2.1.0',d:'2026-07-18',t:'Calculator recalibrated to Silverbird',n:'Multi-stage ascent correction fitted against a 30-configuration Silverbird probe campaign (holdout-validated at 800 km/GTO/MEO). Saturn V 185x185 golden moves 150,838 -> 125,893 kg; all multi-stage payloads now track Silverbird raw within a few percent. Single-stage results unchanged. See MATH.md critique 121.'},
   {v:'2.0.1', title:'Integral — analysis update', date:'2026-07-15', notes:[
     'NEW Trade Studies sweep: Escape C3 — the classic payload-vs-C3 launch vehicle capability curve, with every metric, vehicle comparison, and CSV export. Pinned to exactly match the Orbits page escape math.',
     'Trade-study line charts are analysis-grade now: hairline series strokes at any window size, finer gridlines, and wheel-zoom / drag-pan / double-click-reset with the y-axis auto-fitting to the zoomed window.',

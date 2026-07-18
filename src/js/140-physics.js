@@ -8,6 +8,28 @@ function rotVel(lat,azMin,azMax){
 }
 function rocketEq(isp,m0,mf){return(mf<=0||m0<=mf)?0:G0*isp*Math.log(m0/mf);}
 
+// ─── MULTI-STAGE ASCENT CORRECTION (2026-07-18, MATH.md critique 121) ───────
+// The published Townsend-Schilling method (2009 note) gives only the LINEAR
+// penalty refit (Eq5, K3+K4*Tmix) — regressed on modern vehicles with
+// ordinary ascent times. Silverbird's live model (SB7) books substantially
+// more penalty for multi-stage stacks with long total burns (Saturn V-class:
+// ~800 m/s more), physics visible in third-party Schilling-method
+// implementations as a full-ascent-time correction. This term was fitted by
+// least squares against a 30-configuration black-box probe campaign of
+// Silverbird itself (19 LEO calibration + 11 higher-orbit holdout points;
+// dataset: tests/fixtures/silverbird-probes-2026-07-18.md). Chosen basis won
+// on HOLDOUT error (fitted at LEO only, validated blind at 800 km/GTO/MEO:
+// Saturn V GTO error +29.7% -> +1.1%, MEO +32% -> -0.3%).
+//   corr = max(0, A*TaFull - C*X + B)   [multi-stage only]
+//   TaFull = total ascent burn time (all stages, boosters integrated), s
+//   X      = sum over upper stages of bt_i * max(0, 1 - TW_i)  (low-TW
+//            upper-stage exposure; TW at stage ignition, full stack above)
+// With identical stage data our corrected model reproduces Silverbird raw to
+// +-0.3-6% across LEO/800/GTO/MEO, 1-3 stages. Single-stage is gated off
+// (already agreed within noise). Known residual: none of this fixes the
+// inclination-insensitive rotVel (separate defect, documented).
+const LV_MSCORR_A=1.0313, LV_MSCORR_C=1.0667, LV_MSCORR_B=-1.4664;
+
 // ─── S1.5 (STAGE-AND-A-HALF) CARRIAGE ─────────
 // The s15 sextet (the `s15` flag + these 5 fields) describes a stage's BECO
 // (booster-engine-cutoff) split and must move ATOMICALLY between every stage
@@ -329,9 +351,26 @@ function lvPerformance(stages, booster, pay, fairingMass, fairingJ, parkingAlt, 
       Ta+=bt*Math.min(1,Math.max(0,fr));cum=Vcirc;break;}
     Ta+=bt;cum+=dv;}
   if(cum<Vcirc)Ta=tBT;
-  const Tmix=0.405*Ta+0.595*T3s, DVpen=K3+K4*Tmix;
+  const Tmix=0.405*Ta+0.595*T3s, DVpenBase=K3+K4*Tmix;
+  // Multi-stage ascent correction (see LV_MSCORR_* above): extra loss for
+  // long multi-stage ascents that the linear Eq5 penalty cannot produce.
+  // X = upper-stage low-TW exposure; TW at stage ignition with the full
+  // stack above (spM[s] already = payload+fairing+stages-above).
+  let msCorr=0;
+  if(n>1){
+    let X=0;
+    for(let s=1;s<n;s++){
+      const sd=stages[s],up=sd.prop*(1-(sd.res||0)/100);
+      const mdot=(sd.thrust*1000)/(G0*sd.isp),bt=mdot>0?up/mdot:0;
+      const mIgn=sd.dry+sd.prop+spM[s];
+      const tw=mIgn>0?(sd.thrust*1000)/(mIgn*G0):0;
+      X+=bt*Math.max(0,1-tw);
+    }
+    msCorr=Math.max(0,LV_MSCORR_A*tBT-LV_MSCORR_C*X+LV_MSCORR_B);
+  }
+  const DVpen=DVpenBase+msCorr;
   const DVasc=Vcirc+DVpen-Vrot, DVtot=DVasc+(onOrbitDV||0), margin=tDV-DVtot;
-  return{sDVs,sBTs,tDV,tBT,Ta,Tmix,DVpen,DVasc,DVtot,margin,tMas,A0,avgIsp,Vcirc,Vrot};
+  return{sDVs,sBTs,tDV,tBT,Ta,Tmix,DVpen,DVpenBase,msCorr,DVasc,DVtot,margin,tMas,A0,avgIsp,Vcirc,Vrot};
 }
 
 // Max payload (kg) a vehicle can deliver — binary-search lvPerformance for the
