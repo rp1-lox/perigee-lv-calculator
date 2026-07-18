@@ -17,6 +17,7 @@ module.exports = function run() {
 const {
   archGet, archAddNode, archRemoveNode, archAddEdge, archRemoveEdge,
   archUndoCapture, archUndo, archRedo, archUndoReset,
+  archUpdateNode, archMoveNode, archNodeDetachRef,
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
@@ -554,6 +555,48 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
     ok('legacy blob: no crash, architecture field absent until archGet() is called', !('architecture' in sandbox.PROG_ACTIVE_PROGRAM));
     const arch = archGet();
     ok('legacy blob: archGet() lazily creates an empty architecture on first access', Array.isArray(arch.nodes) && arch.nodes.length === 0 && Array.isArray(arch.edges) && arch.edges.length === 0);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // A2 — ladder rail CRUD extensions (archUpdateNode/archMoveNode/
+  // archNodeDetachRef, 600-architecture-model.js). The rail UI itself
+  // (605-architecture-page.js) is DOM-driven and not loaded into this
+  // harness — these pins cover the model-side CRUD it calls.
+  // ═══════════════════════════════════════════════════════════════════════
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    archUndoReset();
+    const a = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    const b = archAddNode({ name: 'GEO', body: 'Earth', orbit: geo });
+
+    const updated = archUpdateNode(a.id, { name: 'LEO renamed', orbit: { body: 'Earth', periKm: 300, apoKm: 300, incDeg: 51.6, lanDeg: 0 } });
+    ok('archUpdateNode: patches name + re-normalizes the orbit', updated && updated.name === 'LEO renamed' && updated.orbit.periKm === 300 && updated.orbit.incDeg === 51.6);
+    ok('archUpdateNode: unknown id -> null, no crash', archUpdateNode('nope', { name: 'x' }) === null);
+
+    const badPatch = archUpdateNode(a.id, { orbit: { body: 'Earth', propagated: true, r: [1, 0, 0], v: [0, 1, 0] } });
+    ok('archUpdateNode: invalid (propagated) orbit patch rejected -> null, node unchanged', badPatch === null && archGet().nodes.find(n => n.id === a.id).orbit.periKm === 300);
+
+    const boundNode = archAddNode({ name: 'GTO', body: 'Earth', orbit: geo, orbitRefId: 'geo' });
+    ok('archAddNode: orbitRefId carries through when passed in spec', boundNode.orbitRefId === 'geo');
+    const detached = archNodeDetachRef(boundNode.id);
+    ok('archNodeDetachRef: clears orbitRefId (fork-on-edit), no undo-capture side effect on the stack top', detached === true && !('orbitRefId' in archGet().nodes.find(n => n.id === boundNode.id)));
+    ok('archNodeDetachRef: already-unbound node -> false', archNodeDetachRef(boundNode.id) === false);
+    const rebound = archUpdateNode(boundNode.id, { orbitRefId: 'geo' });
+    ok('archUpdateNode: orbitRefId key present + truthy -> binds', rebound.orbitRefId === 'geo');
+    const cleared = archUpdateNode(boundNode.id, { orbitRefId: null });
+    ok('archUpdateNode: orbitRefId key present + null -> clears (deletes key)', !('orbitRefId' in cleared));
+
+    // archMoveNode: [a, b, boundNode] -> move boundNode (idx 2) up to idx 1.
+    ok('order before move', archGet().nodes.map(n => n.id).join(',') === [a.id, b.id, boundNode.id].join(','));
+    const moved = archMoveNode(boundNode.id, -1);
+    ok('archMoveNode: moves a node up one slot', moved === true && archGet().nodes.map(n => n.id).join(',') === [a.id, boundNode.id, b.id].join(','));
+    ok('archMoveNode: cannot move the first node further up -> false, order unchanged', archMoveNode(a.id, -1) === false && archGet().nodes[0].id === a.id);
+    ok('archMoveNode: cannot move the last node further down -> false', archMoveNode(b.id, 1) === false);
+    ok('archMoveNode: unknown id -> false', archMoveNode('nope', 1) === false);
+
+    // undo/redo: archUpdateNode and archMoveNode both went through archUndoCapture.
+    const beforeUndoCount = archGet().nodes.length;
+    ok('CRUD extensions participate in the same undo stack (archUndo reverts the last move)', archUndo() === true && archGet().nodes.map(n => n.id).join(',') === [a.id, b.id, boundNode.id].join(',') && archGet().nodes.length === beforeUndoCount);
   }
 
   // restore the shared progUUID stub for any later code in this process that

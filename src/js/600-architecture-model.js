@@ -84,6 +84,62 @@ function archRemoveEdge(id) {
   return true;
 }
 
+// ─── A2 additions: update + reorder ────────────────────────────────────────
+
+/** Patch an existing node's name/body/orbit/orbitRefId. `patch.orbit` (if
+ *  present) is re-validated through orbitNormalize exactly like archAddNode
+ *  — an invalid orbit patch is rejected wholesale (no partial mutation) and
+ *  returns null. `patch.orbitRefId` may be set to a string to bind, or
+ *  explicit null to clear (fork-on-edit) — omit the key to leave it
+ *  untouched. Returns the updated node, or null if the node id doesn't
+ *  exist or the orbit patch didn't validate. */
+function archUpdateNode(id, patch) {
+  if (!patch) return null;
+  const arch = archGet();
+  const node = arch.nodes.find(n => n.id === id);
+  if (!node) return null;
+  let orbit = node.orbit;
+  if (patch.orbit) {
+    orbit = orbitNormalize(patch.orbit);
+    if (!orbit) return null; // v1: no propagated/surface nodes — same guard as archAddNode
+  }
+  archUndoCapture();
+  if (patch.name != null) node.name = patch.name;
+  if (patch.body != null) node.body = patch.body;
+  node.orbit = orbit;
+  if ('orbitRefId' in patch) {
+    if (patch.orbitRefId) node.orbitRefId = patch.orbitRefId;
+    else delete node.orbitRefId;
+  }
+  return node;
+}
+
+/** Clear a node's orbitRefId binding WITHOUT an undo-capture step — the
+ *  fork-on-edit convention (mirrors missionLaunchOrbitDetach, 570): hand-
+ *  editing a bound orbit field detaches it immediately as the user types,
+ *  same as T2's LAUNCH card; the undo-worthy mutation is the Apply that
+ *  follows (archUpdateNode above), not the detach flag itself. */
+function archNodeDetachRef(id) {
+  const arch = archGet();
+  const node = arch.nodes.find(n => n.id === id);
+  if (!node || !node.orbitRefId) return false;
+  delete node.orbitRefId;
+  return true;
+}
+
+/** Move a node earlier/later in ladder order (dir: -1 up, +1 down). Returns
+ *  true if it moved. */
+function archMoveNode(id, dir) {
+  const arch = archGet();
+  const idx = arch.nodes.findIndex(n => n.id === id);
+  if (idx === -1) return false;
+  const j = idx + dir;
+  if (j < 0 || j >= arch.nodes.length) return false;
+  archUndoCapture();
+  const tmp = arch.nodes[idx]; arch.nodes[idx] = arch.nodes[j]; arch.nodes[j] = tmp;
+  return true;
+}
+
 // ── Undo (own small stack, scoped to the Architecture page — deliberately
 //    NOT the mission undo stream at 575: architecture is program-level, so
 //    mixing the two streams would make either "undo" ambiguous). ──────────

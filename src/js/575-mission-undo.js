@@ -125,6 +125,17 @@ function _missionUndoCanRedo() {
   return stack.redo.length > 0;
 }
 
+// Shared input-guard: true when the key event's target is a live text/edit
+// control (INPUT/TEXTAREA/SELECT/contenteditable) — used by every page-scoped
+// Ctrl+Z/Ctrl+Y handler (this one, and 605-architecture-page.js's) so a
+// keyboard shortcut doesn't fire while the user is typing a value into a
+// field. ONE definition per the project's reuse rule.
+function _uiEditableTarget(e) {
+  const t = e.target;
+  const tag = t && t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable);
+}
+
 document.addEventListener('keydown', e => {
   const cc = document.getElementById('mission-cc');
   const pageProgram = document.getElementById('page-program');
@@ -139,9 +150,7 @@ document.addEventListener('keydown', e => {
     missionCancelPendingEvent(_missionPendingEvent.missionId);
     return;
   }
-  const t = e.target;
-  const tag = t && t.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+  if (_uiEditableTarget(e)) return;
   if (!(e.ctrlKey || e.metaKey)) return;
   const key = e.key.toLowerCase();
   if (key === 'z' && !e.shiftKey) {

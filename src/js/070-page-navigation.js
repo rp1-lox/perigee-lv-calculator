@@ -31,6 +31,7 @@ function showPage(p){
   if(target==='trades'){ tsEnsureRendered(); }
   if(target==='spacecraft'){ scEdRenderList(); scEdRenderDetail(); if(typeof scLibSetMode==='function') scLibSetMode(_scLibMode||'mine'); }
   if(target==='orbits' && typeof orbVehRenderSelectorBar==='function'){ orbVehRenderSelectorBar(); }
+  if(target==='architecture' && typeof archRenderPage==='function'){ archRenderPage(); }
   // Re-draw the mini orbit-diagram on navigation TO the orbits page: its
   // overlay layer (230) sizes itself off the panel's REAL measured px rect
   // (see 230's header comment), which is 0x0 while the page is display:none —
