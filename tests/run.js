@@ -29,7 +29,7 @@ const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 1012;
+const MIN_ASSERTIONS = 1018;
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');

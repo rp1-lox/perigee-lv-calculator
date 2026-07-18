@@ -18,6 +18,7 @@ const {
   archGet, archAddNode, archRemoveNode, archAddEdge, archRemoveEdge,
   archUndoCapture, archUndo, archRedo, archUndoReset,
   archUpdateNode, archMoveNode, archNodeDetachRef,
+  archEdgeDv, archComputeBudget, _nmDvPhysics,
   circVel, rotVel, rocketEq, parseMathExpression, mathValue,
   lvPerformance, lvMaxPayload,
   progVcirc, progHohmannTOF, progTransferTOF, progBoiloff,
@@ -597,6 +598,47 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
     // undo/redo: archUpdateNode and archMoveNode both went through archUndoCapture.
     const beforeUndoCount = archGet().nodes.length;
     ok('CRUD extensions participate in the same undo stack (archUndo reverts the last move)', archUndo() === true && archGet().nodes.map(n => n.id).join(',') === [a.id, b.id, boundNode.id].join(',') && archGet().nodes.length === beforeUndoCount);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // A3 — node-map edge dV + chain decomposition (610-architecture-map.js).
+  // ACCOUNTING-IDENTITY GUARD: archEdgeDv() adapts canonical architecture
+  // orbits into the node-map dialect and calls _nmDvPhysics directly (the
+  // SAME pure function progNmComputeEdgeDv, 430, delegates to) — these pins
+  // confirm the two paths agree byte-for-byte, and that a multi-term result's
+  // `legs` breakdown sums back to the total (no silent double-counting or
+  // dropped terms when 610 displays the chain).
+  // ═══════════════════════════════════════════════════════════════════════
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    archUndoReset();
+    const leoNode = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
+    const gtoOrbit = { body: 'Earth', periKm: 185, apoKm: 35786, incDeg: 28.5, lanDeg: 0, frame: 'eq' };
+    const gtoNode = archAddNode({ name: 'GTO', body: 'Earth', orbit: gtoOrbit });
+    const lloNode = archAddNode({ name: 'LLO', body: 'Moon', orbit: { body: 'Moon', periKm: 100, apoKm: 100, incDeg: 90, lanDeg: 0, frame: 'eq' } });
+
+    // Same-body coaxial two-burn edge (LEO -> GTO): archEdgeDv must equal the
+    // direct _nmDvPhysics call on the same orbit shapes, and its legs must
+    // sum to the total.
+    const direct = _nmDvPhysics({ orbit: { type: 'circular', body: 'Earth', periKm: 185, apoKm: 185, incDeg: 28.5 } },
+                                 { orbit: { type: 'elliptic', body: 'Earth', periKm: 185, apoKm: 35786, incDeg: 28.5 } });
+    const viaArch = archEdgeDv(leoNode, gtoNode);
+    ok('archEdgeDv: LEO->GTO matches _nmDvPhysics dv exactly (one accounting source)', viaArch && direct && viaArch.dv === direct.dv);
+    ok('archEdgeDv: LEO->GTO legs sum to the total (accounting-identity guard)', viaArch.legs && viaArch.legs.length === 2 && viaArch.legs.reduce((s, l) => s + l.dv, 0) === viaArch.dv);
+
+    // Cross-body corridor edge (Earth orbit -> Moon orbit): depart/insert
+    // chain, no fabricated MCC term.
+    const corridor = archEdgeDv(leoNode, lloNode);
+    ok('archEdgeDv: LEO->LLO corridor edge resolves a dv', corridor && corridor.dv > 0);
+    ok('archEdgeDv: LEO->LLO corridor legs are depart(TLI)+insert(LOI), summing to the total', corridor.legs && corridor.legs.length === 2 && corridor.legs[0].role === 'depart' && corridor.legs[1].role === 'insert' && corridor.legs.reduce((s, l) => s + l.dv, 0) === corridor.dv);
+
+    const edge1 = archAddEdge(leoNode.id, gtoNode.id);
+    const edge2 = archAddEdge(leoNode.id, lloNode.id);
+    const budget = archComputeBudget();
+    ok('archComputeBudget: sums every edge\'s dv (2 edges, 0 unresolved)', budget.edgeCount === 2 && budget.unresolved === 0 && budget.total === viaArch.dv + corridor.dv);
+
+    archRemoveEdge(edge2.id);
+    ok('archComputeBudget: live-recomputes after an edge is removed (no caching)', archComputeBudget().edgeCount === 1 && archComputeBudget().total === viaArch.dv);
   }
 
   // restore the shared progUUID stub for any later code in this process that

@@ -42,6 +42,7 @@ const FILES = [
   'src/js/425-reference-orbits.js',
   'src/js/567-phase-truth.js',   // after 425: uses refOrbitResolve/_refToRot/refOrbitSamplePropagatedRaw
   'src/js/430-program-module-phase-8-node-map.js',
+  'src/js/610-architecture-map.js',
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
   'src/js/570-mission-interaction-state.js',

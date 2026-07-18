@@ -16,17 +16,14 @@ let _archExpandedId = null;
 
 function archRenderPage() {
   const list = document.getElementById('arch-ladder-list');
-  const stage = document.querySelector('#page-architecture .arch-stage .placeholder-msg');
   const budget = document.getElementById('arch-dv-budget');
   if (!list) return;
   const arch = archGet();
   const nodes = arch.nodes || [];
 
-  if (stage) {
-    stage.textContent = nodes.length
-      ? 'Node map mounts here (A3) — ladder nodes are authored in the rail →'
-      : 'No architecture yet — add orbits from the rail';
-  }
+  // A3: the `.arch-stage` node-map is owned by 610-architecture-map.js
+  // (archMapRender) — this module stays ladder/rail-only per the module plan.
+  if (typeof archMapRender === 'function') archMapRender();
 
   list.innerHTML = nodes.length
     ? nodes.map((n, i) => _archNodeCardHTML(n, i, nodes.length)).join('')
@@ -35,10 +32,15 @@ function archRenderPage() {
   list.innerHTML += _archPresetPickerHTML();
 
   if (budget) {
-    // A3 fills the real dV chain accounting; A2 just states the honest count.
-    budget.textContent = nodes.length
-      ? `${nodes.length} node${nodes.length === 1 ? '' : 's'} in ladder · edges/dV budget: A3`
-      : '';
+    if (!nodes.length) {
+      budget.textContent = '';
+    } else if (typeof archComputeBudget === 'function') {
+      const b = archComputeBudget();
+      const unresolvedNote = b.unresolved ? ` (${b.unresolved} unpriced)` : '';
+      budget.textContent = `${nodes.length} node${nodes.length === 1 ? '' : 's'} · ${b.edgeCount} edge${b.edgeCount === 1 ? '' : 's'} · dV budget: ${Math.round(b.total).toLocaleString()} m/s${unresolvedNote}`;
+    } else {
+      budget.textContent = `${nodes.length} node${nodes.length === 1 ? '' : 's'} in ladder`;
+    }
   }
 }
 

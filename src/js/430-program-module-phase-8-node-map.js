@@ -372,7 +372,15 @@ function _nmDvPhysics(nA, nB) {
       const note = t.single
         ? `${label}: ${Math.round(t.dv1_ms)} m/s at shared apsis around ${body}`
         : `${label}: ${Math.round(t.dv1_ms)} + ${Math.round(t.dv2_ms)} m/s around ${body}`;
-      return { dv: Math.round(t.total_ms), note, method: label };
+      // A3 (610-architecture-map.js): chain-decomposition legs, consumed by
+      // BOTH the mission node map (via progNmComputeEdgeDv, unaffected — it
+      // never reads `.legs`) and the Architecture page's edge display. Same
+      // numbers as dv1_ms/dv2_ms above — accounting-identity guard: sum(legs) === dv.
+      const legs = t.single
+        ? [{ role: 'insert', label, dv: Math.round(t.dv1_ms) }]
+        : [{ role: 'depart', label: 'Burn 1', dv: Math.round(t.dv1_ms) },
+           { role: 'insert', label: 'Burn 2', dv: Math.round(t.dv2_ms) }];
+      return { dv: Math.round(t.total_ms), note, method: label, legs };
     }
 
     // Unhandled same-body combination (e.g. transit→transit, escape→transit)
@@ -440,11 +448,22 @@ function _nmDvPhysics(nA, nB) {
       const descent = progDvLunarAscent(100);
       return { dv: Math.round(tli + loi + descent),
         note: `TLI from ${h_park} km: ${Math.round(tli)} m/s  +  LOI to 100 km: ${Math.round(loi)} m/s  +  Lunar descent: ${Math.round(descent)} m/s`,
-        method: 'Hohmann/patched-conic' };
+        method: 'Hohmann/patched-conic',
+        legs: [{ role: 'depart', label: 'TLI', dv: Math.round(tli) },
+               { role: 'insert', label: 'LOI', dv: Math.round(loi) },
+               { role: 'insert', label: 'Lunar descent', dv: Math.round(descent) }] };
     }
     return { dv: Math.round(tli + loi),
       note: `TLI from ${h_park} km: ${Math.round(tli)} m/s  +  LOI to ${h_llo} km: ${Math.round(loi)} m/s`,
-      method: 'Hohmann/patched-conic' };
+      method: 'Hohmann/patched-conic',
+      // A3: no propagated mid-course-correction estimate exists in this pure
+      // patched-conic model (MCC only emerges from an actual solved physics
+      // leg in a flown mission, 565 — architecture is pre-mission geometry,
+      // KSP invariant: no vehicle/propagation dependency here) — the chain is
+      // depart/insert only; the UI shows an "MCC: n/a (pre-mission estimate)"
+      // placeholder rather than fabricating a number.
+      legs: [{ role: 'depart', label: 'TLI', dv: Math.round(tli) },
+             { role: 'insert', label: 'LOI', dv: Math.round(loi) }] };
   }
 
   if (oa.body === 'Moon' && ob.body === 'Earth' &&
