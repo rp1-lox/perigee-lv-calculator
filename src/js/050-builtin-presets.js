@@ -224,7 +224,7 @@ const BUILTIN_PRESETS=[
     mode:'orbit',
     orbit:{apogee:35786,perigee:185,inc:28.5},
     tags:['Historical'],
-    note:'First Titan with SRBs. ~13.6t to GTO (reference). NTO/Aerozine-50.'
+    note:'First Titan with SRBs. ~13.6t to GTO (reference). NTO/Aerozine-50. Note: this calculator computes ~9.4t max payload to a 185x185@28.5 LEO for this stage data, below the commonly-cited historical LEO figure (~13.1t) -- our own Silverbird cross-check on these exact stage numbers lands at ~10.0-10.4t, i.e. it AGREES with our result and is also below the 13.1t history-book figure, so this looks like a real divergence between the historical published number and both raw physics models rather than a stage-data bug in this entry; left unchanged pending further investigation.'
   },
   {
     name:'Titan IIIE / Centaur',
@@ -238,7 +238,7 @@ const BUILTIN_PRESETS=[
     mode:'escape',
     escape:{c3:98.5,decl:28.5,perigee:185},
     tags:['Historical','Deep Space'],
-    note:'Voyager 1/2, Viking, Helios. C3=98.5 km²/s² (Voyager trajectory).'
+    note:'Voyager 1/2, Viking, Helios. C3=98.5 km²/s² (Voyager trajectory). Note: this calculator\'s LEO max-payload for this stage data (~12.7t to 185x185@28.5) is below the commonly-cited historical Titan IIIE LEO figure (~15.4t), but matches our own Silverbird cross-check on these exact stage numbers (~12.8t) closely -- treated as agreement with Silverbird rather than a data bug; left unchanged.'
   },
   {
     name:'Scout G-1',
@@ -352,7 +352,7 @@ const BUILTIN_PRESETS=[
     mode:'orbit',
     orbit:{apogee:400,perigee:400,inc:51.6},
     tags:['Active','Reusable'],
-    note:'Expendable config. Merlin 1D+ vac Isp 311s / MVac 348s. ~22.8t LEO.'
+    note:'B5 expendable config. Merlin 1D+ vac Isp 311s / MVac 348s. Nominal payload 22,800 kg is the SpaceX-published expendable LEO figure. This project\'s own calculator (185x185 @ 28.5) computes ~22,000+ kg max LEO payload and ~7,500-7,900 kg max GTO payload against our destOnOrbitDV/lvPerformance path, tracking Silverbird\'s raw (uncalibrated) GTO number within a few percent. The SpaceX-published GTO figure (~8,300 kg) is higher than either raw model -- that residual is a calibration-layer gap (Silverbird\'s own Mixed/Guide calibration modes exist to close exactly this kind of gap against manufacturer data; see docs/CALCULATOR_AUDIT.md), not a stage-data error in this entry.'
   },
   {
     name:'Falcon Heavy',
@@ -368,7 +368,7 @@ const BUILTIN_PRESETS=[
     mode:'orbit',
     orbit:{apogee:400,perigee:400,inc:28.5},
     tags:['Active','Reusable','Center Throttle'],
-    note:'3× F9 cores + MVac. Expendable config. ~63.8t LEO. The first stage throttles to ~57% during the boost phase so it stages with propellant remaining after the side boosters separate (modeled with first-stage throttle-down).'
+    note:'3× F9 cores + MVac, fully-expendable crossfeed configuration -- NEVER FLOWN (all actual Falcon Heavy flights use independent-throttle boosters without crossfeed, and always land at least the two side boosters). 63,800 kg is SpaceX\'s published theoretical max-expendable-with-crossfeed LEO figure, not an achieved payload. The first stage throttles to ~57% during the boost phase so it stages with propellant remaining after the side boosters separate (modeled with first-stage throttle-down).'
   },
   {
     name:'Vulcan Centaur',

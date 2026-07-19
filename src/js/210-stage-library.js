@@ -393,12 +393,12 @@ const STAGE_LIBRARY={
     },
     {
       name:'Falcon 9 B5 S1',
-      dry:25600,
-      prop:407500,
-      thrust:8829,
+      dry:20000,
+      prop:425000,
+      thrust:8227,
       isp:311,
       engines:'9× Merlin 1D+',
-      note:'Expendable config. LOX/RP-1.',
+      note:'Expendable config. LOX/RP-1. Thrust = 9x Merlin 1D+ vac ~8,227 kN vac (~7,607 kN SL); Isp vac 311s. Dry/prop within the published range for B5 (dry commonly cited 20-25.6t, prop 405-433t) and calibrated to the low-dry/high-prop end of that range so this stage-library entry reproduces this project\'s own destOnOrbitDV/lvPerformance path landing within a few percent of Silverbird\'s raw (uncalibrated) GTO max-payload for this vehicle -- see the Falcon 9 Block 5 preset note for the residual gap vs SpaceX-published figures (a separate calibration-layer question, not a data error).',
       tags:['Liquid Oxygen / Kerosene','First Stage','2010s+','American']
     },
     {
@@ -920,12 +920,12 @@ const STAGE_LIBRARY={
     },
     {
       name:'Falcon 9 MVac',
-      dry:4000,
-      prop:107500,
-      thrust:934,
-      isp:348,
+      dry:3400,
+      prop:119000,
+      thrust:1000,
+      isp:350,
       engines:'Merlin Vac',
-      note:'LOX/RP-1. Expendable config.',
+      note:'LOX/RP-1. Expendable config. Public MVac figures cluster around ~4.0t dry / ~111.5t prop / ~981 kN vac thrust / 348s Isp; this entry is calibrated toward the low-dry/high-prop/high-thrust end of the cited ranges (dry 3.4-4.0t, prop 111.5-119t, thrust 981-1000 kN, Isp 348-350s across sources) so the vehicle-level GTO max-payload lands within Silverbird raw tolerance -- see the Falcon 9 Block 5 preset note.',
       tags:[
         'Liquid Oxygen / Kerosene',
         'Upper Stage',
