@@ -22,9 +22,15 @@ function escHtml(s) {
 // ─── VERSION & CHANGELOG ──────────────────────
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
-const APP_VERSION='2.1.0';
+const APP_VERSION='2.2.0';
 const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
-const APP_CHANGELOG=[{v:'2.1.0', title:'Calculator recalibrated to Silverbird', date:'2026-07-18', notes:[
+const APP_CHANGELOG=[{v:'2.2.0', title:'Architecture page', date:'2026-07-21', notes:[
+    'NEW Architecture page: plan your mission\'s orbit ladder and transfers before you fly it. Add named orbits (from the preset catalog or fully custom), draw transfer edges between them, and see the trip\'s delta-V budget add up automatically.',
+    'The Mission page now understands your plan: a LAUNCH can target an architecture orbit directly, and "Transfer (from plan)" turns any drawn edge into a real, editable set of maneuver events.',
+    'Flight Readiness now flags it when a flown mission drifts from its own plan: a launch that lands off the planned orbital plane, or a mission that ends up needing meaningfully more delta-V than the plan budgeted for.',
+    'Missions with no architecture behave exactly as before — the Architecture page is fully optional.',
+  ]},
+  {v:'2.1.0', title:'Calculator recalibrated to Silverbird', date:'2026-07-18', notes:[
     'The launch vehicle performance calculator now tracks the Silverbird Astronautics reference across multi-stage vehicles. A multi-stage ascent correction was fitted against a 30-configuration probe campaign and validated on held-out higher orbits (800 km, GTO, MEO).',
     'Saturn V 185x185 km max payload moves 150,838 to 125,893 kg. Multi-stage payloads at every destination now land within a few percent of the reference; single-stage vehicles are unchanged.',
     'Falcon 9 Block 5 stage data refreshed: LEO 22,051 kg and GTO 7,493 kg. Falcon Heavy inherits the shared core. Titan presets carry notes documenting where published historical figures diverge from the model.',

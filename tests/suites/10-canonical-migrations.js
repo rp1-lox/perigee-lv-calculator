@@ -52,6 +52,7 @@ const {
   _missionMigrateOrbitFieldNames, _missionMigrateNodeMapCustomNodes,
   _missionPlaneMatchTargetSpec, _archMapContentHTML, _archCustomNodeForArchNode,
   _missionCreateCustomNode, _missionCustomNodes, _archOrbitToNmOrbit,
+  missionRunChecks, missionGetChecks,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -705,6 +706,103 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
   // might rely on it (defensive — this suite doesn't reuse it after this point).
   sandbox.progUUID = () => 'test-uuid';
 }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // A5 — flown-vs-planned readiness checks (572-mission-checks.js).
+  // missionRunChecks reads only m.log/m._expanded/m.groups/m.vehicleIds +
+  // PROG_ACTIVE_PROGRAM.vehicles (see 572's own banner) — a hand-built m
+  // with a pre-populated _expanded exercises the two new checks without
+  // needing a full missionRecompute replay. KSP invariant is the FIRST
+  // assertion in each block: no architecture -> zero new findings, even
+  // when e.planNodeId/e.orbit are present (a stale/dangling reference from
+  // before the architecture was cleared must not spuriously fire either).
+  // ═══════════════════════════════════════════════════════════════════════
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = { vehicles: {} };
+    archUndoReset();
+
+    const launchEvt = (orbit, planNodeId) => ({
+      type: 'LAUNCH', result: 'SUCCESS', _authIdx: 0, orbit, planNodeId,
+      stagingResult: { status: 'SUCCESS', dvMargin: 500, dvRequired: 9000 },
+    });
+
+    // KSP invariant: no architecture at all — a LAUNCH carrying a (dangling)
+    // planNodeId + orbit produces neither new finding, and an over-threshold
+    // authored dV produces no over-budget finding either (there's no budget
+    // to be over).
+    {
+      const m = { missionId: 'a5-noarch', log: [], groups: {}, vehicleIds: [] };
+      m._expanded = [launchEvt({ body: 'Earth', periKm: 200, apoKm: 200, incDeg: 80, lanDeg: 0, frame: 'eq' }, 'dangling-node-id')];
+      m.log = m._expanded;
+      missionRunChecks(m);
+      const findings = missionGetChecks(m);
+      ok('A5 KSP invariant: no architecture -> no architecture-plane-deviation finding', !findings.some(f => f.id === 'architecture-plane-deviation'));
+      ok('A5 KSP invariant: no architecture -> no architecture-over-budget finding', !findings.some(f => f.id === 'architecture-over-budget'));
+    }
+
+    // Plane-deviation check: matching plane -> silent; deviated plane -> fires
+    // with a sensible degree value; tolerance is not so tight that a
+    // canonical-rounding no-op edit trips it.
+    {
+      const node = archAddNode({ name: 'Target LEO', body: 'Earth', orbit: { body: 'Earth', periKm: 200, apoKm: 200, incDeg: 28.5, lanDeg: 0, frame: 'eq' } });
+      const mMatch = { missionId: 'a5-match', log: [], groups: {}, vehicleIds: [] };
+      mMatch._expanded = [launchEvt({ body: 'Earth', periKm: 200, apoKm: 200, incDeg: 28.5, lanDeg: 0, frame: 'eq' }, node.id)];
+      mMatch.log = mMatch._expanded;
+      missionRunChecks(mMatch);
+      ok('A5: LAUNCH committed orbit matching its node plane -> no plane-deviation finding', !missionGetChecks(mMatch).some(f => f.id === 'architecture-plane-deviation'));
+
+      const mDeviate = { missionId: 'a5-deviate', log: [], groups: {}, vehicleIds: [] };
+      mDeviate._expanded = [launchEvt({ body: 'Earth', periKm: 200, apoKm: 200, incDeg: 51.6, lanDeg: 0, frame: 'eq' }, node.id)];
+      mDeviate.log = mDeviate._expanded;
+      missionRunChecks(mDeviate);
+      const dev = missionGetChecks(mDeviate).find(f => f.id === 'architecture-plane-deviation');
+      ok('A5: LAUNCH committed orbit deviated 23.1deg from its node -> plane-deviation finding fires', !!dev);
+      ok('A5: plane-deviation finding is amber (info/amber only, never blocking)', dev && dev.severity === 'amber');
+      ok('A5: plane-deviation finding names a sensible degree value in its detail text', dev && /23\.1|23\.0|23\.2/.test(dev.detail));
+      ok('A5: plane-deviation finding is anchored to the LAUNCH event (clickable in the UI)', dev && dev.authIdx === 0);
+
+      // set back to matching -> the finding clears (fresh recompute of checks).
+      mDeviate._expanded[0].orbit.incDeg = 28.5;
+      missionRunChecks(mDeviate);
+      ok('A5: setting the plane back to match clears the finding', !missionGetChecks(mDeviate).some(f => f.id === 'architecture-plane-deviation'));
+    }
+
+    // Over-budget check: archComputeBudget().total is the ONE accounting
+    // source (610) — build a 2-node/1-edge architecture with a known budget,
+    // then author BURN dv well past it.
+    {
+      sandbox.PROG_ACTIVE_PROGRAM = { vehicles: {} };
+      archUndoReset();
+      // archAddNode/archAddEdge id nodes via progUUID — the harness's shared
+      // stub returns a constant id, which would collide the two nodes here
+      // (archAddEdge would resolve fromId===toId to the SAME node). Give
+      // this block its own incrementing stub, restored after.
+      let _uid = 0;
+      const _savedUUID = sandbox.progUUID;
+      sandbox.progUUID = () => 'a5-node-' + (_uid++);
+      const a = archAddNode({ name: 'LEO', body: 'Earth', orbit: { body: 'Earth', periKm: 185, apoKm: 185, incDeg: 28.5, lanDeg: 0, frame: 'eq' } });
+      const b = archAddNode({ name: 'LLO', body: 'Moon', orbit: { body: 'Moon', periKm: 110, apoKm: 110, incDeg: 0, lanDeg: 0, frame: 'eq' } });
+      archAddEdge(a.id, b.id);
+      sandbox.progUUID = _savedUUID;
+      const budget = archComputeBudget();
+      ok('A5 fixture: 2-node/1-edge architecture prices a nonzero budget', budget.total > 0 && budget.unresolved === 0);
+
+      const mUnder = { missionId: 'a5-under', log: [], groups: {}, vehicleIds: [] };
+      mUnder._expanded = [{ type: 'BURN', result: 'SUCCESS', _authIdx: 0, dvTarget: budget.total * 0.5, dv_actual: budget.total * 0.5 }];
+      mUnder.log = mUnder._expanded;
+      missionRunChecks(mUnder);
+      ok('A5: authored dV well under budget -> no over-budget finding', !missionGetChecks(mUnder).some(f => f.id === 'architecture-over-budget'));
+
+      const mOver = { missionId: 'a5-over', log: [], groups: {}, vehicleIds: [] };
+      mOver._expanded = [{ type: 'BURN', result: 'SUCCESS', _authIdx: 0, dvTarget: budget.total * 1.5, dv_actual: budget.total * 1.5 }];
+      mOver.log = mOver._expanded;
+      missionRunChecks(mOver);
+      const over = missionGetChecks(mOver).find(f => f.id === 'architecture-over-budget');
+      ok('A5: authored dV 50% over budget -> over-budget finding fires', !!over);
+      ok('A5: over-budget finding is amber (info/amber only, never blocking)', over && over.severity === 'amber');
+      ok('A5: over-budget finding is a mission-level (unanchored) end-state finding', over && over.authIdx === null);
+    }
+  }
 
   return counts();
 };

@@ -65,6 +65,7 @@ const FILES = [
   'src/js/5745-maneuver-gizmo-math.js',
   'src/js/5745-maneuver-gizmo-hover.js',
   'src/js/5745-maneuver-gizmo-drag.js',
+  'src/js/572-mission-checks.js',
   'src/js/450-program-module-phase-10-save-load-closur.js',
 ];
 

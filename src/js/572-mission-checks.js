@@ -68,6 +68,11 @@ function missionRunChecks(m) {
   if (!m || !m.log || !m.log.length) { delete _missionChecksById[m && m.missionId]; return; }
   const expanded = m._expanded || [];
   const findings = [];
+  // A5 (MISSION_MODEL_V2 §26): flown-vs-planned readiness checks. KSP hard
+  // invariant — with no architecture authored, these are complete no-ops
+  // (guarded up front, not just "usually silent"): zero new findings, zero
+  // new work done, byte-identical behavior to pre-A5.
+  const _archHasNodes = (typeof archGet === 'function') && archGet().nodes.length > 0;
   // dedupe by (id, authIdx) with a ×N count suffix for repeated-group clones
   const seen = new Map();   // key `${id}#${authIdx}` -> finding object (already pushed to findings)
   const push = (id, severity, title, detail, authIdx) => {
@@ -249,6 +254,31 @@ function missionRunChecks(m) {
           authIdx);
       }
     }
+
+    // A5 #10 AMBER architecture-plane-deviation: a LAUNCH targeting an
+    // architecture node (e.planNodeId, A4) whose COMMITTED orbit (e.orbit,
+    // authored/possibly hand-edited after the plane-match ran) no longer
+    // shares the node's plane. Compared via orbitWorldNormal (384/385, the
+    // ONE C1 boundary) on both sides — never raw inc/lan, which would be
+    // meaningless across bodies/frames (docs/MATH.md §7al). INFO/amber only
+    // — a deviating plane doesn't fail the launch, it just makes the
+    // architecture's dV budget for the downstream edge unreliable.
+    if (_archHasNodes && e.type === 'LAUNCH' && e.planNodeId && e.orbit) {
+      const node = archGet().nodes.find(n => n.id === e.planNodeId);
+      if (node && node.orbit) {
+        const nA = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(node.orbit) : null;
+        const nB = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(e.orbit) : null;
+        if (nA && nB) {
+          const dot = Math.max(-1, Math.min(1, nA[0] * nB[0] + nA[1] * nB[1] + nA[2] * nB[2]));
+          const deviationDeg = Math.acos(dot) * 180 / Math.PI;
+          if (deviationDeg > 1) {
+            push('architecture-plane-deviation', 'amber', 'Launch plane drifted from its architecture node',
+              `This launch targets "${_mcEscape(node.name || 'the node')}" but the committed orbit's plane is ${deviationDeg.toFixed(1)}&deg; off that node's plane — the transfer edges leaving this node will price against a plane the vehicle isn't actually on.`,
+              authIdx);
+          }
+        }
+      }
+    }
   }
 
   // ── §22 TRANSFER CHAINS — group-level checks (flyby / staleness) ──────────
@@ -377,6 +407,31 @@ function missionRunChecks(m) {
       if (!everFreed) {
         push('payload-never-freed', 'info', 'Payload never separated',
           `${m.payloadScIds.length} payload spacecraft ${m.payloadScIds.length === 1 ? 'is' : 'are'} manifested but no SEPARATE (or independent DEPLOY) event ever detaches ${m.payloadScIds.length === 1 ? 'it' : 'them'} from the stack.`, null);
+      }
+    }
+
+    // A5 #11 AMBER architecture-over-budget: the mission's total AUTHORED
+    // transfer dV (what BURN/solved-maneuver cards say they need — the same
+    // fields #2's burn-overdraw check reads, summed across the whole log,
+    // not just one repetition group) materially exceeds the architecture's
+    // own budget (archComputeBudget().total, 610 — the ONE accounting
+    // source, never recomputed here). "Materially" = >5% over, so ordinary
+    // margin/rounding doesn't chatter. INFO/amber only — a real mission can
+    // legitimately fly a fatter margin than its plan called for.
+    if (_archHasNodes) {
+      const budget = (typeof archComputeBudget === 'function') ? archComputeBudget() : null;
+      if (budget && budget.total > 0) {
+        let authoredDv = 0;
+        expanded.forEach(e => {
+          if (e.type === 'BURN') authoredDv += (e.dvTarget || 0);
+          else if (_evIsSolvedManeuver(e)) authoredDv += (e.dvRequired || 0);
+        });
+        const over = authoredDv - budget.total;
+        if (over > 0.05 * budget.total) {
+          push('architecture-over-budget', 'amber', 'Mission is over the architecture plan budget',
+            `Authored transfer &Delta;V totals ${Math.round(authoredDv).toLocaleString()} m/s against a ${Math.round(budget.total).toLocaleString()} m/s architecture budget — over plan budget by ${Math.round(over).toLocaleString()} m/s.`,
+            null);
+        }
       }
     }
   } else {

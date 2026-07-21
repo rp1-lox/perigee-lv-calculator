@@ -1569,7 +1569,7 @@ button,input,select,textarea{font-family:inherit;}
   <div class="vp-header">Architecture <span class="vp-header-sub">Author the mission's orbit ladder and transfer edges</span></div>
   <div class="arch-layout" style="display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:stretch;">
     <div class="arch-stage lib-panel" style="margin-top:0;min-width:0;display:flex;align-items:center;justify-content:center;min-height:360px;">
-      <div class="placeholder-msg">No architecture yet - add orbits from the rail (A2)</div>
+      <div class="placeholder-msg">No orbits in your ladder yet. Use the rail on the right to add one — pick a preset from the catalog or add a custom orbit — then draw a transfer edge between two nodes to build out your mission's dV budget.</div>
     </div>
     <div class="arch-rail lib-panel" style="margin-top:0;min-width:0;display:flex;flex-direction:column;">
       <div class="sl" style="flex-shrink:0;">Orbit Ladder</div>
@@ -2073,9 +2073,15 @@ function escHtml(s) {
 // ─── VERSION & CHANGELOG ──────────────────────
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
-const APP_VERSION='2.1.0';
+const APP_VERSION='2.2.0';
 const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
-const APP_CHANGELOG=[{v:'2.1.0', title:'Calculator recalibrated to Silverbird', date:'2026-07-18', notes:[
+const APP_CHANGELOG=[{v:'2.2.0', title:'Architecture page', date:'2026-07-21', notes:[
+    'NEW Architecture page: plan your mission\'s orbit ladder and transfers before you fly it. Add named orbits (from the preset catalog or fully custom), draw transfer edges between them, and see the trip\'s delta-V budget add up automatically.',
+    'The Mission page now understands your plan: a LAUNCH can target an architecture orbit directly, and "Transfer (from plan)" turns any drawn edge into a real, editable set of maneuver events.',
+    'Flight Readiness now flags it when a flown mission drifts from its own plan: a launch that lands off the planned orbital plane, or a mission that ends up needing meaningfully more delta-V than the plan budgeted for.',
+    'Missions with no architecture behave exactly as before — the Architecture page is fully optional.',
+  ]},
+  {v:'2.1.0', title:'Calculator recalibrated to Silverbird', date:'2026-07-18', notes:[
     'The launch vehicle performance calculator now tracks the Silverbird Astronautics reference across multi-stage vehicles. A multi-stage ascent correction was fitted against a 30-configuration probe campaign and validated on held-out higher orbits (800 km, GTO, MEO).',
     'Saturn V 185x185 km max payload moves 150,838 to 125,893 kg. Multi-stage payloads at every destination now land within a few percent of the reference; single-stage vehicles are unchanged.',
     'Falcon 9 Block 5 stage data refreshed: LEO 22,051 kg and GTO 7,493 kg. Falcon Heavy inherits the shared core. Titan presets carry notes documenting where published historical figures diverge from the model.',
@@ -28742,6 +28748,11 @@ function missionRunChecks(m) {
   if (!m || !m.log || !m.log.length) { delete _missionChecksById[m && m.missionId]; return; }
   const expanded = m._expanded || [];
   const findings = [];
+  // A5 (MISSION_MODEL_V2 §26): flown-vs-planned readiness checks. KSP hard
+  // invariant — with no architecture authored, these are complete no-ops
+  // (guarded up front, not just "usually silent"): zero new findings, zero
+  // new work done, byte-identical behavior to pre-A5.
+  const _archHasNodes = (typeof archGet === 'function') && archGet().nodes.length > 0;
   // dedupe by (id, authIdx) with a ×N count suffix for repeated-group clones
   const seen = new Map();   // key `${id}#${authIdx}` -> finding object (already pushed to findings)
   const push = (id, severity, title, detail, authIdx) => {
@@ -28923,6 +28934,31 @@ function missionRunChecks(m) {
           authIdx);
       }
     }
+
+    // A5 #10 AMBER architecture-plane-deviation: a LAUNCH targeting an
+    // architecture node (e.planNodeId, A4) whose COMMITTED orbit (e.orbit,
+    // authored/possibly hand-edited after the plane-match ran) no longer
+    // shares the node's plane. Compared via orbitWorldNormal (384/385, the
+    // ONE C1 boundary) on both sides — never raw inc/lan, which would be
+    // meaningless across bodies/frames (docs/MATH.md §7al). INFO/amber only
+    // — a deviating plane doesn't fail the launch, it just makes the
+    // architecture's dV budget for the downstream edge unreliable.
+    if (_archHasNodes && e.type === 'LAUNCH' && e.planNodeId && e.orbit) {
+      const node = archGet().nodes.find(n => n.id === e.planNodeId);
+      if (node && node.orbit) {
+        const nA = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(node.orbit) : null;
+        const nB = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(e.orbit) : null;
+        if (nA && nB) {
+          const dot = Math.max(-1, Math.min(1, nA[0] * nB[0] + nA[1] * nB[1] + nA[2] * nB[2]));
+          const deviationDeg = Math.acos(dot) * 180 / Math.PI;
+          if (deviationDeg > 1) {
+            push('architecture-plane-deviation', 'amber', 'Launch plane drifted from its architecture node',
+              `This launch targets "${_mcEscape(node.name || 'the node')}" but the committed orbit's plane is ${deviationDeg.toFixed(1)}&deg; off that node's plane — the transfer edges leaving this node will price against a plane the vehicle isn't actually on.`,
+              authIdx);
+          }
+        }
+      }
+    }
   }
 
   // ── §22 TRANSFER CHAINS — group-level checks (flyby / staleness) ──────────
@@ -29051,6 +29087,31 @@ function missionRunChecks(m) {
       if (!everFreed) {
         push('payload-never-freed', 'info', 'Payload never separated',
           `${m.payloadScIds.length} payload spacecraft ${m.payloadScIds.length === 1 ? 'is' : 'are'} manifested but no SEPARATE (or independent DEPLOY) event ever detaches ${m.payloadScIds.length === 1 ? 'it' : 'them'} from the stack.`, null);
+      }
+    }
+
+    // A5 #11 AMBER architecture-over-budget: the mission's total AUTHORED
+    // transfer dV (what BURN/solved-maneuver cards say they need — the same
+    // fields #2's burn-overdraw check reads, summed across the whole log,
+    // not just one repetition group) materially exceeds the architecture's
+    // own budget (archComputeBudget().total, 610 — the ONE accounting
+    // source, never recomputed here). "Materially" = >5% over, so ordinary
+    // margin/rounding doesn't chatter. INFO/amber only — a real mission can
+    // legitimately fly a fatter margin than its plan called for.
+    if (_archHasNodes) {
+      const budget = (typeof archComputeBudget === 'function') ? archComputeBudget() : null;
+      if (budget && budget.total > 0) {
+        let authoredDv = 0;
+        expanded.forEach(e => {
+          if (e.type === 'BURN') authoredDv += (e.dvTarget || 0);
+          else if (_evIsSolvedManeuver(e)) authoredDv += (e.dvRequired || 0);
+        });
+        const over = authoredDv - budget.total;
+        if (over > 0.05 * budget.total) {
+          push('architecture-over-budget', 'amber', 'Mission is over the architecture plan budget',
+            `Authored transfer &Delta;V totals ${Math.round(authoredDv).toLocaleString()} m/s against a ${Math.round(budget.total).toLocaleString()} m/s architecture budget — over plan budget by ${Math.round(over).toLocaleString()} m/s.`,
+            null);
+        }
       }
     }
   } else {
@@ -38452,7 +38513,7 @@ function _archMapContentHTML(readOnly) {
   const edges = arch.edges || [];
 
   if (!nodes.length) {
-    return '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
+    return '<div class="placeholder-msg">No orbits in your ladder yet. Add one from the rail — pick a preset from the catalog or add a custom orbit — then draw a transfer edge between two nodes to see the dV budget.</div>';
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);

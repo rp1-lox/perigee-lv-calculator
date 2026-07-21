@@ -175,7 +175,7 @@ function _archMapContentHTML(readOnly) {
   const edges = arch.edges || [];
 
   if (!nodes.length) {
-    return '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
+    return '<div class="placeholder-msg">No orbits in your ladder yet. Add one from the rail — pick a preset from the catalog or add a custom orbit — then draw a transfer edge between two nodes to see the dV budget.</div>';
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
