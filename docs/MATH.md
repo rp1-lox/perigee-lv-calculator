@@ -1109,7 +1109,16 @@ All sweeps evaluate the SAME pure pipeline per point: assemble vehicle (workshee
 
 ---
 
-## 10. 2-DOF ascent simulator (SIM-series, 155-ascent-sim.js) — SIM3 as-built (2026-07-21)
+## 10. 2-DOF ascent simulator (SIM-series) — REMOVED 2026-07-21, findings retained
+
+> **REMOVED FROM THE CODEBASE** (user decision, 2026-07-21, same day the series closed):
+> `src/js/155-ascent-sim.js` and `tests/suites/11-ascent-sim.js` were deleted because the
+> simulator, while correct, does not improve the calculator's accuracy — the loss-budget wall
+> (s10.11-10.12 below) proves honest 2-DOF physics cannot reach published payload bands, so
+> the T-S + Silverbird-correction path (s1-2) remains the payload estimator. This section is
+> kept as the record of the model and of WHY the sim road is closed; the last commit with the
+> working code is 3836e7e96 (branch dev). Do not re-attempt payload estimation by 2-DOF
+> simulation without first rereading s10.11-10.12.
 
 A numerical ascent-and-insertion simulator, OPT-IN and additive: it integrates the real equations of motion and closed-loop steering instead of charging the Townsend-Schilling statistical penalty. It does NOT touch the T-S path (§1–§4), `calculate()`, or `destOnOrbitDV` — those remain the instant estimator. All state is SI internally (metres, m/s, kg, rad); the km-based globals `MU`/`RE` (010) are converted once at the top of each entry point (`MU_SI = MU·1e9`, `RE_M = RE·1000`).
 

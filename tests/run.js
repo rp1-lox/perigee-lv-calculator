@@ -29,7 +29,7 @@ const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 1094; // +3, 2026-07-21: local-frame PEG near-circular delivery pins — tight insertion / beats-default / determinism (suite 11)
+const MIN_ASSERTIONS = 1048; // -46, 2026-07-21: SIM-series ascent simulator removed (suite 11 deleted with src/js/155-ascent-sim.js; findings preserved in docs/MATH.md s10)
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');
