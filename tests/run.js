@@ -29,7 +29,7 @@ const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 1056; // +8, 2026-07-21: SIM1 ascent-sim analytic pins (suite 11)
+const MIN_ASSERTIONS = 1079; // +23, 2026-07-21: SIM2 optimizer/bisection/azimuth pins (suite 11)
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');
