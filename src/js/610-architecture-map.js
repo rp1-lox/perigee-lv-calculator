@@ -163,33 +163,39 @@ function _archChainDetailHTML(A, B, res) {
   </div>`;
 }
 
-/** Renders the `.arch-stage` node-map surface. Called by 605's archRenderPage()
- *  on every model change, so it never goes stale relative to the ladder. */
-function archMapRender() {
-  const stage = document.querySelector('#page-architecture .arch-stage');
-  if (!stage) return;
+// A4 (MISSION_MODEL_V2 §26): "one renderer, two mounts" — the content-string
+// builder is now separate from the DOM mount so the Mission Plan surface
+// (570-mission-lifecycle.js) can embed the exact same markup, read-mostly,
+// when an architecture exists. `readOnly` suppresses the Draw Edge control
+// and per-edge delete chip; node/edge click-to-inspect (selection + chain
+// detail) stays live either way since that's harmless viewing, not editing.
+function _archMapContentHTML(readOnly) {
   const arch = archGet();
   const nodes = arch.nodes || [];
   const edges = arch.edges || [];
 
   if (!nodes.length) {
-    stage.innerHTML = '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
-    return;
+    return '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
   const lay = _archMapLayout(nodes);
   const pos = lay.pos;
 
-  let ctrlHTML = `<div class="sl" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    <button class="act-btn" style="${_archBridgeMode ? 'background:var(--accent);color:#000;' : ''}" onclick="archToggleBridgeMode()">+ Draw Edge</button>`;
-  if (_archBridgeMode) {
-    if (_archBridgeFrom == null) {
-      ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">Click a start node&hellip;</span>`;
-    } else {
-      const fl = byId[_archBridgeFrom] ? byId[_archBridgeFrom].name : _archBridgeFrom;
-      ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-bright);">From ${escHtml(fl)} &mdash; click a destination node</span>
-        <button class="act-btn" style="padding:2px 8px;font-size:10px;" onclick="archMapCancelBridge()">Cancel</button>`;
+  let ctrlHTML = `<div class="sl" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">`;
+  if (readOnly) {
+    ctrlHTML += `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.08em;">MISSION ARCHITECTURE (read-mostly)</span>
+      <button class="act-btn" onclick="showPage('architecture')">Edit in Architecture &rarr;</button>`;
+  } else {
+    ctrlHTML += `<button class="act-btn" style="${_archBridgeMode ? 'background:var(--accent);color:#000;' : ''}" onclick="archToggleBridgeMode()">+ Draw Edge</button>`;
+    if (_archBridgeMode) {
+      if (_archBridgeFrom == null) {
+        ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">Click a start node&hellip;</span>`;
+      } else {
+        const fl = byId[_archBridgeFrom] ? byId[_archBridgeFrom].name : _archBridgeFrom;
+        ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-bright);">From ${escHtml(fl)} &mdash; click a destination node</span>
+          <button class="act-btn" style="padding:2px 8px;font-size:10px;" onclick="archMapCancelBridge()">Cancel</button>`;
+      }
     }
   }
   ctrlHTML += `</div>`;
@@ -213,10 +219,12 @@ function archMapRender() {
       <rect x="${mx - 38}" y="${my - 9}" width="76" height="18" rx="9" fill="var(--bg)" stroke="${col}" stroke-width="1.2"/>
       <text x="${mx}" y="${my + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${col}">${escHtml(dvLabel)}</text>
     </g>`;
-    edgesHTML += `<g onclick="event.stopPropagation();archDeleteEdge('${e.id}')" style="cursor:pointer"><title>Delete edge</title>
-      <circle cx="${mx + 44}" cy="${my - 9}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
-      <text x="${mx + 44}" y="${my - 6}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
-    </g>`;
+    if (!readOnly) {
+      edgesHTML += `<g onclick="event.stopPropagation();archDeleteEdge('${e.id}')" style="cursor:pointer"><title>Delete edge</title>
+        <circle cx="${mx + 44}" cy="${my - 9}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
+        <text x="${mx + 44}" y="${my - 6}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
+      </g>`;
+    }
     if (sel && res) chainHTML = _archChainDetailHTML(A, B, res);
   });
 
@@ -235,5 +243,54 @@ function archMapRender() {
   });
 
   const svgHTML = `<svg viewBox="0 0 ${lay.W} ${lay.H}" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:none;height:auto;max-height:340px;background:transparent;display:block;">${edgesHTML}${nodesHTML}</svg>`;
-  stage.innerHTML = `${ctrlHTML}<div style="overflow-x:auto;">${svgHTML}</div>${chainHTML}`;
+  return `${ctrlHTML}<div style="overflow-x:auto;">${svgHTML}</div>${chainHTML}`;
+}
+
+/** Renders the `.arch-stage` node-map surface. Called by 605's archRenderPage()
+ *  on every model change, so it never goes stale relative to the ladder. */
+function archMapRender() {
+  const stage = document.querySelector('#page-architecture .arch-stage');
+  if (!stage) return;
+  stage.innerHTML = _archMapContentHTML(false);
+}
+
+// ── A4: "Transfer along this edge" -> real s22 chain events ────────────────
+// Reuse decision (task brief mandate): adapt the edge's two architecture
+// nodes into custom node-map nodes (_missionCreateCustomNode, 570-mission-
+// nodemap.js — the SAME dialect archEdgeDv already produces via
+// _archOrbitToNmOrbit) and hand off to the EXISTING s22 authoring path,
+// missionExecManeuver (570-mission-panel.js), completely unmodified. That
+// function already: (1) detects a two-hop transit corridor and splits
+// depart/MCC/insert via _missionChainSplitInject when the node-map's own
+// physics recognizes one (e.g. an Earth<->Moon pair), or (2) authors a single
+// charged, editable, deletable MNODE event for any other pair — the SAME
+// fidelity the Node Map's own "Draw Maneuver" bridge has today for that same
+// endpoint pair. No new chain-generation logic was written; dV/timing come
+// from the identical accounting source (progNmComputeEdgeDv's underlying
+// _nmDvPhysics) the Architecture page's own edge display already reads.
+function _archCustomNodeForArchNode(node) {
+  // Reuse a previously-created custom node for this architecture node
+  // (tagged via archNodeId) instead of spawning a duplicate on every
+  // "Add Transfer" click for the same edge.
+  const existing = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.archNodeId === node.id) : null;
+  if (existing) return existing.id;
+  if (typeof _missionCreateCustomNode !== 'function') return null;
+  const nmOrbit = _archOrbitToNmOrbit(node.orbit);
+  const cid = _missionCreateCustomNode(node.name, nmOrbit, 550, 300, node.body + ' ' + nmOrbit.type);
+  const cn = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.id === cid) : null;
+  if (cn) cn.archNodeId = node.id;
+  return cid;
+}
+function missionExecArchTransfer(missionId, edgeId) {
+  if (!edgeId) return;
+  const arch = archGet();
+  const edge = (arch.edges || []).find(e => e.id === edgeId);
+  if (!edge) return;
+  const A = (arch.nodes || []).find(n => n.id === edge.fromId);
+  const B = (arch.nodes || []).find(n => n.id === edge.toId);
+  if (!A || !B) return;
+  const fromId = _archCustomNodeForArchNode(A);
+  const toId = _archCustomNodeForArchNode(B);
+  if (!fromId || !toId) return;
+  if (typeof missionExecManeuver === 'function') missionExecManeuver(missionId, fromId, toId);
 }

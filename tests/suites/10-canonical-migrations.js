@@ -50,6 +50,8 @@ const {
   orbitNormalize, orbitMeanRadiusKm, orbitPeriodS, orbitWorldNormal,
   _missionMigrateLaunchOrbitEntry, _missionMigrateLaunchOrbitLog,
   _missionMigrateOrbitFieldNames, _missionMigrateNodeMapCustomNodes,
+  _missionPlaneMatchTargetSpec, _archMapContentHTML, _archCustomNodeForArchNode,
+  _missionCreateCustomNode, _missionCustomNodes, _archOrbitToNmOrbit,
 } = sandbox;
 // PHYS_THRUST_REVS_RESOLUTION is a module-scope `const` (not a `function`
 // declaration), so it isn't a sandbox-global property — pull it via
@@ -639,6 +641,64 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
 
     archRemoveEdge(edge2.id);
     ok('archComputeBudget: live-recomputes after an edge is removed (no caching)', archComputeBudget().edgeCount === 1 && archComputeBudget().total === viaArch.dv);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // A4 — mission-side wiring (MISSION_MODEL_V2.md §26): LAUNCH Target-from-
+  // node resolution, architecture-edge -> custom-node adaptation for the
+  // reused s22 chain path, and the Plan surface's read-mostly content
+  // builder. Full end-to-end event authoring (missionExecArchTransfer's
+  // missionRecompute/physics tail) is exercised by hand in the browser pass
+  // per CLAUDE.md's lightweight-verification default; these pins pin the
+  // pure adaptation/data-shape seams that make that reuse honest.
+  // ═══════════════════════════════════════════════════════════════════════
+  {
+    sandbox.PROG_ACTIVE_PROGRAM = {};
+    archUndoReset();
+    const node = archAddNode({ name: 'Gateway NRHO', body: 'Moon', orbit: { body: 'Moon', periKm: 3000, apoKm: 70000, incDeg: 57, lanDeg: 120, frame: 'eq' } });
+
+    // Target-from-node resolution: _missionPlaneMatchTargetSpec('node:<id>')
+    // returns the {inc,lan,name} shape progResolvePlaneTarget already accepts
+    // for 'Moon'/catalog-ref targets — no new solve path, same function.
+    const spec = _missionPlaneMatchTargetSpec('node:' + node.id);
+    ok('_missionPlaneMatchTargetSpec resolves an architecture-node target to {inc,lan,name}', spec && spec.inc === 57 && spec.lan === 120 && spec.name === 'Gateway NRHO');
+    ok('_missionPlaneMatchTargetSpec: unknown node id -> null (display-tolerant, no throw)', _missionPlaneMatchTargetSpec('node:nope') === null);
+    ok('_missionPlaneMatchTargetSpec: still resolves Moon unchanged (no regression)', _missionPlaneMatchTargetSpec('Moon') === 'Moon');
+
+    const epochJD = progEpochJD();
+    const res = progResolvePlaneTarget(spec, epochJD, 0, 28.5);
+    ok('progResolvePlaneTarget accepts the node-derived spec and returns a real solve', !!res && isFinite(res.inc_deg) && isFinite(res.lan_deg));
+
+    // Edge -> custom-node adaptation: _archCustomNodeForArchNode creates one
+    // node-map custom node in the SAME dialect archEdgeDv already produces
+    // (_archOrbitToNmOrbit), tags it archNodeId, and is idempotent per
+    // architecture node (no duplicate spawned on a second call) — the seam
+    // that lets missionExecArchTransfer hand off to the existing
+    // missionExecManeuver chain path with zero new chain logic.
+    const nid1 = _archCustomNodeForArchNode(node);
+    const nid2 = _archCustomNodeForArchNode(node);
+    ok('_archCustomNodeForArchNode creates a node-map custom node for an architecture node', !!nid1);
+    ok('_archCustomNodeForArchNode is idempotent per architecture node (no duplicate on repeat calls)', nid1 === nid2);
+    const cn = _missionCustomNodes().find(n => n.id === nid1);
+    ok('_archCustomNodeForArchNode tags the custom node with archNodeId for lookup', cn && cn.archNodeId === node.id);
+    ok('_archCustomNodeForArchNode: custom node orbit matches _archOrbitToNmOrbit exactly (one accounting/dialect source)', cn && JSON.stringify(cn.orbit) === JSON.stringify(_archOrbitToNmOrbit(node.orbit)));
+
+    // Plan-surface read-mostly content: _archMapContentHTML(true) renders the
+    // same node/edge markup archMapRender uses for the Architecture page
+    // (one renderer, two mounts, per A3's convention) but suppresses the
+    // Draw Edge control and the per-edge delete chip, and offers the
+    // Edit-in-Architecture affordance instead.
+    const node2 = archAddNode({ name: 'LLO', body: 'Moon', orbit: { body: 'Moon', periKm: 100, apoKm: 100, incDeg: 90, lanDeg: 0, frame: 'eq' } });
+    archAddEdge(node.id, node2.id);
+    // escHtml (015-version.js) isn't in this suite's harness FILES list (chrome
+    // module, no math/model content) — stub it for this content-string call.
+    sandbox.escHtml = s => String(s);
+    const readOnlyHTML = _archMapContentHTML(true);
+    const editableHTML = _archMapContentHTML(false);
+    ok('_archMapContentHTML(true) omits the Draw Edge authoring control', !readOnlyHTML.includes('archToggleBridgeMode'));
+    ok('_archMapContentHTML(true) omits the per-edge delete chip', !readOnlyHTML.includes('archDeleteEdge'));
+    ok('_archMapContentHTML(true) offers the Edit-in-Architecture affordance', readOnlyHTML.includes("showPage('architecture')"));
+    ok('_archMapContentHTML(false) (Architecture page mount) keeps the Draw Edge control (no regression)', editableHTML.includes('archToggleBridgeMode'));
   }
 
   // restore the shared progUUID stub for any later code in this process that

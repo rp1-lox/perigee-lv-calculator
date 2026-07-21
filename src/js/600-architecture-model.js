@@ -22,6 +22,13 @@
 /** Returns PROG_ACTIVE_PROGRAM.architecture, creating an empty
  *  {nodes:[], edges:[]} lazily on first access. Never returns null/undefined. */
 function archGet() {
+  // A4 hardening: new call sites in 570-mission-band.js/570-mission-events.js
+  // read archGet() from render paths that can fire during missionInit(),
+  // BEFORE 590-init.js's startup IIFE assigns PROG_ACTIVE_PROGRAM — return a
+  // transient empty shape instead of throwing (never persisted; the real
+  // program's architecture is created lazily on the first real archGet()
+  // call once PROG_ACTIVE_PROGRAM exists).
+  if (!PROG_ACTIVE_PROGRAM) return { nodes: [], edges: [] };
   if (!PROG_ACTIVE_PROGRAM.architecture) {
     PROG_ACTIVE_PROGRAM.architecture = { nodes: [], edges: [] };
   }

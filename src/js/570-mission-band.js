@@ -543,6 +543,10 @@ function _missionAddEventHTML(m) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
   const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['lowthrust','Low-Thrust'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
+  // A4 (MISSION_MODEL_V2 §26): only offered once the mission's architecture
+  // has at least one edge to transfer along (KSP invariant — nothing new
+  // appears for a fresh, architecture-free mission).
+  if (typeof archGet === 'function' && archGet().edges && archGet().edges.length) types.push(['archxfer', 'Transfer (from plan)']);
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -601,6 +605,19 @@ function _missionAddEventHTML(m) {
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
+  } else if (_missionAddEvt === 'archxfer') {
+    const arch = (typeof archGet === 'function') ? archGet() : { nodes: [], edges: [] };
+    const byId = {}; (arch.nodes || []).forEach(n => byId[n.id] = n);
+    const opts = (arch.edges || []).map(e => {
+      const A = byId[e.fromId], B = byId[e.toId];
+      return (A && B) ? `<option value="${e.id}">${_mrEsc(A.name)} &rarr; ${_mrEsc(B.name)}</option>` : '';
+    }).join('');
+    form = (arch.edges || []).length
+      ? `<label class="cfg-label">Architecture edge</label>
+        <select id="addev-archxfer-${id}" class="mcc-field-select" style="margin-bottom:8px;">${opts}</select>
+        <button class="act-btn" style="width:100%;" onclick="missionExecArchTransfer('${id}',document.getElementById('addev-archxfer-${id}').value)">Add Transfer</button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// generates the depart/MCC/insertion burn(s) via the same solver as the Node Map maneuver bridge — each stays separately editable/deletable after</div>`
+      : `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no architecture edges yet — author them on the Architecture page</div>`;
   } else if (_missionAddEvt === 'rendezvous') {
     const others = live.filter(x => x.id !== m.vehicleId);
     if (others.length) {

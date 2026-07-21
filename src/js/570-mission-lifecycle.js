@@ -191,10 +191,27 @@ function missionRenderDetail() {
   // _missionNodeMapHTML) are UNCHANGED — this is chrome, not map rendering. ──
   let stageHTML, viewPanelHTML;
   if (viewMode === 'nodemap') {
-    stageHTML = _missionNodeMapHTML(m);
-    // Node map panel = the ORBITS catalog — its natural home (was the dying
-    // Plan-rail's one live occupant).
-    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div></div>`;
+    // A4 (MISSION_MODEL_V2 §26): once the program has authored an
+    // architecture, the Plan surface becomes a READ-MOSTLY mirror of it
+    // (archMapRender's content builder, extracted for this second mount —
+    // "one renderer, two mounts", same pattern A3 established) instead of the
+    // mission-local node map; editing redirects to the Architecture page.
+    // With NO architecture, this branch is untouched (KSP invariant) — the
+    // ORBITS catalog rail below still authors custom node-map nodes directly
+    // for the maneuver bridge, a capability the ladder doesn't yet replace.
+    const hasArch = (typeof archGet === 'function') && archGet().nodes && archGet().nodes.length > 0;
+    if (hasArch && typeof _archMapContentHTML === 'function') {
+      stageHTML = _archMapContentHTML(true);
+      viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:8px;line-height:1.6;">
+        This mission's Plan surface mirrors the mission architecture (read-mostly). Edit nodes/edges on the Architecture page.
+        <div style="margin-top:6px;"><button class="act-btn" onclick="showPage('architecture')">Edit in Architecture &rarr;</button></div>
+      </div></div>`;
+    } else {
+      stageHTML = _missionNodeMapHTML(m);
+      // Node map panel = the ORBITS catalog — its natural home (was the dying
+      // Plan-rail's one live occupant).
+      viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div></div>`;
+    }
   } else if (viewMode === 'band') {
     stageHTML = _missionBandViewHTML(m);
     // Timeline panel: blank scaffold for now (user: "leave them blank").

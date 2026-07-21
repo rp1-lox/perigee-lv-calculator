@@ -430,9 +430,24 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // at a catalog ref has no Target-list equivalent (the ref picker is a
   // separate field) — tolerate it read-only below rather than force a migration.
   const legacyRefMatch = e.planeMatchTarget && e.planeMatchTarget !== 'Moon' ? e.planeMatchTarget : null;
-  const cur = e.planDest ? ('dest:' + e.planDest) : (e.planeMatchTarget === 'Moon' ? 'dest:Moon' : '');
+  // A4 (MISSION_MODEL_V2 §26): architecture nodes get their own optgroup,
+  // FIRST, when an architecture with nodes exists — mutually exclusive with
+  // planDest/planeMatchTarget, persisted as e.planNodeId (see
+  // missionApplyLaunchEdit below). Display-tolerant: a legacy/deleted node id
+  // just falls through to '' (no crash, no data loss — the raw id stays on e
+  // until the user re-picks).
+  const archNodes = (typeof archGet === 'function') ? (archGet().nodes || []) : [];
+  let archOptsHTML = '';
+  if (archNodes.length) {
+    const opts = archNodes.map(n => `<option value="node:${n.id}"${e.planNodeId === n.id ? ' selected' : ''}>${_mrEsc(n.name)} (${_mrEsc(n.body)})</option>`).join('');
+    archOptsHTML = `<optgroup label="Mission architecture">${opts}</optgroup>`;
+  }
+  const cur = e.planNodeId ? ('node:' + e.planNodeId)
+    : e.planDest ? ('dest:' + e.planDest)
+    : (e.planeMatchTarget === 'Moon' ? 'dest:Moon' : '');
   const destOpts = dests.map(d => `<option value="dest:${d}"${cur === 'dest:' + d ? ' selected' : ''}>${d}</option>`).join('');
   const isDest = cur.startsWith('dest:');
+  const isArchNode = cur.startsWith('node:');
   const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
   // Committed LAUNCH entries auto-apply (missionRecompute + missionRenderDetail)
   // right after missionLaunchMatchPlane sets its rich live readout — which
@@ -442,7 +457,23 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // the window countdown itself is transient (already applied to launchTime_s
   // by the time this re-render happens) so it's not reconstructed here.
   let initReadout;
-  if (e.planDest === 'Moon') {
+  if (e.planNodeId) {
+    const node = archNodes.find(n => n.id === e.planNodeId);
+    if (node) {
+      const site = _missionLaunchSiteFor(e);
+      const siteLat = site ? site.lat : 28.5;
+      const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+      const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
+      const target = { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name };
+      const res = (typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget(target, epochJD, t_s, siteLat) : null;
+      initReadout = res
+        ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to ${_mrEsc(node.name)}`)
+          + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
+        : '// pick Target again to rematch';
+    } else {
+      initReadout = '// this mission architecture node no longer exists &mdash; pick Target again';
+    }
+  } else if (e.planDest === 'Moon') {
     const site = _missionLaunchSiteFor(e);
     const siteLat = site ? site.lat : 28.5;
     const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
@@ -465,6 +496,7 @@ function _missionLaunchTargetHTML(m, idx, e) {
       <div class="cfg-item"><label class="cfg-label">Target</label>
         <select id="edit-launch-target-${id}" style="${_es}" onchange="missionLaunchTargetChange('${id}',${idx},this.value)">
           <option value=""${cur === '' ? ' selected' : ''}>&mdash; none (manual orbit) &mdash;</option>
+          ${archOptsHTML}
           ${destOpts}
         </select></div>
       <div class="cfg-item" id="edit-launch-depjd-wrap-${id}" style="${isDest ? '' : 'display:none;'}">
@@ -484,8 +516,16 @@ function missionLaunchTargetChange(id, idx, val) {
   const depWrap = document.getElementById('edit-launch-depjd-wrap-' + id);
   const optBtn = document.getElementById('edit-launch-optimize-' + id);
   const isDest = val.startsWith('dest:');
+  const isArchNode = val.startsWith('node:');
   if (depWrap) depWrap.style.display = isDest ? '' : 'none';
   if (optBtn) optBtn.style.display = isDest ? '' : 'none';
+  if (isArchNode) {
+    // A4: architecture-node target runs the SAME complete plane/window solve
+    // Moon does (missionLaunchMatchPlane), against {inc,lan,name} resolved
+    // from the node's canonical orbit — see _missionPlaneMatchTargetSpec.
+    missionLaunchMatchPlane(id, idx, val);
+    return;
+  }
   if (!isDest) {
     const out = document.getElementById('launch-plan-readout-' + id);
     if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
@@ -505,6 +545,11 @@ function missionLaunchTargetChange(id, idx, val) {
 function _missionPlaneMatchTargetSpec(targetVal) {
   if (!targetVal) return null;
   if (targetVal === 'Moon') return 'Moon';
+  if (targetVal.startsWith('node:')) {
+    const nodeId = targetVal.slice('node:'.length);
+    const node = (typeof archGet === 'function') ? (archGet().nodes || []).find(n => n.id === nodeId) : null;
+    return node ? { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name } : null;
+  }
   const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
   return entry ? { inc: entry.inc, lan: entry.lan, name: entry.name } : null;
 }
@@ -782,7 +827,7 @@ function missionLaunchGeoUpdate(id, idx) {
       // e.planDest === 'Moon' (see the Target-control note above); legacy
       // missions may still carry e.planeMatchTarget (Moon or a catalog ref) —
       // check either so the staleness readout keeps working for both.
-      const matchTarget = e.planDest === 'Moon' ? 'Moon' : e.planeMatchTarget;
+      const matchTarget = e.planNodeId ? ('node:' + e.planNodeId) : (e.planDest === 'Moon' ? 'Moon' : e.planeMatchTarget);
       if (matchTarget && typeof progResolvePlaneTarget === 'function' && typeof _missionPlaneMatchTargetSpec === 'function') {
         const spec = _missionPlaneMatchTargetSpec(matchTarget);
         const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
@@ -1009,13 +1054,20 @@ function _missionLaunchSyncDraft(id, idx) {
   const targetEl = document.getElementById('edit-launch-target-' + id);
   if (targetEl) {
     const targetVal = targetEl.value || '';
-    if (targetVal.startsWith('dest:')) {
+    if (targetVal.startsWith('node:')) {
+      e.planNodeId = targetVal.slice('node:'.length);
+      e.planDest = null;
+      e.planeMatchTarget = null;
+    } else if (targetVal.startsWith('dest:')) {
+      e.planNodeId = null;
       e.planDest = targetVal.slice('dest:'.length);
       e.planeMatchTarget = null;
     } else if (targetVal.startsWith('plane:')) {
+      e.planNodeId = null;
       e.planDest = null;
       e.planeMatchTarget = targetVal.slice('plane:'.length);
     } else {
+      e.planNodeId = null;
       e.planDest = null;
       e.planeMatchTarget = null;
     }

@@ -21860,6 +21860,10 @@ function _missionAddEventHTML(m) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
   const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['lowthrust','Low-Thrust'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
+  // A4 (MISSION_MODEL_V2 §26): only offered once the mission's architecture
+  // has at least one edge to transfer along (KSP invariant — nothing new
+  // appears for a fresh, architecture-free mission).
+  if (typeof archGet === 'function' && archGet().edges && archGet().edges.length) types.push(['archxfer', 'Transfer (from plan)']);
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -21918,6 +21922,19 @@ function _missionAddEventHTML(m) {
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
+  } else if (_missionAddEvt === 'archxfer') {
+    const arch = (typeof archGet === 'function') ? archGet() : { nodes: [], edges: [] };
+    const byId = {}; (arch.nodes || []).forEach(n => byId[n.id] = n);
+    const opts = (arch.edges || []).map(e => {
+      const A = byId[e.fromId], B = byId[e.toId];
+      return (A && B) ? `<option value="${e.id}">${_mrEsc(A.name)} &rarr; ${_mrEsc(B.name)}</option>` : '';
+    }).join('');
+    form = (arch.edges || []).length
+      ? `<label class="cfg-label">Architecture edge</label>
+        <select id="addev-archxfer-${id}" class="mcc-field-select" style="margin-bottom:8px;">${opts}</select>
+        <button class="act-btn" style="width:100%;" onclick="missionExecArchTransfer('${id}',document.getElementById('addev-archxfer-${id}').value)">Add Transfer</button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// generates the depart/MCC/insertion burn(s) via the same solver as the Node Map maneuver bridge — each stays separately editable/deletable after</div>`
+      : `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// no architecture edges yet — author them on the Architecture page</div>`;
   } else if (_missionAddEvt === 'rendezvous') {
     const others = live.filter(x => x.id !== m.vehicleId);
     if (others.length) {
@@ -23477,9 +23494,24 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // at a catalog ref has no Target-list equivalent (the ref picker is a
   // separate field) — tolerate it read-only below rather than force a migration.
   const legacyRefMatch = e.planeMatchTarget && e.planeMatchTarget !== 'Moon' ? e.planeMatchTarget : null;
-  const cur = e.planDest ? ('dest:' + e.planDest) : (e.planeMatchTarget === 'Moon' ? 'dest:Moon' : '');
+  // A4 (MISSION_MODEL_V2 §26): architecture nodes get their own optgroup,
+  // FIRST, when an architecture with nodes exists — mutually exclusive with
+  // planDest/planeMatchTarget, persisted as e.planNodeId (see
+  // missionApplyLaunchEdit below). Display-tolerant: a legacy/deleted node id
+  // just falls through to '' (no crash, no data loss — the raw id stays on e
+  // until the user re-picks).
+  const archNodes = (typeof archGet === 'function') ? (archGet().nodes || []) : [];
+  let archOptsHTML = '';
+  if (archNodes.length) {
+    const opts = archNodes.map(n => `<option value="node:${n.id}"${e.planNodeId === n.id ? ' selected' : ''}>${_mrEsc(n.name)} (${_mrEsc(n.body)})</option>`).join('');
+    archOptsHTML = `<optgroup label="Mission architecture">${opts}</optgroup>`;
+  }
+  const cur = e.planNodeId ? ('node:' + e.planNodeId)
+    : e.planDest ? ('dest:' + e.planDest)
+    : (e.planeMatchTarget === 'Moon' ? 'dest:Moon' : '');
   const destOpts = dests.map(d => `<option value="dest:${d}"${cur === 'dest:' + d ? ' selected' : ''}>${d}</option>`).join('');
   const isDest = cur.startsWith('dest:');
+  const isArchNode = cur.startsWith('node:');
   const depVal = (e.planDepJD != null && e.planDepJD !== '') ? e.planDepJD : '';
   // Committed LAUNCH entries auto-apply (missionRecompute + missionRenderDetail)
   // right after missionLaunchMatchPlane sets its rich live readout — which
@@ -23489,7 +23521,23 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // the window countdown itself is transient (already applied to launchTime_s
   // by the time this re-render happens) so it's not reconstructed here.
   let initReadout;
-  if (e.planDest === 'Moon') {
+  if (e.planNodeId) {
+    const node = archNodes.find(n => n.id === e.planNodeId);
+    if (node) {
+      const site = _missionLaunchSiteFor(e);
+      const siteLat = site ? site.lat : 28.5;
+      const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+      const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
+      const target = { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name };
+      const res = (typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget(target, epochJD, t_s, siteLat) : null;
+      initReadout = res
+        ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to ${_mrEsc(node.name)}`)
+          + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
+        : '// pick Target again to rematch';
+    } else {
+      initReadout = '// this mission architecture node no longer exists &mdash; pick Target again';
+    }
+  } else if (e.planDest === 'Moon') {
     const site = _missionLaunchSiteFor(e);
     const siteLat = site ? site.lat : 28.5;
     const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
@@ -23512,6 +23560,7 @@ function _missionLaunchTargetHTML(m, idx, e) {
       <div class="cfg-item"><label class="cfg-label">Target</label>
         <select id="edit-launch-target-${id}" style="${_es}" onchange="missionLaunchTargetChange('${id}',${idx},this.value)">
           <option value=""${cur === '' ? ' selected' : ''}>&mdash; none (manual orbit) &mdash;</option>
+          ${archOptsHTML}
           ${destOpts}
         </select></div>
       <div class="cfg-item" id="edit-launch-depjd-wrap-${id}" style="${isDest ? '' : 'display:none;'}">
@@ -23531,8 +23580,16 @@ function missionLaunchTargetChange(id, idx, val) {
   const depWrap = document.getElementById('edit-launch-depjd-wrap-' + id);
   const optBtn = document.getElementById('edit-launch-optimize-' + id);
   const isDest = val.startsWith('dest:');
+  const isArchNode = val.startsWith('node:');
   if (depWrap) depWrap.style.display = isDest ? '' : 'none';
   if (optBtn) optBtn.style.display = isDest ? '' : 'none';
+  if (isArchNode) {
+    // A4: architecture-node target runs the SAME complete plane/window solve
+    // Moon does (missionLaunchMatchPlane), against {inc,lan,name} resolved
+    // from the node's canonical orbit — see _missionPlaneMatchTargetSpec.
+    missionLaunchMatchPlane(id, idx, val);
+    return;
+  }
   if (!isDest) {
     const out = document.getElementById('launch-plan-readout-' + id);
     if (out) out.innerHTML = '// choose a destination to auto-set the ideal parking-orbit plane (inc/&Omega;) for the lowest-&Delta;V departure &mdash; every field stays editable';
@@ -23552,6 +23609,11 @@ function missionLaunchTargetChange(id, idx, val) {
 function _missionPlaneMatchTargetSpec(targetVal) {
   if (!targetVal) return null;
   if (targetVal === 'Moon') return 'Moon';
+  if (targetVal.startsWith('node:')) {
+    const nodeId = targetVal.slice('node:'.length);
+    const node = (typeof archGet === 'function') ? (archGet().nodes || []).find(n => n.id === nodeId) : null;
+    return node ? { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name } : null;
+  }
   const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
   return entry ? { inc: entry.inc, lan: entry.lan, name: entry.name } : null;
 }
@@ -23829,7 +23891,7 @@ function missionLaunchGeoUpdate(id, idx) {
       // e.planDest === 'Moon' (see the Target-control note above); legacy
       // missions may still carry e.planeMatchTarget (Moon or a catalog ref) —
       // check either so the staleness readout keeps working for both.
-      const matchTarget = e.planDest === 'Moon' ? 'Moon' : e.planeMatchTarget;
+      const matchTarget = e.planNodeId ? ('node:' + e.planNodeId) : (e.planDest === 'Moon' ? 'Moon' : e.planeMatchTarget);
       if (matchTarget && typeof progResolvePlaneTarget === 'function' && typeof _missionPlaneMatchTargetSpec === 'function') {
         const spec = _missionPlaneMatchTargetSpec(matchTarget);
         const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
@@ -24056,13 +24118,20 @@ function _missionLaunchSyncDraft(id, idx) {
   const targetEl = document.getElementById('edit-launch-target-' + id);
   if (targetEl) {
     const targetVal = targetEl.value || '';
-    if (targetVal.startsWith('dest:')) {
+    if (targetVal.startsWith('node:')) {
+      e.planNodeId = targetVal.slice('node:'.length);
+      e.planDest = null;
+      e.planeMatchTarget = null;
+    } else if (targetVal.startsWith('dest:')) {
+      e.planNodeId = null;
       e.planDest = targetVal.slice('dest:'.length);
       e.planeMatchTarget = null;
     } else if (targetVal.startsWith('plane:')) {
+      e.planNodeId = null;
       e.planDest = null;
       e.planeMatchTarget = targetVal.slice('plane:'.length);
     } else {
+      e.planNodeId = null;
       e.planDest = null;
       e.planeMatchTarget = null;
     }
@@ -25003,10 +25072,27 @@ function missionRenderDetail() {
   // _missionNodeMapHTML) are UNCHANGED — this is chrome, not map rendering. ──
   let stageHTML, viewPanelHTML;
   if (viewMode === 'nodemap') {
-    stageHTML = _missionNodeMapHTML(m);
-    // Node map panel = the ORBITS catalog — its natural home (was the dying
-    // Plan-rail's one live occupant).
-    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div></div>`;
+    // A4 (MISSION_MODEL_V2 §26): once the program has authored an
+    // architecture, the Plan surface becomes a READ-MOSTLY mirror of it
+    // (archMapRender's content builder, extracted for this second mount —
+    // "one renderer, two mounts", same pattern A3 established) instead of the
+    // mission-local node map; editing redirects to the Architecture page.
+    // With NO architecture, this branch is untouched (KSP invariant) — the
+    // ORBITS catalog rail below still authors custom node-map nodes directly
+    // for the maneuver bridge, a capability the ladder doesn't yet replace.
+    const hasArch = (typeof archGet === 'function') && archGet().nodes && archGet().nodes.length > 0;
+    if (hasArch && typeof _archMapContentHTML === 'function') {
+      stageHTML = _archMapContentHTML(true);
+      viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:8px;line-height:1.6;">
+        This mission's Plan surface mirrors the mission architecture (read-mostly). Edit nodes/edges on the Architecture page.
+        <div style="margin-top:6px;"><button class="act-btn" onclick="showPage('architecture')">Edit in Architecture &rarr;</button></div>
+      </div></div>`;
+    } else {
+      stageHTML = _missionNodeMapHTML(m);
+      // Node map panel = the ORBITS catalog — its natural home (was the dying
+      // Plan-rail's one live occupant).
+      viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div class="mcc-orbit-cat">${_missionOrbitPaletteHTML(m)}</div></div>`;
+    }
   } else if (viewMode === 'band') {
     stageHTML = _missionBandViewHTML(m);
     // Timeline panel: blank scaffold for now (user: "leave them blank").
@@ -37768,6 +37854,13 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.matches?.('
 /** Returns PROG_ACTIVE_PROGRAM.architecture, creating an empty
  *  {nodes:[], edges:[]} lazily on first access. Never returns null/undefined. */
 function archGet() {
+  // A4 hardening: new call sites in 570-mission-band.js/570-mission-events.js
+  // read archGet() from render paths that can fire during missionInit(),
+  // BEFORE 590-init.js's startup IIFE assigns PROG_ACTIVE_PROGRAM — return a
+  // transient empty shape instead of throwing (never persisted; the real
+  // program's architecture is created lazily on the first real archGet()
+  // call once PROG_ACTIVE_PROGRAM exists).
+  if (!PROG_ACTIVE_PROGRAM) return { nodes: [], edges: [] };
   if (!PROG_ACTIVE_PROGRAM.architecture) {
     PROG_ACTIVE_PROGRAM.architecture = { nodes: [], edges: [] };
   }
@@ -38327,33 +38420,39 @@ function _archChainDetailHTML(A, B, res) {
   </div>`;
 }
 
-/** Renders the `.arch-stage` node-map surface. Called by 605's archRenderPage()
- *  on every model change, so it never goes stale relative to the ladder. */
-function archMapRender() {
-  const stage = document.querySelector('#page-architecture .arch-stage');
-  if (!stage) return;
+// A4 (MISSION_MODEL_V2 §26): "one renderer, two mounts" — the content-string
+// builder is now separate from the DOM mount so the Mission Plan surface
+// (570-mission-lifecycle.js) can embed the exact same markup, read-mostly,
+// when an architecture exists. `readOnly` suppresses the Draw Edge control
+// and per-edge delete chip; node/edge click-to-inspect (selection + chain
+// detail) stays live either way since that's harmless viewing, not editing.
+function _archMapContentHTML(readOnly) {
   const arch = archGet();
   const nodes = arch.nodes || [];
   const edges = arch.edges || [];
 
   if (!nodes.length) {
-    stage.innerHTML = '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
-    return;
+    return '<div class="placeholder-msg">No architecture yet — add orbits from the rail</div>';
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
   const lay = _archMapLayout(nodes);
   const pos = lay.pos;
 
-  let ctrlHTML = `<div class="sl" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-    <button class="act-btn" style="${_archBridgeMode ? 'background:var(--accent);color:#000;' : ''}" onclick="archToggleBridgeMode()">+ Draw Edge</button>`;
-  if (_archBridgeMode) {
-    if (_archBridgeFrom == null) {
-      ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">Click a start node&hellip;</span>`;
-    } else {
-      const fl = byId[_archBridgeFrom] ? byId[_archBridgeFrom].name : _archBridgeFrom;
-      ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-bright);">From ${escHtml(fl)} &mdash; click a destination node</span>
-        <button class="act-btn" style="padding:2px 8px;font-size:10px;" onclick="archMapCancelBridge()">Cancel</button>`;
+  let ctrlHTML = `<div class="sl" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">`;
+  if (readOnly) {
+    ctrlHTML += `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.08em;">MISSION ARCHITECTURE (read-mostly)</span>
+      <button class="act-btn" onclick="showPage('architecture')">Edit in Architecture &rarr;</button>`;
+  } else {
+    ctrlHTML += `<button class="act-btn" style="${_archBridgeMode ? 'background:var(--accent);color:#000;' : ''}" onclick="archToggleBridgeMode()">+ Draw Edge</button>`;
+    if (_archBridgeMode) {
+      if (_archBridgeFrom == null) {
+        ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">Click a start node&hellip;</span>`;
+      } else {
+        const fl = byId[_archBridgeFrom] ? byId[_archBridgeFrom].name : _archBridgeFrom;
+        ctrlHTML += `<span style="font-family:var(--mono);font-size:10px;color:var(--text-bright);">From ${escHtml(fl)} &mdash; click a destination node</span>
+          <button class="act-btn" style="padding:2px 8px;font-size:10px;" onclick="archMapCancelBridge()">Cancel</button>`;
+      }
     }
   }
   ctrlHTML += `</div>`;
@@ -38377,10 +38476,12 @@ function archMapRender() {
       <rect x="${mx - 38}" y="${my - 9}" width="76" height="18" rx="9" fill="var(--bg)" stroke="${col}" stroke-width="1.2"/>
       <text x="${mx}" y="${my + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${col}">${escHtml(dvLabel)}</text>
     </g>`;
-    edgesHTML += `<g onclick="event.stopPropagation();archDeleteEdge('${e.id}')" style="cursor:pointer"><title>Delete edge</title>
-      <circle cx="${mx + 44}" cy="${my - 9}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
-      <text x="${mx + 44}" y="${my - 6}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
-    </g>`;
+    if (!readOnly) {
+      edgesHTML += `<g onclick="event.stopPropagation();archDeleteEdge('${e.id}')" style="cursor:pointer"><title>Delete edge</title>
+        <circle cx="${mx + 44}" cy="${my - 9}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
+        <text x="${mx + 44}" y="${my - 6}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
+      </g>`;
+    }
     if (sel && res) chainHTML = _archChainDetailHTML(A, B, res);
   });
 
@@ -38399,7 +38500,56 @@ function archMapRender() {
   });
 
   const svgHTML = `<svg viewBox="0 0 ${lay.W} ${lay.H}" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:none;height:auto;max-height:340px;background:transparent;display:block;">${edgesHTML}${nodesHTML}</svg>`;
-  stage.innerHTML = `${ctrlHTML}<div style="overflow-x:auto;">${svgHTML}</div>${chainHTML}`;
+  return `${ctrlHTML}<div style="overflow-x:auto;">${svgHTML}</div>${chainHTML}`;
+}
+
+/** Renders the `.arch-stage` node-map surface. Called by 605's archRenderPage()
+ *  on every model change, so it never goes stale relative to the ladder. */
+function archMapRender() {
+  const stage = document.querySelector('#page-architecture .arch-stage');
+  if (!stage) return;
+  stage.innerHTML = _archMapContentHTML(false);
+}
+
+// ── A4: "Transfer along this edge" -> real s22 chain events ────────────────
+// Reuse decision (task brief mandate): adapt the edge's two architecture
+// nodes into custom node-map nodes (_missionCreateCustomNode, 570-mission-
+// nodemap.js — the SAME dialect archEdgeDv already produces via
+// _archOrbitToNmOrbit) and hand off to the EXISTING s22 authoring path,
+// missionExecManeuver (570-mission-panel.js), completely unmodified. That
+// function already: (1) detects a two-hop transit corridor and splits
+// depart/MCC/insert via _missionChainSplitInject when the node-map's own
+// physics recognizes one (e.g. an Earth<->Moon pair), or (2) authors a single
+// charged, editable, deletable MNODE event for any other pair — the SAME
+// fidelity the Node Map's own "Draw Maneuver" bridge has today for that same
+// endpoint pair. No new chain-generation logic was written; dV/timing come
+// from the identical accounting source (progNmComputeEdgeDv's underlying
+// _nmDvPhysics) the Architecture page's own edge display already reads.
+function _archCustomNodeForArchNode(node) {
+  // Reuse a previously-created custom node for this architecture node
+  // (tagged via archNodeId) instead of spawning a duplicate on every
+  // "Add Transfer" click for the same edge.
+  const existing = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.archNodeId === node.id) : null;
+  if (existing) return existing.id;
+  if (typeof _missionCreateCustomNode !== 'function') return null;
+  const nmOrbit = _archOrbitToNmOrbit(node.orbit);
+  const cid = _missionCreateCustomNode(node.name, nmOrbit, 550, 300, node.body + ' ' + nmOrbit.type);
+  const cn = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.id === cid) : null;
+  if (cn) cn.archNodeId = node.id;
+  return cid;
+}
+function missionExecArchTransfer(missionId, edgeId) {
+  if (!edgeId) return;
+  const arch = archGet();
+  const edge = (arch.edges || []).find(e => e.id === edgeId);
+  if (!edge) return;
+  const A = (arch.nodes || []).find(n => n.id === edge.fromId);
+  const B = (arch.nodes || []).find(n => n.id === edge.toId);
+  if (!A || !B) return;
+  const fromId = _archCustomNodeForArchNode(A);
+  const toId = _archCustomNodeForArchNode(B);
+  if (!fromId || !toId) return;
+  if (typeof missionExecManeuver === 'function') missionExecManeuver(missionId, fromId, toId);
 }
 </script>
 
