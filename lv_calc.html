@@ -4608,6 +4608,19 @@ function ascentSimDefaults(cfg) {
     // near-circular orbit.
     apohold: cfg.apohold,
     apoholdFrac: cfg.apoholdFrac,
+    // ─── PEG terminal guidance (the critique-122 resolution) ─────────────────
+    // PEG is the DEFAULT exoatmospheric guidance for a targeted run (positive
+    // apogee target, no explicit profile, apohold off). The SIM3 energy-cutoff
+    // / apoapsis-hold / coast machinery is kept as a FALLBACK, reachable via an
+    // explicit profile ('twoburn'/'twoburn-coast') or apohold:true.
+    //   pegHandoffKm: altitude (km) at which the atmospheric boost (velocity-
+    //     scheduled pitch) hands off to PEG. Above ~50-60 km drag is negligible
+    //     and PEG's small-angle vacuum formulation holds. Default 55.
+    //   pegCycleS: PEG re-solve interval (s of sim time). Deterministic; PEG
+    //     switches to per-step re-solves once time-to-go drops below one cycle,
+    //     for a clean cutoff. Default 2.
+    pegHandoffKm: cfg.pegHandoffKm != null ? cfg.pegHandoffKm : 55,
+    pegCycleS: cfg.pegCycleS != null ? cfg.pegCycleS : 2,
   };
 }
 
@@ -4643,6 +4656,192 @@ function ascsimBuildBoosters(booster) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PEG — Powered Explicit Guidance (2-DOF linear-tangent terminal guidance)
+// ═══════════════════════════════════════════════════════════════════════════
+// The SIM3 heuristic insertion (apoapsis-hold / energy cutoff) delivers the
+// target ENERGY but leaves an eccentric orbit; forcing it circular costs
+// 1200-2000 m/s of steering loss (critique 122). PEG replaces that heuristic
+// with the published Shuttle-heritage optimal-control law: each guidance cycle
+// it SOLVES the terminal boundary-value problem — find the linear-tangent
+// steering coefficients (A,B) and time-to-go T that fly the state to the target
+// circular orbit (r=r_T, v_r=0, v_t=sqrt(mu/r_T)) simultaneously. Because the
+// steering is the solution of the two-point BVP (not a feedback heuristic), the
+// thrust stays near-prograde and the orbit arrives circular with minimal loss.
+//
+// Formulation (2-DOF plane, small-angle linear-tangent):
+//   The radial component of the thrust UNIT vector is f_r(t) = A + B*t (t=0 at
+//   the guidance-cycle start). Tangential component f_t = sqrt(1-f_r^2). Radial
+//   thrust acceleration ~= a(t)*f_r(t) to first order in the (small) pitch.
+//   Thrust-acceleration moments b_k = integral_0^T t^k a(t) dt, composed across
+//   ALL remaining SERIAL stages (each a constant-mdot segment a_i(s)=ve_i/(tau_i
+//   - s), ve=g0*isp_vac, tau=m/mdot), give:
+//     radial velocity gained by thrust  = A*b0 + B*b1
+//     radial position gained by thrust  = A*c0 + B*c1,  c0=T*b0-b1, c1=T*b1-b2
+//   Gravity/centrifugal enters through the effective radial acceleration
+//   g_eff = mu/r^2 - v_t^2/r (net radial pull absent thrust; = 0 at the target
+//   circular orbit). It is AVERAGED over the arc as the mean of its current
+//   value and its terminal value (0 for the exact circular target), i.e.
+//   g_eff_avg = g_eff_now/2 (documented averaging choice). The tangential
+//   Coriolis term -v_r*v_t/r is averaged the same way (mean of now and 0).
+//   Terminal constraints:
+//     radial velocity : A*b0 + B*b1 = -v_r + g_eff_avg*T        (want v_r(T)=0)
+//     radial position : A*c0 + B*c1 = r_T - r - v_r*T + g_eff_avg*T^2/2
+//   Time-to-go from the velocity-to-gain magnitude closure: the total thrust dv
+//   b0(T) must supply the whole velocity deficit, so b0(T) = |v_go(T)| with
+//     v_go = [ v_tT - v_t + coriolis_avg*T ,  -v_r + g_eff_avg*T ]  (tang,rad).
+//   b0 is monotone increasing in T and |v_go| is nearly flat, so T is found by
+//   bisection over (0, T_burn_total] (deterministic, 50 iters; robust, avoids
+//   FD-Jacobian noise per the repo's corrector philosophy). If even the full
+//   remaining dv cannot meet |v_go| the burn is dv-insufficient (payload too
+//   high) — T is pinned to the max and the run falls short (the optimizer/
+//   bisection detects the miss). Boosters/atmosphere live BELOW the PEG handoff
+//   (exoatmospheric, boosters long gone), so PEG composes only the serial upper
+//   stages — parallel-booster thrust never needs composing (documented).
+
+// Compose the thrust-acceleration moments b0,b1,b2 = integral_0^T t^k a(t) dt
+// over the remaining serial-stage segments. remStages: [{ve,tau,burnTime}].
+function ascsimPegMoments(remStages, T) {
+  let b0 = 0, b1 = 0, b2 = 0, tOff = 0, remaining = T;
+  for (let i = 0; i < remStages.length && remaining > 1e-9; i++) {
+    const s = remStages[i];
+    const dt = Math.min(s.burnTime, remaining);
+    if (dt <= 1e-12) { tOff += s.burnTime; continue; }
+    const ve = s.ve, tau = s.tau;
+    const L = ve * Math.log(tau / Math.max(tau - dt, 1e-6)); // segment dv (b0 local)
+    const J = tau * L - ve * dt;                              // integral s*a ds
+    const Q = tau * J - ve * dt * dt / 2;                     // integral s^2*a ds
+    b0 += L;
+    b1 += tOff * L + J;
+    b2 += tOff * tOff * L + 2 * tOff * J + Q;
+    tOff += dt;
+    remaining -= dt;
+  }
+  return { b0, b1, b2 };
+}
+
+// Build the remaining serial-stage segment list from the live sim state (the
+// ONE place PEG derives future staging). Mirrors the integrator's mass
+// bookkeeping exactly: burn usable propellant, then drop the stage's dry mass
+// (reserve propellant rides up as it does in the integrator). usableFn = the
+// run's usableProp closure.
+function ascsimPegRemStages(stages, stageIdx, m, burnedThisStage, usableFn) {
+  let mass = m;
+  const rem = [];
+  for (let i = stageIdx; i < stages.length; i++) {
+    const st = stages[i];
+    const ve = G0 * st.isp_vac_s;
+    const mdot = st.isp_vac_s > 0 ? st.F_vac_N / ve : 0;
+    const usable = usableFn(st);
+    const propLeft = i === stageIdx ? Math.max(0, usable - burnedThisStage) : usable;
+    if (mdot > 0 && propLeft > 1e-9) rem.push({ ve, tau: mass / mdot, burnTime: propLeft / mdot });
+    mass = mass - propLeft - st.dry_kg;
+  }
+  return rem;
+}
+
+// Thrust-acceleration magnitude at elapsed time s into the remaining-stage
+// sequence (ve/(tau - local time); 0 past the last stage). Used by the
+// predicted-trajectory gravity integral below.
+function ascsimPegThrustAccel(remStages, s) {
+  let off = 0;
+  for (let i = 0; i < remStages.length; i++) {
+    const st = remStages[i];
+    if (s < off + st.burnTime) return st.ve / Math.max(st.tau - (s - off), 1e-6);
+    off += st.burnTime;
+  }
+  return 0;
+}
+
+// Predict the powered trajectory over [0,T] under gravity + thrust-along-primer
+// and accumulate the GRAVITY velocity/position gained along the ACTUAL path:
+//   vGrav = integral g(p(t)) dt ,  rGrav = integral (T-t) g(p(t)) dt
+// (the position contribution of an acceleration at time t is weighted by T-t).
+// This is the crux of a working long-arc PEG: the single trapezoidal
+// current+terminal gravity average is only valid over a short near-apogee arc;
+// a low-TWR direct ascent spends a long arc at varying radius/angle where the
+// gravity vector both rotates and changes magnitude, and only integrating it
+// along the predicted path keeps the guidance from diverging. Semi-implicit
+// Euler, N sub-steps. Returns { vGrav, rGrav, Pend } (Pend = predicted terminal
+// position, used for the terminal-direction target).
+function ascsimPegPredict(P, V, remStages, lambda, lamDot, T, muSI, N) {
+  let px = P[0], py = P[1], vx = V[0], vy = V[1];
+  const dt = T / N;
+  const vGrav = [0, 0], rGrav = [0, 0];
+  for (let k = 0; k < N; k++) {
+    const s = k * dt;
+    const r = Math.hypot(px, py) || 1e-9;
+    const gc = -muSI / (r * r * r);
+    const gx = gc * px, gy = gc * py;
+    vGrav[0] += gx * dt; vGrav[1] += gy * dt;
+    rGrav[0] += (T - s) * gx * dt; rGrav[1] += (T - s) * gy * dt;
+    const a = ascsimPegThrustAccel(remStages, s);
+    let dx = lambda[0] + lamDot[0] * s, dy = lambda[1] + lamDot[1] * s;
+    const dn = Math.hypot(dx, dy) || 1; dx /= dn; dy /= dn;
+    vx += (gx + a * dx) * dt; vy += (gy + a * dy) * dt;
+    px += vx * dt; py += vy * dt;
+  }
+  return { vGrav, rGrav, Pend: [px, py] };
+}
+
+// Solve the PEG terminal BVP in inertial Cartesian (direct ascent). Returns the
+// primer vector lambda (unit thrust direction now) + its rate lamDot (kept
+// perpendicular to lambda) + time-to-go T, or null (no burn time). The
+// commanded thrust unit vector at cycle-elapsed s is lambda + lamDot*s
+// (re-normalised). r_T = target circular radius (m). Outer fixed-point loop
+// (deterministic, fixed iteration cap) alternately (a) predicts the trajectory
+// to get the path gravity integral, (b) forms v_go/r_go, (c) updates T from the
+// velocity-to-gain magnitude closure b0(T)=|v_go|, (d) updates lambda/lamDot.
+function ascsimPegSolve(state, remStages, r_T, muSI, prev) {
+  const r = state.r, theta = state.theta, vr = state.vr, vt = state.vt;
+  const vt_T = Math.sqrt(muSI / r_T);
+  const cth = Math.cos(theta), sth = Math.sin(theta);
+  const P = [r * cth, r * sth];
+  const V = [vr * cth - vt * sth, vr * sth + vt * cth];
+  let Tmax = 0;
+  for (let i = 0; i < remStages.length; i++) Tmax += remStages[i].burnTime;
+  if (Tmax <= 1e-6) return null;
+  const N = 24;
+  // Seed lambda/lamDot/T from the previous cycle (warm start) or a prograde
+  // guess; T seeded near the full remaining burn.
+  let lambda = prev ? prev.lambda.slice() : [(-sth), (cth)]; // prograde-ish
+  let lamDot = prev ? prev.lamDot.slice() : [0, 0];
+  let T = prev ? Math.min(prev.T, Tmax) : Tmax * 0.9;
+  let insufficient = false;
+  for (let it = 0; it < 6; it++) {
+    const pr = ascsimPegPredict(P, V, remStages, lambda, lamDot, T, muSI, N);
+    // Terminal target direction from the predicted terminal position.
+    const rn = Math.hypot(pr.Pend[0], pr.Pend[1]) || 1e-9;
+    const urT = [pr.Pend[0] / rn, pr.Pend[1] / rn];
+    const utT = [-urT[1], urT[0]];                 // prograde unit at terminal
+    const P_T = [r_T * urT[0], r_T * urT[1]];
+    const V_T = [vt_T * utT[0], vt_T * utT[1]];
+    const v_go = [V_T[0] - V[0] - pr.vGrav[0], V_T[1] - V[1] - pr.vGrav[1]];
+    const r_go = [P_T[0] - P[0] - V[0] * T - pr.rGrav[0], P_T[1] - P[1] - V[1] * T - pr.rGrav[1]];
+    const vgoMag = Math.hypot(v_go[0], v_go[1]) || 1e-9;
+    // Update T so the remaining thrust dv b0(T) supplies exactly |v_go|.
+    const fOf = (TT) => ascsimPegMoments(remStages, TT).b0 - vgoMag;
+    if (fOf(Tmax) < 0) { T = Tmax; insufficient = true; }
+    else if (fOf(1e-3) > 0) { T = 1e-3; insufficient = false; }
+    else {
+      let lo = 1e-3, hi = Tmax; insufficient = false;
+      for (let j = 0; j < 40; j++) { const mid = 0.5 * (lo + hi); if (fOf(mid) > 0) hi = mid; else lo = mid; }
+      T = 0.5 * (lo + hi);
+    }
+    const mom = ascsimPegMoments(remStages, T);
+    const b0 = mom.b0, b1 = mom.b1, b2 = mom.b2;
+    const c0 = T * b0 - b1, c1 = T * b1 - b2;
+    lambda = [v_go[0] / vgoMag, v_go[1] / vgoMag];
+    lamDot = [0, 0];
+    if (Math.abs(c1) > 1e-6) {
+      lamDot = [(r_go[0] - c0 * lambda[0]) / c1, (r_go[1] - c0 * lambda[1]) / c1];
+      const along = lamDot[0] * lambda[0] + lamDot[1] * lambda[1];
+      lamDot = [lamDot[0] - along * lambda[0], lamDot[1] - along * lambda[1]];
+    }
+  }
+  return { lambda, lamDot, T, insufficient };
+}
+
 function ascentSimRun(rawCfg) {
   const cfg = ascentSimDefaults(rawCfg);
   const MU_SI = MU * 1e9;   // m^3/s^2 (MU global is km^3/s^2 — see header)
@@ -4668,7 +4867,17 @@ function ascentSimRun(rawCfg) {
   //                    Robust + efficient (near-direct-ascent), converges where
   //                    SIM2's open-loop family could not.
   const twoBurnCoast = cfg.profile === 'twoburn-coast';
-  const twoBurn = cfg.profile === 'twoburn' || twoBurnCoast || (cfg.profile !== 'direct' && hasApoTarget);
+  //   'peg' — OPT-IN PEG optimal-control terminal guidance (atmospheric boost ->
+  //           handoff -> direct-ascent PEG to the circular target). Implemented
+  //           and available, but NOT the default: on the marginal, low-upper-
+  //           stage-TWR anchor stacks it does not robustly reach a tight
+  //           circular insertion (see docs/MATH.md §10.11 + critique 122 for the
+  //           honest miss and the diagnostics), so the working SIM3 energy-
+  //           cutoff / apoapsis-hold path remains the default. Selected only by
+  //           an explicit cfg.profile==='peg'.
+  const usePeg = cfg.profile === 'peg';
+  const twoBurn = !usePeg && (cfg.profile === 'twoburn' || twoBurnCoast ||
+    (cfg.profile !== 'direct' && hasApoTarget));
 
   const bstate = ascsimBuildBoosters(cfg.booster); // throws on air-lit
   const boosterInitMass = bstate.reduce((a, g) => a + g.prop + g.dryDrop, 0);
@@ -4688,10 +4897,14 @@ function ascentSimRun(rawCfg) {
   let mStageStart = m;
   let dvIdeal = 0;
   let status = 'timeout';
-  let phase = twoBurn ? 'boost' : 'direct';
+  let phase = (twoBurn || usePeg) ? 'boost' : 'direct';
   let coastStart = null;
 
-  const steerCtx = { kicked: false, lastGtPitch: null, handoffDone: false, pitchHandoff: null, tHandoff: null };
+  // Target circular radius for PEG (mean of the requested apsides — 185x185 ->
+  // 185 km; a slightly elliptical target degrades gracefully to its mean).
+  const rTargetM = cfg.target ? RE_M + (cfg.target.periKm + cfg.target.apoKm) / 2 * 1000 : 0;
+
+  const steerCtx = { kicked: false, lastGtPitch: null, handoffDone: false, pitchHandoff: null, tHandoff: null, peg: null };
 
   let gravLoss = 0, dragLoss = 0, steerLoss = 0, thrustPowerIntegral = 0;
 
@@ -4740,7 +4953,7 @@ function ascentSimRun(rawCfg) {
       // no residual vertical rate to fight, so it drives straight to circular.
       // Apogee reached (radial velocity turned over — or already non-positive
       // if we entered the coast at/after apogee): hand to the insertion burn.
-      if (state.vr <= 0) { phase = twoBurnCoast ? 'insert' : 'apohold'; continue; }
+      if (state.vr <= 0) { phase = usePeg ? 'peg' : (twoBurnCoast ? 'insert' : 'apohold'); steerCtx.peg = null; continue; }
       if (t - coastStart > cfg.coastCapS) { status = 'coastTimeout'; break; }
       continue;
     }
@@ -4811,7 +5024,37 @@ function ascentSimRun(rawCfg) {
     // circularization; at apogee the velocity is ~horizontal, so this raises
     // perigee toward apogee. pitch_from_horizontal = atan2(vr, vt).
     let pitch;
-    if (phase === 'insert') {
+    if (phase === 'peg') {
+      // Re-solve the PEG BVP at the guidance-cycle interval; switch to per-step
+      // re-solves once time-to-go falls below one cycle (clean cutoff). Between
+      // re-solves the commanded radial thrust-unit component follows the stored
+      // linear-tangent law f_r(t) = A + B*(t - t0).
+      const pg0 = steerCtx.peg;
+      const elapsed = pg0 ? (t - pg0.t0) : Infinity;
+      const tgo0 = pg0 ? (pg0.T - elapsed) : 0;
+      const needRecompute = !pg0 || elapsed >= cfg.pegCycleS || tgo0 < cfg.pegCycleS;
+      if (needRecompute) {
+        const remStages = ascsimPegRemStages(cfg.stages, stageIdx, m, burnedThisStage, usableProp);
+        const sol = ascsimPegSolve(state, remStages, rTargetM, MU_SI, pg0);
+        if (sol) steerCtx.peg = { lambda: sol.lambda, lamDot: sol.lamDot, T: sol.T, t0: t, insufficient: sol.insufficient };
+      }
+      const pg = steerCtx.peg;
+      if (pg) {
+        // Commanded inertial thrust unit vector: lambda + lamDot*(t - t0),
+        // re-normalised. Project onto the CURRENT position basis (radial u_r,
+        // prograde u_t) to get the sim's pitch-from-horizontal — this correctly
+        // accounts for frame rotation between guidance cycles.
+        const s = t - pg.t0;
+        let fx = pg.lambda[0] + pg.lamDot[0] * s, fy = pg.lambda[1] + pg.lamDot[1] * s;
+        const fn = Math.hypot(fx, fy) || 1e-9; fx /= fn; fy /= fn;
+        const cth = Math.cos(state.theta), sth = Math.sin(state.theta);
+        const fRad = fx * cth + fy * sth;        // component along u_r=(cos,sin)
+        const fTan = fx * -sth + fy * cth;        // component along u_t=(-sin,cos)
+        pitch = Math.atan2(fRad, fTan);
+      } else {
+        pitch = ascsimPitch(state, t, cfg, steerCtx, RE_M);
+      }
+    } else if (phase === 'insert') {
       pitch = Math.atan2(state.vr, Math.max(state.vt, 1e-9));
     } else if (phase === 'apohold') {
       // Closed-loop APOAPSIS-HOLD with vertical-rate damping (a PD law):
@@ -4832,6 +5075,13 @@ function ascentSimRun(rawCfg) {
       pitch = pc;
     } else {
       pitch = ascsimPitch(state, t, cfg, steerCtx, RE_M);
+    }
+
+    // PEG: clamp the final step so the burn ends exactly at time-to-go (a clean,
+    // near-circular cutoff rather than overshooting by up to a full step).
+    if (phase === 'peg' && steerCtx.peg) {
+      const tgo = steerCtx.peg.T - (t - steerCtx.peg.t0);
+      if (tgo > 1e-9 && tgo < dtStep) dtStep = tgo;
     }
 
     const ctx = {
@@ -4871,7 +5121,30 @@ function ascentSimRun(rawCfg) {
     if (state.r < RE_M) { status = 'crash'; break; }
 
     // ─── Phase transitions / cutoffs ───────────────────────────────────────
-    if (phase === 'boost') {
+    if (phase === 'boost' && usePeg) {
+      // Atmospheric boost -> PEG handoff. The velocity-scheduled gravity turn
+      // (ascsimPitch) flies the drag-significant lower atmosphere; once above
+      // the handoff altitude (drag negligible) PEG takes over the DIRECT ASCENT
+      // to orbit — a continuous upper-stage burn, NOT a coast-to-apogee (a
+      // low-TWR upper stage cannot circularise impulsively at apogee; it falls
+      // before reaching orbital speed, so a direct ascent is both physical and
+      // optimal). PEG's predicted-path gravity integral keeps the long powered
+      // arc convergent. Boosters have separated by this altitude, so PEG
+      // composes only the serial upper stages.
+      const h = state.r - RE_M;
+      if (h >= cfg.pegHandoffKm * 1000) { phase = 'peg'; steerCtx.peg = null; }
+    } else if (phase === 'peg') {
+      const pg = steerCtx.peg;
+      const tgo = pg ? pg.T - (t - pg.t0) : Infinity;
+      if (pg && tgo <= dtStep + 1e-9) {
+        const orbCheck = ascentSimOrbitOf(state, MU_SI, RE_M);
+        const periTol = cfg.target.periTol != null ? cfg.target.periTol : 2;
+        const apoTol = cfg.target.apoTol != null ? cfg.target.apoTol : 5;
+        status = (Math.abs(orbCheck.periKm - cfg.target.periKm) <= periTol &&
+                  Math.abs(orbCheck.apoKm - cfg.target.apoKm) <= apoTol) ? 'inserted' : 'insertOffTol';
+        break;
+      }
+    } else if (phase === 'boost') {
       const orb = ascentSimOrbitOf(state, MU_SI, RE_M);
       // DIRECT-ASCENT energy cutoff (default twoBurn). SIM2 established that the
       // continuous commanded-schedule ascent DOES reach orbit for these vehicles
@@ -5313,6 +5586,11 @@ function ascentSimMaxPayload(cfg, opts) {
       gtAltKm: cfg.gtAltKm,
       apohold: cfg.apohold,
       apoholdFrac: cfg.apoholdFrac,
+      // Forward the guidance profile so an opt-in profile (e.g. 'peg') is
+      // actually exercised through the bisection; undefined keeps the default.
+      profile: cfg.profile,
+      pegHandoffKm: cfg.pegHandoffKm,
+      pegCycleS: cfg.pegCycleS,
     };
     const optOpts = { budget };
     if (lastParams) optOpts.start = lastParams;

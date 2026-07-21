@@ -189,6 +189,51 @@ module.exports = function run() {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // 8b. PEG (Powered Explicit Guidance) machinery pins. PEG is an OPT-IN
+  //    optimal-control terminal-guidance profile (profile:'peg'); on the
+  //    marginal low-upper-stage-TWR anchor stacks it does NOT reach a tight
+  //    circular insertion, so — per the honest-miss policy — the payload bands
+  //    are NOT asserted here either. What IS pinned: the thrust-moment identity
+  //    (analytic), determinism, and that a targeted PEG run terminates with a
+  //    finite orbit. See docs/MATH.md §10.11 + critique 122.
+  // ═══════════════════════════════════════════════════════════════════════
+  {
+    const { ascsimPegMoments } = sandbox;
+    // Moment identity: for a single constant-mdot stage, b0 = ve*ln(tau/(tau-T))
+    // = the rocket-equation delta-v of burning mdot*T over time T. Pin against
+    // rocketEq (140), the ONE rocket-equation definition.
+    const { rocketEq } = sandbox;
+    const isp = 340, ve = G0 * isp, m0 = 20000, F = 200000;
+    const mdot = F / ve, tau = m0 / mdot, T = 120;
+    const b0 = ascsimPegMoments([{ ve, tau, burnTime: 500 }], T).b0;
+    const dvRE = rocketEq(isp, m0, m0 - mdot * T);
+    ok('PEG moments: single-stage b0 matches rocket-equation dv (<0.01%)',
+      Math.abs(b0 - dvRE) / dvRE < 1e-4);
+    // b1/b2 non-negative and ordered (t^k weighting), a sanity guard on the
+    // multi-moment composition.
+    const mom = ascsimPegMoments([{ ve, tau, burnTime: 500 }], T);
+    ok('PEG moments: b0,b1,b2 finite and non-negative', mom.b0 > 0 && mom.b1 >= 0 && mom.b2 >= 0);
+
+    // A targeted profile:'peg' run terminates with a terminal status and a
+    // finite reconstructed orbit (the guidance runs end-to-end without throwing
+    // or hanging), and is deterministic (byte-identical repeat).
+    const pcfg = {
+      stages: [
+        { dry_kg: 8000, prop_kg: 180000, F_vac_N: 3500000, isp_vac_s: 300, isp_sl_s: 270 },
+        { dry_kg: 3000, prop_kg: 40000, F_vac_N: 900000, isp_vac_s: 350 },
+      ],
+      payload_kg: 2000, profile: 'peg', vTarget: 4000, pitchExp: 1.3, v_kick: 55,
+      pegHandoffKm: 70, target: { periKm: 185, apoKm: 185, periTol: 25, apoTol: 40 }, tMax: 2000,
+    };
+    const pa = ascentSimRun(JSON.parse(JSON.stringify(pcfg)));
+    const pb = ascentSimRun(JSON.parse(JSON.stringify(pcfg)));
+    ok('PEG run: terminates with a terminal status and finite orbit',
+      typeof pa.status === 'string' && pa.status.length > 0 &&
+      Number.isFinite(pa.finalOrbit.periKm) && Number.isFinite(pa.finalOrbit.apoKm));
+    ok('PEG run: deterministic (byte-identical repeat)', JSON.stringify(pa) === JSON.stringify(pb));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // 9. SIM3 machinery: boosters (parallel thrust + drop), S1.5 expansion
   //    boundary, fairing jettison, air-lit refusal. Loaded in a small preset
   //    sandbox (mirrors the preset-integrity pattern in 01-pure-math.js).
