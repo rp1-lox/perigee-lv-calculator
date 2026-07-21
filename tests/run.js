@@ -29,7 +29,7 @@ const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 1091; // +4, 2026-07-21: PEG machinery pins — moment identity/determinism/terminal-status (suite 11)
+const MIN_ASSERTIONS = 1094; // +3, 2026-07-21: local-frame PEG near-circular delivery pins — tight insertion / beats-default / determinism (suite 11)
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');

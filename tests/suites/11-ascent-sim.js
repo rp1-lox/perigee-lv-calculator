@@ -190,12 +190,14 @@ module.exports = function run() {
 
   // ═══════════════════════════════════════════════════════════════════════
   // 8b. PEG (Powered Explicit Guidance) machinery pins. PEG is an OPT-IN
-  //    optimal-control terminal-guidance profile (profile:'peg'); on the
-  //    marginal low-upper-stage-TWR anchor stacks it does NOT reach a tight
-  //    circular insertion, so — per the honest-miss policy — the payload bands
-  //    are NOT asserted here either. What IS pinned: the thrust-moment identity
-  //    (analytic), determinism, and that a targeted PEG run terminates with a
-  //    finite orbit. See docs/MATH.md §10.11 + critique 122.
+  //    optimal-control terminal-guidance profile (profile:'peg', now the
+  //    local-frame downrange-free formulation). It delivers NEAR-CIRCULAR orbits
+  //    (pinned separately below in the preset sandbox) but still does NOT reach
+  //    the §27 payload BANDS on the marginal low-upper-stage-TWR anchors (a
+  //    proven loss-budget wall, not a convergence failure — docs/MATH.md
+  //    §10.11-10.12 + critique 122), so the bands are NOT asserted. What IS
+  //    pinned here: the thrust-moment identity (analytic), determinism, and that
+  //    a targeted PEG run terminates with a finite orbit.
   // ═══════════════════════════════════════════════════════════════════════
   {
     const { ascsimPegMoments } = sandbox;
@@ -317,6 +319,36 @@ module.exports = function run() {
         vm.runInContext(`ascentSimRun({stages:[{dry_kg:1,prop_kg:1,F_vac_N:1,isp_vac_s:1}],booster:[{Fvac_N:1,isp_vac_s:1,usableProp_kg:1,ignition:{after:0}}]})`, psb);
       } catch (e) { threw = /air-lit/.test(e.message); }
       ok('SIM3 boosters: an air-lit ignition config is REFUSED loudly (throws), not mis-simulated', threw);
+    }
+
+    // ── PEG near-circular delivery (the local-frame rewrite's actual value).
+    //    The shipped default (energy cutoff) delivers the target ENERGY but an
+    //    ECCENTRIC orbit; the local-frame downrange-free PEG (profile:'peg')
+    //    delivers a NEAR-CIRCULAR orbit at the same payload. At a fixed test
+    //    payload PEG must land tight (|peri-apo| small, status 'inserted') and
+    //    beat the default's low, eccentric perigee — and be deterministic. This
+    //    is a SHAPE win, NOT a payload-band claim (the bands remain a proven
+    //    honest miss — see docs/MATH.md §10.11-10.12 + critique 122). ──
+    {
+      const out = JSON.parse(vm.runInContext(`(function(){
+        const base=_tsVehicleToBase(BUILTIN_PRESETS.find(x=>x.name==='Saturn V'));
+        const stages=ascsimStagesFromBase(_tsExpandStages(base.stages));
+        const v0t=ascentSimV0Tangential(base.siteLat,base.azMin,base.azMax,28.5);
+        const common={stages,payload_kg:60000,v0_tangential:v0t,fairingMass:base.fairingM,
+          target:{periKm:185,apoKm:185,periTol:25,apoTol:40},tMax:2500};
+        const peg=ascentSimRun(Object.assign({},common,{profile:'peg',v_kick:20,vTarget:5500,pitchExp:2.7,pegHandoffKm:90}));
+        const def=ascentSimRun(Object.assign({},common,{apohold:true,apoholdFrac:0.6,vTarget:5000,pitchExp:3}));
+        const peg2=ascentSimRun(Object.assign({},common,{profile:'peg',v_kick:20,vTarget:5500,pitchExp:2.7,pegHandoffKm:90}));
+        return JSON.stringify({pegPeri:peg.finalOrbit.periKm, pegApo:peg.finalOrbit.apoKm, pegStatus:peg.status,
+          defPeri:def.finalOrbit.periKm, defApo:def.finalOrbit.apoKm,
+          det: JSON.stringify(peg)===JSON.stringify(peg2)});
+      })()`, psb));
+      ok('PEG delivery: local-frame PEG lands NEAR-CIRCULAR at a fixed payload (|peri-apo| < 5 km, status inserted)',
+        Math.abs(out.pegPeri - out.pegApo) < 5 && out.pegStatus === 'inserted' &&
+        out.pegPeri > 180 && out.pegPeri < 190);
+      ok('PEG delivery: PEG perigee beats the eccentric default at the SAME payload (near-circular vs low-perigee ellipse)',
+        out.pegPeri > out.defPeri + 50 && Math.abs(out.pegPeri - out.pegApo) < Math.abs(out.defPeri - out.defApo));
+      ok('PEG delivery: deterministic (byte-identical repeat)', out.det === true);
     }
 
     // ── Anchor machinery pins (HONEST-MISS policy, per §27). The payload bands
