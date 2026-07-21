@@ -158,7 +158,7 @@ const BUILTIN_PRESETS=[
   },
   {
     name:'Saturn IB',
-    stageNames:['Saturn IB S-IB','Saturn 1B & V S-IVB'],
+    stageNames:['Saturn IB S-IB','Saturn IB S-IVB-200'],
     payload:21000,
     fairingMass:0,
     fairingJettison:0,

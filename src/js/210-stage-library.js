@@ -708,6 +708,26 @@ const STAGE_LIBRARY={
       ]
     },
     {
+      name:'Saturn IB S-IVB-200',
+      dry:13310,
+      prop:106600,
+      thrust:1001,
+      isp:421,
+      res:2,
+      engines:'Rock.    J-2',
+      note:'Saturn IB second stage. Distinct from the Saturn V S-IVB-500: no restart capability, smaller APS modules and no 500-series interstage, so it is ~1.8 t lighter. Figures from published S-IVB-200 data (dry 13,310 kg, prop 106,600 kg, J-2 1,001 kN vac).',
+      tags:[
+        'Liquid Oxygen / Liquid Hydrogen',
+        'Upper Stage',
+        '1960s',
+        '1970s',
+        'American',
+        'LOX/LH2',
+        'Pump-fed',
+        'QC-Controlled'
+      ]
+    },
+    {
       name:'Saturn 1B & V S-IVB',
       dry:15090,
       prop:108110,
@@ -715,7 +735,7 @@ const STAGE_LIBRARY={
       isp:425,
       res:2,
       engines:'Rock.    J-2',
-      note:'Restartable. Used for TLI on Apollo.',
+      note:'Saturn V third stage (S-IVB-500 class): restartable, used for TLI on Apollo. The Saturn IB flew the lighter, non-restartable S-IVB-200 - see that entry. Name kept for compatibility with saved vehicles.',
       tags:[
         'Liquid Oxygen / Liquid Hydrogen',
         'Upper Stage',
