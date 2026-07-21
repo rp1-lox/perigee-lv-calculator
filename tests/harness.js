@@ -23,6 +23,7 @@ const FILES = [
   'src/js/140-physics.js',
   'src/js/145-dest-dv.js',
   'src/js/150-stage-and-a-half.js',
+  'src/js/155-ascent-sim.js',
   'src/js/165-trade-study.js',
   'src/js/360-program-module-phase-1-delta-v-engine.js',
   'src/js/384-orbit-canonical.js',

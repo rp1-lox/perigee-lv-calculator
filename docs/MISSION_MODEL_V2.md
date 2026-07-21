@@ -1182,3 +1182,14 @@ Persistence rides the existing stage/vehicle shapes; library entries MAY add isp
 
 ### Non-goals (parked)
 3-DOF/azimuth-plane maneuvering, winds, real telemetry pitch programs, throttle buckets for max-q (fixed profile only), reusability reserves, trade-study integration (T-S stays the sweep engine), Mission-page integration.
+
+### SIM1 as-built (2026-07-21)
+Module `src/js/155-ascent-sim.js` (loads after 150, before 160; pure, no DOM). API: `ascentSimRun(cfg)` -> `{status, finalOrbit:{periKm,apoKm}, finalState:{r,theta,vr,vt,m,t}, losses:{gravity,drag,steering,total}, dvIdeal, tBurnout, mFinal, workDiag:{thrustPowerIntegral}}`; `ascentSimOrbitOf(state, muSI?, RE_M?)` -> `{periKm, apoKm, aM, eccentricity, specificEnergy}` (vis-viva reconstruction). `cfg`: `{stages:[{dry_kg,prop_kg,F_vac_N,isp_vac_s,isp_sl_s?,res_pct?}], payload_kg?, v0_tangential?, v_kick?(50), theta_kick?(0.035 rad), ltRate?(0), dragArea_m2?(mass-scaled default), dt?(0.25s), tMax?(4000s)}`.
+
+Constants chosen: atmosphere scale height 7160 m (low end of the 7.16-8.5 km family — SIM3 revisits), rho0=1.225 kg/m^3, hard cutoff above 120 km; constant speed of sound 340 m/s for the Cd(Mach) lookup (no temperature-altitude model yet — deferred to SIM3, MATH.md gets the full derivation then per the spec). Reused verbatim: G0/MU/RE/OMEGA_E (010), `rocketEq` (140) for the ideal-dv/dvIdeal accounting — the T-S path in 140 was not touched.
+
+Integrator notes: fixed dt=0.25s RK4 on {r,theta,vr,vt}; mass is NOT frozen across a step's four RK4 substages — since mdot is constant and known, the exact mass at each substage's time offset is used (freezing it at the step-start value produced multi-percent delta-v error on short high-thrust burns where a 0.25s step consumes a large fraction of remaining mass; caught by the rocket-eq analytic pin). A stage's final step is time-clamped (not mass-frozen) to end exactly at propellant depletion rather than overshooting into negative mass. Steering phase/pitch is computed once per outer step (frozen across RK4 substeps) for determinism. Loss integrals (gravity/drag/steering) use forward-Euler quadrature on the start-of-step derivative, decoupled from the RK4 state integration.
+
+Deferred to later SIM steps: steering optimizer + payload bisection + earth-rotation/azimuth handling (SIM2); booster groups, S1.5 expansion, fairing jettison, coast+insertion burn (SIM3); UI (SIM4). No MATH.md section yet, per the spec ("MATH.md waits for SIM3").
+
+Pins: `tests/suites/11-ascent-sim.js` (8 assertions, added to `tests/harness.js` FILES and `tests/run.js` MIN_ASSERTIONS, now 1056) — rocket-eq identity, hover-loss g0*tb (<2%), no-drag energy audit vs integrated thrust power (<0.5%), circular-orbit reconstruction (<0.1 km), and run-to-run determinism.
