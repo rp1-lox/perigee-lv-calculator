@@ -2075,7 +2075,11 @@ function escHtml(s) {
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
 const APP_VERSION='2.1.0';
 const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
-const APP_CHANGELOG=[{v:'2.1.0',d:'2026-07-18',t:'Calculator recalibrated to Silverbird',n:'Multi-stage ascent correction fitted against a 30-configuration Silverbird probe campaign (holdout-validated at 800 km/GTO/MEO). Saturn V 185x185 golden moves 150,838 -> 125,893 kg; all multi-stage payloads now track Silverbird raw within a few percent. Single-stage results unchanged. See MATH.md critique 121.'},
+const APP_CHANGELOG=[{v:'2.1.0', title:'Calculator recalibrated to Silverbird', date:'2026-07-18', notes:[
+    'The launch vehicle performance calculator now tracks the Silverbird Astronautics reference across multi-stage vehicles. A multi-stage ascent correction was fitted against a 30-configuration probe campaign and validated on held-out higher orbits (800 km, GTO, MEO).',
+    'Saturn V 185x185 km max payload moves 150,838 to 125,893 kg. Multi-stage payloads at every destination now land within a few percent of the reference; single-stage vehicles are unchanged.',
+    'Falcon 9 Block 5 stage data refreshed: LEO 22,051 kg and GTO 7,493 kg. Falcon Heavy inherits the shared core. Titan presets carry notes documenting where published historical figures diverge from the model.',
+  ]},
   {v:'2.0.1', title:'Integral — analysis update', date:'2026-07-15', notes:[
     'NEW Trade Studies sweep: Escape C3 — the classic payload-vs-C3 launch vehicle capability curve, with every metric, vehicle comparison, and CSV export. Pinned to exactly match the Orbits page escape math.',
     'Trade-study line charts are analysis-grade now: hairline series strokes at any window size, finer gridlines, and wheel-zoom / drag-pan / double-click-reset with the y-axis auto-fitting to the zoomed window.',
@@ -2115,19 +2119,35 @@ const APP_CHANGELOG=[{v:'2.1.0',d:'2026-07-18',t:'Calculator recalibrated to Sil
   ]},
 ];
 
+// Defensive by design (2026-07-21): this runs from _initVersionUI during the
+// 590-init top-level sequence, so ANY throw here halts the rest of init —
+// PROG_ACTIVE_PROGRAM never gets created and every `let`/`const` declared in
+// a later module (600-architecture-model's undo stack, ...) stays in its
+// temporal dead zone, bricking the app on a fresh load. That is exactly what
+// a single malformed changelog entry did in v2.1.0 (`n:'...'` string instead
+// of `notes:[...]` -> `c.notes.map` threw). Entry rendering is now
+// field-tolerant AND the whole body is try/caught: patch notes are cosmetic
+// and must never be able to take the application down with them.
 function _renderPatchNotes(){
   const el=document.getElementById('patch-notes-body'); if(!el)return;
-  el.innerHTML=APP_CHANGELOG.map(c=>`
+  try{
+    el.innerHTML=(APP_CHANGELOG||[]).map(c=>{
+      const notes=Array.isArray(c.notes)?c.notes:(c.notes?[c.notes]:[]);
+      return `
     <div style="margin-bottom:16px;">
       <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-        <span style="font-family:var(--mono);color:var(--accent);font-size:13px;">v${c.v}</span>
-        <span style="font-weight:600;color:var(--text-bright);">${c.title}</span>
-        <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto;">${c.date}</span>
+        <span style="font-family:var(--mono);color:var(--accent);font-size:13px;">v${c.v||'?'}</span>
+        <span style="font-weight:600;color:var(--text-bright);">${c.title||''}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto;">${c.date||''}</span>
       </div>
       <ul style="margin:6px 0 0;padding-left:18px;color:var(--text);font-size:12px;line-height:1.6;">
-        ${c.notes.map(n=>`<li>${n}</li>`).join('')}
+        ${notes.map(n=>`<li>${n}</li>`).join('')}
       </ul>
-    </div>`).join('');
+    </div>`;}).join('');
+  }catch(e){
+    console.warn('patch notes render failed (non-fatal):',e);
+    el.innerHTML='<div style="color:var(--text-dim);font-family:var(--mono);font-size:11px;">Patch notes unavailable.</div>';
+  }
 }
 function openPatchNotes(){ _renderPatchNotes(); openModal('modal-patch-notes'); }
 function _initVersionUI(){
