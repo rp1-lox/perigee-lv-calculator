@@ -58,6 +58,123 @@ let _archBridgeMode = false;
 let _archBridgeFrom = null;
 let _archSelectedEdgeId = null;
 
+// ── A3-3D: body-centered 3D orbit scene ─────────────────────────────────────
+// Camera state — transient (module-level), never persisted, never on the
+// program object (mirrors the trajectory view's own camera convention).
+let _archCam = { yaw: -30 * _PROG_D2R, pitch: 22 * _PROG_D2R, zoom: 1 };
+let _archDragState = null;
+let _archRafPending = false;
+let _archFocusBody = null;   // null => defaults to the first ladder node's body
+
+function _archMapRafRender() {
+  if (_archRafPending) return;
+  _archRafPending = true;
+  requestAnimationFrame(() => { _archRafPending = false; archMapRender(); });
+}
+
+function _archCamDragStart(e) {
+  e.preventDefault();
+  _archDragState = { x: e.clientX, y: e.clientY };
+  document.addEventListener('mousemove', _archCamDragMove);
+  document.addEventListener('mouseup', _archCamDragEnd);
+}
+function _archCamDragMove(e) {
+  if (!_archDragState) return;
+  const dx = e.clientX - _archDragState.x, dy = e.clientY - _archDragState.y;
+  _archDragState.x = e.clientX; _archDragState.y = e.clientY;
+  _archCam.yaw += dx * 0.008;
+  _archCam.pitch = Math.max(-85 * _PROG_D2R, Math.min(85 * _PROG_D2R, _archCam.pitch - dy * 0.008));
+  _archMapRafRender();
+}
+function _archCamDragEnd() {
+  _archDragState = null;
+  document.removeEventListener('mousemove', _archCamDragMove);
+  document.removeEventListener('mouseup', _archCamDragEnd);
+}
+function _archCamWheel(e) {
+  e.preventDefault();
+  const f = e.deltaY > 0 ? 1.1 : 0.9;
+  _archCam.zoom = Math.max(0.3, Math.min(6, _archCam.zoom * f));
+  archMapRender();
+}
+function _archCamReset() {
+  _archCam = { yaw: -30 * _PROG_D2R, pitch: 22 * _PROG_D2R, zoom: 1 };
+  archMapRender();
+}
+function _archSetFocusBody(body) {
+  _archFocusBody = body;
+  archMapRender();
+}
+
+/** ONE projection function — world geometry (orbit polylines, body sphere,
+ *  equator, spin axis) AND symbology anchors (node chips, dV labels, edge
+ *  endpoints) all go through this so symbology never scales independently of
+ *  the world it's labeling (screen-space-symbology-two-layers convention).
+ *  pt = [x,y,z] km, body-centered, equatorial frame (Z = spin axis — the same
+ *  frame progOrbitSamplePoints' rotation matrix targets). cam = {yaw,pitch,
+ *  scale,cx,cy}. Returns {sx,sy,depth} in SCREEN px; depth is a signed
+ *  view-space distance (positive = toward the camera). */
+function _archProject3D(pt, cam) {
+  const x = pt[0], y = pt[1], z = pt[2];
+  const cy_ = Math.cos(cam.yaw), sy_ = Math.sin(cam.yaw);
+  const x1 = x * cy_ - y * sy_, y1 = x * sy_ + y * cy_, z1 = z;
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const y2 = y1 * cp - z1 * sp, z2 = y1 * sp + z1 * cp;
+  const x2 = x1;
+  return { sx: cam.cx + x2 * cam.scale, sy: cam.cy - z2 * cam.scale, depth: y2 };
+}
+
+/** Canonical architecture orbit -> {a,e,i,raan,argp} (km/rad) for
+ *  progOrbitSamplePoints (360). Reuses orbitNormalize (384, canonical shape)
+ *  + orbitWorldElements (385, the ONE eq->world frame seam) — no re-derived
+ *  geometry. a/e come from periKm/apoKm + the body's radius (PROG_BODIES). */
+function _archOrbitWorldEl(n) {
+  const o = n && n.orbit; if (!o) return null;
+  const body = n.body || o.body || 'Earth';
+  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  const bodyR = bodyMeta ? bodyMeta.R : 0;
+  const c = (typeof orbitNormalize === 'function') ? orbitNormalize(o) : o;
+  if (!c) return null;
+  const rPeri = bodyR + (c.periKm || 0), rApo = bodyR + (c.apoKm || 0);
+  const a = (rPeri + rApo) / 2;
+  const e = rApo > rPeri ? (rApo - rPeri) / (rApo + rPeri) : 0;
+  const w = (typeof orbitWorldElements === 'function') ? orbitWorldElements(o) : { incDeg: c.incDeg || 0, lanDeg: c.lanDeg || 0 };
+  const argpDeg = c.argpDeg != null ? c.argpDeg : 0;
+  return { a, e, i: (w.incDeg || 0) * _PROG_D2R, raan: (w.lanDeg || 0) * _PROG_D2R, argp: argpDeg * _PROG_D2R, bodyR, body };
+}
+
+// Split a projected polyline into behind/front runs by comparing each
+// point's depth against the body sphere's screen disc (painter's order —
+// no z-buffer, per the task brief). Returns [{front:bool, pts:[{sx,sy}...]}]
+function _archSplitDepth(projPts, cam, bodyScreenR) {
+  const runs = [];
+  let cur = null;
+  projPts.forEach(p => {
+    const dx = p.sx - cam.cx, dy = p.sy - cam.cy;
+    const behind = p.depth < 0 && Math.sqrt(dx * dx + dy * dy) < bodyScreenR;
+    const front = !behind;
+    if (!cur || cur.front !== front) { cur = { front, pts: [] }; runs.push(cur); }
+    cur.pts.push(p);
+  });
+  return runs;
+}
+
+// Same summary text as 605's ladder cards (_archOrbitSummary), duplicated
+// locally rather than cross-called — 605 owns ladder/rail rendering only and
+// this module's own test sandbox loads without it (see the module banner's
+// mount-vs-extract note: keep 605 and 610 independently loadable).
+function _archMapOrbitSummary(o) {
+  if (!o) return '';
+  const peri = (o.periKm || 0).toLocaleString();
+  const apo = (o.apoKm || 0).toLocaleString();
+  const radii = (o.apoKm !== o.periKm) ? `${peri} &times; ${apo} km` : `${peri} km`;
+  return `${radii} @ ${o.incDeg || 0}&deg;`;
+}
+
+function _archPolylinePath(pts) {
+  return pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.sx.toFixed(1)},${p.sy.toFixed(1)}`).join(' ');
+}
+
 // Adapt a canonical architecture orbit (384's {body,periKm,apoKm,incDeg,
 // lanDeg,frame}) into the node-map orbit dialect _nmDvPhysics expects
 // ({type,body,periKm,apoKm,incDeg}) — same shim pattern as
@@ -99,19 +216,6 @@ function archComputeBudget() {
     if (res && res.dv != null) total += res.dv; else unresolved++;
   });
   return { total, unresolved, edgeCount: (arch.edges || []).length };
-}
-
-// Simple ladder-order layout: honest v1, no drag (mirrors 605's "no drag" call
-// for the ladder cards themselves) — nodes place left-to-right in ladder
-// order, staggered vertically so edges between non-adjacent nodes don't all
-// collide on one line.
-function _archMapLayout(nodes) {
-  const pos = {};
-  const W = Math.max(760, 150 * nodes.length + 160);
-  nodes.forEach((n, i) => {
-    pos[n.id] = [90 + i * 150, 170 + (i % 2 === 0 ? 0 : 70)];
-  });
-  return { W, H: 320, pos };
 }
 
 function archToggleBridgeMode() {
@@ -179,8 +283,15 @@ function _archMapContentHTML(readOnly) {
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
-  const lay = _archMapLayout(nodes);
-  const pos = lay.pos;
+
+  // Body-selector: default to the first ladder node's body.
+  const bodies = [];
+  nodes.forEach(n => { const b = n.body || 'Earth'; if (bodies.indexOf(b) === -1) bodies.push(b); });
+  if (!_archFocusBody || bodies.indexOf(_archFocusBody) === -1) _archFocusBody = bodies[0] || 'Earth';
+  const focusBody = _archFocusBody;
+  const focusNodes = nodes.filter(n => (n.body || 'Earth') === focusBody);
+  const offBodyCounts = {};
+  nodes.forEach(n => { const b = n.body || 'Earth'; if (b !== focusBody) offBodyCounts[b] = (offBodyCounts[b] || 0) + 1; });
 
   let ctrlHTML = `<div class="sl" style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">`;
   if (readOnly) {
@@ -198,52 +309,163 @@ function _archMapContentHTML(readOnly) {
       }
     }
   }
+  if (bodies.length > 1) {
+    ctrlHTML += `<span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">BODY</span>
+      ${bodies.map(b => `<button class="act-btn" style="padding:2px 9px;font-size:10px;${b === focusBody ? 'background:var(--accent);color:#000;' : ''}" onclick="_archSetFocusBody('${escHtml(b)}')">${escHtml(b)}</button>`).join('')}
+    </span>`;
+  }
   ctrlHTML += `</div>`;
 
+  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[focusBody] : null;
+  const bodyR = bodyMeta ? bodyMeta.R : 6371;
+  const bodyColor = (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS[focusBody]) || 'var(--accent)';
+
+  const nodeEls = {};
+  focusNodes.forEach(n => { const el = _archOrbitWorldEl(n); if (el) nodeEls[n.id] = el; });
+
+  // Scene bounds: two-pass fit. Project every ring (plus the body sphere's
+  // extent) at unit scale under the CURRENT camera orientation, then fit the
+  // actual projected bounding box — a radial bound wastes most of the frame
+  // on eccentric orbits (body at the focus, not the center) and on pitch-
+  // compressed views.
+  const W = 760, H = 460;
+  const probe = { yaw: _archCam.yaw, pitch: _archCam.pitch, cx: 0, cy: 0, scale: 1 };
+  let minX = -bodyR * 1.25, maxX = bodyR * 1.25, minY = -bodyR * 1.25, maxY = bodyR * 1.25;
+  if (typeof progOrbitSamplePoints === 'function') {
+    Object.values(nodeEls).forEach(el => {
+      progOrbitSamplePoints(el, 48).forEach(p3 => {
+        const p = _archProject3D(p3, probe);
+        if (p.sx < minX) minX = p.sx; if (p.sx > maxX) maxX = p.sx;
+        if (p.sy < minY) minY = p.sy; if (p.sy > maxY) maxY = p.sy;
+      });
+    });
+  }
+  const fitScale = Math.min((W - 130) / Math.max(1, maxX - minX), (H - 96) / Math.max(1, maxY - minY));
+  const cam = { yaw: _archCam.yaw, pitch: _archCam.pitch,
+                cx: W / 2 - (minX + maxX) / 2 * fitScale * _archCam.zoom,
+                cy: H / 2 - (minY + maxY) / 2 * fitScale * _archCam.zoom,
+                scale: fitScale * _archCam.zoom };
+  const bodyScreenR = Math.max(4, bodyR * cam.scale);
+
+  // Equator ellipse (dashed, faint) — reads inclination against this plane.
+  const EQ_N = 72, eqPts = [];
+  for (let k = 0; k <= EQ_N; k++) { const t = 2 * Math.PI * k / EQ_N; eqPts.push(_archProject3D([bodyR * Math.cos(t), bodyR * Math.sin(t), 0], cam)); }
+  const equatorHTML = `<path d="${_archPolylinePath(eqPts)}" fill="none" stroke="var(--border-bright)" stroke-width="1" stroke-dasharray="3,4" opacity="0.5"/>`;
+
+  // Spin-axis line.
+  const axTop = _archProject3D([0, 0, bodyR * 1.7], cam), axBot = _archProject3D([0, 0, -bodyR * 1.7], cam);
+  const axisHTML = `<line x1="${axTop.sx.toFixed(1)}" y1="${axTop.sy.toFixed(1)}" x2="${axBot.sx.toFixed(1)}" y2="${axBot.sy.toFixed(1)}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2,3" opacity="0.4"/>`;
+
+  const bodySphereHTML = `<defs><radialGradient id="arch-body-shade" cx="38%" cy="34%" r="70%">
+      <stop offset="0%" stop-color="${bodyColor}" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="${bodyColor}" stop-opacity="0.45"/>
+    </radialGradient></defs>
+    <circle cx="${cam.cx}" cy="${cam.cy}" r="${bodyScreenR.toFixed(1)}" fill="url(#arch-body-shade)" stroke="var(--border-bright)" stroke-width="1"/>`;
+
+  // Per-node orbit ring: sample, project, depth-split, cache the ring +
+  // apoapsis-anchor screen point for chip/edge placement below.
+  const ringData = {};
+  let ringsBehindHTML = '', ringsFrontHTML = '';
+  focusNodes.forEach(n => {
+    const el = nodeEls[n.id];
+    if (!el || typeof progOrbitSamplePoints !== 'function') return;
+    const pts3d = progOrbitSamplePoints(el, 96);
+    const proj = pts3d.map(p => _archProject3D(p, cam));
+    const isSel = (typeof _archExpandedId !== 'undefined' && _archExpandedId === n.id);
+    const isFrom = _archBridgeFrom === n.id;
+    const col = isFrom ? 'var(--accent2)' : (isSel ? 'var(--accent)' : 'var(--border-bright)');
+    const sw = (isFrom || isSel) ? 2.6 : 1.6;
+    const runs = _archSplitDepth(proj, cam, bodyScreenR);
+    runs.forEach(run => {
+      if (run.pts.length < 2) return;
+      const seg = `<path d="${_archPolylinePath(run.pts)}" fill="none" stroke="${col}" stroke-width="${sw}" opacity="${run.front ? (isSel || isFrom ? 1 : 0.85) : 0.35}"/>`;
+      if (run.front) ringsFrontHTML += seg; else ringsBehindHTML += seg;
+    });
+    // Apoapsis anchor for the label chip — the sampled point farthest from
+    // the body center (robust for circular orbits too, where any point works).
+    let anchor = proj[0], best = -1;
+    proj.forEach(p => { const d = (p.sx - cam.cx) ** 2 + (p.sy - cam.cy) ** 2; if (d > best) { best = d; anchor = p; } });
+    ringData[n.id] = { proj, anchor, col };
+  });
+
+  // Off-body note.
+  let offBodyHTML = '';
+  const offList = Object.keys(offBodyCounts);
+  if (offList.length) {
+    offBodyHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:6px;">` +
+      offList.map(b => `${offBodyCounts[b]} node${offBodyCounts[b] === 1 ? '' : 's'} at ${escHtml(b)} &mdash; switch body`).join(' &middot; ') + `</div>`;
+  }
+
+  // Node chips (native screen px, anchored at the ring's projected apoapsis —
+  // symbology layer, never scaled with zoom per the two-layer rule).
+  let chipsHTML = '';
+  focusNodes.forEach(n => {
+    const rd = ringData[n.id]; if (!rd) return;
+    const label = `${(n.name || 'Orbit').slice(0, 16)}`;
+    const sub = _archMapOrbitSummary(n.orbit);
+    const w = Math.max(70, label.length * 5.6 + 14);
+    const x = rd.anchor.sx, y = rd.anchor.sy;
+    chipsHTML += `<g style="cursor:pointer" onclick="archMapNodeClick('${n.id}')"><title>${escHtml(n.name)} &mdash; ${escHtml(n.body)}</title>
+      <rect x="${(x - w / 2).toFixed(1)}" y="${(y - 17).toFixed(1)}" width="${w}" height="26" rx="5" fill="var(--bg)" stroke="${rd.col}" stroke-width="1.3" opacity="0.95"/>
+      <text x="${x.toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--text-bright)">${escHtml(label)}</text>
+      <text x="${x.toFixed(1)}" y="${(y + 5).toFixed(1)}" text-anchor="middle" font-family="var(--mono)" font-size="7.5px" fill="var(--text-dim)">${sub}</text>
+    </g>`;
+  });
+
+  // Edges: connector between the two rings' nearest projected points (v1 —
+  // no transfer physics, matches the flat map's straight-line convention).
   let edgesHTML = '', chainHTML = '';
   edges.forEach(e => {
     const A = byId[e.fromId], B = byId[e.toId];
     if (!A || !B) return;   // orphaned edge (shouldn't happen — archRemoveNode cascades) — skip defensively
-    const [ax, ay] = pos[A.id], [bx, by] = pos[B.id];
     const res = archEdgeDv(A, B);
     const sel = e.id === _archSelectedEdgeId;
     const col = sel ? 'var(--accent2)' : 'var(--accent)';
+    const rdA = ringData[A.id], rdB = ringData[B.id];
+    const aOff = (A.body || 'Earth') !== focusBody, bOff = (B.body || 'Earth') !== focusBody;
+
+    let ax, ay, bx, by, tagSuffix = '';
+    if (!aOff && !bOff && rdA && rdB) {
+      // Nearest-point pair between the two rings.
+      let bestD = Infinity;
+      rdA.proj.forEach(p => rdB.proj.forEach(q => { const d = (p.sx - q.sx) ** 2 + (p.sy - q.sy) ** 2; if (d < bestD) { bestD = d; ax = p.sx; ay = p.sy; bx = q.sx; by = q.sy; } }));
+    } else if (!aOff && rdA) {
+      ax = rdA.anchor.sx; ay = rdA.anchor.sy; bx = W - 30; by = 30; tagSuffix = ` &rarr; ${escHtml(B.body)}`;
+    } else if (!bOff && rdB) {
+      bx = rdB.anchor.sx; by = rdB.anchor.sy; ax = 30; ay = 30; tagSuffix = ` &larr; ${escHtml(A.body)}`;
+    } else {
+      return; // neither endpoint visible in this scene
+    }
+
     edgesHTML += `<g style="cursor:pointer" onclick="archSelectEdge('${e.id}')">
-      <line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="transparent" stroke-width="14"/>
-      <line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="${col}" stroke-width="2.5" opacity="0.85"/>
+      <line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="transparent" stroke-width="14"/>
+      <line x1="${ax.toFixed(1)}" y1="${ay.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${col}" stroke-width="2.5" opacity="0.85"/>
       ${_nmArrowHead(ax, ay, bx, by, col, 18)}
     </g>`;
     const mx = (ax + bx) / 2, my = (ay + by) / 2;
     const dvLabel = (res && res.dv != null) ? Math.round(res.dv).toLocaleString() + ' m/s' : 'no model';
+    const tagText = dvLabel + tagSuffix;
+    const tagW = Math.max(76, tagText.replace(/&\w+;/g, 'X').length * 5.4);
     edgesHTML += `<g onclick="event.stopPropagation();archSelectEdge('${e.id}')" style="cursor:pointer">
-      <rect x="${mx - 38}" y="${my - 9}" width="76" height="18" rx="9" fill="var(--bg)" stroke="${col}" stroke-width="1.2"/>
-      <text x="${mx}" y="${my + 3}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${col}">${escHtml(dvLabel)}</text>
+      <rect x="${(mx - tagW / 2).toFixed(1)}" y="${(my - 9).toFixed(1)}" width="${tagW.toFixed(1)}" height="18" rx="9" fill="var(--bg)" stroke="${col}" stroke-width="1.2"/>
+      <text x="${mx.toFixed(1)}" y="${(my + 3).toFixed(1)}" text-anchor="middle" font-family="var(--mono)" font-size="8px" fill="${col}">${tagText}</text>
     </g>`;
     if (!readOnly) {
       edgesHTML += `<g onclick="event.stopPropagation();archDeleteEdge('${e.id}')" style="cursor:pointer"><title>Delete edge</title>
-        <circle cx="${mx + 44}" cy="${my - 9}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
-        <text x="${mx + 44}" y="${my - 6}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
+        <circle cx="${(mx + tagW / 2 + 8).toFixed(1)}" cy="${(my - 9).toFixed(1)}" r="7" fill="var(--input)" stroke="var(--danger)" stroke-width="1"/>
+        <text x="${(mx + tagW / 2 + 8).toFixed(1)}" y="${(my - 6).toFixed(1)}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--danger)">&times;</text>
       </g>`;
     }
     if (sel && res) chainHTML = _archChainDetailHTML(A, B, res);
   });
 
-  let nodesHTML = '';
-  nodes.forEach(n => {
-    const [x, y] = pos[n.id];
-    const isFrom = _archBridgeFrom === n.id;
-    const isLadderSel = (typeof _archExpandedId !== 'undefined' && _archExpandedId === n.id);
-    const stroke = isFrom ? 'var(--accent2)' : (isLadderSel ? 'var(--accent)' : 'var(--border-bright)');
-    const sw = (isFrom || isLadderSel) ? 3 : 1.5;
-    const label = (n.name || 'Orbit').slice(0, 12);
-    nodesHTML += `<g style="cursor:pointer" onclick="archMapNodeClick('${n.id}')"><title>${escHtml(n.name)} &mdash; ${escHtml(n.body)}</title>
-      <circle cx="${x}" cy="${y}" r="19" fill="${stroke}" fill-opacity="0.18" stroke="${stroke}" stroke-width="${sw}"/>
-      <text x="${x}" y="${y + 3}" text-anchor="middle" font-family="var(--mono)" font-size="9px" fill="var(--text-bright)">${escHtml(label)}</text>
-    </g>`;
-  });
-
-  const svgHTML = `<svg viewBox="0 0 ${lay.W} ${lay.H}" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:none;height:auto;max-height:340px;background:transparent;display:block;">${edgesHTML}${nodesHTML}</svg>`;
-  return `${ctrlHTML}<div style="overflow-x:auto;">${svgHTML}</div>${chainHTML}`;
+  const svgHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:none;height:auto;max-height:420px;background:transparent;display:block;">
+    ${equatorHTML}${axisHTML}${ringsBehindHTML}${bodySphereHTML}${ringsFrontHTML}${edgesHTML}${chipsHTML}
+  </svg>`;
+  const viewportHTML = `<div class="arch-3d-viewport" style="overflow:hidden;cursor:grab;touch-action:none;"
+    onmousedown="_archCamDragStart(event)" onwheel="_archCamWheel(event);return false;" ondblclick="_archCamReset()">${svgHTML}</div>`;
+  return `<div style="display:flex;flex-direction:column;width:100%;min-width:0;">${ctrlHTML}${viewportHTML}${offBodyHTML}${chainHTML}</div>`;
 }
 
 /** Renders the `.arch-stage` node-map surface. Called by 605's archRenderPage()
