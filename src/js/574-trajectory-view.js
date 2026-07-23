@@ -809,6 +809,62 @@ function _trajWorldSVG(m, cam, zoom, rect) {
     emit(p.depth, s);
   });
 
+  // ── SANCTIONED EXTRA RINGS + EDGES (Architecture-page World mount) ─────────
+  // ONE optional input on the mission object: m._extraRings / m._extraEdges.
+  // Consumed at the SAME trueRingPath seam the heliocentric/moon reference
+  // rings use, so architecture orbits render in the identical visual language
+  // (true ellipse, body at the focus, occlusion-split, projected through the
+  // one pass camera). Real missions never set these fields (undefined) → this
+  // block is skipped → byte-identical output. See 610-architecture-map.js.
+  //   _extraRings[]: { body, el:{a,e,i,raan,argp}, color, label, clickId, selected }
+  //   _extraEdges[]: { fromId, toId, clickId, label, selected }
+  if (m && m._extraRings && m._extraRings.length) {
+    const ringAnchors = {};
+    m._extraRings.forEach(er => {
+      if (!er || !er.el) return;
+      const wp = progBodyWorldPos(er.body, viewT);
+      const cp = toRender(wp.x, wp.y, wp.z);
+      if (_trajCullPositionOffscreen(cp.x, cp.y, viewportDiagPx)) return;
+      const color = er.color || _trajBodyColor(er.body);
+      const alpha = (er.selected ? 1 : 0.8).toFixed(3);
+      const pathSvg = trueRingPath(er.el, cp, alpha, color, null);
+      if (!pathSvg) return;
+      const dm = pathSvg.match(/ d="([^"]+)"/);
+      const dAttr = dm ? dm[1] : '';
+      // Representative label/edge anchor: the ring's projected apoapsis (the
+      // sample farthest from the body center — robust for circular orbits too).
+      const pts = progOrbitSamplePoints(er.el, 60);
+      let ax = cp.x, ay = cp.y, best = -1;
+      for (let k = 0; k < pts.length; k++) {
+        const q = _trajProj3(pts[k][0], pts[k][1], pts[k][2]);
+        const sx = cp.x + q.x * zoom, sy = cp.y + q.y * zoom;
+        const d = (sx - cp.x) * (sx - cp.x) + (sy - cp.y) * (sy - cp.y);
+        if (d > best) { best = d; ax = sx; ay = sy; }
+      }
+      if (er.clickId) ringAnchors[er.clickId] = { x: ax, y: ay, depth: cp.depth };
+      const sw = er.selected ? 1.8 : 1.0;
+      const hit = er.clickId && dAttr ? `<path d="${dAttr}" fill="none" stroke="transparent" stroke-width="9" vector-effect="non-scaling-stroke"/>` : '';
+      const ring = `<path d="${dAttr}" fill="none" stroke="${color}" stroke-width="${sw}" opacity="${alpha}" vector-effect="non-scaling-stroke"/>`;
+      const clickAttr = er.clickId ? ` style="cursor:pointer" onclick="_archWorldRingClick(event,'${er.clickId}')"` : '';
+      emit(cp.depth, `<g${clickAttr}><title>${_tsEsc(er.label || '')}</title>${hit}${ring}</g>`);
+      if (er.label) _trajRegisterLabel(ax, ay, [{ text: er.label.slice(0, 18), dy: -4, fontPx: 9, color }],
+        'orbit', { screenSize: Infinity, minSize: 0, selected: !!er.selected });
+    });
+    (m._extraEdges || []).forEach(ed => {
+      const a = ringAnchors[ed.fromId], b = ringAnchors[ed.toId];
+      if (!a || !b) return;
+      const color = ed.selected ? 'var(--accent2)' : 'var(--accent)';
+      const sw = ed.selected ? 1.6 : 1.1;
+      const clickAttr = ed.clickId ? ` style="cursor:pointer" onclick="_archWorldEdgeClick(event,'${ed.clickId}')"` : '';
+      emit(1e18, `<g${clickAttr}><title>${_tsEsc(ed.label || '')}</title>` +
+        `<line x1="${a.x.toFixed(2)}" y1="${a.y.toFixed(2)}" x2="${b.x.toFixed(2)}" y2="${b.y.toFixed(2)}" stroke="transparent" stroke-width="10" vector-effect="non-scaling-stroke"/>` +
+        `<line x1="${a.x.toFixed(2)}" y1="${a.y.toFixed(2)}" x2="${b.x.toFixed(2)}" y2="${b.y.toFixed(2)}" stroke="${color}" stroke-width="${sw}" opacity="0.9" vector-effect="non-scaling-stroke"/></g>`);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (ed.label) _trajRegisterLabel(mx, my, [{ text: ed.label, dy: 0, fontPx: 9, color }],
+        'burn', { screenSize: Infinity, minSize: 0, selected: !!ed.selected });
+    });
+  }
+
   // painter: back-to-front (ascending depth), STABLE — emission order is the
   // tiebreak, preserving pre-R2 layering at el=90° where depths degenerate.
   return records
@@ -1134,7 +1190,7 @@ function _trajScrubUp() {
 function _trajScrubKey(ev, id, maxMet) {
   if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
   ev.preventDefault();
-  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const m = (typeof _trajMissionById === 'function') ? _trajMissionById(id) : (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
   if (!m) return;
   const vt = _trajViewTime(m);
   const step = _trajTickIntervalS(maxMet);
@@ -1211,7 +1267,8 @@ let _trajStarfieldSize = {}; // id -> "WxH" of the last drawn size (resize-only 
 // blank. Only cache a key once it reflects a real, positive size; a
 // transition FROM zero/uncached TO a real size always redraws.
 function _trajStarfieldSync(id) {
-  const canvas = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] canvas.traj-starfield`);
+  const wrap = (typeof _trajFindWrap === 'function') ? _trajFindWrap(id) : document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
+  const canvas = wrap && wrap.querySelector('canvas.traj-starfield');
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
@@ -1261,8 +1318,9 @@ function _trajStarfieldSync(id) {
 let _trajResizeObservers = {};
 function _missionTrajAfterRender(m) {
   const id = m.missionId;
-  const svgEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] svg.traj-svg`);
-  const overlayEl = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"] svg.traj-overlay`);
+  const wrap = (typeof _trajFindWrap === 'function') ? _trajFindWrap(id) : document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
+  const svgEl = wrap && wrap.querySelector('svg.traj-svg');
+  const overlayEl = wrap && wrap.querySelector('svg.traj-overlay');
   if (!svgEl) return;
   const sync = () => {
     _trajStarfieldSync(id);
@@ -1274,8 +1332,8 @@ function _missionTrajAfterRender(m) {
     const vbH = _TRAJ_VB * aspect;
     svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2).toFixed(3)} ${(-vbH / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
     const sceneEl = svgEl.querySelector('g.traj-scene');
-    if (sceneEl && typeof _missions !== 'undefined') {
-      const mm = (_missions || []).find(x => x.missionId === id);
+    if (sceneEl) {
+      const mm = (typeof _trajMissionById === 'function') ? _trajMissionById(id) : (_missions || []).find(x => x.missionId === id);
       const zoom = _trajZoomFromCam(cam);
       _trajResetLabels();
       _trajExtractionCache = { missionId: null, data: null };

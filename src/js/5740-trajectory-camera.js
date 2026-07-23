@@ -23,6 +23,48 @@
 //                  scene-local `scale` factor now — it's real km)
 let _trajCamByMission = {};
 
+// ── Non-mission stub registry (Architecture-page World mount) ────────────────
+// The Architecture page reuses this whole trajectory renderer to draw the
+// program's authored orbit ladder in the exact same solar-system view the
+// Mission World surface uses (see 610-architecture-map.js). It drives the
+// render with a transient STUB mission object (empty log, id '__arch__' /
+// '__archplan__') carrying only the sanctioned `_extraRings`/`_extraEdges`
+// inputs — registered here, NEVER in `_missions`, so autosave/session (which
+// walk `_missions`) can never see it. Camera/view state for the stub lives in
+// the existing missionId-keyed side tables under its id (transient, resets on
+// reload, same spirit as every other camera). Real missions never appear here.
+let _trajExtraMissions = {};
+
+// Resolve a mission id to its object: a real mission first, else a registered
+// stub. Every camera/render site that used `(_missions||[]).find(...)` now
+// routes through this so the World renderer works for the Architecture stub
+// too — behavior is byte-identical for real missions (find still wins).
+function _trajMissionById(id) {
+  const arr = (typeof _missions !== 'undefined' && _missions) ? _missions : [];
+  const found = arr.find(mm => mm.missionId === id);
+  if (found) return found;
+  return (_trajExtraMissions && _trajExtraMissions[id]) || null;
+}
+
+// Find a mounted traj-wrap by id. The Mission World surface lives inside
+// `.mcc-view-area` (kept as the preferred, unambiguous scope so mission
+// behavior is unchanged); the Architecture-page mount lives elsewhere, so fall
+// back to a global lookup. A given data-mid is unique (real missionId vs the
+// two arch stub ids), so the fallback can never grab the wrong wrap.
+function _trajFindWrap(id) {
+  return document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`)
+    || document.querySelector(`.traj-wrap[data-mid="${id}"]`);
+}
+
+// Re-render the surface that owns a given id after a camera anchor change:
+// real missions + the Plan-mirror stub go through missionRenderDetail(); the
+// Architecture-page stub re-mounts through archMapRender(). (trajSetFocus needs
+// a full re-mount for the instant floating-origin re-center on the new anchor.)
+function _trajRequestRerender(id) {
+  if (id === '__arch__' && typeof archMapRender === 'function') { archMapRender(); return; }
+  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+}
+
 // Fixed reference viewBox size in RENDER units (floating-origin km, i.e. 1
 // render unit = 1 km at zoom reference). Kept named _TRAJ_VB for continuity
 // with the mini-diagram's synthetic cam (still `{cx:0,cy:0,w:_OD_VBW}` in its
@@ -237,7 +279,7 @@ function _trajFlyTo(id, targetCam) {
 }
 
 function trajSetFocus(id, body) {
-  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const m = _trajMissionById(id);
   const wKm = _trajFitWKmForBody(body, m);
   const prev = _trajCam(id); // fly-to keeps the user's 3D orientation
   const target = { anchorBody: body, relOffsetKm: { x: 0, y: 0 }, wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 };
@@ -245,13 +287,13 @@ function trajSetFocus(id, body) {
   // precision requirement) — seed the camera at the new anchor but the OLD
   // zoom/orientation, mount the panel there, then ease wKm/az/el to target.
   _trajCamByMission[id] = Object.assign({}, target, { wKm: prev.wKm, az: prev.az || 0, el: prev.el != null ? prev.el : Math.PI / 2 });
-  missionRenderDetail();
+  _trajRequestRerender(id);
   _trajFlyTo(id, target);
 }
 
 function trajResetView(id) {
   const cam = _trajCam(id);
-  const m = (typeof _missions !== 'undefined' ? (_missions || []) : []).find(mm => mm.missionId === id);
+  const m = _trajMissionById(id);
   const wKm = _trajFitWKmForBody(cam.anchorBody, m);
   // Reset returns to the canonical top-down view (az/el included) — anchor is
   // unchanged, so no instant re-mount is needed; just ease there.
@@ -263,11 +305,11 @@ function trajResetView(id) {
 // rebuild the whole mission panel.
 function _trajApplyCam(id, cam) {
   _trajCamByMission[id] = cam;
-  const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
-  if (!va) { missionRenderDetail(); return; }
+  const va = _trajFindWrap(id);
+  if (!va) { _trajRequestRerender(id); return; }
   const svgEl = va.querySelector('svg.traj-svg');
   const overlayEl = va.querySelector('svg.traj-overlay');
-  if (!svgEl) { missionRenderDetail(); return; }
+  if (!svgEl) { _trajRequestRerender(id); return; }
   const rect = svgEl.getBoundingClientRect();
   const aspect = (rect.width > 0 && rect.height > 0) ? (rect.height / rect.width) : 1;
   // Geometry is emitted in render units (km·zoom), so the viewBox is a
@@ -276,8 +318,8 @@ function _trajApplyCam(id, cam) {
   const vbH = _TRAJ_VB * aspect;
   svgEl.setAttribute('viewBox', `${(-_TRAJ_VB / 2).toFixed(3)} ${(-vbH / 2).toFixed(3)} ${_TRAJ_VB.toFixed(3)} ${vbH.toFixed(3)}`);
   const sceneEl = svgEl.querySelector('g.traj-scene');
-  if (sceneEl && typeof _missions !== 'undefined') {
-    const m = (_missions || []).find(mm => mm.missionId === id);
+  if (sceneEl) {
+    const m = _trajMissionById(id);
     const zoom = _trajZoomFromCam(cam);
     _trajResetLabels();
     sceneEl.innerHTML = _trajWorldSVG(m, cam, zoom, rect);

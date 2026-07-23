@@ -274,6 +274,9 @@ function missionRenderDetail() {
   if (m.vehicleId) setTimeout(() => missionBurnPreview(m.missionId), 0);
   if (viewMode === 'nodemap') _missionCenterNmEarth();
   if (viewMode === 'traj' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
+  // A3-3D: the Plan surface's read-mostly architecture mirror mounts the same
+  // World renderer — fill + post-mount sync it once its container is in the DOM.
+  if (viewMode === 'nodemap' && typeof _archWorldPlanAfterRender === 'function') _archWorldPlanAfterRender();
   // keep the header's File menu (program/mission name fields, Reset
   // visibility) in sync with every mission mutation.
   if (typeof _globalFileMenuRender === 'function') _globalFileMenuRender();

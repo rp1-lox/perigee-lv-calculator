@@ -320,10 +320,20 @@ function _trajSelectEventFromView(id, authIdx) {
 function _trajMissionExtentForBody(body, m) {
   const frames = _trajGetExtraction(m);
   const sc = frames[body];
-  if (!sc) return 0;
   const isSun = body === 'Sun';
   const R = isSun ? 0 : ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0);
   let maxR = 0;
+  // Architecture-mount extra rings (one sanctioned optional input — see
+  // 610-architecture-map.js). Body-anchored orbit elements; contribute each
+  // ring's apoapsis radius so fly-to/reset frames the authored ladder.
+  if (m && m._extraRings) {
+    m._extraRings.forEach(er => {
+      if (!er || er.body !== body || !er.el) return;
+      const ra = er.el.a * (1 + (er.el.e || 0));
+      if (isFinite(ra)) maxR = Math.max(maxR, ra);
+    });
+  }
+  if (!sc) return maxR;
   sc.orbits.forEach(rec => {
     // Phase 5a fix (user flight-test "corrupted Moon view"): a PROPAGATED
     // record (NRHO) has no rec.apo — `R + undefined` = NaN, which poisons
