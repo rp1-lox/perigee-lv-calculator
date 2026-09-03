@@ -1,10 +1,6 @@
 // tests/harness.js
 //
-// Shared vm-sandbox loader + assertion helpers for the per-domain suites under
-// tests/suites/. Extracted from the former monolithic tests/math.test.js so
-// each suite (and each parallel worker process) can build its own fresh
-// sandbox without re-deriving the loader logic.
-//
+// Shared vm-sandbox loader + assertion helpers for the suites under tests/suites/.
 // Loads the source modules as TEXT (src/ stays untouched) and evaluates them
 // in a Node `vm` context with a stubbed `document`, so top-level DOM-touching
 // statements in those files don't throw.
@@ -15,16 +11,14 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 
-// Modules loaded (pure-math functions only; DOM-dependent functions such as
-// boosterModeFromDOM/collectVehicle/gv exist in the context but are NOT tested).
-// Keep in sync with the list that used to live at the top of math.test.js.
+// Modules loaded into the sandbox (DOM-dependent functions exist but are not tested).
 const FILES = [
   'src/js/010-constants.js',
   'src/js/140-physics.js',
   'src/js/145-dest-dv.js',
   'src/js/150-stage-and-a-half.js',
   'src/js/165-trade-study.js',
-  'src/js/360-program-module-phase-1-delta-v-engine.js',
+  'src/js/360-delta-v-engine.js',
   'src/js/384-orbit-canonical.js',
   'src/js/600-architecture-model.js',
   'src/js/385-physics-core.js',
@@ -34,14 +28,14 @@ const FILES = [
   'src/js/565-physics-nrho.js',
   'src/js/566-mission-state-v2.js',
   'src/js/568-lowthrust.js',
-  'src/js/440-program-module-phase-9-spacecraft-defini.js',
-  'src/js/410-program-module-phase-6-pork-chop-plotter.js',
+  'src/js/440-spacecraft-definition.js',
+  'src/js/410-porkchop.js',
   'src/js/415-launch-planner.js',
   'src/js/424-blt-reference.js',
   'src/js/565-physics-blt.js',
   'src/js/425-reference-orbits.js',
   'src/js/567-phase-truth.js',   // after 425: uses refOrbitResolve/_refToRot/refOrbitSamplePropagatedRaw
-  'src/js/430-program-module-phase-8-node-map.js',
+  'src/js/430-node-map.js',
   'src/js/610-architecture-map.js',
   'src/js/570-mission-core-state.js',
   'src/js/570-mission-event-model.js',
@@ -66,7 +60,7 @@ const FILES = [
   'src/js/5745-maneuver-gizmo-hover.js',
   'src/js/5745-maneuver-gizmo-drag.js',
   'src/js/572-mission-checks.js',
-  'src/js/450-program-module-phase-10-save-load-closur.js',
+  'src/js/450-program-save-load.js',
 ];
 
 let cachedSrc = null;
@@ -97,7 +91,6 @@ function buildSandbox() {
   return sandbox;
 }
 
-// Tiny assertion harness — identical semantics to the old math.test.js.
 function makeAssertions() {
   let pass = 0, fail = 0;
   const failures = [];

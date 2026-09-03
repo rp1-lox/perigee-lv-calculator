@@ -1,25 +1,8 @@
-// ─── Custom themed calendar popover — mission epoch (T+0) picker ──────────
-// Replaces the earlier native <input type="datetime-local"> inline editor
-// (see 570-mission-panel.js's _missionTopStripHTML history). That approach
-// committed on `change`/`blur`, and a native datetime-local control fires
-// `change` on EVERY still-valid intermediate value while a segment is being
-// retyped (e.g. typing "1919" into the year segment passes through several
-// syntactically-valid years on the way). Each of those fired a commit ->
-// missionRecompute -> missionRenderDetail, and re-rendering replaces the
-// <input> DOM node outright, destroying focus/mid-edit state. The visible
-// symptom ("jumping back a large date only moves ~1 year") was really N
-// separate partial commits landing, each overwritten mid-type by the next
-// keystroke's re-render. Root cause: commit-on-change against a multi-segment
-// control with a destructive re-render in between segments.
-//
-// Fix: nothing commits until an explicit Apply click. The widget below is a
-// self-contained DOM popover (not tied to any template re-render), so typing/
-// clicking around inside it never touches missionRecompute — only Apply does,
-// exactly once per open-edit-apply cycle.
-//
-// Usage: epochPickerOpen({ initialJD, anchorEl, onApply(jd) }). Generic by
-// design (no mission-specific code in here) so other date fields can reuse it
-// later per the task's "reusable-ish" ask.
+// ─── MISSION EPOCH (T+0) PICKER ────────────────────────────────────────────
+// Self-contained themed calendar popover. Nothing commits until Apply, so
+// typing never triggers missionRecompute mid-edit (a native datetime-local
+// input fired change on every intermediate value and the re-render destroyed
+// the field). Generic: epochPickerOpen({ initialJD, anchorEl, onApply(jd) }).
 
 let _epochPickerEl = null;
 let _epochPickerCloseHandlers = null;
@@ -48,7 +31,7 @@ function epochPickerOpen(opts) {
   opts = opts || {};
   epochPickerClose();
 
-  const haveJD = (typeof progJDToDate === 'function' && typeof progDateToJD === 'function');
+  const haveJD = (typeof progDateToJD === 'function');
   const seedDate = (haveJD && isFinite(opts.initialJD)) ? progJDToDate(opts.initialJD) : new Date();
 
   let viewYear = seedDate.getUTCFullYear();

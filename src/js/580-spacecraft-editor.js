@@ -37,7 +37,7 @@ function _scEdGet(id) {
   return _scEdSC.find(s => s.spacecraftId === (id ?? _scEdSel)) ?? null;
 }
 
-function scEdRender() { scEdRenderList(); scEdRenderDetail(); if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave(); }
+function scEdRender() { scEdRenderList(); scEdRenderDetail(); autosaveScheduleSave(); }
 
 function scEdRenderList() {
   const el = document.getElementById('sc-ed-list');

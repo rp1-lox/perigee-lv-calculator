@@ -1,20 +1,18 @@
 
 // ─── ORBITS-PAGE VEHICLE SELECTOR ─────────────
-// Page-local override: lets the Orbits page evaluate ANY library vehicle
-// (built-in preset or user-saved LV) against the current destination inputs,
-// WITHOUT touching the worksheet (the Vehicles page state / stageStore / DOM).
-// Session-only — not persisted, not part of autosave.
-//   null           = "Worksheet (current)" -> classic calculateWithS15() path.
-//   {kind,idx,name}= a library vehicle -> pure orbCalcSelectedVehicle() path.
+// Lets the Orbits page evaluate any library vehicle against the current
+// destination without touching the worksheet. Session-only, not persisted.
+//   null            = "Worksheet (current)" -> calculateWithS15() path.
+//   {kind,idx,name} = a library vehicle -> pure orbCalcSelectedVehicle() path.
 let _orbVehSel = null;
 
-// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+// Thin alias onto the canonical escaper.
 function _orbVehEsc(s){return escHtml(s);}
 
 // Build the <select> options: Worksheet + optgroups for presets / user vehicles.
 function _orbVehSelectorOptionsHTML(){
   let html = `<option value="">Worksheet (current)</option>`;
-  const presets = (typeof BUILTIN_PRESETS !== 'undefined') ? BUILTIN_PRESETS : [];
+  const presets = BUILTIN_PRESETS;
   if (presets.length) {
     html += `<optgroup label="Presets">`;
     presets.forEach((p, i) => {
@@ -22,7 +20,7 @@ function _orbVehSelectorOptionsHTML(){
     });
     html += `</optgroup>`;
   }
-  const user = (typeof userLVs !== 'undefined') ? userLVs : [];
+  const user = userLVs;
   if (user.length) {
     html += `<optgroup label="My Vehicles">`;
     user.forEach((v, i) => {
@@ -115,7 +113,7 @@ function orbCalcSelectedVehicle(){
 
     // S1.5 stages must be BECO-split before the pure physics (same fix as the
     // trade study's _tsMetricAt — lvPerformance knows nothing about s15 fields).
-    const stages = (typeof _tsExpandStages === 'function') ? _tsExpandStages(base.stages) : base.stages;
+    const stages = _tsExpandStages(base.stages);
     const maxPay = lvMaxPayload(stages, base.boosterArg, base.fairingM, base.fairingJ, parkingAlt, onOrbitDV, base.siteLat, base.azMin, base.azMax);
     const res = lvPerformance(stages, base.boosterArg, maxPay, base.fairingM, base.fairingJ, parkingAlt, onOrbitDV, base.siteLat, base.azMin, base.azMax);
 

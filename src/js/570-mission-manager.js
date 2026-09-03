@@ -54,7 +54,7 @@ function _missionLvPickerOptsHTML(selectedFleetId) {
   return html;
 }
 
-// Unify-create/edit (2026-07-16): _missionLaunchParamsHTML (the dock's own
+// Unify-create/edit: _missionLaunchParamsHTML (the dock's own
 // launch-authoring form) is REMOVED — Add Event → Launch now creates a
 // PENDING DRAFT card in the events list rendered through the exact same
 // _missionEventEditFieldsHTML LAUNCH branch (570-mission-cards.js) an
@@ -64,7 +64,7 @@ function _missionLvPickerOptsHTML(selectedFleetId) {
 // _missionRefreshLaunchModal, a pop-up form, were removed in favor of the
 // dock form this comment used to describe.)
 
-// MISSION_MODEL_V2 Phase 2 S1 (F3 — deterministic replay identity): runtime
+// Phase 2 S1 (F3 — deterministic replay identity): runtime
 // vehicleIds default to a fresh progUUID() per replay, which dirties the
 // autosave blob (m.log stamps e.vehicleId/e.lowerVehicleId/etc.) on every
 // recompute even when nothing changed. `_originKey` is ALREADY a stable
@@ -117,7 +117,7 @@ function _missionApplyLaunch(m, e) {
   // parallel-booster handling, same Townsend ascent penalty. We read its per-stage
   // ΔV (perf.sDVs, boosters folded into stage 0) + ascent requirement, then map that
   // onto the live vehicle. Other bodies use the simpler circular-velocity estimate.
-  const perf = (launchOrbit.body === 'Earth' && typeof lvPerformance === 'function' && entry.stageData && entry.stageData.length)
+  const perf = (launchOrbit.body === 'Earth' && entry.stageData && entry.stageData.length)
     ? lvPerformance(entry.stageData, entry.boosterGroups || entry.boosterData || null, payloadMass, entry.fairingMass || 0, 0, launchOrbit.periKm, 0, 28.5, 37, 112)
     : null;
   const dvRequired = perf ? perf.DVasc : _missionDvToOrbit(launchOrbit.body, launchOrbit.periKm);
@@ -216,13 +216,13 @@ function _missionApplyDeploy(m, e, metNow) {
     // Phase 4 U3: deploy ON the propagated ref — sample it at the event's own
     // MET (phase into the period) rather than always the seed epoch, so a
     // DEPLOY authored later in the timeline still lands somewhere ON the loop.
-    const st0 = (typeof refOrbitPropagatedStateAt === 'function') ? refOrbitPropagatedStateAt(o.refId, metNow || 0) : null;
+    const st0 = refOrbitPropagatedStateAt(o.refId, metNow || 0);
     orbitState = {
       body: o.body, propagated: true, refId: o.refId,
       r: st0 ? st0.r : null, v: st0 ? st0.v : null, frame: st0 ? st0.frame : o.body,
-      // 5b R1: the MET this state was captured at — phase-truth's nearest-point
+      // The MET this state was captured at — phase-truth's nearest-point
       // search (567) needs the epoch a captured r/v is valid at, to rotate it
-      // into the Earth-Moon frame correctly (§7v: the rotating basis itself
+      // into the Earth-Moon frame correctly (: the rotating basis itself
       // moves with real time). Without this, a DEPLOY'd vehicle's phase could
       // only be measured relative to "now", losing the very offset R1 exists
       // to surface.
@@ -256,17 +256,6 @@ function missionExecLaunch(id, opts) {
   if (fv && fv._originKey) setTimeout(() => missionRenameVehicle(id, fv._originKey), 0);
 }
 
-function missionExecDeploy(id, scId) {
-  const m = _missionGet(id);
-  if (!m) return;
-  const sc = _scEdSC.find(s => s.spacecraftId === scId);
-  if (!sc) return;
-  const empty = !!document.getElementById('addev-deploy-empty-' + id)?.checked;
-  m.log.push({ type: 'DEPLOY', label: sc.name, spacecraftId: scId, orbit: _missionLaunchOrbitDraft(m.launchOrbit), emptyTanks: empty });
-  _missionAddEvt = null;
-  _missionExpandLast(m);
-  missionRecompute(m); missionRenderDetail();
-}
 
 function missionResetLaunch(id) {
   const m = _missionGet(id);
@@ -284,11 +273,6 @@ function _missionConfirmReset(id) {
   showConfirm('Reset Mission', `Clear all events for "${label}"? This cannot be undone.`, () => missionResetLaunch(id), 'Reset');
 }
 
-function _missionConfirmDelete(id) {
-  const m = _missionGet(id);
-  const label = m ? m.name : 'this mission';
-  showConfirm('Delete Mission', `Delete "${label}"? This cannot be undone.`, () => missionDelete(id), 'Delete');
-}
 
 // ── Export menu (topbar "Export ▾") — tiny module-scoped open/close handler ──
 let _missionExportMenuOpen = false;
@@ -324,7 +308,7 @@ function _missionExportMenuOutsideClick(e) {
 // once at startup. ──
 function _globalFileMenuHTML() {
   const progName = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && PROG_ACTIVE_PROGRAM.name) || '';
-  const m = (typeof _missions !== 'undefined' && _missions) ? _missions[0] : null;
+  const m = (_missions) ? _missions[0] : null;
   const id = m ? m.missionId : '';
   const missionName = m ? m.name : '';
   return `<div class="mcc-export-wrap">
@@ -466,16 +450,16 @@ function _missionVehicleRemainingDv(fv) {
   return total;
 }
 
-// MISSION_MODEL_V2 Phase 2 S4 (§11.2 step 3): missionBudget delegates to
+// Phase 2 S4 ( step 3): missionBudget delegates to
 // v2DeriveBudget (the simulated-state readout) + the ascent line it already
 // carries (F2). The old per-entry summation over m.log is DELETED — this is
-// also what retires the 2026-07-11 aggregate-undercount anomaly (a manual
+// also what retires the aggregate-undercount anomaly (a manual
 // 200 m/s burn moving the total by +3), since the path that produced it no
 // longer exists. Payload mass and ascent propellant are read straight off
-// the LAUNCH entry's stagingResult (unchanged source, §11.1 F2) since
+// the LAUNCH entry's stagingResult (unchanged source) since
 // v2DeriveBudget's propTotal only covers burns, not the ascent stage.
 function missionBudget(m) {
-  const vb = (typeof v2DeriveBudget === 'function' && m && m.missionId) ? v2DeriveBudget(m.missionId) : null;
+  const vb = (m && m.missionId) ? v2DeriveBudget(m.missionId) : null;
   let dvExpended = 0, propConsumed = 0, payloadMass = 0;
   if (vb) {
     dvExpended = vb.dvTotal;
@@ -513,29 +497,6 @@ function missionBudget(m) {
   };
 }
 
-function _missionBudgetCardHTML(m) {
-  const b = missionBudget(m);
-  const capColor = b.dvCapacityRemaining > 0 ? 'var(--accent3)' : 'var(--accent2)';
-  const kv = (k, v, color) => `<div class="mission-state-kv"><span class="mission-state-key">${k}</span><span class="mission-state-val"${color ? ` style="color:${color}"` : ''}>${v}</span></div>`;
-  const _fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
-  const _os = _fv && _fv.orbitState ? _fv.orbitState : null;
-  // §14 U3: a propagated orbit (NRHO) has no Kepler peri/apo/inc — an honest
-  // label beats wrong ellipse numbers (spec's own phrasing).
-  const orbitGrid = _os && _os.propagated
-    ? `<div class="mission-state-grid">${kv('Body', _os.body || 'Moon')}${kv('Orbit', 'NRHO (propagated)')}</div>`
-    : _os ? `<div class="mission-state-grid">${kv('Body', _os.body || 'Earth')}${kv('Apogee', Math.round(_os.apogee || 0).toLocaleString() + ' km')}${kv('Perigee', Math.round(_os.perigee ?? _os.apogee ?? 0).toLocaleString() + ' km')}${kv('Inc', (_os.inclination || 0) + '&deg;')}</div>` : '';
-  return `
-    <div class="mcc-section-header">Mission ΔV Budget</div>
-    <div class="mission-log-card">
-      ${orbitGrid}
-      <div class="mission-state-grid">
-        ${kv('ΔV Expended', b.dvExpended.toLocaleString() + ' m/s')}
-        ${kv('Prop Consumed', b.propConsumed.toLocaleString() + ' kg')}
-        ${kv('ΔV Capacity Left', b.dvCapacityRemaining.toLocaleString() + ' m/s', capColor)}
-        ${kv('Payload', b.payloadMass.toLocaleString() + ' kg')}
-      </div>
-    </div>`;
-}
 
 function _missionBurnSectionHTML(m) {
   const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId];
@@ -687,24 +648,7 @@ function _missionComputeBurn(fv, bt, pval) {
   return { dvTarget, newOrbit, burnLabel };
 }
 
-function _missionSnapState(fv) {
-  return {
-    orbit: fv.orbitState ? {...fv.orbitState} : null,
-    status: fv.status,
-    fills: fv.stages.map(s => (s.tanks||[]).map(t => t.fill))
-  };
-}
 
-function _missionRestoreState(fv, snap) {
-  if (!snap) return;
-  fv.orbitState = snap.orbit ? {...snap.orbit} : fv.orbitState;
-  if (snap.status) fv.status = snap.status;
-  if (snap.fills) fv.stages.forEach((s,i)=>{
-    (s.tanks||[]).forEach((t,j)=>{
-      if (snap.fills[i] && snap.fills[i][j] != null) t.fill = snap.fills[i][j];
-    });
-  });
-}
 
 // ── PURE APPLIER: computes burn, dispatches BURN progEvent, updates fv orbit.
 // Does NOT push to m.log — that is done by missionRecompute.

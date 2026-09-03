@@ -142,7 +142,7 @@
       </div>
       <div id="preset-grid" style="display:none"></div>
 
-      <!-- LAUNCH SITE — collapsible strip inside Stage Composition (2026-07-02 IA restructure) -->
+      <!-- LAUNCH SITE — collapsible strip inside Stage Composition -->
       <div class="left-section" id="sec-launch" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
         <div class="launch-site-strip" id="launch-site-strip" onclick="launchSiteStripToggle()">
           <span id="launch-site-strip-text">⚑ Launch Site: Custom</span>
@@ -448,13 +448,11 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════ PAGE: ARCHITECTURE -->
-<!-- A1 shell only (MISSION_MODEL_V2.md §26): two-region skeleton, both
-     regions empty pending A2 (ladder rail) / A3 (node-map stage). -->
 <div id="page-architecture" class="page">
   <div class="vp-header">Architecture <span class="vp-header-sub">Author the mission's orbit ladder and transfer edges</span></div>
   <div class="arch-layout" style="display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:stretch;">
     <div class="arch-stage lib-panel" style="margin-top:0;min-width:0;display:flex;align-items:center;justify-content:center;min-height:360px;">
-      <div class="placeholder-msg">No orbits in your ladder yet. Use the rail on the right to add one — pick a preset from the catalog or add a custom orbit — then draw a transfer edge between two nodes to build out your mission's dV budget.</div>
+      <div class="placeholder-msg">No orbits in your ladder yet. Add one from the rail on the right, then draw a transfer edge between two nodes to build the dV budget.</div>
     </div>
     <div class="arch-rail lib-panel" style="margin-top:0;min-width:0;display:flex;flex-direction:column;">
       <div class="sl" style="flex-shrink:0;">Orbit Ladder</div>
@@ -598,7 +596,7 @@
   </div>
 </div>
 
-<!-- ── MODAL: Settings (N1b) ── -->
+<!-- ── MODAL: Settings ── -->
 <div class="modal-overlay" id="modal-settings" style="display:none">
   <div class="modal" style="max-width:520px;">
     <div class="modal-header">

@@ -1,14 +1,8 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 605-architecture-page.js — Architecture page rendering + handlers (A2)
-// MISSION_MODEL_V2.md §26. OWNS: `#arch-ladder-list` card rendering (canonical
-// inline edit, accordion, mirrors 570-mission-cards.js's mevt-evt-row markup),
-// the preset picker (571-combobox over refOrbitCatalogList), add/delete/
-// reorder, and the page-scoped undo/redo keyboard shortcut. Keeps
-// 600-architecture-model.js pure — every mutation here goes through its CRUD
-// (archAddNode/archRemoveNode/archUpdateNode/archMoveNode/archNodeDetachRef)
-// then archRenderPage() then autosaveScheduleSave(), never touches
-// PROG_ACTIVE_PROGRAM.architecture directly.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── ARCHITECTURE PAGE — ladder rail rendering + handlers ───────────────────
+// #arch-ladder-list cards (inline edit, accordion), the preset picker
+// (571-combobox over refOrbitCatalogList), add/delete/reorder, and the page
+// undo/redo shortcut. Every mutation goes through 600's CRUD, then
+// archRenderPage() and autosaveScheduleSave().
 
 // Single-expansion accordion state, mirrors missionSelectEvent's convention —
 // module-local (not persisted; purely a UI cursor).
@@ -21,9 +15,9 @@ function archRenderPage() {
   const arch = archGet();
   const nodes = arch.nodes || [];
 
-  // A3: the `.arch-stage` node-map is owned by 610-architecture-map.js
+  // The `.arch-stage` node-map is owned by 610-architecture-map.js
   // (archMapRender) — this module stays ladder/rail-only per the module plan.
-  if (typeof archMapRender === 'function') archMapRender();
+  archMapRender();
 
   list.innerHTML = nodes.length
     ? nodes.map((n, i) => _archNodeCardHTML(n, i, nodes.length)).join('')
@@ -56,9 +50,6 @@ function _archNodeCardHTML(n, i, count) {
   const expanded = n.id === _archExpandedId;
   const upDis = (i <= 0) ? ' disabled' : '';
   const dnDis = (i >= count - 1) ? ' disabled' : '';
-  const refEntry = (n.orbitRefId && typeof refOrbitCatalogList === 'function')
-    ? refOrbitCatalogList().find(r => r.id === n.orbitRefId) : null;
-  const boundNote = refEntry ? escHtml(refEntry.name) : '(custom)';
   const ctl = `<div class="mevt-ctlbar">
       <button class="act-btn mevt-ctl" onclick="event.stopPropagation();archMoveNode('${n.id}',-1);archRenderPage();autosaveScheduleSave();" title="Move up"${upDis}>&#9650;</button>
       <button class="act-btn mevt-ctl" onclick="event.stopPropagation();archMoveNode('${n.id}',1);archRenderPage();autosaveScheduleSave();" title="Move down"${dnDis}>&#9660;</button>
@@ -79,7 +70,7 @@ function _archNodeCardHTML(n, i, count) {
 function _archNodeEditFieldsHTML(n) {
   const o = n.orbit || {};
   const id = n.id;
-  const bodyOpts = Object.keys((typeof PROG_BODIES !== 'undefined' && PROG_BODIES) || {})
+  const bodyOpts = Object.keys((PROG_BODIES) || {})
     .map(b => `<option value="${escHtml(b)}"${b === n.body ? ' selected' : ''}>${escHtml(b)}</option>`).join('');
   const refEntry = (n.orbitRefId && typeof refOrbitCatalogList === 'function')
     ? refOrbitCatalogList().find(r => r.id === n.orbitRefId) : null;
@@ -155,11 +146,11 @@ function _archPresetPickerHTML() {
 
 function _archPresetComboOpen() {
   const inputEl = document.getElementById('arch-preset-q');
-  if (!inputEl || typeof comboboxOpen !== 'function') return;
+  if (!inputEl) return;
   comboboxOpen({
     inputEl,
     groups: () => {
-      const opts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList() : [];
+      const opts = refOrbitCatalogList();
       const keplerian = opts.filter(r => r.kind === 'keplerian');
       return keplerian.length ? [{ label: 'Reference Orbits', items: keplerian.map(r => ({ value: r.id, label: r.name })) }] : [];
     },
@@ -168,9 +159,9 @@ function _archPresetComboOpen() {
 }
 
 function _archPresetPick(refId) {
-  const resolved = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
+  const resolved = refOrbitResolve(refId);
   if (!resolved || resolved.kind !== 'keplerian') return; // v1: no propagated architecture nodes
-  const refEntry = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList().find(r => r.id === refId) : null;
+  const refEntry = refOrbitCatalogList().find(r => r.id === refId);
   const node = archAddNode({
     name: refEntry ? refEntry.name : 'Orbit',
     body: resolved.body,
@@ -205,7 +196,7 @@ document.addEventListener('keydown', e => {
   const pg = document.getElementById('page-architecture');
   const visible = pg && getComputedStyle(pg).display !== 'none';
   if (!visible) return;
-  if (typeof _uiEditableTarget === 'function' && _uiEditableTarget(e)) return;
+  if (_uiEditableTarget(e)) return;
   if (!(e.ctrlKey || e.metaKey)) return;
   const key = e.key.toLowerCase();
   if (key === 'z' && !e.shiftKey) {

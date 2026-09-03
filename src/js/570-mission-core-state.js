@@ -3,7 +3,7 @@
 
 let _missions = [];
 let _missionSel = null;
-// MISSION_MODEL_V2 §12 U3 (tri-view restoration): _missionViewMode is the
+// (tri-view restoration): _missionViewMode is the
 // REAL, authoritative view state again — not a mirror of a promotion surface
 // (the U1/U2 one-stage-two-rails promotion grammar is retired). Driven by
 // missionSetView(id, mode); read directly by missionRenderDetail's tri-toggle

@@ -1,28 +1,13 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 565-physics-targeting.js — P4 generic differential corrector + leg-aim shooter
+// ─── DIFFERENTIAL CORRECTOR + LEG-AIM SHOOTER ───────────────────────────────
+// physAimBurnState (burn-state aim builder), closest-approach / arrival-state /
+// osculating-element evaluation, the generic shooter physShootToTarget, the
+// leg-aim solver physShootLegAim, and the per-leg cache _physShootCache.
 //
-// OWNS: the burn-state aim builder (physAimBurnState), closest-approach / arrival
-//   state + osculating elements evaluation (physClosestApproachKm, physArrivalStateAt,
-//   physArrivalOsculatingElements), the generic differential-corrector shooter
-//   (physShootToTarget) and the leg-aim solver that drives it (physShootLegAim), plus
-//   the per-leg shooter-solution cache (_physShootCache).
-// CONTRACT (unchanged): physShootLegAim is a CLAUDE.md invariant (solved-RAAN shooter);
-//   solved-burn MAGNITUDE still flows through progNmComputeEdgeDv/dvOverride, never
-//   recomputed here. No numbers/tolerances/iteration limits were altered by the split.
-// Does NOT own: the LEO->NRHO transfer (565-physics-nrho.js), solved node burn / mission
-//   rebuild / side-tables (residual 565-physics-mission.js), or the integrator (386).
-// Split out of 565-physics-mission.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among the 565* def-only modules is
-//   irrelevant (this file loads after the 565 core and before 566).
-// ─────────────────────────────────────────────────────────────────────────────
-// ── P4: targeting — generic differential corrector + leg aim ─────────────────
-//
-// ΔV ACCOUNTING PARITY (sacred): the shooter adjusts WHERE the burn happens
-// (anomaly theta on the parking orbit) and its DIRECTION (in-plane pitch off
-// prograde; R3 adds out-of-plane yaw toward ĥ) — NEVER the magnitude.
-// |Δv| is always the engine-supplied value. If the fixed magnitude cannot
-// reach the target, we return converged:false and the renderer keeps the
-// schematic arc (MATH.md §7g/§7h).
+// ΔV accounting parity: the shooter adjusts WHERE the burn happens (anomaly on
+// the parking orbit) and its DIRECTION (in-plane pitch, out-of-plane yaw) —
+// never the magnitude, which is always the engine-supplied value. If the fixed
+// magnitude cannot reach the target we return converged:false and the renderer
+// keeps the schematic arc.
 
 /** Burn state on a circular parking ring in its AUTHORED plane (R3):
  *  position at true anomaly `theta` on the orbit {a:r1, e:0, i:incRad,
@@ -76,7 +61,7 @@ function physClosestApproachKm(res, dest, overrides) {
   return { dKm: best, t: tBest, dz };
 }
 
-/** R3.1 / MISSION_MODEL_V2 Phase 2 S2: raw arrival {r,v,t} of a converged leg's
+/** R3.1 / Phase 2 S2: raw arrival {r,v,t} of a converged leg's
  *  actual encounter, for BOTH the state-derived ring orientation
  *  (physArrivalOsculatingElements, below) and the F1 arrival-burn construction
  *  (physRebuildMissionTrajectories' 'arrival' leg branch). The propagator only
@@ -112,8 +97,8 @@ function physArrivalStateAt(res, dest) {
   return { r, v, t: ev.t };
 }
 
-/** R3.1: osculating plane of a converged leg's actual arrival, for the
- *  STATE-DERIVED orbit ring (MATH.md §7f-R2/§7h/§7i). This phase only
+/** Osculating plane of a converged leg's actual arrival, for the
+ *  STATE-DERIVED orbit ring. This phase only
  *  consumes (i, raan, argp) — NOT precise enough for a targeting residual.
  *  Returns osculating {a,e,i,raan,argp,nu,hVec} (physStateToElements' full
  *  return) or null if physArrivalStateAt found nothing to bracket. */
@@ -223,12 +208,12 @@ function physShootToTarget(burnSolveFn, targetFn, x0, opts) {
  *   1-DOF: burn anomaly theta (cheap, usually enough for moon legs)
  *   2-DOF: theta + in-plane pitch, with an arrival-timing miss component
  *          (closest-approach time vs. the schematic TOF × 0.5 km/s) so the
- *          2×2 Jacobian is full-rank (MATH.md §7g)
+ *          2×2 Jacobian is full-rank
  *   3-DOF (R3): theta + pitch + out-of-plane yaw toward ĥ, third miss
  *          component = out-of-plane (z) miss at closest approach — the DOF
  *          that closes plane-mismatched encounters (28.5° LEO → 5.145° Moon).
  * The departure ring carries fromOrbit's AUTHORED inclination (Ω=0
- * convention, §7h). Target: closest approach to the destination body equals
+ * convention). Target: closest approach to the destination body equals
  * the destination-orbit radius. |Δv| = dv_kms, FIXED throughout — direction
  * only. Moon-leg acceptance tightened by R3 to min(SOI/3, 25,000 km), with a
  * 5,000 km solver tolerance driving the Newton loop itself.
@@ -242,7 +227,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   if (!burn0 || (burn0.kind !== 'moon' && burn0.kind !== 'interplanetary')) return null;
   const dest = burn0.dest, fromBody = burn0.center;
   const r1 = physMag(burn0.state.r);
-  // §20 OBLIQUITY seam: fromOrbit.inclination/.lan_deg are AUTHORED in
+  // OBLIQUITY seam: fromOrbit.inclination/.lan_deg are AUTHORED in
   // fromBody's EQUATOR frame (user convention unchanged). incRad stays
   // equatorial for the whole function (it's the ring's inclination
   // MAGNITUDE, frame-invariant under a pure re-basing, and the RAAN-solve
@@ -251,11 +236,10 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // world-frame state (physAimBurnState -> physElementsToState) does the
   // equatorial (inc, raan) pair get rotated into world/ecliptic via
   // progEqToWorldElements — see aimBurnEq below. This is the ONE seam
-  // application for this function; MATH.md §7al lists it in the audit.
+  // application for this function; lists it in the audit.
   const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
-  const _eqBasis = (typeof physEqBasis === 'function') ? physEqBasis(fromBody) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  const _eqBasis = physEqBasis(fromBody);
   function toWorldPlane(iEqRad, raanEqRad) {
-    if (typeof orbitWorldElements !== 'function') return { inc: iEqRad, raan: raanEqRad };
     const w = orbitWorldElements({ body: fromBody, inc_deg: iEqRad * 180 / Math.PI, lan_deg: raanEqRad * 180 / Math.PI });
     return { inc: w.incDeg * Math.PI / 180, raan: w.lanDeg * Math.PI / 180 };
   }
@@ -265,19 +249,19 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   }
   // in-plane anomaly of the analytic seed (physSolveNodeBurn placed it at ν=theta)
   let theta0 = physPhaseBurnAngle(progBodyAngleAt(dest, tDepart_s + burn0.coastTof_s));
-  // N1: encounter length scale — explicit km constant (numerically the old
+  // Encounter length scale — explicit km constant (numerically the old
   // physSoiRadius(dest); see PHYS_ENCOUNTER_SCALE_KM). Pure acceptance/
   // conditioning scale, not a dynamical boundary.
   const soi = PHYS_ENCOUNTER_SCALE_KM[dest];
   const targetR = PROG_BODIES[dest].R + (opts.destAltKm != null ? opts.destAltKm : 100);
-  // R3 acceptance: the yaw DOF lets the burn leave the departure plane, so
+  // The yaw DOF lets the burn leave the departure plane, so
   // plane-mismatched encounters can now close for real — moon legs tighten
   // from the R1 SOI/3 (which absorbed the coplanar out-of-plane floor) to
   // ACCEPTANCE min(SOI/3, 25,000 km), and the Newton loop itself drives
   // toward a tighter 5,000 km SOLVER tolerance so accepted moon legs actually
   // arrive near the destination-orbit radius instead of stopping the moment
   // they duck under the acceptance bar. Interplanetary keeps SOI/3
-  // (encounter stepping and mean-element rails dominate there, §7g).
+  // (encounter stepping and mean-element rails dominate there).
   const acceptKm = burn0.kind === 'moon' ? Math.min(soi / 3, 25000) : soi / 3;
   const tolKm = burn0.kind === 'moon' ? Math.min(5000, acceptKm) : acceptKm;
   const cutoff = tDepart_s + 1.5 * Math.max(burn0.coastTof_s, 3600);
@@ -287,7 +271,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     dtMax: burn0.kind === 'interplanetary' ? 16384 : undefined };
   const propagate = st => physPropagateSegment({ r: st.r, v: st.v }, tDepart_s, cutoff, ctx, { maxSamples: 128 });
   const tArrSched = tDepart_s + burn0.coastTof_s;
-  // Solved RAAN for moon legs (R3.0.1, 2026-07-10 — R3.1's tier-3 rule pulled
+  // Solved RAAN for moon legs (R3.0.1, — R3.1's tier-3 rule pulled
   // forward because physics NEEDS it): with Ω pinned to 0, a 28.5° parking
   // plane can sit up to ~34° from the Moon's plane and a fixed-|Δv| TLI
   // physically cannot cross that gap (yaw redirects, it can't buy plane
@@ -311,7 +295,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     const mMag = physMag(mSt.r);
     if (mMag > 0) {
       const mHatWorld = physScale(mSt.r, 1 / mMag);
-      // §20: this cone-axis equation (n·m̂=0) assumes m̂'s components are
+      // this cone-axis equation (n·m̂=0) assumes m̂'s components are
       // already in the frame whose z-axis is the ring's inclination cone
       // axis. incRad is EQUATORIAL, so m̂ must be rotated into the equatorial
       // basis here too (not left in world/ecliptic) — otherwise the solved
@@ -351,7 +335,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     }
     theta0 = bestTheta;
   }
-  // R3.2: an AUTHORED arrival plane (toOrbit.lan_deg + .inclination) adds a
+  // An AUTHORED arrival plane (toOrbit.lan_deg + .inclination) adds a
   // plane-alignment component to the miss vector — insertion into "LLO i=90
   // Ω=X" is a genuinely different target than "any 100 km LLO" (spec, R3.2).
   // Conditioning: angle between the arrival h-vector (osculating, via the
@@ -361,7 +345,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
   // SOI-scale radial/timing misses already in the vector, so no single
   // component dominates the Newton step. Documented here per the plan's
   // "document the constant as hand-tuned" instruction.
-  // §20: toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
+  // toOrbit.inclination/.lan_deg are authored in `dest`'s equator frame
   // (same convention as fromOrbit) — rotate into world before comparing
   // against the world-frame osculating arrival elements below.
   const toAuthoredPlane = ((toOrbit.lanDeg ?? toOrbit.lan_deg) != null && (toOrbit.incDeg ?? toOrbit.inclination) != null)
@@ -427,7 +411,7 @@ function physShootLegAim(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides, opts)
     { s: sol2, dof: 2, pitch: sol2.x[1] || 0, yaw: 0 },
     { s: sol3, dof: 3, pitch: sol3.x[1] || 0, yaw: sol3.x[2] || 0 },
   ];
-  // R3.2: when the arrival plane is authored, only sol3's residual actually
+  // When the arrival plane is authored, only sol3's residual actually
   // CHECKS the plane (its 3rd component is the plane-alignment miss) — a
   // lower-DOF stage that happens to have a small radial/timing miss says
   // nothing about whether the authored plane was reached, so it must not win

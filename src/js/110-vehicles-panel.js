@@ -74,14 +74,6 @@ function removeVehicleFilter(cat,tag){
   buildVehicleFilterPanel();updateVehicleFilterChips();buildPresets();
 }
 
-function toggleVehicleFilters(){
-  vehicleFilterOpen=!vehicleFilterOpen;
-  const p=document.getElementById('vehicle-filter-panel');
-  if(p)p.style.display=vehicleFilterOpen?'block':'none';
-  if(vehicleFilterOpen)buildVehicleFilterPanel();
-  const ftb=document.getElementById('vehicle-filter-btn');
-  if(ftb)ftb.classList.toggle('active',vehicleFilterOpen||Object.keys(vehicleFilters).length>0);
-}
 
 function buildPresets(){
   const grid=document.getElementById('preset-grid');

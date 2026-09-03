@@ -61,17 +61,7 @@ function removeFilter(cat,tag){
   buildFilterPanel();updateFilterChips();buildStageLibrary();
 }
 
-function clearAllFilters(){
-  activeFilters={};buildFilterPanel();updateFilterChips();buildStageLibrary();
-}
 
-function toggleFilterPanel(){
-  filterPanelOpen=!filterPanelOpen;
-  const panel=document.getElementById('filter-panel');
-  panel.style.display=filterPanelOpen?'block':'none';
-  if(filterPanelOpen)buildFilterPanel();
-  document.getElementById('filter-toggle-btn').classList.toggle('active',filterPanelOpen||Object.keys(activeFilters).length>0);
-}
 
 function stageMatchesFilters(stage){
   // AND across filter categories, OR within each category

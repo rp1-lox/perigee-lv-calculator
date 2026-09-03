@@ -37,7 +37,7 @@ const PROG_MOON_ORBIT_R = 384400; // km — Moon orbital radius from Earth centr
 // -cos(node)*sin(obliquity), cos(obliquity)] in the WORLD (ecliptic) frame —
 // i.e. "obliquity" plays the role of an orbital inclination of the body's
 // equator against the ecliptic, "node" the role of that equator's RAAN.
-// node values (SIGN BUG FIXED 2026-07-18, MATH.md critique 120): the v1
+// node values: the v1
 // claim that node=0 was "true by construction for Earth/J2000" was WRONG
 // under this exact formula — node 0 yields pole (0, -sin eps, cos eps), the
 // MIRROR of the real north celestial pole (0, +sin eps, cos eps) at ecliptic
@@ -63,7 +63,7 @@ const PROG_BODY_POLES = {
 /** Unit pole vector (world/ecliptic frame) for `body`. Bodies absent from
  *  PROG_BODY_POLES fall back to the untilted pole (world +z) — i.e. the
  *  pre-§20 behavior — so callers never need a null-guard. Static v1: no
- *  precession (documented in MATH.md §7al). */
+ *  precession. */
 function physBodyPoleAt(body) {
   const p = PROG_BODY_POLES[body];
   if (!p) return [0, 0, 1];
@@ -82,8 +82,8 @@ const PROG_MOON_ORBITS = {
 // ── Body kinematics (R1 — real ephemeris rails, 2026-07-09) ─────────────────
 // Replaces the C1a circular-coplanar model (PROG_BODY_KINEMATICS + theta0
 // calibration) with REAL Keplerian mean elements + secular rates, evaluated
-// at real absolute time. The planet-phase calibration fiction (MATH.md old
-// §7a) retires with it: real ephemeris = real phases. See MATH.md §7a (R1).
+// at real absolute time. The planet-phase calibration fiction (old
+// retires with it: real ephemeris = real phases.
 //
 // Planets: JPL approximate mean elements (Standish, valid 1800–2050).
 //   Columns: a (AU), e, I (deg), L (mean longitude, deg), wbar (longitude of
@@ -158,7 +158,7 @@ const PROG_BODY_ELEMENTS = {
 // Titan: schematic — circular at 1,221,870 km IN SATURN'S ORBITAL PLANE
 // (I/Om copied from Saturn's J2000 elements; the real Titan orbits near
 // Saturn's EQUATOR, tilted ~26.7° from its orbital plane — known wrong,
-// accepted and critiqued in MATH.md).
+// accepted and critiqued in).
 const PROG_MOON_ELEMENTS = {
   Moon:  { parent: 'Earth',  a: 384400,  e: 0.0549, I0: 5.145,      L0: 218.316, LDot: 13.176358,          wbar0: 83.353, wbarDot: 0.111403, Om0: 125.080,       OmDot: -0.052954 },
   Titan: { parent: 'Saturn', a: 1221870, e: 0,      I0: 2.48599187, L0: 0,       LDot: 360 / 15.9454,      wbar0: 0,      wbarDot: 0,        Om0: 113.66242448,  OmDot: 0 },
@@ -305,30 +305,13 @@ function progOrbitSamplePoints(el, n) {
   return pts;
 }
 
-/** Single point on the same ellipse progOrbitSamplePoints walks, at ONE
- *  eccentric anomaly E (rad). Used by the mock-ascent renderer (574) to drop
- *  a schematic insertion marker without sampling the whole ring. Pure. */
-function progOrbitPointAtE(el, E) {
-  const { a, e, i, raan, argp } = el;
-  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
-  const cO = Math.cos(raan), sO = Math.sin(raan);
-  const ci = Math.cos(i), si = Math.sin(i);
-  const cw = Math.cos(argp), sw = Math.sin(argp);
-  const R = [
-    [cO * cw - sO * sw * ci, -cO * sw - sO * cw * ci],
-    [sO * cw + cO * sw * ci, -sO * sw + cO * cw * ci],
-    [sw * si,                 cw * si               ],
-  ];
-  const x = a * (Math.cos(E) - e), y = b * Math.sin(E);
-  return [R[0][0] * x + R[0][1] * y, R[1][0] * x + R[1][1] * y, R[2][0] * x + R[2][1] * y];
-}
 
 // ─── R6.3: launch-time -> RAAN authoring (MATH.md §7k, resolves critique 49) ─
 // Pure spherical-trig helpers. All angles in/out are DEGREES unless noted.
 // Earth's sidereal rotation period, SECONDS — must match _trajBodySpinAngle's
 // Earth constant (574) so the site-longitude math stays self-consistent with
 // what's drawn on the rotating globe (that function's prime-meridian epoch
-// offset is uncalibrated/display-flavor only — see MATH.md critique 55; the
+// offset is uncalibrated/display-flavor only; the
 // RAAN this produces is therefore self-consistent within the app, not tied to
 // a real-world UTC launch-window clock).
 const PROG_EARTH_SIDEREAL_S = 86164.1;
@@ -439,13 +422,13 @@ const PROG_PROPELLANT_TYPES = {
   NTO_A50:  { boiloff_rate: 0.0000, label: 'NTO/Aerozine-50',  cryo: false     },
   NTO_UDMH: { boiloff_rate: 0.0000, label: 'NTO/UDMH',         cryo: false     },
   SOLID:    { boiloff_rate: 0.0000, label: 'Solid',             cryo: false     },
-  // 16f fix (2026-07-14): 440's SC stage default literally uses the key
+  // 16f fix: 440's SC stage default literally uses the key
   // 'MMH/NTO' (not 'NTO_A50') and always has — that lookup silently missed
   // the registry, so unedited SC stages boiled off nothing by accident, not
   // by design. Registered under the SAME key the default already emits, so
   // no call site changes: storable hypergolic, matches NTO_A50's physics.
   'MMH/NTO': { boiloff_rate: 0.0000, label: 'MMH/NTO',          cryo: false     },
-  // MISSION_MODEL_V2 §19 E2: electric propulsion propellant (xenon ion/Hall
+  // Electric propulsion propellant (xenon ion/Hall
   // thrusters). Storable at room temperature/pressure as a supercritical
   // fluid in practice — no boiloff modeled (consistent with the other
   // storables above; this program has no ionization/plume physics).
@@ -454,7 +437,7 @@ const PROG_PROPELLANT_TYPES = {
 
 // ── OrbitalState ──────────────────────────────────────────────────────────────
 /**
- * Create an OrbitalState (spec §3.8).
+ * Create an OrbitalState (spec).
  * For circular orbits apogee === perigee === alt_km.
  * surface is inferred true when alt_km === 0.
  */
@@ -590,18 +573,6 @@ function progDvTEI(llo_alt_km, leo_alt_km) {
 
 // ── Interplanetary transfers ──────────────────────────────────────────────
 
-/** Trans-Mars Injection ΔV from LEO, m/s. */
-function progDvTMI(leo_alt_km) {
-  const r_E   = PROG_HELIO_R.Earth;
-  const r_M   = PROG_HELIO_R.Mars;
-  const a     = (r_E + r_M) / 2;
-  const v_E   = Math.sqrt(PROG_MU_SUN / r_E);
-  const v_dep = Math.sqrt(PROG_MU_SUN * (2/r_E - 1/a));
-  const v_inf = v_dep - v_E;                   // positive: outer planet
-  const mu = PROG_BODIES.Earth.mu;
-  const r  = PROG_BODIES.Earth.R + leo_alt_km;
-  return Math.abs(Math.sqrt(v_inf*v_inf + 2*mu/r) - Math.sqrt(mu/r)) * 1000;
-}
 
 /** Mars Orbit Insertion ΔV, m/s. */
 function progDvMOI(mco_alt_km) {
@@ -616,18 +587,6 @@ function progDvMOI(mco_alt_km) {
   return Math.abs(Math.sqrt(v_inf*v_inf + 2*mu_M/r_mco) - Math.sqrt(mu_M/r_mco)) * 1000;
 }
 
-/** Trans-Venus Injection ΔV from LEO, m/s. */
-function progDvTVI(leo_alt_km) {
-  const r_E       = PROG_HELIO_R.Earth;
-  const r_V       = PROG_HELIO_R.Venus;
-  const a         = (r_E + r_V) / 2;
-  const v_E       = Math.sqrt(PROG_MU_SUN / r_E);
-  const v_apo_dep = Math.sqrt(PROG_MU_SUN * (2/r_E - 1/a));
-  const v_inf     = Math.abs(v_E - v_apo_dep); // Earth faster than apo (inner planet)
-  const mu = PROG_BODIES.Earth.mu;
-  const r  = PROG_BODIES.Earth.R + leo_alt_km;
-  return Math.abs(Math.sqrt(v_inf*v_inf + 2*mu/r) - Math.sqrt(mu/r)) * 1000;
-}
 
 /** Venus Orbit Insertion ΔV, m/s. */
 function progDvVOI(vco_alt_km) {
@@ -703,7 +662,7 @@ function progTransferTOF(fromNode, toNode) {
   if (ob.type === 'transit') return 0;
 
   // Same body: Hohmann half-ellipse between average altitudes (keeps the model
-  // simple for elliptical endpoints — see MATH.md critique on TOF fidelity).
+  // simple for elliptical endpoints.
   if (oa.body === ob.body && (ob.type === 'circular' || ob.type === 'elliptic' || ob.type === 'surface')
       && (oa.type === 'circular' || oa.type === 'elliptic' || oa.type === 'surface')) {
     const altA = oa.type === 'surface' ? 0 : ((oa.perigee ?? oa.apogee ?? 0) + (oa.apogee ?? oa.perigee ?? 0)) / 2;

@@ -1,36 +1,20 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// C2 — Canonical orbit object + normalize shim
-// (MISSION_MODEL_V2.md §24 C2, UNIFICATION_AUDIT item 2 — the keystone step)
-//
-// The program grew a dialect explosion for the same physical thing (an orbit):
-// the SAME quantity appears as alt_km / perigee / peri, apo_km / apogee / apo,
-// inc_deg / inclination / inc, lan_deg / lan. Mean radius and the world-frame
-// orbit-normal were each re-derived inline in 3+ places. Every hand field-rename
-// between dialects was a place a converter could drop or mistranslate a field —
-// the disease behind the week's frame bugs. C2 introduces ONE canonical shape
-// plus a normalize shim so consumers can migrate to reading through it
-// incrementally (adapters first — THIS phase; per-module field renames second).
-//
-//   CANONICAL SHAPE: { body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }
-//     - body    : body name string ('Earth' default when absent).
-//     - periKm  : periapsis ALTITUDE above the body surface, km.
-//     - apoKm   : apoapsis  ALTITUDE above the body surface, km.
-//     - incDeg  : inclination, degrees.
-//     - lanDeg  : longitude of ascending node (RAAN), degrees.
-//     - argpDeg : argument of periapsis, degrees (optional; absent for the
-//                 circular-parking dialects that never carry it).
-//     - frame   : 'eq' (equator-authored — the program's authoring default) or
-//                 'world' (ecliptic/world). ABSENT ⇒ 'eq' (C1 convention). This
-//                 module always emits an explicit 'eq'|'world'.
-//
-// This module is pure/definitions-only; load order (filename-sort concatenation)
-// is irrelevant — it is placed at 384 for logical adjacency to the 385 physics
-// core and its C1 frame boundary, which composes on top of orbitNormalize.
-// ═══════════════════════════════════════════════════════════════════════════
+// ─── CANONICAL ORBIT OBJECT ─────────────────────────────────────────────────
+// One shape for an orbit plus orbitNormalize(), which accepts every legacy
+// dialect (alt_km/perigee/peri, apo_km/apogee/apo, inc_deg/inclination/inc,
+// lan_deg/lan) and returns:
+//   { body, periKm, apoKm, incDeg, lanDeg, argpDeg?, frame }
+//     body    : body name ('Earth' when absent)
+//     periKm  : periapsis altitude above the surface, km
+//     apoKm   : apoapsis altitude above the surface, km
+//     incDeg  : inclination, degrees
+//     lanDeg  : RAAN, degrees
+//     argpDeg : argument of periapsis, degrees (optional)
+//     frame   : 'eq' (equator-authored, the default) or 'world' (ecliptic)
+// Pure definitions; 385's frame boundary composes on top of orbitNormalize.
 
 /** Normalize any of the program's orbit dialects to the ONE canonical shape
- *  documented above. Accepts every dialect in the UNIFICATION_AUDIT item-2
- *  table (verified against the live code, 2026-07-17):
+ *  documented above. Accepts every dialect in the item-2
+ *  table:
  *    - mission event  e.orbit : {body, alt_km(=peri), apo_km, inc_deg, lan_deg}
  *    - node-map/catalog builtin : {body, perigee, apogee, inclination, lan|lan_deg}
  *    - refOrbitResolve keplerian: {body, peri, apo, inc, lan, argp}
@@ -114,7 +98,7 @@ function orbitMeanRadiusKm(o, bodyR) {
 function orbitPeriodS(o, mu, bodyR) {
   const c = orbitNormalize(o);
   if (!c || !(mu > 0)) return null;
-  if (bodyR == null && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[c.body]) bodyR = PROG_BODIES[c.body].R;
+  if (bodyR == null && PROG_BODIES[c.body]) bodyR = PROG_BODIES[c.body].R;
   const a = (bodyR || 0) + (c.periKm + c.apoKm) / 2;
   if (!(a > 0)) return null;
   return 2 * Math.PI * Math.sqrt((a * a * a) / mu);
@@ -129,7 +113,6 @@ function orbitPeriodS(o, mu, bodyR) {
 function orbitWorldNormal(o) {
   const c = orbitNormalize(o);
   if (!c) return null;
-  if (typeof orbitWorldElements !== 'function' || typeof physNormalFromIncLan !== 'function') return null;
   const w = orbitWorldElements(c); // eq→world seam (identity for frame:'world')
   return physNormalFromIncLan(w.incDeg, w.lanDeg);
 }

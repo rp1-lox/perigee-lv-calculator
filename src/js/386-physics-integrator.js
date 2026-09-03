@@ -1,26 +1,18 @@
 
-// ─── PHYSICS INTEGRATOR (P1) — restricted n-body propagation ─────────────────
-//
-// Pure math, no DOM. See PHYSICS_PLAN.md (P1) and MATH.md §7d.
-//
-// Model: vessels are massless test particles; bodies ride analytic rails
-// (physBodyStateAt, 385). Integration happens in the DOMINANT body's frame
-// (the vessel's current SOI) with third-body perturbers in the standard
-// relative-motion form (direct minus indirect tidal terms) — this keeps
-// coordinates small near the body that matters and is exactly the restricted
-// three-body relative formulation when one perturber dominates.
+// ─── PHYSICS INTEGRATOR — restricted n-body propagation ──────────────────────
+// Pure math, no DOM. Vessels are massless test particles; bodies ride analytic
+// rails (physBodyStateAt, 385). Integration runs in the dominant body's frame
+// with third-body perturbers in relative-motion form (direct minus indirect).
 //
 // Determinism contract: fixed quantized step ladder, no wall clock, no
-// randomness — identical inputs give bit-identical outputs (replay/undo/golden
-// safety). All consumers go through physPropagateSegment (hard invariant:
-// no ad-hoc integrators elsewhere).
+// randomness — identical inputs give bit-identical outputs. All consumers go
+// through physPropagateSegment; no ad-hoc integrators elsewhere.
 //
 // ctx = {
 //   center:  'Earth' | 'Moon' | 'Sun' | ...   frame body (vessel's SOI)
-//   bodies:  ['Sun','Earth','Moon']           gravitating set (center included or not — filtered)
-//   overrides: {}                              planet-phase calibration map (render coherence)
+//   bodies:  ['Sun','Earth','Moon']           gravitating set (center filtered)
+//   overrides: {}                              planet-phase calibration map
 //   railFn:  (body, t, overrides) => {r,v}    body-state source; default physBodyStateAt
-//                                              (tests inject consistent synthetic rails here)
 // }
 
 // ── SOI radii ────────────────────────────────────────────────────────────────
@@ -114,13 +106,13 @@ function physAccel(r, t, ctx) {
   // ── optional J2 oblateness term (R4) — DEFAULT OFF: only applied when the
   // caller explicitly opts in with ctx.j2 === true AND the center body has a
   // J2 entry (PROG_BODY_J2, 385). No existing caller sets ctx.j2, so this is
-  // zero behavior change unless requested (gate-pinned).
+  // zero behavior change unless requested.
   // Approximation: the standard Earth-centered J2 form treats the z axis as
   // the body's equatorial-plane normal. We use the ECLIPTIC normal as a
   // stand-in (z of the integration frame) since body obliquities aren't
-  // modeled anywhere in this program — see MATH.md §7l critique.
+  // modeled anywhere in this program.
   if (ctx.j2 === true) {
-    const j2 = (typeof PROG_BODY_J2 !== 'undefined') ? PROG_BODY_J2[ctx.center] : null;
+    const j2 = PROG_BODY_J2[ctx.center];
     if (j2 != null) {
       const info = PROG_BODIES[ctx.center];
       const Rb = info.R;
@@ -142,7 +134,7 @@ function physAccel(r, t, ctx) {
 // dt = local orbital timescale / PHYS_STEPS_PER_ORBIT, quantized DOWN onto a
 // fixed power-of-4 ladder — quantization is what makes runs deterministic
 // regardless of float noise in the timescale estimate.
-// R3 perf (2026-07-10): ladder densified from powers of 4 to powers of 2 —
+// R3 perf: ladder densified from powers of 4 to powers of 2 —
 // the coarse buckets quantized "want 14.7 s" down to 4 s, running ~3.7× more
 // steps than the accuracy policy asked for (measured 612k steps per shoot
 // campaign, dominating cold recompute). Still a FIXED ladder: deterministic.
@@ -304,9 +296,9 @@ function _physMat3Vec(m, v) {
 }
 /** dA/dr (3x3, row-major) for ctx's exact force sum at (r,t) — central body
  *  uses s=r directly (physAccel's central term), each perturber uses
- *  s=rel=d-r (physAccel's perturber term); see MATH.md §7ah for the
+ *  s=rel=d-r (physAccel's perturber term); for the
  *  derivation. Does NOT include the optional J2 term (ctx.j2) — v1 limitation,
- *  documented (MATH.md §7ah critique): an STM run with ctx.j2 true will be
+ *  documented: an STM run with ctx.j2 true will be
  *  linearized against the point-mass field only. */
 function physAccelJacobian(r, t, ctx) {
   const rails = ctx.railFn || physBodyStateAt;
@@ -363,14 +355,14 @@ function physFindEventTime(f, tLo, tHi, tol) {
  *   stopAtSoi:  false,      // end the segment at the first SOI transition
  *   handoff:    true,       // patch frames + continue on SOI transitions
  *   maxSteps:   2e6,        // hard runaway backstop
- *   singleFrame:false,      // N1 (MISSION_MODEL_V2 §17): never change frame —
- *                           // integrate in ctx.center the whole segment (full
- *                           // ctx.bodies force model unchanged; no soi
- *                           // events). Diagnostic/gate use: proves the frame
- *                           // handoff is pure coordinate bookkeeping (the
- *                           // residual vs the handoff path is dt-ladder
- *                           // discretization only — measured ~81 km / 0.22 m/s
- *                           // over a 6-day lunar flyby, MATH.md §7u).
+ *   singleFrame:false, // N1: never change frame —
+ *                           / integrate in ctx.center the whole segment (full
+ *                           / ctx.bodies force model unchanged; no soi
+ *                           / events). Diagnostic/gate use: proves the frame
+ *                           / handoff is pure coordinate bookkeeping (the
+ *                           / residual vs the handoff path is dt-ladder
+ *                           / discretization only — measured ~81 km / 0.22 m/s
+ *                           / over a 6-day lunar flyby).
  * }
  *
  * Returns {
@@ -410,12 +402,12 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const maxSteps = opts.maxSteps || 2e6;
   const rails = ctx.railFn || physBodyStateAt;
   let ctxNow = { center: ctx.center, bodies: ctx.bodies || ['Sun', 'Earth', 'Moon'], overrides: ctx.overrides || {}, railFn: ctx.railFn, dtMax: ctx.dtMax, j2: ctx.j2 };
-  // E1 (MISSION_MODEL_V2 §19 / MATH.md §7y): thrust is opt-in and hoisted to a
+  // Thrust is opt-in and hoisted to a
   // single boolean — the ballistic branch below never evaluates any thrust
   // code, keeping it byte-identical to pre-E1 behavior.
   const hasThrust = !!ctx.thrust;
   const thrust = ctx.thrust;
-  // B1 (MATH.md §7ah): opts.stm opt-in. Unsupported with ctx.thrust (v1) —
+  // Opts.stm opt-in. Unsupported with ctx.thrust (v1) —
   // return stmF:null + a note rather than throwing (E1's "never throw
   // mid-integration" discipline extended to this substrate).
   const wantStm = !!opts.stm;
@@ -448,7 +440,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
   const helioOf = (st, tt, center) => center === 'Sun' ? st.r : physAdd(st.r, rails(center, tt, ctxNow.overrides).r);
 
   // R3 perf: SOI transitions can only involve bodies whose gravity the leg
-  // models (ctx.bodies) + their moons — scanning every planet's ephemeris per
+  // models (ctx.bodies) + their moons — scanning every planet's ephemeris
   // step was ~9 Kepler solves/step for nothing (frame checks got expensive
   // under the R1 real rails). physFrameOf takes the restricted list.
   const frameBodies = ctxNow.bodies;
@@ -472,7 +464,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
       next = physLeapfrogStep(state, t, dt, ctxNow, aCarry);
     }
     const tNext = t + dt;
-    // B1: propagate Phi via the SAME kick-drift-kick recursion as r,v, using
+    // Propagate Phi via the SAME kick-drift-kick recursion as r,v, using
     // F evaluated at the reference trajectory's own (r,t) and (r1,t+dt) — the
     // standard variational-equation linearization (same F for every column).
     if (stmActive) {
@@ -495,7 +487,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     prevRdotV = rdotV;
 
     // SOI transition: frame of the new heliocentric position differs.
-    // N1 (§17): this is COORDINATE bookkeeping only — ctx.bodies (the force
+    // This is COORDINATE bookkeeping only — ctx.bodies (the force
     // model) is fixed for the whole segment and never truncated at a handoff;
     // opts.singleFrame skips even the re-centering (gate/diagnostic path).
     if (opts.singleFrame) { state = next; t = tNext; raw.push(hasThrust ? { t, r: state.r.slice(), frame: ctxNow.center, m: state.m, dv: dvAccum } : { t, r: state.r.slice(), frame: ctxNow.center }); continue; }
@@ -503,7 +495,7 @@ function physPropagateSegment(state0, t0, tMax, ctx, opts) {
     const frameNext = physFrameOf(helio, tNext, ctxNow.overrides, ctxNow.railFn, frameBodies);
     if (frameNext !== ctxNow.center) {
       events.push({ type: 'soi', t: tNext, from: ctxNow.center, to: frameNext });
-      // B1: Phi's columns are expressed in the OLD frame's coordinates; a
+      // Phi's columns are expressed in the OLD frame's coordinates; a
       // frame handoff is a translation of r,v by body state (physPatchState),
       // not a linear map on the deviation coordinates, so Phi is not valid
       // past a handoff. RECOMMENDED usage is opts.singleFrame (the N2/B2

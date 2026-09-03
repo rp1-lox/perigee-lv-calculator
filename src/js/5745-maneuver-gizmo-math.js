@@ -1,21 +1,9 @@
-// ──────────────────────────────────────────────────────────────────────────────────
-// 5745-maneuver-gizmo-math.js — Pure maneuver-gizmo math (gate-tested)
-//
-// OWNS: the side-effect-free gizmo helpers the interaction layers call — local
-//   orbit-frame axes and Δv decomposition (_trajGizmoAxes, _trajGizmoDecomposeDv),
-//   pixel<->Δv mapping and handle magnitudes (_trajGizmoPxToDv, _trajGizmoHandleSideMag,
-//   _trajGizmoDragComponentValue, _trajGizmoClampCross), center-drag time mapping and
-//   orbit period (_trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet), nearest-sample /
-//   nearest-screen-MET picking (_trajGizmoNearestScreenMet, _trajGizmoNearestSampleMet,
-//   _trajRingDirSegments), pull-rate (_TRAJ_GIZMO_RATE_MS_PER_S, _trajGizmoPullRate),
-//   readout formatting and screen-direction (_trajGizmoFormatReadout, _trajGizmoScreenDir),
-//   and closest-approach / SOI-entry / preview-fidelity helpers (_trajGizmoClosestApproach,
-//   _trajGizmoSoiEntryT, _trajGizmoPreviewFidelity).
-// These are pinned by tests/math.test.js. Does NOT own any DOM/render state — that is
-//   the residual 5745-maneuver-gizmo.js and the -hover/-drag sibling modules.
-// Split out of 5745-maneuver-gizmo.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order among the 5745* def-only modules is irrelevant.
-// ────────────────────────────────────────────────────────────────────────────
+// ─── MANEUVER GIZMO — pure math (gate-tested) ──────────────────────────────
+// Side-effect-free helpers: local orbit-frame axes and Δv decomposition,
+// pixel<->Δv mapping and handle magnitudes, center-drag time mapping and orbit
+// period, nearest-sample / nearest-screen-MET picking, pull rate, readout
+// formatting, and closest-approach / SOI-entry / preview-fidelity helpers.
+// No DOM or render state.
 
 // ── (1) Pure helpers ────────────────────────────────────────────────────────
 
@@ -52,24 +40,7 @@ function _trajGizmoDecomposeDv(dvVecKms, axes) {
   };
 }
 
-/** px-drag -> signed m/s. gain = 2 m/s/px normally, 0.2 m/s/px with Shift
- *  held (fine control) — hand-tuned constants, zoom-independent by design
- *  (screen px in, m/s out; see MATH.md §7k). Pure. */
-function _trajGizmoPxToDv(pxDelta, shiftHeld) {
-  const gain = shiftHeld ? 0.2 : 2;
-  return pxDelta * gain;
-}
 
-/** R3.4 six-handle component mapping: a handle only ADDS in its own signed
- *  direction. `dv0` is the handle's OWN side magnitude at drag-start (i.e.
- *  max(component,0) for a "+" handle, max(-component,0) for a "-" handle) —
- *  never the raw signed component, so re-grabbing a handle after the
- *  opposite handle drove the value negative starts this handle's pull from
- *  zero, not from the negative value. Result is clamped >= 0 (never crosses
- *  zero into the opposite handle's territory — that's its job). Pure. */
-function _trajGizmoHandleSideMag(dv0, alongPx, shiftHeld) {
-  return Math.max(0, (dv0 || 0) + _trajGizmoPxToDv(alongPx, shiftHeld));
-}
 
 /** R3.4 node-time control: screen px dragged along the node's own prograde
  *  screen direction -> a MET delta (s). K = km-per-screen-px (at the
@@ -98,64 +69,29 @@ function _trajGizmoOrbitPeriodMet(mu, r, v) {
   return 2 * Math.PI * Math.sqrt((a * a * a) / mu);
 }
 
-/** R3.5 (2026-07-10, user flight-test item 1): nearest point (by squared
+/** Nearest point (by squared
  *  screen-px distance) in a precomputed ring-sample array `pts` (each
  *  {x,y,met}, screen px) to a cursor position (x,y). Returns that sample's
  *  met, or null for an empty array. Replaces the old incremental
  *  velocity-projection center-drag (which broke down as the node moved
  *  around the curve and the local v̂ rotated away from the drag direction —
- *  see PHYSICS_PLAN R3.5) with KSP-style "grab and slide anywhere on the
+ *  with KSP-style "grab and slide anywhere on the
  *  rails" behavior: the node always snaps to whichever ring sample is
  *  physically closest to the cursor, so dragging works uniformly in every
  *  direction and around the full loop. Pure. */
 function _trajGizmoNearestScreenMet(pts, x, y) {
-  if (!pts || !pts.length) return null;
-  let best = Infinity, bestMet = pts[0].met;
-  for (let i = 0; i < pts.length; i++) {
-    const dx = pts[i].x - x, dy = pts[i].y - y;
-    const d = dx * dx + dy * dy;
-    if (d < best) { best = d; bestMet = pts[i].met; }
-  }
-  return bestMet;
+  const p = _trajRailNearestPoint(pts, x, y);
+  return p ? p.met : null;
 }
 
-/** R3.5 (item 4): single-tick zero-cross clamp — given a component's value
- *  at the START of the current drag (`prev`) and the raw candidate value for
- *  this tick (`next`), returns 0 if `next` would cross to the opposite sign
- *  of `prev` (a drag that pulls an existing +component back through zero
- *  stops AT zero rather than silently continuing negative — KSP-style;
- *  matching or same-sign values, and any candidate once `prev` is already 0,
- *  pass through unchanged). See _trajGizmoDragComponentValue for how this
- *  composes with a handle's own-direction floor. Pure. */
-function _trajGizmoClampCross(prev, next) {
-  if ((prev > 0 && next < 0) || (prev < 0 && next > 0)) return 0;
-  return next;
-}
 
-/** R3.5 (item 4): full per-tick drag-component value, combining the
- *  zero-cross clamp above with the R3.4 "a handle only ever pushes its OWN
- *  side" floor (a "+" handle's sign is +1: the result is never allowed
- *  negative; a "-" handle's sign is -1: never allowed positive). `compStart`
- *  is the component's RAW signed value at drag-start (may belong to the
- *  opposite handle, e.g. +50 when grabbing retro) — using the raw value
- *  (rather than always starting a freshly-grabbed handle from 0) is what
- *  makes an opposite-handle grab drain the existing value down to zero and
- *  stop there for the rest of THIS drag, instead of jumping straight to a
- *  negative value; releasing and re-grabbing starts a new drag with
- *  compStart already at 0, which is when it's free to build the opposite
- *  sign. Pure. */
-function _trajGizmoDragComponentValue(compStart, sign, deltaDv) {
-  const raw = (compStart || 0) + sign * (deltaDv || 0);
-  const crossClamped = _trajGizmoClampCross(compStart || 0, raw);
-  return sign > 0 ? Math.max(0, crossClamped) : Math.min(0, crossClamped);
-}
 
-/** R3.5.1 (2026-07-10, correction #2, user flight-test on R3.5 item 4): the
+/** The
  *  zero-cross clamp above FELT wrong in practice — real KSP lets a held
  *  handle's pull set a continuous RATE of change, and pulling the opposite
  *  handle just drains the component through zero and keeps going negative
  *  (no stop-at-zero). `_trajGizmoDragComponentValue`/`_trajGizmoClampCross`
- *  are kept (still gate-pinned below) but are NO LONGER on the live drag
+ *  are kept but are NO LONGER on the live drag
  *  path — see _trajGizmoHandleTick, which now integrates this rate instead.
  *  `pullPx` is the drag displacement projected onto the handle's own
  *  outward axis, already floored to >= 0 by the caller (pushing back toward
@@ -170,14 +106,14 @@ function _trajGizmoPullRate(pullPx, shiftHeld) {
   return shiftHeld ? base * 0.1 : base;
 }
 
-/** R3.5 (item 2): split a sampled ring polyline (array of {x,y} render/screen
+/** Split a sampled ring polyline (array of {x,y} render/screen
  *  points, in DIRECTION-OF-MOTION order) into `nSeg` contiguous segments with
  *  opacity ramping from `floor` (trailing/behind) to 1.0 (leading edge) — KSP's
  *  "fade behind the direction of travel" cue. `floor` defaults to 0.25 (the
- *  unselected-ring fade); the SELECTED ring passes a higher floor (~0.45, see
+ *  unselected-ring fade); the SELECTED ring passes a higher floor (~0.45,
  *  5743's _trajRingSVG) so the trailing 3/4 of a close-zoomed selected orbit
  *  never fades to near-invisible over a bright day-side globe (user-reported
- *  2026-07-15, round 2 — the previous 0.25 floor read as "color floating over
+ *  round 2 — the previous 0.25 floor read as "color floating over
  *  black" once the casing pass was also toned down). Returns
  *  [{pts:[{x,y},...], opacity}], oldest/faintest segment first. Empty/1-point
  *  input -> []. Pure — caller supplies already-projected points and does the
@@ -203,8 +139,8 @@ function _trajRingDirSegments(pts, nSeg, floor) {
  *  returns that sample's MET, or null for an empty array. Used both for
  *  "spawn a node on a physics polyline" (targetT = current view time — a
  *  documented simplification of "nearest to the click point" that avoids an
- *  inverse-projection of the click pixel back into world/sample space; see
- *  PHYSICS_PLAN.md R3.3) and is generically reusable. Pure. */
+ *  inverse-projection of the click pixel back into world/sample space;
+ *  And is generically reusable. Pure. */
 function _trajGizmoNearestSampleMet(samples, targetT) {
   if (!samples || !samples.length) return null;
   let best = Infinity, bestT = samples[0].t;
@@ -250,7 +186,7 @@ function _trajGizmoScreenDir(dvx, dvy, fallback, epsilon) {
  *  unless the caller lets the default resolve at call time). */
 function _trajGizmoClosestApproach(samples, targetBody, railFn) {
   if (!samples || !samples.length || !targetBody) return null;
-  const rails = railFn || (typeof physBodyStateAt === 'function' ? physBodyStateAt : null);
+  const rails = railFn || physBodyStateAt;
   if (!rails) return null;
   let best = null;
   for (let i = 0; i < samples.length; i++) {
@@ -280,14 +216,3 @@ function _trajGizmoSoiEntryT(samples, targetBody) {
   return null;
 }
 
-/** R3.4 fidelity-ladder decision, pure: 'cheap' while the pointer is still
- *  actively moving (< debounceMs since the last move), 'full' once the node
- *  has been left alone for >= debounceMs (default 2000 — a hand-tuned
- *  constant, see MATH.md §7k). Any new movement should re-call this with a
- *  fresh `lastMoveMs` (i.e. resets the ladder back to 'cheap'), which the
- *  caller does by re-stamping lastMoveMs on every move tick — this function
- *  itself is stateless/pure, just the (lastMoveMs, nowMs) -> mode mapping. */
-function _trajGizmoPreviewFidelity(lastMoveMs, nowMs, debounceMs) {
-  const dt = (nowMs || 0) - (lastMoveMs || 0);
-  return dt >= (debounceMs != null ? debounceMs : 2000) ? 'full' : 'cheap';
-}

@@ -55,7 +55,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..');
 const FILES = [
   'src/js/010-constants.js', 'src/js/140-physics.js',
-  'src/js/360-program-module-phase-1-delta-v-engine.js', 'src/js/385-physics-core.js',
+  'src/js/360-delta-v-engine.js', 'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js', 'src/js/424-blt-reference.js', 'src/js/425-reference-orbits.js',
   'src/js/565-physics-targeting.js', 'src/js/565-physics-blt.js',
 ];

@@ -1,13 +1,8 @@
 
-// ─── PROGRAM MODULE — Phase 9: Spacecraft Definition Editor ─────────────────
-//
+// ─── SPACECRAFT DEFINITION ──────────────────────────────────────────────────
 // SpacecraftDefinition: a named, ordered stage stack stored in the program.
-// LAUNCH events may reference a spacecraftId; the spacecraft's stages are
-// appended on top of (i.e. above) the launch vehicle upper stage.
-//
-// stage stack convention (same as Phase 2/3): stages[0]=bottom, stages[last]=top.
-// A spacecraft typically sits above the LV upper stage, so spacecraft stages are
-// appended AFTER the LV stages in the array.
+// LAUNCH events may reference a spacecraftId; its stages are appended above
+// the launch vehicle's upper stage (stages[0]=bottom, stages[last]=top).
 
 // ── Structs ───────────────────────────────────────────────────────────────────
 
@@ -23,13 +18,13 @@ function progMakeSpacecraftStageDef(name) {
     isp:                 320,        // s, vacuum Isp
     propKg:              0,          // propellant capacity kg
     propType:            'MMH/NTO',  // propellant type key
-    // Spec §3.4 extended fields
+    // Spec extended fields
     crewCapacity:        0,          // number of crew seats
     dockingPorts:        0,          // number of docking ports
     tunnelCapable:       false,      // pressurised tunnel to adjacent stage
     isLandingTruss:      false,      // structural-only; auto-candidate for surface separation (spec §3.4)
     descentPropFraction: 0,          // fraction of propKg reserved for powered descent (0–1)
-    // MISSION_MODEL_V2 §19 E2: electric-propulsion engine params. Only meaningful
+    // Electric-propulsion engine params. Only meaningful
     // (and only shown in the editor) when propType === 'XENON_EP'; a LOWTHRUST
     // event's readiness check requires both to be present and > 0.
     ep_thrust_N:         undefined, // thrust, newtons
@@ -60,7 +55,7 @@ function progSpacecraftToLiveStages(scd) {
     ls.tunnelCapable       = def.tunnelCapable        ?? false;
     ls.isLandingTruss      = def.isLandingTruss       ?? false;
     ls.descentPropFraction = def.descentPropFraction  ?? 0;
-    // MISSION_MODEL_V2 §19 E2: carried onto the live stage so a LOWTHRUST
+    // Carried onto the live stage so a LOWTHRUST
     // event's readiness check / est. math can read them directly off the
     // active stage, same as any other live-stage field.
     ls.propType             = def.propType;
@@ -72,7 +67,7 @@ function progSpacecraftToLiveStages(scd) {
 
 // ── Spacecraft editor UI ──────────────────────────────────────────────────────
 
-let _progScSelId = null;  // currently selected spacecraft ID in editor modal
+  // currently selected spacecraft ID in editor modal
 
 
 

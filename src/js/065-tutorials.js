@@ -129,7 +129,7 @@ let _tutSel = 'welcome';
 function openTutorials(topicId) {
   _tutSel = topicId || _tutSel || (TUTORIALS[0] && TUTORIALS[0].id);
   renderTutorials();
-  if (typeof openModal === 'function') openModal('modal-tutorials');
+  openModal('modal-tutorials');
 }
 function tutSelect(id) { _tutSel = id; renderTutorials(); }
 function renderTutorials() {

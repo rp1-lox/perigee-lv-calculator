@@ -1,24 +1,12 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-replay.js — Mission recompute/replay engine
-//
-// OWNS: missionRecompute(m) — the authoritative "tear down runtime vehicles and
-//   REPLAY the whole m.log" pass that is the mission's source of truth — plus its
-//   direct support helpers: display-name resolution (_missionResolveDisplayNames),
-//   state snapshotting (_missionCaptureSnapshot), effective-log/event-group
-//   expansion (_missionEffectiveLog, _missionGroupRange), owner/origin-key
-//   rescoping for repeated groups (_missionRescopeOwner, _missionRescopeOriginKey),
-//   and transfer/separate index resolution (_missionResolveXferStages,
-//   _missionResolveSepIndex).
-// CONTRACT (unchanged): every mutation goes m.log -> missionRecompute(m) ->
-//   missionRenderDetail(); the recompute tail hooks autosaveScheduleSave() and
-//   missionUndoCapture() — preserved verbatim here.
-// Does NOT own: event execution (still in manager remainder), event-card rendering
-//   (570-mission-cards.js), band/node-map views (570-mission-band.js/-nodemap.js).
-// Split out of 570-mission-manager.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── MISSION REPLAY ENGINE ──────────────────────────────────────────────────
+// missionRecompute(m) tears down runtime vehicles and replays the whole m.log;
+// it is the mission's source of truth. Every mutation goes
+// m.log -> missionRecompute(m) -> missionRenderDetail(); the recompute tail
+// hooks autosaveScheduleSave() and missionUndoCapture(). Support helpers:
+// display-name resolution, snapshots, effective-log / event-group expansion,
+// owner rescoping for repeated groups, transfer/separate index resolution.
 
-// C2b item-3: translate a vehicle orbitState (380 dialect: perigee/apogee/
+// Translate a vehicle orbitState (380 dialect: perigee/apogee/
 // inclination/lan + surface/propagated/r/v/frame/body) into the CANONICAL
 // orbitAtBurn boundary shape (periKm/apoKm/incDeg/lanDeg), preserving every
 // non-element field via spread. The element keys are removed so the persisted
@@ -77,7 +65,7 @@ function _missionCaptureSnapshot(live, baseOf) {
       vehicleId: v.vehicleId,
       originKey: v._originKey || null,
       name, status: v.status || 'ORBIT',
-      // §20 OBLIQUITY (MATH.md §7al): carry lan_deg into the snapshot ONLY when
+      // OBLIQUITY: carry lan_deg into the snapshot ONLY when
       // it was genuinely authored (plane-match / plan-for-destination / launch-
       // time-derived RAAN — os.lanAuthored). Otherwise leave it null so the
       // trajectory ring extractor (5741) keeps its flight-derived (tier-2) /
@@ -128,7 +116,7 @@ function _missionEffectiveLog(m) {
       }
     } else { e._authIdx = i; e._rep = 0; e._clone = false; out.push(e); i++; }
   }
-  // Unify-create/edit (2026-07-16): a PENDING draft (mid-creation, fields not
+  // Unify-create/edit: a PENDING draft (mid-creation, fields not
   // yet applied) sits at the end of m.log so it renders through the normal
   // card machinery, but it must never be replayed — it has no effect on the
   // mission until Commit clears the flag. Filtered here (the single choke
@@ -182,7 +170,7 @@ function _missionResolveXferStages(m, e, active, si, di) {
   const rdi = dk != null ? nthOwner(dk, auth._dstPos || 0) : -1;
   return { si: rsi >= 0 ? rsi : si, di: rdi >= 0 ? rdi : di };
 }
-// Resolve a SEPARATE's split index by owner (the stage at the split), re-scoped per
+// Resolve a SEPARATE's split index by owner (the stage at the split), re-scoped
 // repetition so each loop jettisons that loop's vehicle, not the original.
 function _missionResolveSepIndex(m, e, active, sepIndex) {
   const auth = m.log[e._authIdx] || e;
@@ -198,7 +186,7 @@ function missionRecompute(m) {
   if (!m || typeof PROG_ACTIVE_PROGRAM === 'undefined') return;
   // P2 physics bridge: rotate the trajectory side-table (current -> previous)
   // so this replay can consult the PREVIOUS rebuild's physics TOFs (565).
-  if (typeof physMissionRecomputeBegin === 'function') physMissionRecomputeBegin(m);
+  physMissionRecomputeBegin(m);
   // tear down this mission's runtime vehicles
   (m.vehicleIds || []).forEach(vid => { if (PROG_ACTIVE_PROGRAM.vehicles[vid]) delete PROG_ACTIVE_PROGRAM.vehicles[vid]; });
   m.vehicleIds = []; m.vehicleId = null;
@@ -232,7 +220,7 @@ function missionRecompute(m) {
   // Apply progApplyStageBoiloff (370) to every stage of every LIVE (not EXPENDED/
   // RECOVERED) vehicle for a Δt in DAYS. Cryo tanks lose mass per PROG_PROPELLANT_TYPES'
   // boiloff_rate; non-cryo/unknown propTypes (incl. LV stages, whose progVehicleDefToLiveStages
-  // always assigns a valid LOX_* type — see MATH.md §5) lose nothing. Returns total kg lost
+  // always assigns a valid LOX_* type. Returns total kg lost
   // across the whole mission (summed onto the caller's event for the "boiloff −N kg" badge).
   // Per-vehicle cumulative boiloff, keyed by stable origin key (survives dock/separate
   // identity changes well enough for a mission-level readiness summary — see check #boiloff-losses,
@@ -330,17 +318,17 @@ function missionRecompute(m) {
     const e = expanded[evIdx];
     const kid = e._authIdx + (e._rep ? ':' + e._rep : '');   // stable per authored-event + repetition
     const authEntry = (e._authIdx != null && m.log[e._authIdx]) ? m.log[e._authIdx] : null;
-    // T2 (§13): if this event is bound to a reference orbit, overwrite its inline orbit
+    // If this event is bound to a reference orbit, overwrite its inline orbit
     // fields with the ref's CURRENT resolution before replay consumes them — a catalog
     // edit propagates to every binder on next recompute (cached-resolution semantics).
     // Missing/deleted/stub ref: keep the cached inline values, stamp a transient note,
     // never throw.
     if ((e.type === 'LAUNCH' || e.type === 'DEPLOY') && e.orbitRefId) {
-      const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(e.orbitRefId) : null;
+      const res = refOrbitResolve(e.orbitRefId);
       if (res && res.kind === 'propagated' && res.seedState) {
         // Phase 4 U3: a propagated ref (nrho-nominal) has no peri/apo/inc to
         // write into the inline Kepler fields — a LAUNCH can never target one
-        // (excluded from the launch picker, §14 U3), so this only fires for
+        // (excluded from the launch picker), so this only fires for
         // DEPLOY. Stamp a propagated marker instead of Kepler fields.
         if (e.type === 'DEPLOY') {
           const o = e.orbit || (e.orbit = {});
@@ -377,9 +365,9 @@ function missionRecompute(m) {
       m._initialPropByVehicle[r.fv._originKey] = r.fv._initialPropCap;
       durationAuto = (r.stagingResult && r.stagingResult.burnTime) || 0;
       if (!sawLaunch) { metClock = 0; sawLaunch = true; }   // T-0 = first LAUNCH
-      // T2: ascent burn time is minutes — boiloff over that span is negligible, so
+      // Ascent burn time is minutes — boiloff over that span is negligible, so
       // ordering vs. the ascent burn itself doesn't matter; applied after for simplicity
-      // (see MATH.md §5 T2 note). Only affects OTHER live vehicles (this one has no
+      // Only affects OTHER live vehicles (this one has no
       // propellant history yet) unless a depot etc. is already on-orbit.
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
     } else if (e.type === 'DEPLOY') {
@@ -400,12 +388,12 @@ function missionRecompute(m) {
       const res = _missionApplyBurn(active, e.burnType, e.burnParam, e.stageId);
       e.dvTarget = res.dvTarget; e.dv_actual = res.dv_actual; e.prop_consumed = res.prop_consumed;
       e.burnLabel = res.burnLabel; e.result = res.result;
-      // 5b R3 (MATH.md §7af): a phasing burn (missionAddPhasingBurns, 570-
+      // A phasing burn (missionAddPhasingBurns, 570-
       // mission-events.js) stamps _phaseOffsetDelta on its CLOSING burn — the
       // construction's guaranteed effect (after N revs on the retimed
       // period, the vehicle's along-track clock has shifted by exactly the
       // residual it was built to cancel). CUSTOM burns don't otherwise touch
-      // orbitState/r (no re-propagation happens here, honestly — see §7af),
+      // orbitState/r (no re-propagation happens here, honestly),
       // so this is the one place that effect is recorded: a stamped clock
       // correction 567's phase-truth machinery reads (_phaseVehiclePoint),
       // not a hidden fudge on the measured phase itself.
@@ -422,14 +410,14 @@ function missionRecompute(m) {
         else if (e.burnType === 'TLI') durationAuto = progHohmannTOF('Earth', altA, PROG_MOON_ORBIT_R - PROG_BODIES.Earth.R);
         else if (e.burnType === 'LOI') durationAuto = 0;   // arrival burn at end of an already-counted TLI coast
       }
-      // T2: this BURN's own coast is the leg it INITIATES (HOHMANN/TLI depart now, arrive
+      // This BURN's own coast is the leg it INITIATES (HOHMANN/TLI depart now, arrive
       // later) — the burn itself is impulsive, so boiloff for the coast is charged AFTER
       // the burn's propellant is spent (ordering is immaterial for the burn's own tank
       // here since the burn already completed; it matters for OTHER live vehicles idling
       // through the same span, e.g. a docked depot).
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
     } else if (e.type === 'LOWTHRUST') {
-      // MISSION_MODEL_V2 §19 E2 — see MATH.md §7z for the full est./computed
+      //
       // lane writeup. This branch ALWAYS runs the cheap est. (Edelbaum/
       // rocket-eq) lane synchronously; the expensive integrated lane is
       // computed out-of-band by the "Compute trajectory" button (572/UI) and
@@ -461,10 +449,10 @@ function missionRecompute(m) {
       e.propUsed_est = est.propUsed_kg;
       const body = active.orbitState.body;
       const altKm = active.orbitState.perigee ?? active.orbitState.apogee ?? 0;
-      const vCirc = (typeof progVcirc === 'function') ? progVcirc(body, altKm) : 0;
-      const bodyDef = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+      const vCirc = progVcirc(body, altKm);
+      const bodyDef = PROG_BODIES[body];
       // metStart_s = metClock (this event's start MET, before this event's own
-      // duration advances the clock) — E4 (MATH.md §7ab, closes critique 86):
+      // duration advances the clock) — E4:
       // folded into the signature so an upstream timeline shift (an earlier
       // event's duration edit sliding this leg's metStart) flips STALE even
       // when the leg's own r/v/thrust/duration are byte-identical.
@@ -500,7 +488,7 @@ function missionRecompute(m) {
       // sync), so every read below is unchanged from the legacy MANEUVER path.
       active = resolveActive(e);
       if (active) e.vehicleId = active.vehicleId;
-      // §13 T3: labels are display-only mirrors — refresh them from the current
+      // labels are display-only mirrors — refresh them from the current
       // terminology helper each replay so cached logs pick up the dwell/transit
       // phrasing ("TLI (trans-lunar)" not "TLC (trans-lunar)") without migration.
       if (e.fromNode) e.fromLabel = _missionManeuverNodeLabel(e.fromNode, 'from');
@@ -516,8 +504,8 @@ function missionRecompute(m) {
       // check (572 #2) catches the resulting shortfall for free.
       // Duration precedence (P2): durationOverride (below, T1 block) > physics
       // leg TOF (previous rebuild's side-table, stale-by-one — see 565 +
-      // MATH.md §7e) > launchWindow > Hohmann (both inside progTransferTOF).
-      const _physTof = (typeof physLegTofFor === 'function') ? physLegTofFor(m, e, metClock) : null;
+      // > launchWindow > Hohmann (both inside progTransferTOF).
+      const _physTof = physLegTofFor(m, e, metClock);
       durationAuto = (_physTof != null) ? _physTof
         : progTransferTOF(_missionNmNodeById(e.fromNode), _missionNmNodeById(e.toNode));
       e.boiloffKg = applyMissionBoiloff((durationAuto || 0) / 86400);
@@ -601,7 +589,7 @@ function missionRecompute(m) {
       if (active) { e.vehicleId = active.vehicleId; e.activeName = _missionVehicleDisplayName(active); }
       const tgt = findVehE(e, e.targetKey, e.targetName);
       if (tgt) { e.targetName = _missionVehicleDisplayName(tgt); e.targetVehId = tgt.vehicleId; }
-      // 5b R1 (MATH.md §7ad): phase truth AT this event's MET, measured BEFORE
+      // Phase truth AT this event's MET, measured BEFORE
       // the co-orbital merge below overwrites active's orbitState with tgt's —
       // this is the honest "how far apart were they really" reading; the merge
       // itself stays R1-unchanged (still co-orbital success, no new solving).
@@ -651,7 +639,7 @@ function missionRecompute(m) {
         if (active === tgt) active = live.find(v => v !== tgt && v.status !== 'EXPENDED' && v.status !== 'RECOVERED') || tgt; }
     }
     else if (e.type === 'COAST') {
-      // T2: the ONLY event type where the user authors time directly ("loiter 30 days in
+      // The ONLY event type where the user authors time directly ("loiter 30 days in
       // NRHO"). durationOverride is NOT needed here — e.days IS the authored duration.
       durationAuto = Math.max(0, e.days || 0) * 86400;
       e.result = 'SUCCESS';
@@ -662,14 +650,14 @@ function missionRecompute(m) {
       // dock UI until P4). Burns propellant through the SAME rocket-eq path as
       // MANEUVER burn steps with |Δv| = √(pro²+rad²+nrm²); advances NO orbit
       // state — the node-map orbit stays where it is (the physics-side
-      // trajectory divergence is P3/P4's problem; MATH.md §7e critique).
+      // trajectory divergence is P3/P4's problem; critique).
       active = resolveActive(e);
       if (active) {
         e.vehicleId = active.vehicleId;
-        // P4: cache the vehicle's node-map orbit at the burn so the physics
+        // Cache the vehicle's node-map orbit at the burn so the physics
         // rebuild (565) can reconstruct + propagate the post-burn trajectory
         // (same replay-derived-cache pattern as e.orbitAfter / e.stagingResult).
-        // C2b item-3 (2026-07-17): orbitAtBurn is a CANONICAL boundary field
+        // OrbitAtBurn is a CANONICAL boundary field
         // (periKm/apoKm/incDeg/lanDeg). active.orbitState is the 380 dialect
         // (perigee/apogee/inclination/lan) — translate the element field names
         // to canonical here (the ONE writer), spreading the rest (body/surface/
@@ -744,27 +732,25 @@ function missionRecompute(m) {
   // side-table (results NEVER stored on m — autosave/undo leak guard). Runs
   // BEFORE autosave/undo/checks; may trigger ONE extra recompute pass when a
   // physics TOF disagrees >1% with the duration this replay used (see 565).
-  if (typeof PHYS_ENABLED !== 'undefined' && PHYS_ENABLED && typeof physRebuildMissionTrajectories === 'function') {
+  if (PHYS_ENABLED) {
     try { physRebuildMissionTrajectories(m); } catch (err) { console.warn('physics trajectory rebuild failed:', err); }
   }
-  // MISSION_MODEL_V2 Phase 1 (shadow state, 566): builds a VehicleState timeline
+  // Builds a VehicleState timeline
   // alongside V1, promoting the legs just rebuilt above. Transient side-table
-  // only (never on m — §8); read only by v2Reconcile/reconciliation tooling.
-  // Zero user-visible effect — see MISSION_MODEL_V2.md §10.
-  if (typeof v2BuildShadow === 'function') {
-    try { v2BuildShadow(m); } catch (err) { console.warn('v2 shadow build failed:', err); }
-  }
-  // MISSION_MODEL_V2 Phase 2 S4 (§11.2 step 2, "stamp-from-V2"): overwrite the
+  // only (never on m); read only by v2Reconcile/reconciliation tooling.
+  // Zero user-visible effect.
+  try { v2BuildShadow(m); } catch (err) { console.warn('v2 shadow build failed:', err); }
+  // Phase 2 S4 ( step 2, "stamp-from-V2"): overwrite the
   // consumer-read fields (e.dv_actual, e.prop_consumed) on every burn-family
   // expanded entry FROM the just-built V2 timeline, so band/checks/report/
-  // node-map/state-panel — none of which change in this phase (§11.0's
+  // node-map/state-panel — none of which change in this phase ('s
   // blast-radius trick) — start reading physics-derived delivered ΔV instead
   // of V1's bookkeeping. e.dvRequired/e.dvTarget for solved edges are left
-  // untouched (still progNmComputeEdgeDv, unchanged authority, §2/§11.2.2). A
+  // untouched (still progNmComputeEdgeDv, unchanged authority). A
   // burn with no promotable V2 dv (dv_ms: null — an unconverged/un-anchored
-  // corridor edge, §10.3 "never silently skip") keeps its V1-computed value
+  // corridor edge, "never silently skip") keeps its V1-computed value
   // rather than being blanked.
-  if (typeof v2DeriveBudget === 'function' && m.missionId) {
+  if (m.missionId) {
     const vb = v2DeriveBudget(m.missionId);
     const byAuth = {};
     vb.perBurn.forEach(function (b) { if (!(b.authIdx in byAuth)) byAuth[b.authIdx] = b; });
@@ -781,7 +767,7 @@ function missionRecompute(m) {
         // OWN prop-limited delivered ΔV, before the stamp above overwrote
         // dv_actual with the simulated value — re-derive it against the
         // stamped number so readiness checks (572) see a consistent
-        // required-vs-delivered pair instead of a stale verdict (F1, §11.1:
+        // required-vs-delivered pair instead of a stale verdict (F1,:
         // "reason about it, don't suppress it" — the arrival-burn flip can
         // legitimately turn a V1 shortfall into an over-delivery or vice
         // versa; this keeps the SUCCESS/MARGINAL badge honest either way).
@@ -796,5 +782,5 @@ function missionRecompute(m) {
   // Flight Readiness checks are derived state — computed LAST, after autosave has
   // already scheduled its save and undo has already captured its snapshot, so
   // neither persistence path can pick them up (see 572-mission-checks.js header).
-  if (typeof missionRunChecks === 'function') missionRunChecks(m);
+  missionRunChecks(m);
 }

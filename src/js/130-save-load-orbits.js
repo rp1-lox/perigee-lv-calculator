@@ -41,8 +41,8 @@ function doSaveOrbit(){
 
 function collectCurrentOrbit(){
   if(destMode==='escape')return{mode:'escape',c3:gv('c3'),decl:gv('decl'),perigee:gv('escape-perigee')};
-  // R3.2: lan_deg/argp_deg are OPTIONAL — blank fields stay absent from the
-  // saved spec (unauthored), never coerced to 0 (see MATH.md §7i tier 1).
+  // Lan_deg/argp_deg are OPTIONAL — blank fields stay absent from the
+  // saved spec (unauthored), never coerced to 0.
   const o={mode:'orbit',apogee:gv('apogee'),perigee:gv('perigee'),inc:gv('inclination'),parking:gv('parking-alt')};
   const lan=gvOpt('orbit-lan'), argp=gvOpt('orbit-argp');
   if(lan!=null)o.lan_deg=lan;

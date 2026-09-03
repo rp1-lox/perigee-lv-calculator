@@ -4,7 +4,7 @@
 // so it does NOT use the app's CSS custom properties (exempt by design: it's
 // meant to be printed / saved / opened outside the tool).
 
-// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+// Thin alias onto the canonical escaper.
 function _mrEsc(s) { return escHtml(s); }
 
 function _mrNum(v, digits) {
@@ -23,7 +23,7 @@ function _mrEventRow(e, i) {
   // R6.2' Phase B: report label stays "MANEUVER" for a unified solved MNODE
   // (mode:'solved') — the printed report is a plain-English document, not a
   // schema dump, so it shows the same type word a legacy MANEUVER always did.
-  const isSolvedMv = (typeof _evIsSolvedManeuver === 'function') && _evIsSolvedManeuver(e);
+  const isSolvedMv = _evIsSolvedManeuver(e);
   const type = _mrEsc(isSolvedMv ? 'MANEUVER' : (e.type || ''));
   const desc = _mrEsc(_mrEventDesc(e));
   let dv = '', prop = '', veh = '';
@@ -48,7 +48,7 @@ function _mrEventRow(e, i) {
     veh = _mrEsc(e.vehicleName || e.activeName || e.targetName || '');
   }
   const rep = e.groupId ? ' <span class="mr-tag">grp</span>' : '';
-  const met = (typeof _metFmt === 'function' && e.metStart != null) ? _metFmt(e.metStart) : '—';
+  const met = (e.metStart != null) ? _metFmt(e.metStart) : '—';
   return `<tr>
     <td class="mr-num">${i + 1}</td>
     <td>${type}${rep}</td>
@@ -75,26 +75,26 @@ function missionReportHTML(m) {
   if (!m) return '<!DOCTYPE html><html><body>No mission.</body></html>';
 
   const log = (m._expanded && m._expanded.length) ? m._expanded : (m.log || []);
-  const entry = (typeof _fleetGet === 'function' && m.fleetEntryId) ? _fleetGet(m.fleetEntryId) : null;
+  const entry = (m.fleetEntryId) ? _fleetGet(m.fleetEntryId) : null;
   const lvName = entry ? entry.name : (m.fleetEntryId ? 'Unknown vehicle' : '—');
 
   const payloadNames = (m.payloadScIds || []).map(scId => {
-    const sc = (typeof _scEdSC !== 'undefined') ? _scEdSC.find(s => s.spacecraftId === scId) : null;
+    const sc = _scEdSC.find(s => s.spacecraftId === scId);
     return sc ? sc.name : null;
   }).filter(Boolean);
   const payloadMass = (m.payloadScIds || []).reduce((s, scId) =>
-    s + (typeof _fleetScMassById === 'function' ? _fleetScMassById(scId) : 0), 0);
+    s + _fleetScMassById(scId), 0);
 
   const firstLaunch = log.find(e => e.type === 'LAUNCH' && e.stagingResult);
   const sr = firstLaunch ? firstLaunch.stagingResult : null;
   // C3: read the actual authored LAUNCH entry's orbit; m.launchOrbit only as a
   // pre-authoring fallback (no LAUNCH entry logged yet).
-  const o = (firstLaunch && firstLaunch.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
+  const o = (firstLaunch && firstLaunch.orbit) || _missionLaunchOrbitDraft(m.launchOrbit) || {};
 
-  const budget = (typeof missionBudget === 'function') ? missionBudget(m) : null;
+  const budget = missionBudget(m);
 
   const genDate = new Date().toLocaleString();
-  const ver = (typeof APP_VERSION !== 'undefined') ? APP_VERSION : '';
+  const ver = APP_VERSION;
 
   const eventRows = log.map((e, i) => _mrEventRow(e, i)).join('') ||
     `<tr><td colspan="7" class="mr-empty">No events.</td></tr>`;
@@ -167,7 +167,7 @@ function missionReportHTML(m) {
     <div class="mr-header-right">
       <div class="mr-tool">Rocket Playground${ver ? ' v' + _mrEsc(ver) : ''}</div>
       <div>Generated ${_mrEsc(genDate)}</div>
-      <div>Physics fidelity: ${_mrEsc((typeof physFidelity === 'function') ? physFidelity() : 'contextual')}</div>
+      <div>Physics fidelity: ${_mrEsc(physFidelity())}</div>
     </div>
   </div>
 
@@ -224,7 +224,7 @@ function missionExportReport(id) {
   const m = _missionGet(id);
   if (!m) return;
   if (!m._expanded || !m._expanded.length) {
-    if (typeof missionRecompute === 'function') missionRecompute(m);
+    missionRecompute(m);
   }
   const html = missionReportHTML(m);
   let w = null;

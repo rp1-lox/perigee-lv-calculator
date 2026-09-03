@@ -1,16 +1,9 @@
 
-// ─── PHYSICS CORE (P0) — 3D two-body machinery ───────────────────────────────
-//
-// Pure math, no DOM, no globals mutated. See PHYSICS_PLAN.md (P0) and
-// MATH.md §"Numerical propagation foundations".
-//
-// Everything here is 3D-NATIVE: vectors are plain [x, y, z] arrays. Since R3
-// the MISSION layer is 3D too (inclined parking orbits, out-of-plane burns).
-// Units: km, km/s, seconds, radians. mu in km³/s².
-//
-// The Stumpff functions live here (moved verbatim from 410, which loads later
-// and keeps using them by name) because both the Lambert solver (410) and the
-// universal-variable propagator below are built on them.
+// ─── PHYSICS CORE — 3D two-body machinery ────────────────────────────────────
+// Pure math, no DOM, no globals mutated. Vectors are plain [x, y, z] arrays.
+// Units: km, km/s, seconds, radians; mu in km³/s². The Stumpff functions live
+// here because both the Lambert solver (410) and the universal-variable
+// propagator use them.
 
 // ── vec3 primitives ──────────────────────────────────────────────────────────
 function physV3(x, y, z) { return [x || 0, y || 0, z || 0]; }
@@ -137,8 +130,8 @@ function physStateToElements(r, v, mu) {
 // (360). Only (inc, lan/raan) are rotated — argp/nu are measured from the
 // orbit's own ascending node, a direction intrinsic to the orbit plane, so
 // they are frame-invariant under a pure re-basing of (i, raan) and are left
-// untouched by design (see MATH.md §7al). See MISSION_MODEL_V2.md §20 / the
-// audited call-site list in MATH.md §7al for where this must be applied.
+// untouched by design.
+// audited call-site list in for where this must be applied.
 
 /** Orthonormal basis of `body`'s EQUATOR frame, expressed in WORLD (ecliptic)
  *  coordinates: zEq = the body's pole; xEq = the ascending node of the
@@ -147,7 +140,7 @@ function physStateToElements(r, v, mu) {
  *  makes the whole seam an identity transform for such bodies); yEq
  *  completes the right-handed set. */
 function physEqBasis(body) {
-  const zEq = (typeof physBodyPoleAt === 'function') ? physBodyPoleAt(body) : [0, 0, 1];
+  const zEq = physBodyPoleAt(body);
   let xEq = physCross([0, 0, 1], zEq);
   const xMag = physMag(xEq);
   xEq = xMag > 1e-9 ? physScale(xEq, 1 / xMag) : [1, 0, 0];
@@ -183,7 +176,7 @@ function progEqToWorldElements(body, inc_deg, lan_deg) {
 }
 /** Inverse of progEqToWorldElements: WORLD-frame (inc_deg, lan_deg) ->
  *  `body`'s EQUATOR frame. Round-trips progEqToWorldElements exactly (pure
- *  change of orthonormal basis) — pinned in the gate (§20). */
+ *  change of orthonormal basis) — pinned in the gate. */
 function progWorldToEqElements(body, inc_deg, lan_deg) {
   const b = physEqBasis(body);
   const hWorld = physNormalFromIncLan(inc_deg, lan_deg);
@@ -201,9 +194,9 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
 // site that used to inline "progEqToWorldElements + a `typeof` guard" now
 // routes through orbitWorldElements/orbitWorldState instead — ONE boundary,
 // so the seam can never again be silently skipped at a new call site (the
-// bug class behind five shipped fixes in one week, §24 C1). Direct calls to
+// bug class behind five shipped fixes in one week). Direct calls to
 // progEqToWorldElements outside this module are a gate violation (see the
-// grep-assert test in tests/math.test.js) — 415-launch-planner.js's
+// grep-assert test in tests/run.js) — 415-launch-planner.js's
 // progWorldToEqElements use is the one intentional exception: it is the
 // INVERSE direction (a computed world-frame plane reported back out in the
 // user-facing equator-authoring convention), not an authoring boundary, so
@@ -219,19 +212,18 @@ function progWorldToEqElements(body, inc_deg, lan_deg) {
  *  'eq' — today's default authoring convention). */
 function orbitWorldElements(o) {
   o = o || {};
-  // C2: the canonical shape is the boundary's native input — normalize first
+  // The canonical shape is the boundary's native input — normalize first
   // (one dialect reader, 384) so post-C2 consumers can pass anything. The
   // inline multi-dialect read below stays as the fallback for the one case
   // orbitNormalize returns null on (a non-Keplerian propagated/surface orbit
   // — which has no inc/lan element form anyway, so the fallback yields the
   // same 0/0 it always did), and for headless load orders where 384 is absent.
-  const _c = (typeof orbitNormalize === 'function') ? orbitNormalize(o) : null;
+  const _c = orbitNormalize(o);
   const src = _c || o;
   const incDeg = (src.incDeg != null ? src.incDeg : (src.inc_deg != null ? src.inc_deg : (src.inclination != null ? src.inclination : (src.inc != null ? src.inc : 0)))) || 0;
   const lanDeg = (src.lanDeg != null ? src.lanDeg : (src.lan_deg != null ? src.lan_deg : (src.lan != null ? src.lan : 0))) || 0;
   if (src.frame === 'world') return { incDeg, lanDeg };
   const body = src.body || 'Earth';
-  if (typeof progEqToWorldElements !== 'function') return { incDeg, lanDeg };
   const w = progEqToWorldElements(body, incDeg, lanDeg);
   return w ? { incDeg: w.inc_deg, lanDeg: w.lan_deg } : { incDeg, lanDeg };
 }
@@ -245,13 +237,13 @@ function orbitWorldElements(o) {
  *  signature break). Returns whatever physAimBurnState returns, or null if
  *  physAimBurnState isn't loaded or `o`/`o.body` is missing. */
 function orbitWorldState(o, thetaRad, metOrOpts) {
-  if (!o || !o.body || typeof physAimBurnState !== 'function') return null;
-  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[o.body] : null;
+  if (!o || !o.body) return null;
+  const bodyMeta = PROG_BODIES[o.body];
   const w = orbitWorldElements(o);
-  // C2: mean radius via the canonical helper (handles every dialect incl. the
+  // Mean radius via the canonical helper (handles every dialect incl. the
   // canonical periKm/apoKm shape); fall back to the inline perigee/apogee read
   // if 384 isn't loaded (headless) or the orbit is non-Keplerian.
-  let rMean = (typeof orbitMeanRadiusKm === 'function') ? orbitMeanRadiusKm(o, bodyMeta ? bodyMeta.R : 0) : null;
+  let rMean = orbitMeanRadiusKm(o, bodyMeta ? bodyMeta.R : 0);
   if (rMean == null) {
     const peri = o.perigee != null ? o.perigee : o.apogee, apo = o.apogee != null ? o.apogee : o.perigee;
     rMean = (bodyMeta ? bodyMeta.R : 0) + ((peri || 0) + (apo || 0)) / 2;
@@ -356,8 +348,8 @@ function physEscapeGeometry(rpKm, c3, mu, outboundSign) {
 /** Dimensionless J2 (oblateness) coefficient per body. Bodies absent from this
  *  map have no J2 model — callers must treat that as "no data", not zero.
  *  Provenance: standard published low-precision values (Earth/Moon/Mars/Venus
- *  IAU/JPL fact-sheet order-of-magnitude figures), NOT re-derived here — see
- *  MATH.md §7l critique on provenance/precision. */
+ *  IAU/JPL fact-sheet order-of-magnitude figures), NOT re-derived here —
+ *  Critique on provenance/precision. */
 const PROG_BODY_J2 = {
   Earth: 1.08263e-3,
   Mars:  1.9555e-3,

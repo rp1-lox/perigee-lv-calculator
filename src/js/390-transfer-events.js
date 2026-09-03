@@ -1,12 +1,8 @@
 
-// ─── PROGRAM MODULE — Phase 4: Interaction & Transfer Events ─────────────────
-//
+// ─── TRANSFER & INTERACTION EVENTS ───────────────────────────────────────────
 // DOCK, TRANSFER_PROPELLANT, TRANSFER_CREW, TRANSFER_STAGE, LAND,
-// ASCENT_SURFACE, RECONFIGURE.
-//
-// Key rule: LAND is zero ΔV / zero prop (Rule 5). Powered descent prop is
-// consumed by preceding BURN events. ASCENT_SURFACE DOES consume prop (not
-// in Rule 5's exclusion list).
+// ASCENT_SURFACE, RECONFIGURE. LAND is zero ΔV / zero prop (powered descent
+// prop is consumed by preceding BURN events); ASCENT_SURFACE consumes prop.
 
 /** DOCK: merge two FlightVehicles that share the same OrbitalState (Rule 3).
  *  event.vehicleIds     = [id1, id2]

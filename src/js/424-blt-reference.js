@@ -1,41 +1,24 @@
-// src/js/424-blt-reference.js
-// MISSION_MODEL_V2 §21 B2 — Markellos f16/f'16 reference family (pinned table).
-//
-// PROVENANCE: generated offline by the Sun-(Earth+Moon) planar CRTBP scratch
-// dynamics in tests/corrector_harness.js (NOT the app's ephemeris integrator —
-// per RESEARCH_CISLUNAR.md's own recommendation, "a CRTBP scratch mode exists
-// only inside the corrector harness — keep it there"). Re-runnable:
+// ─── BLT REFERENCE FAMILY ────────────────────────────────────────────────────
+// Markellos f16/f'16 periodic-orbit family (Sun-(Earth+Moon) planar CRTBP),
+// pinned table generated offline by tests/corrector_harness.js:
 //   node tests/corrector_harness.js f16
-// Re-run and re-pin (with a dated comment) if the generation method changes.
-// See docs/MATH.md §7ai for the full derivation (family continuation in the
-// Jacobi constant, perpendicular-crossing correction to |vx| < 1e-11 nondim),
-// the scaling chain, and the verification against Griesemer/Ocampo/Cooley
-// (NTRS 20090016184) Table 1: our f16 rp=7,200 km member gives perigee 2 =
-// 231,007 km vs the paper's 230,434 km (0.25%) and perigee 3 = 132,854 km vs
-// 132,580 km (0.21%); Jacobi C = 3.0008551 vs the paper's 3.000850893 (4e-6).
+// Verified against Griesemer/Ocampo/Cooley (NTRS 20090016184) Table 1 to
+// within 0.25%. Derivation and scaling chain in.
 //
-// Orbit structure (the paper's Fig. 1/2): 5 perigees per period — p1 = the
-// LEO-class nearest perigee (the family parameter, on the x-axis, perpendicular
-// crossing), p2/p3 raised by the solar perturbation (~28-35x), p4/p5 mirror
-// p3/p2 by the orbit's x-axis symmetry. The half-period point is the FAR
-// perpendicular x-axis crossing (~1.51M km, the WSB region).
+// Five perigees per period: p1 = the LEO-class nearest perigee (family
+// parameter, perpendicular x-axis crossing), p2/p3 raised by the solar
+// perturbation, p4/p5 mirror p3/p2. The half-period point is the far
+// perpendicular crossing (~1.51M km, the WSB region).
 //
 // Each entry:
-//   rp_km        — perigee 1 = the target parking perigee (family parameter).
+//   rp_km        — perigee 1 = target parking perigee (family parameter)
 //   x0_nd/vy0_nd — perpendicular-crossing IC, CRTBP nondim rotating frame
-//                  (secondary at x = 1-mu; f16 starts on the ANTI-Sun side,
-//                  x0 > 1-mu, vy0 > 0; f'16 on the Sun side, x0 < 1-mu,
-//                  vy0 < 0 — labels assigned so f16 reproduces the paper's
-//                  Table 1, see MATH.md §7ai critique 107).
-//   jacobiC      — Jacobi constant of the converged IC.
-//   perigee2_km/perigee3_km + t_p2_days/t_p3_days — the raised perigees and
-//                  their times from p1 (paper: capture targeted at p2 gives
-//                  the ~100 d transfer class, at p3 the ~180 d class).
-//   period_days  — full period (2x the 5th-crossing time).
-//   far_km       — the half-period far perpendicular crossing radius.
-//
-// Convergence: every member fully converged, |vx at 5th crossing| <= 2.2e-11
-// nondim (<= 7e-7 m/s dimensional) — real periodic orbits, not approximations.
+//                  (f16 starts anti-Sun, x0 > 1-mu, vy0 > 0; f'16 Sun side)
+//   jacobiC      — Jacobi constant of the converged IC
+//   perigee2_km/perigee3_km + t_p2_days/t_p3_days — raised perigees and times from p1
+//   period_days  — full period
+//   far_km       — half-period far perpendicular crossing radius
+// Every member converged to |vx at 5th crossing| <= 2.2e-11 nondim.
 
 'use strict';
 
@@ -68,7 +51,7 @@ const BLT_F16_FAMILY = [
 // f'16 — Sun-side start (x0 < 1-mu), far loop on the Sun side. The near-mirror
 // counterpart (the Sun's finite distance breaks exact symmetry: perigee 2 is
 // ~7% lower than f16's — a real physical asymmetry, verified by independent
-// continuation, not an artifact; see MATH.md §7ai).
+// continuation, not an artifact).
 const BLT_FPRIME16_FAMILY = [
   { rp_km: 6563, x0_nd: 0.999953088735, vy0_nd: -0.371137665627, jacobiC: 3.0008527816, perigee1_km: 6563, perigee2_km: 210097, perigee3_km: 125403, t_p2_days: 76.4, t_p3_days: 127.9, period_days: 371.76, far_km: 1505000 },
   { rp_km: 6700, x0_nd: 0.999952172947, vy0_nd: -0.367299251187, jacobiC: 3.0008530455, perigee1_km: 6700, perigee2_km: 210996, perigee3_km: 126238, t_p2_days: 76.5, t_p3_days: 128.0, period_days: 372.10, far_km: 1505000 },
@@ -79,10 +62,10 @@ const BLT_FPRIME16_FAMILY = [
   { rp_km: 7500, x0_nd: 0.999946825283, vy0_nd: -0.347023117868, jacobiC: 3.0008545132, perigee1_km: 7500, perigee2_km: 216121, perigee3_km: 131026, t_p2_days: 76.8, t_p3_days: 128.4, period_days: 374.05, far_km: 1507000 },
 ];
 
-// Family-selection rule (B3 consumer contract, MATH.md §7ai): at the mission
+// Family-selection rule: at the mission
 // epoch, resolve the Moon's Sun-relative quadrant (angle between the
 // Earth->Moon vector and the Earth->Sun vector) — Sun-near quadrants select
-// f16, Sun-far quadrants select f'16 (RESEARCH_CISLUNAR.md, [V] claim).
+// f16, Sun-far quadrants select f'16.
 function bltF16SelectFamily(sunEarthMoonAngleDeg) {
   const a = ((sunEarthMoonAngleDeg % 360) + 360) % 360;
   const sunNear = a > 270 || a < 90; // within 90 deg of the Sun direction

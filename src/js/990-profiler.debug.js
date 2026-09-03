@@ -1,26 +1,9 @@
 
-// ─── DEV PROFILER (DEBUG BUILDS ONLY — *.debug.js is stripped from lv_calc.html) ──
-//
-// Build with `python build.py --debug` -> lv_calc.debug.html. The user build
-// never contains this file, so nothing outside it may reference these names
-// without a typeof guard.
-//
-// What it does: wraps a curated list of hot/global functions with a timing
-// shim that accumulates {calls, total ms, max ms} per function, then prints a
-// sorted table on demand. Numbered 990 so it loads AFTER every module it
-// instruments.
-//
-// Console API:
-//   profReport(minMs?)  — print the aggregate table (default: >=0.05ms total)
-//   profReset()         — zero the counters AND the per-call log
-//   profWrap('fnName')  — instrument one more global function by name at runtime
-//   profDownloadCsv()   — download the PER-CALL log as CSV (function,start_ms,dur_ms)
-//                         for offline analysis; also on the floating ⏱ button.
-//
-// Per-call log: EVERY instrumented call appends {name, start, dur}. Capped at
-// PROF_LOG_CAP rows (a day-long LEO propagation makes ~500k physBodyStateAt
-// calls — without a cap the tab dies); when full, new rows are dropped and the
-// CSV notes the truncation. Timestamps are performance.now() ms since load.
+// ─── DEV PROFILER (debug builds only) ──────────────────────────────────────
+// Included only by `python build.py --debug`. Wraps hot global functions with
+// a timing shim and prints a sorted table on demand. Loads last (990).
+// Console API: profReport(minMs?), profReset(), profWrap('fnName'),
+// profDownloadCsv() (per-call log, capped at PROF_LOG_CAP rows).
 
 const PROF_TABLE = {};
 const PROF_WRAPPED = new Set();

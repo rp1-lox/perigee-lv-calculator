@@ -8,19 +8,13 @@ function _missionMake(name) {
     log:           [],
     vehicleId:     null,
     vehicleIds:    [],
-    // MISSION_MODEL_V2 D3/Phase 2 S5: the persistence version gate. Every
+    // Phase 2 S5: the persistence version gate. Every
     // mission this build creates is pure-V2 (no legacy MANEUVER entries, no
     // detachedFrom baggage) — see applyProgramObject/_applySessionObject.
     modelVersion:  2,
   };
 }
 
-function missionNew() {
-  const m = _missionMake('Mission ' + (_missions.length + 1));
-  _missions.push(m);
-  _missionSel = m.missionId;
-  missionRender();
-}
 
 function missionDelete(id) {
   _missions = _missions.filter(m => m.missionId !== id);
@@ -68,7 +62,7 @@ function missionRenderDetail() {
   const m = _missionGet(_missionSel);
   if (!m) { cc.innerHTML = '<div class="placeholder-msg">Select or create a mission</div>'; return; }
   const id = m.missionId;
-  // MISSION_MODEL_V2 §12 U3: _missionViewMode is real state again — the
+  // _missionViewMode is real state again — the
   // authoritative view ('traj'|'band'|'nodemap'), not a mirror of a
   // promotion surface. See 570-mission-core-state.js.
   const viewMode = _missionViewMode;
@@ -86,11 +80,11 @@ function missionRenderDetail() {
     const upDis = (i <= 0) ? ' disabled' : '';
     const dnDis = (i >= m.log.length - 1) ? ' disabled' : '';
     const sub = e.burnLabel || e.toLabel || e.vehicleName || e.label || e.targetName || '';
-    // Unify-create/edit (2026-07-16): a pending draft's ctlbar is Commit/Cancel
+    // Unify-create/edit: a pending draft's ctlbar is Commit/Cancel
     // instead of the usual move/delete controls — Commit runs the SAME
-    // missionApply*Edit function a later edit of that entry would use (see
+    // missionApply*Edit function a later edit of that entry would use
     // missionCommitPendingEvent, 570-mission-band.js); Cancel splices the
-    // draft back out with no recompute (m.log stays byte-identical).
+    // draft back out with no recompute.
     const ctl = e.pending
       ? `<div class="mevt-ctlbar"><button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;" onclick="event.stopPropagation();missionCommitPendingEvent('${id}')">${e._commitLabel || 'Commit'}</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionCancelPendingEvent('${id}')" title="Discard (Esc)">Cancel</button></div>`
       : `<div class="mevt-ctlbar"><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},-1)" title="Move up"${upDis}>▲</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEvent('${id}',${i},1)" title="Move down"${dnDis}>▼</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionMoveEventToEnd('${id}',${i})" title="Send to end"${dnDis}>⤓</button><button class="act-btn mevt-ctl" onclick="event.stopPropagation();missionDeleteEvent('${id}',${i})" title="Delete event">✕</button></div>`;
@@ -132,7 +126,7 @@ function missionRenderDetail() {
         let inner = ''; for (let k = i; k < j; k++) inner += card(m.log[k], k);
         if (!inner) { i = j; continue; }   // whole group filtered out
         if (g.kind === 'transfer') {
-          // §22 TRANSFER CHAINS: header shows the route + summed member ΔV +
+          // TRANSFER CHAINS: header shows the route + summed member ΔV +
           // a ↻ re-solve control instead of the Loop repeat UI. Total is the
           // SUM of each member's own charged dv (depart auto/override + mcc
           // burnParam + inject dv/dvOverride) — never re-derived here.
@@ -191,7 +185,7 @@ function missionRenderDetail() {
   // _missionNodeMapHTML) are UNCHANGED — this is chrome, not map rendering. ──
   let stageHTML, viewPanelHTML;
   if (viewMode === 'nodemap') {
-    // A4 (MISSION_MODEL_V2 §26): once the program has authored an
+    // Once the program has authored an
     // architecture, the Plan surface becomes a READ-MOSTLY mirror of it
     // (archMapRender's content builder, extracted for this second mount —
     // "one renderer, two mounts", same pattern A3 established) instead of the
@@ -199,8 +193,8 @@ function missionRenderDetail() {
     // With NO architecture, this branch is untouched (KSP invariant) — the
     // ORBITS catalog rail below still authors custom node-map nodes directly
     // for the maneuver bridge, a capability the ladder doesn't yet replace.
-    const hasArch = (typeof archGet === 'function') && archGet().nodes && archGet().nodes.length > 0;
-    if (hasArch && typeof _archMapContentHTML === 'function') {
+    const hasArch = archGet().nodes && archGet().nodes.length > 0;
+    if (hasArch) {
       stageHTML = _archMapContentHTML(true);
       viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-nodemap"><div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);padding:8px;line-height:1.6;">
         This mission's Plan surface mirrors the mission architecture (read-mostly). Edit nodes/edges on the Architecture page.
@@ -217,23 +211,23 @@ function missionRenderDetail() {
     // Timeline panel: blank scaffold for now (user: "leave them blank").
     viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-timeline"></div>`;
   } else { // 'traj' — World
-    stageHTML = (typeof _missionTrajViewHTML === 'function') ? _missionTrajViewHTML(m) : '';
+    stageHTML = _missionTrajViewHTML(m);
     // World panel = the camera/frame/anchor selects, moved off the floating
     // stage toolbar into the docked panel — the last floating chrome killed.
-    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-world">${(typeof _trajCamToolbarHTML === 'function') ? _trajCamToolbarHTML(m, id) : ''}</div>`;
+    viewPanelHTML = `<div class="mcc-view-panel mcc-view-panel-world">${_trajCamToolbarHTML(m, id)}</div>`;
   }
 
   // Left column: the Vehicles & Mission State panel RETURNS to its pre-§12
   // home, full per-vehicle state, event-aware (unchanged data path).
-  const leftColHTML = (typeof _missionMultiVehicleHTML === 'function') ? _missionMultiVehicleHTML(m) : '';
+  const leftColHTML = _missionMultiVehicleHTML(m);
 
   // Top universal strip: MET/date + minimal scrubber + active vehicle name +
   // readiness chip — identical across all three views (570-mission-panel.js).
-  const topStripHTML = (typeof _missionTopStripHTML === 'function') ? _missionTopStripHTML(m) : '';
+  const topStripHTML = _missionTopStripHTML(m);
 
   // Visible tri-toggle at the top of the center region — the primary,
   // exclusive view switch (570-mission-panel.js).
-  const viewToggleHTML = (typeof _missionViewToggleHTML === 'function') ? _missionViewToggleHTML(m) : '';
+  const viewToggleHTML = _missionViewToggleHTML(m);
 
   // The setup hint (shown before any vehicle has been launched) lives above
   // the events list, in the right column it's guiding the user toward.
@@ -267,19 +261,19 @@ function missionRenderDetail() {
         </div>
         ${filterRow}
         <div class="mcc-events-list">${logHTML}</div>
-        <div class="mcc-panel-pad mcc-addevt-dock${(_missionAddEvt != null || (typeof _missionGroupPending !== 'undefined' && _missionGroupPending)) ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
+        <div class="mcc-panel-pad mcc-addevt-dock${(_missionAddEvt != null || (_missionGroupPending)) ? ' open' : ''}" style="flex-shrink:0;">${_missionAddEventHTML(m)}</div>
       </div>
     </div>
   `;
   if (m.vehicleId) setTimeout(() => missionBurnPreview(m.missionId), 0);
   if (viewMode === 'nodemap') _missionCenterNmEarth();
-  if (viewMode === 'traj' && typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(m);
-  // A3-3D: the Plan surface's read-mostly architecture mirror mounts the same
+  if (viewMode === 'traj') _missionTrajAfterRender(m);
+  // The Plan surface's read-mostly architecture mirror mounts the same
   // World renderer — fill + post-mount sync it once its container is in the DOM.
-  if (viewMode === 'nodemap' && typeof _archWorldPlanAfterRender === 'function') _archWorldPlanAfterRender();
+  if (viewMode === 'nodemap') _archWorldPlanAfterRender();
   // keep the header's File menu (program/mission name fields, Reset
   // visibility) in sync with every mission mutation.
-  if (typeof _globalFileMenuRender === 'function') _globalFileMenuRender();
+  _globalFileMenuRender();
 }
 
 // Position the node-map scroll on Earth's system (Earth + its orbits), leaving the
@@ -317,12 +311,6 @@ function missionSetFleet(id, fleetId) {
   missionRenderDetail();
 }
 
-function missionTogglePayload(id, scId, checked) {
-  const m = _missionGet(id);
-  if (!m) return;
-  if (checked && !m.payloadScIds.includes(scId)) m.payloadScIds.push(scId);
-  if (!checked) m.payloadScIds = m.payloadScIds.filter(x => x !== scId);
-}
 
 function missionSetOrbit(id, key, val) {
   const m = _missionGet(id);

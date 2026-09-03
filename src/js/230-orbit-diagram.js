@@ -1,24 +1,11 @@
 
 // ─── ORBIT DIAGRAM ────────────────────────────
-// "Weaker, Earth-centric" true-geometry mini-view. Earth-centric only, no
-// zoom/pan, fixed frame auto-fit each render. Reuses the Trajectory view's
-// (574) pure geometry helper _trajEllipseGeom (focus-correct: body at focus,
-// c = a - r_peri) so the ellipse math is identical to the big view — this
-// panel is deliberately a smaller, non-interactive SVG rendering of the same
-// geometry, not a reimplementation.
-//
-// Two-layer split (same architecture as 574, see that file's header comment
-// for the full rationale): the mini-diagram's world "camera" is a CONSTANT
-// transform (fixed frame, auto-fit each render, no zoom/pan) — trivial
-// compared to 574's mutable viewBox camera, but it funnels through the exact
-// SAME projection (_trajWorldToScreen) and the exact same label registry /
-// resolve pass (_trajRegisterLabel / _trajResolveLabels) so there is ONE
-// symbology code path shared by both surfaces, not two. World geometry
-// (rings/ellipses/discs/arcs) is drawn directly into the world <svg> in
-// world-unit (km*scale) coordinates as before; labels/plates are registered
-// then resolved into a sibling overlay <svg> sized in real container px.
-// viewBox matches the panel's rendered aspect (~1.1/1, see #orbit-diagram in
-// styles.css) so world-unit and overlay-px boxes have the same aspect ratio.
+// Earth-centric, non-interactive mini orbit view with a fixed auto-fit frame.
+// Shares the trajectory view's geometry (_trajEllipseGeom), projection
+// (_trajWorldToScreen) and label registry so there is one symbology code path.
+// World geometry is drawn into the world <svg> in world units; labels are
+// registered and resolved into a sibling px-sized overlay <svg>. The viewBox
+// aspect matches #orbit-diagram in styles.css.
 const _OD_VBW = 330, _OD_VBH = 300;
 
 function initOrbitDiagram(){
@@ -171,7 +158,7 @@ function drawOrbitDiagram(){
       if(!redundant){
         // Hohmann transfer arc, parking -> target apoapsis, with 2 burn dots at
         // the tangent points (periapsis-side and apoapsis-side of the transfer).
-        // Apse-line aligned with the target ellipse (rotDeg=0 on both — see
+        // Apse-line aligned with the target ellipse (rotDeg=0 on both —
         // the bug-fix note above _trajEllipseGeom's callers): the arrival dot
         // (arc.arrX/arrY) coincides with the target ellipse's apoapsis point.
         const arc=_trajTransferArcPath(r_park,rApo,scale,0);
@@ -193,7 +180,7 @@ function drawOrbitDiagram(){
   // path as 574: a synthetic camera whose box equals the world viewBox
   // (cam.w=_OD_VBW, centered at 0,0), projected against the panel's ACTUAL
   // measured rendered rect (odRect) — NOT the nominal _OD_VBW x _OD_VBH box.
-  // The panel's CSS aspect-ratio is pinned to match _OD_VBW/_OD_VBH (see
+  // The panel's CSS aspect-ratio is pinned to match _OD_VBW/_OD_VBH
   // #orbit-diagram in styles.css) so the two boxes are always the same
   // ASPECT, but the panel can render at any absolute size (350px wide on a
   // narrow layout, 900px on a wide one) — using the nominal box here would

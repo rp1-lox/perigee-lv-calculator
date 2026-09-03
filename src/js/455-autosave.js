@@ -1,11 +1,9 @@
 
 // ─── AUTOSAVE / SESSION RESTORE ──────────────────────────────────────────────
-//
 // Persists the whole session (program + current LV) to localStorage on a
-// debounce, and offers to restore it on next load via a dismissible banner.
-// Never allowed to throw into the caller — save/restore failures are caught
-// and swallowed (with a single console.warn) so a full/corrupt localStorage
-// can never break the app.
+// debounce and offers to restore it on next load via a dismissible banner.
+// Save/restore failures are caught and swallowed (one console.warn) so a
+// full or corrupt localStorage can never break the app.
 
 const AUTOSAVE_KEY = 'lv_autosave_v1';
 
@@ -36,17 +34,17 @@ function _buildSessionObject() {
   const safeCopy = v => { try { return JSON.parse(JSON.stringify(v)); } catch (err) { return null; } };
   return {
     savedAt: new Date().toISOString(),
-    program: (typeof buildProgramObject === 'function') ? buildProgramObject() : null,
-    lv: (typeof buildLVObject === 'function') ? buildLVObject((typeof loadedVehicleName !== 'undefined' ? loadedVehicleName : '') || '', '') : null,
-    userLVs: (typeof userLVs !== 'undefined') ? safeCopy(userLVs) : null,
-    userStagesByCategory: (typeof userStagesByCategory !== 'undefined') ? safeCopy(userStagesByCategory) : null,
-    userOrbitsByCategory: (typeof userOrbitsByCategory !== 'undefined') ? safeCopy(userOrbitsByCategory) : null,
-    customThemes: (typeof customThemes !== 'undefined') ? safeCopy(customThemes) : null,
-    activeThemeKey: (typeof activeThemeKey !== 'undefined') ? activeThemeKey : null,
-    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog.
-    orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
-    // N1b (§17): physics fidelity setting ('contextual' | 'full').
-    physicsFidelity: (typeof physFidelity === 'function') ? physFidelity() : null,
+    program: buildProgramObject(),
+    lv: buildLVObject(loadedVehicleName || '', ''),
+    userLVs: safeCopy(userLVs),
+    userStagesByCategory: safeCopy(userStagesByCategory),
+    userOrbitsByCategory: safeCopy(userOrbitsByCategory),
+    customThemes: safeCopy(customThemes),
+    activeThemeKey: activeThemeKey,
+    // Phase 3 T1: user-tier reference-orbit catalog.
+    orbitCatalogUser: _refOrbitSessionSave(),
+    // Physics fidelity setting ('contextual' | 'full').
+    physicsFidelity: physFidelity(),
   };
 }
 
@@ -74,32 +72,30 @@ function _applySessionObject(blob) {
   _autosaveSuspended = true;
   try {
     // ── User library content (restore first — may be referenced below) ──
-    if (Array.isArray(blob.userLVs) && typeof userLVs !== 'undefined') {
+    if (Array.isArray(blob.userLVs)) {
       userLVs = blob.userLVs;
-      if (typeof buildPresets === 'function') buildPresets();
+      buildPresets();
     }
-    if (blob.userStagesByCategory && typeof userStagesByCategory !== 'undefined') {
+    if (blob.userStagesByCategory) {
       userStagesByCategory = blob.userStagesByCategory;
-      if (typeof buildStageLibrary === 'function') buildStageLibrary();
+      buildStageLibrary();
     }
-    if (blob.userOrbitsByCategory && typeof userOrbitsByCategory !== 'undefined') {
+    if (blob.userOrbitsByCategory) {
       userOrbitsByCategory = blob.userOrbitsByCategory;
-      if (typeof buildOrbitCategories === 'function') buildOrbitCategories();
+      buildOrbitCategories();
     }
     // ── Themes (guarded — legacy blobs predate this field) ──
-    if (blob.customThemes && typeof customThemes !== 'undefined') {
+    if (blob.customThemes) {
       customThemes = blob.customThemes;
     }
-    if (typeof rebuildThemeSelect === 'function') rebuildThemeSelect();
-    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog (guarded —
+    rebuildThemeSelect();
+    // Phase 3 T1: user-tier reference-orbit catalog (guarded —
     // legacy blobs predate this field).
-    if (typeof _refOrbitSessionRestore === 'function') {
-      _refOrbitSessionRestore(blob.orbitCatalogUser);
-    }
-    // N1b (§17): physics fidelity — set BEFORE the program apply below so the
+    _refOrbitSessionRestore(blob.orbitCatalogUser);
+    // Physics fidelity — set BEFORE the program apply below so the
     // restored missions' first recompute already runs in the saved mode
     // (guarded — legacy blobs predate this field).
-    if (blob.physicsFidelity && typeof physSetFidelity === 'function') {
+    if (blob.physicsFidelity) {
       physSetFidelity(blob.physicsFidelity);
       if (typeof settingsSyncUI === 'function') settingsSyncUI();
     }

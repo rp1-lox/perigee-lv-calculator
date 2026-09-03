@@ -1,50 +1,14 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 610-architecture-map.js — Architecture node-map stage (A3-3D, World mount)
-// MISSION_MODEL_V2.md §26. OWNS: the `.arch-stage` mount (archMapRender),
-// bridge-draw edge authoring (archAddEdge), per-edge dV + chain-decomposition
-// display, and the dV budget number (archComputeBudget, consumed by 605's
-// #arch-dv-budget text). Keeps 600-architecture-model.js pure and
-// 605-architecture-page.js ladder/rail-only.
-//
-// ── RENDERER: the Mission World surface, reused verbatim (2026-07-22) ────────
-// The user rejected the bespoke body-centered 3D scene built in e581de1de
-// ("not displaying proper eccentricity … wire the exact same solar system
-// view into Architecture mode"). This module now MOUNTS the Mission page's
-// World surface renderer (574-trajectory-view.js: _missionTrajViewHTML /
-// _trajWorldSVG — real JPL-ephemeris bodies, starfield, az/el camera,
-// occlusion, true-ellipse rings via trueRingPath) so the Architecture page
-// gets the identical visual language, camera controls, and ring geometry as
-// the Mission World view. NO fork/copy of that renderer exists.
-//
-// THE SEAM (one-definition rule): _trajWorldSVG takes ONE sanctioned optional
-// input — the mission object's `_extraRings` / `_extraEdges` fields — consumed
-// at the SAME trueRingPath emit layer the heliocentric/moon reference rings
-// use. Real missions never set those fields, so their World view renders
-// byte-identically; the Architecture page feeds them via a TRANSIENT STUB
-// mission (empty log, id '__arch__' for the editable page, '__archplan__' for
-// the read-mostly Plan-surface mirror). The stub is registered ONLY in
-// 5740's _trajExtraMissions (NEVER in _missions), so autosave/session — which
-// walk _missions — can never see it; its camera lives in the existing
-// missionId-keyed _trajCamByMission side table under the stub id (transient).
-//
-// Architecture node orbits (canonical {body,periKm,apoKm,incDeg,lanDeg,argp?})
-// are converted to the renderer's element shape {a,e,i,raan,argp} through the
-// EXISTING frame seam orbitWorldElements (385) — see _archOrbitWorldEl below.
-// Body at the FOCUS (a·(cosE−e) puts the primary at the ellipse focus), so a
-// 185×35786 GTO ring visibly has Earth at one focus — the eccentricity defect
-// the previous scene was rejected for.
-//
-// SELECTION OWNERSHIP: one cursor, owned by 605 (_archExpandedId). A ring
-// click (_archWorldRingClick → archMapNodeClick) converges on 605's
-// _archSelectNode(id), same as a ladder-card click; edge selection is a
-// map-local cursor (_archSelectedEdgeId, this module). Bridge-draw edge
-// authoring is unchanged (archMapNodeClick's bridge branch → archAddEdge).
-//
-// The pure ΔV physics is unchanged: archEdgeDv adapts a canonical orbit into
-// the node-map dialect and delegates to _nmDvPhysics (430) — the SAME
-// accounting function progNmComputeEdgeDv calls — so budget/chain numbers stay
-// byte-identical with the mission node map.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── ARCHITECTURE MAP — the Mission World renderer, mounted ─────────────────
+// Renders the ladder on the same World surface as the Mission page
+// (_missionTrajViewHTML / _trajWorldSVG in 574) by feeding a transient stub
+// mission (id '__arch__'; '__archplan__' for the Plan-surface mirror) whose
+// _extraRings / _extraEdges fields the renderer draws at the same layer as its
+// reference rings. The stub lives only in _trajExtraMissions (never _missions,
+// so autosave cannot see it); its camera sits in _trajCamByMission under the
+// stub id. Node orbits convert through orbitWorldElements (385).
+// Selection: one cursor owned by 605 (_archExpandedId); ring clicks converge
+// on _archSelectNode. Edge ΔV comes from _nmDvPhysics (430), the same function
+// the mission node map uses.
 
 let _archBridgeMode = false;
 let _archBridgeFrom = null;
@@ -58,16 +22,16 @@ let _archSelectedEdgeId = null;
 function _archOrbitWorldEl(n) {
   const o = n && n.orbit; if (!o) return null;
   const body = n.body || o.body || 'Earth';
-  const bodyMeta = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  const bodyMeta = PROG_BODIES[body];
   const bodyR = bodyMeta ? bodyMeta.R : 0;
-  const c = (typeof orbitNormalize === 'function') ? orbitNormalize(o) : o;
+  const c = orbitNormalize(o);
   if (!c) return null;
   const rPeri = bodyR + (c.periKm || 0), rApo = bodyR + (c.apoKm || 0);
   const a = (rPeri + rApo) / 2;
   const e = rApo > rPeri ? (rApo - rPeri) / (rApo + rPeri) : 0;
-  const w = (typeof orbitWorldElements === 'function') ? orbitWorldElements(o) : { incDeg: c.incDeg || 0, lanDeg: c.lanDeg || 0 };
+  const w = orbitWorldElements(o);
   const argpDeg = c.argpDeg != null ? c.argpDeg : 0;
-  return { a, e, i: (w.incDeg || 0) * _PROG_D2R, raan: (w.lanDeg || 0) * _PROG_D2R, argp: argpDeg * _PROG_D2R, bodyR, body };
+  return { a, e, i: (w.incDeg || 0) * _PROG_D2R, raan: (w.lanDeg || 0) * _PROG_D2R, argp: argpDeg * _PROG_D2R, body };
 }
 
 // Adapt a canonical architecture orbit (384's {body,periKm,apoKm,incDeg,
@@ -87,13 +51,13 @@ function _archOrbitToNmOrbit(o) {
  *  _nmDvPhysics (430) — see the module banner above. Returns
  *  {dv, note, method, legs?} or null if no model applies to this pair. */
 function archEdgeDv(fromNode, toNode) {
-  if (!fromNode || !toNode || typeof _nmDvPhysics !== 'function') return null;
+  if (!fromNode || !toNode) return null;
   const nA = { orbit: _archOrbitToNmOrbit(fromNode.orbit) };
   const nB = { orbit: _archOrbitToNmOrbit(toNode.orbit) };
   const result = _nmDvPhysics(nA, nB);
   if (result) return result;
   const rev = _nmDvPhysics(nB, nA);
-  if (rev) return { ...rev, note: rev.note + ' (reversed)', reversed: true };
+  if (rev) return { ...rev, note: rev.note + ' (reversed)' };
   return null;
 }
 
@@ -159,12 +123,12 @@ function archDeleteEdge(id) {
 // glyph/leg clicks), so dragging over a ring doesn't also select it.
 function _archWorldRingClick(ev, nodeId) {
   if (ev) ev.stopPropagation();
-  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) { _trajJustDragged = false; return; }
+  if (_trajJustDragged) { _trajJustDragged = false; return; }
   archMapNodeClick(nodeId);
 }
 function _archWorldEdgeClick(ev, edgeId) {
   if (ev) ev.stopPropagation();
-  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) { _trajJustDragged = false; return; }
+  if (_trajJustDragged) { _trajJustDragged = false; return; }
   archSelectEdge(edgeId);
 }
 
@@ -190,7 +154,7 @@ function _archChainDetailHTML(A, B, res, editable) {
 function _archNodeRingColor(n) {
   if (typeof _archExpandedId !== 'undefined' && _archExpandedId === n.id) return 'var(--accent)';
   if (_archBridgeFrom === n.id) return 'var(--accent2)';
-  return (typeof _trajBodyColor === 'function') ? _trajBodyColor(n.body || 'Earth') : 'var(--nm-interp)';
+  return _trajBodyColor(n.body || 'Earth');
 }
 
 // Build (or refresh) the transient stub mission that drives the World renderer
@@ -198,7 +162,7 @@ function _archNodeRingColor(n) {
 // current architecture every call (never stale); seeds the camera ONCE (anchor
 // = the first node's body, framed to the ladder) so user zoom/rotate persists
 // across re-mounts.
-function _archBuildStub(id, readOnly) {
+function _archBuildStub(id) {
   const arch = archGet();
   const nodes = arch.nodes || [];
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
@@ -218,22 +182,22 @@ function _archBuildStub(id, readOnly) {
       label: (res && res.dv != null) ? Math.round(res.dv).toLocaleString() + ' m/s' : 'no model',
       selected: e.id === _archSelectedEdgeId });
   });
-  let stub = (typeof _trajExtraMissions !== 'undefined') ? _trajExtraMissions[id] : null;
+  let stub = _trajExtraMissions[id];
   if (!stub) {
     stub = { missionId: id, log: [], groups: [], vehicleId: null, name: 'Architecture' };
-    if (typeof _trajExtraMissions !== 'undefined') _trajExtraMissions[id] = stub;
+    _trajExtraMissions[id] = stub;
   }
   stub._extraRings = rings;
   stub._extraEdges = edges;
-  if (typeof _trajCamByMission !== 'undefined' && !_trajCamByMission[id]) {
+  if (!_trajCamByMission[id]) {
     const anchor = rings.length ? rings[0].body : 'Earth';
     // Fit the ladder's OWN rings on the anchor body (not _trajFitWKmForBody,
     // whose Earth fit frames out to the Moon and shrinks LEO/GTO to sub-pixel).
-    const bodyR = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[anchor]) ? PROG_BODIES[anchor].R : 6371;
+    const bodyR = (PROG_BODIES[anchor]) ? PROG_BODIES[anchor].R : 6371;
     let maxApo = 0;
     rings.forEach(r => { if (r.body === anchor) maxApo = Math.max(maxApo, r.el.a * (1 + (r.el.e || 0))); });
     let wKm = Math.max(maxApo, bodyR * 3) * 2.6;
-    if (typeof _TRAJ_WKM_MIN !== 'undefined') wKm = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, wKm));
+    wKm = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, wKm));
     _trajCamByMission[id] = { anchorBody: anchor, relOffsetKm: { x: 0, y: 0 }, wKm, az: 0, el: Math.PI / 2 };
   }
   return stub;
@@ -243,19 +207,19 @@ function _archBuildStub(id, readOnly) {
 // and run its post-mount sync (overlay sizing, starfield, ResizeObserver). Kept
 // separate from the content-string builder so the string builder stays pure
 // (test-safe) and the heavy DOM render happens only when actually mounted.
-function _archWorldMountFill(id, readOnly) {
+function _archWorldMountFill(id) {
   const mount = document.querySelector(`.arch-world-mount[data-arch-id="${id}"]`);
-  if (!mount || typeof _missionTrajViewHTML !== 'function') return;
-  const stub = _archBuildStub(id, readOnly);
+  if (!mount) return;
+  const stub = _trajExtraMissions[id] || _archBuildStub(id); // _archMapContentHTML just rebuilt it
   mount.innerHTML = _missionTrajViewHTML(stub);
-  if (typeof _missionTrajAfterRender === 'function') _missionTrajAfterRender(stub);
+  _missionTrajAfterRender(stub);
 }
 
 // Called by 570-mission-lifecycle.js after the Plan surface renders (nodemap
 // view). No-op unless the read-mostly architecture World mirror is mounted.
 function _archWorldPlanAfterRender() {
   if (!document.querySelector('.arch-world-mount[data-arch-id="__archplan__"]')) return;
-  _archWorldMountFill('__archplan__', true);
+  _archWorldMountFill('__archplan__');
 }
 
 // "one renderer, two mounts" — the content-string builder is shared by the
@@ -270,13 +234,13 @@ function _archMapContentHTML(readOnly) {
   const id = readOnly ? '__archplan__' : '__arch__';
 
   if (!nodes.length) {
-    return '<div class="placeholder-msg">No orbits in your ladder yet. Add one from the rail — pick a preset from the catalog or add a custom orbit — then draw a transfer edge between two nodes to see the dV budget.</div>';
+    return '<div class="placeholder-msg">No orbits in your ladder yet. Add one from the rail on the right, then draw a transfer edge between two nodes to build the dV budget.</div>';
   }
 
   const byId = {}; nodes.forEach(n => byId[n.id] = n);
   // Build the stub NOW (before the camera toolbar reads _trajCamByMission), so
   // the anchor seeds to the first node's body.
-  _archBuildStub(id, readOnly);
+  _archBuildStub(id);
 
   // ── control strip ──
   let ctrlHTML = `<div class="arch-map-ctl">`;
@@ -297,9 +261,7 @@ function _archMapContentHTML(readOnly) {
   }
   // Camera/frame anchor selects + Reset — the World surface's own toolbar,
   // reused verbatim (same trajSetFocus/trajSetFrame/trajResetView handlers).
-  if (typeof _trajCamToolbarHTML === 'function') {
-    ctrlHTML += `<span style="margin-left:auto;">${_trajCamToolbarHTML(_trajExtraMissions[id], id)}</span>`;
-  }
+  ctrlHTML += `<span style="margin-left:auto;">${_trajCamToolbarHTML(_trajExtraMissions[id], id)}</span>`;
   ctrlHTML += `</div>`;
 
   // ── selected-edge chain detail (below the map) ──
@@ -322,11 +284,11 @@ function archMapRender() {
   const stage = document.querySelector('#page-architecture .arch-stage');
   if (!stage) return;
   stage.innerHTML = _archMapContentHTML(false);
-  _archWorldMountFill('__arch__', false);
+  _archWorldMountFill('__arch__');
 }
 
 // ── A4: "Transfer along this edge" -> real s22 chain events ────────────────
-// Reuse decision (task brief mandate): adapt the edge's two architecture
+// Reuse decision: adapt the edge's two architecture
 // nodes into custom node-map nodes (_missionCreateCustomNode, 570-mission-
 // nodemap.js — the SAME dialect archEdgeDv already produces via
 // _archOrbitToNmOrbit) and hand off to the EXISTING s22 authoring path,
@@ -343,12 +305,11 @@ function _archCustomNodeForArchNode(node) {
   // Reuse a previously-created custom node for this architecture node
   // (tagged via archNodeId) instead of spawning a duplicate on every
   // "Add Transfer" click for the same edge.
-  const existing = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.archNodeId === node.id) : null;
+  const existing = _missionCustomNodes().find(n => n.archNodeId === node.id);
   if (existing) return existing.id;
-  if (typeof _missionCreateCustomNode !== 'function') return null;
   const nmOrbit = _archOrbitToNmOrbit(node.orbit);
   const cid = _missionCreateCustomNode(node.name, nmOrbit, 550, 300, node.body + ' ' + nmOrbit.type);
-  const cn = (typeof _missionCustomNodes === 'function') ? _missionCustomNodes().find(n => n.id === cid) : null;
+  const cn = _missionCustomNodes().find(n => n.id === cid);
   if (cn) cn.archNodeId = node.id;
   return cid;
 }
@@ -363,5 +324,5 @@ function missionExecArchTransfer(missionId, edgeId) {
   const fromId = _archCustomNodeForArchNode(A);
   const toId = _archCustomNodeForArchNode(B);
   if (!fromId || !toId) return;
-  if (typeof missionExecManeuver === 'function') missionExecManeuver(missionId, fromId, toId);
+  missionExecManeuver(missionId, fromId, toId);
 }

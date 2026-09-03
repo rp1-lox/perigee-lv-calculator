@@ -65,7 +65,7 @@ function missionGroupPick(id, i) {
   for (let k = a; k <= b; k++) { if (m.log[k].groupId) { missionRenderDetail(); return; } }
   missionOpenGroupModal(id, a, b, '');
 }
-// Inline event-loop (repetition) authoring (2026-07-16): replaces the old
+// Inline event-loop (repetition) authoring: replaces the old
 // modal-mission-group pop-up. `_missionGroupPending` holds the in-progress
 // form state and is rendered inline in the events dock (_missionGroupFormHTML,
 // 570-mission-band.js) in place of the normal Add Event dock while active.
@@ -115,11 +115,11 @@ function missionUngroup(id, gid) {
 }
 let _missionAddEvt = null;   // null = closed; '__menu__' = picker; or a type          // scrubbed event index for the band view (null = last event)
 let _missionSelEvt = null;   // selected event index for event detail panel
-// Unify-create/edit (2026-07-16): a pending event is a DRAFT log entry, pushed onto
+// Unify-create/edit: a pending event is a DRAFT log entry, pushed onto
 // the END of m.log (flagged `pending:true`) so it renders through the exact same
 // card/edit-fields renderers a committed event uses — Commit clears the flag +
 // applies via the normal missionApply*Edit path; Cancel splices it back out with
-// NO recompute (m.log stays byte-identical to before it was opened). Tracked here
+// NO recompute. Tracked here
 // so exactly one can exist at a time and it can be discarded on mission switch.
 let _missionPendingEvent = null;   // { missionId, idx } | null
 // Maneuver add-form draft: the composite step program being built (BURN / SEPARATE steps).
@@ -128,7 +128,6 @@ let _missionAddMv = { from: null, to: null, steps: [] };
 // Prop-transfer add-form: origin key of the chosen DESTINATION vehicle (null = the active
 // vehicle, i.e. an intra-vehicle transfer). Lets you fill a separately-deployed depot.
 let _missionXferDest = null;
-function missionXferSetDest(id, key) { _missionXferDest = key || null; missionRenderDetail(); }
 
 // Collapse every event card except the last one (used after adding an event so the
 // newest is shown expanded). Cards use `_expanded` (default falsy = collapsed/compact).
@@ -141,7 +140,7 @@ let _missionBridgeMode = false;        // true while user is drawing a maneuver 
 let _missionBridgeFrom = null;         // node id chosen as the bridge start
 let _missionNmPos = {};                // nodeId -> [x,y] drag overrides
 let _missionNmDrag = null;             // { missionId, nid } while dragging
-let _missionOrbitPaletteOpen = true;   // orbit catalog dock open by default (below the view)
+   // orbit catalog dock open by default (below the view)
 let _missionNmZoom = 1.0;              // node-map zoom (px width = worldW * zoom) — opens zoomed in on Earth
 let _missionNmPan = null;              // active background-pan drag state
 let _missionNmJustPanned = false;      // suppress the click that ends a pan-drag
@@ -201,9 +200,4 @@ function missionNmPanEnd() {
   document.removeEventListener('mouseup', missionNmPanEnd);
 }
 
-function missionToggleOrbitPalette(id) {
-  _missionOrbitPaletteOpen = !_missionOrbitPaletteOpen;
-  const m = _missionGet(id);
-  if (m) missionRenderDetail();
-}
 

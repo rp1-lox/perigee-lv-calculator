@@ -1,20 +1,11 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-nodemap.js — Mission node-map (schematic phase/ΔV graph) rendering
+// ─── MISSION NODE MAP — schematic phase/ΔV graph ────────────────────────────
+// Custom node CRUD (PROG_ACTIVE_PROGRAM.nodeMapCustomNodes), node-map SVG
+// rendering (_missionNodeMapHTML, _missionNmLayout), orbit palette,
+// orientation badges, node drag, and the per-body color / atmosphere / ring
+// constants (PROG_BODY_COLORS/ATMOSPHERE/RINGS) also used by the trajectory view.
 //
-// OWNS: custom node-map node CRUD (PROG_ACTIVE_PROGRAM.nodeMapCustomNodes), the
-//   node-map SVG rendering (_missionNodeMapHTML, _missionNmLayout), orbit palette,
-//   orientation badges, node drag interaction, and the per-body identity color/
-//   atmosphere/ring constants (PROG_BODY_COLORS/ATMOSPHERE/RINGS — the shared
-//   source of truth also consumed by 574-trajectory-view.js, which loads later).
-// Does NOT own: the band view (570-mission-band.js), the 3D trajectory view (574),
-//   replay/recompute (570-mission-replay.js), or mission lifecycle (570-mission-lifecycle.js).
-// Split out of 570-mission-manager.js (behavior-preserving move). Loads after the
-//   manager remainder in filename sort; contains only definitions/consts (no
-//   load-time execution), so load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
-// ── Custom node-map nodes (orbit palette + manual creation) ─────────────────
-// User-added nodes live in PROG_ACTIVE_PROGRAM.nodeMapCustomNodes, stored in the
-// SAME shape as PROG_NM_NODES (id, label, sub, orbit, cx, cy …) plus custom:true.
+// User-added nodes live in PROG_ACTIVE_PROGRAM.nodeMapCustomNodes in the same
+// shape as PROG_NM_NODES (id, label, sub, orbit, cx, cy …) plus custom:true.
 function _missionCustomNodes() {
   return (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && PROG_ACTIVE_PROGRAM.nodeMapCustomNodes) || [];
 }
@@ -25,7 +16,7 @@ function _missionNmNodeById(id) {
   return _missionNmNodes().find(n => n.id === id) || null;
 }
 
-// §13 T3 terminology: a maneuver endpoint label. Dwell orbits keep "LABEL (sub)".
+// terminology: a maneuver endpoint label. Dwell orbits keep "LABEL (sub)".
 // Transit-corridor nodes stop reading as orbits you park in: as a DESTINATION the
 // label is the departure BURN name ("TLI (trans-lunar)"); as an ORIGIN it's the
 // corridor itself ("trans-lunar coast"). dir: 'to' | 'from'.
@@ -35,8 +26,7 @@ function _missionManeuverNodeLabel(nid, dir) {
   if (n.orbit && n.orbit.type === 'transit') {
     const corridor = n.sub || 'transit';
     if (dir === 'from') return corridor + ' coast';
-    const names = (typeof _nmBurnNames === 'function')
-      ? _nmBurnNames(n.orbit.departure_body || n.orbit.body, n.orbit.destination) : null;
+    const names = _nmBurnNames(n.orbit.departure_body || n.orbit.body, n.orbit.destination);
     return names ? names.dep + ' (' + corridor + ')' : corridor;
   }
   return n.sub ? n.label + ' (' + n.sub + ')' : n.label;
@@ -53,8 +43,8 @@ function _missionOrbitToNodeOrbit(o, planet) {
   const apo  = o.apogee ?? o.perigee ?? 0;
   const spec = { type: (Math.abs(apo - peri) < 1 ? 'circular' : 'elliptic'),
            body: planet, periKm: peri, apoKm: apo, incDeg: o.inc ?? 0 };
-  // R3.2: authored orientation is OPTIONAL — only carried over when the
-  // source orbit spec actually authored it (see MATH.md §7i tier 1).
+  // Authored orientation is OPTIONAL — only carried over when the
+  // source orbit spec actually authored it.
   if (o.lan_deg != null) spec.lanDeg = o.lan_deg;
   if (o.argp_deg != null) spec.argpDeg = o.argp_deg;
   return spec;
@@ -120,7 +110,7 @@ function missionLoadOrbitFile(input, missionId) {
     try {
       const o = JSON.parse(e.target.result);
       if (!o.mode && o.perigee == null && o.apogee == null) { showAlert('Not a valid orbit file.', 'Invalid File'); input.value = ''; return; }
-      const planet = (o._category && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[o._category]) ? o._category : 'Earth';
+      const planet = (o._category && PROG_BODIES[o._category]) ? o._category : 'Earth';
       const nodeOrbit = _missionOrbitToNodeOrbit(o, planet);
       _missionCreateCustomNode(o.name || 'Orbit', nodeOrbit, 550 + Math.round((Math.random() - 0.5) * 120), 300 + Math.round((Math.random() - 0.5) * 80));
       const m = _missionGet(missionId);
@@ -192,7 +182,7 @@ function missionSaveCustomNode() {
     const peri = parseFloat(document.getElementById('nmnode-peri')?.value) || 0;
     const apo  = parseFloat(document.getElementById('nmnode-apo')?.value) || peri;
     orbit = { type: t, body, periKm: peri, apoKm: apo, incDeg: parseFloat(document.getElementById('nmnode-inc')?.value) || 0 };
-    // R3.2: LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
+    // LAN/argp are OPTIONAL — blank means unauthored, never coerced to 0.
     const lanRaw = (document.getElementById('nmnode-lan')?.value ?? '').trim();
     const argpRaw = (document.getElementById('nmnode-argp')?.value ?? '').trim();
     if (lanRaw !== '' && Number.isFinite(parseFloat(lanRaw))) orbit.lanDeg = parseFloat(lanRaw);
@@ -206,8 +196,8 @@ function missionSaveCustomNode() {
   if (va && m) va.innerHTML = _missionNodeMapHTML(m);
 }
 
-// R3.2: node-card orientation badge (tooltip line) — same three-tier
-// precedence as the ring renderer's _trajRingOrientationFor (MATH.md §7i),
+// Node-card orientation badge (tooltip line) — same three-tier
+// precedence as the ring renderer's _trajRingOrientationFor,
 // but resolved from a NODE (not a drawn ring): authored (spec carries
 // lan_deg) beats derived (a converged physics leg touched this exact
 // (body, peri, apo)) beats default (Ω=0 convention). Compact one-line text,
@@ -220,7 +210,7 @@ function _missionOrientationBadge(n, missionId) {
   if (oLan != null) {
     return ` — i ${inc.toFixed(1)}&deg; &Omega; ${(+oLan).toFixed(1)}&deg; (authored)`;
   }
-  if (missionId != null && typeof _physTrajByMission !== 'undefined' && typeof _trajOrbitKey === 'function') {
+  if (missionId != null) {
     const legs = (_physTrajByMission[missionId] && _physTrajByMission[missionId].legs) || [];
     const peri = (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apo = (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0;
     const key = _trajOrbitKey(o.body, peri, apo);
@@ -230,7 +220,7 @@ function _missionOrientationBadge(n, missionId) {
         const d = L.departElements;
         return ` — i ${(d.i * 180 / Math.PI).toFixed(1)}&deg; &Omega; ${(d.raan * 180 / Math.PI).toFixed(1)}&deg; — from flight`;
       }
-      if (L.arrivalElements && L.dest && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[L.dest]) {
+      if (L.arrivalElements && L.dest && PROG_BODIES[L.dest]) {
         const el = L.arrivalElements, Rd = PROG_BODIES[L.dest].R;
         const p = el.a * (1 - el.e) - Rd, a2 = el.a * (1 + el.e) - Rd;
         if (_trajOrbitKey(L.dest, p, a2) === key) {
@@ -242,7 +232,7 @@ function _missionOrientationBadge(n, missionId) {
   return ` — default (&Omega;=0)`;
 }
 
-// §13 T3: "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
+// "dwell = node, transit = edge." A dwell→transit→dwell maneuver CHAIN
 // (e.g. LEO→TLC (TLI) then TLC→LLO (LOI)) collapses into ONE edge drawn directly
 // between the dwell endpoints, carrying named burn chips (_nmBurnNames, 430) —
 // the transit node itself is never drawn. Minimal-log-change: m.log keeps its
@@ -251,7 +241,7 @@ function _missionOrientationBadge(n, missionId) {
 // ends (e.g. authored but not yet continued) is simply not drawn as a
 // stop-to-stop line — it's still reachable via the event log/SOI-ring inject.
 //
-// U1 (§12 Plan rail): factored OUT of _missionNodeMapHTML's edgesHTML block so
+// Factored OUT of _missionNodeMapHTML's edgesHTML block so
 // the Plan rail (5749-plan-rail.js) can reuse the SAME pair/chip data instead
 // of re-deriving it — data only, no SVG/DOM. Returns { pairs, chipsByKey }
 // exactly as the full node map consumed inline before this extraction.
@@ -275,7 +265,7 @@ function _missionNmEdgePairs(m, byId) {
         const lo = e.fromNode, hi = arrival.e.toNode;
         const k = lo + '::' + hi + '::t';
         const names = _nmBurnNames(bodyOf(e.fromNode), bodyOf(arrival.e.toNode));
-        // MISSION_MODEL_V2 §15 5a: a leg arriving at a node bound to a
+        // 5a: a leg arriving at a node bound to a
         // SEEDED propagated ref-orbit (the NRHO) reads "NRHO insertion",
         // not the generic same-body arrival name (LOI) — it's a distinct
         // solved maneuver (physSolveNrhoTransfer), not a Keplerian LOI.
@@ -376,17 +366,16 @@ function _missionNodeMapHTML(m) {
       const bothWays = p.loToHi != null && p.hiToLo != null;
       const latestIdx = p.latestIdx != null ? p.latestIdx : Math.max(p.loToHi == null ? -1 : p.loToHi, p.hiToLo == null ? -1 : p.hiToLo);
       const col = 'var(--accent)';
-      // R5 item 2: annotate from the physics side-table (_physTrajByMission via
+      // Annotate from the physics side-table (_physTrajByMission via
       // _nmEdgePhysicsAnnotation, 430) — display only, NEVER touches ΔV (that
       // stays sourced from progNmComputeEdgeDv/dvOverride exclusively).
-      const ann = (typeof _nmEdgePhysicsAnnotation === 'function')
-        ? _nmEdgePhysicsAnnotation(id, latestIdx) : { flown: false, label: 'estimated' };
+      const ann = _nmEdgePhysicsAnnotation(id, latestIdx);
       const annTitle = ann.flown ? ` — ${_tsEsc(ann.label)}` : ' — estimated (schematic)';
       const chips = chipsByKey[k];
       const chipTitle = chips ? ' — ' + chips.map(c => `${c.name} ${Math.round(c.dv).toLocaleString()} m/s`).join(', ') : '';
       // E3 dual pricing (tooltip): PARALLEL Edelbaum est. when the acting
       // vehicle's active stage is EP-capable — impulsive numbers untouched.
-      const ltEst = (typeof _missionLtEdgeEstimate === 'function') ? _missionLtEdgeEstimate(m, p.lo, p.hi) : null;
+      const ltEst = _missionLtEdgeEstimate(m, p.lo, p.hi);
       const ltTitle = ltEst ? ` — low-thrust est.: ${Math.round(ltEst.dv_ms).toLocaleString()} m/s${ltEst.tof_s != null ? ' · TOF ' + (ltEst.tof_s / 86400).toFixed(1) + ' d' : ''}` : '';
       edgesHTML += `<g style="cursor:pointer" onclick="missionEdgeClick('${id}',${latestIdx})"><title>${bothWays ? '↔ round trip — ' : ''}${chips ? 'trans-lunar transfer' : 'maneuver'} (click to open)${annTitle}${chipTitle}${ltTitle}</title>`;
       edgesHTML += `<line x1="${Ax}" y1="${Ay}" x2="${Bx}" y2="${By}" stroke="transparent" stroke-width="14"/>`;
@@ -528,7 +517,7 @@ const PROG_BODY_COLORS = {
   Pluto:'#d9a86c', // pale tan/ochre, New Horizons look — keep in sync with ORBIT_CATEGORIES' Pluto color
 };
 
-// Per-body atmosphere rim-glow tints (MISSION_MODEL_V2 §18 V1) — same DATA
+// Per-body atmosphere rim-glow tints — same DATA
 // palette exemption as PROG_BODY_COLORS immediately above (keep the two in
 // sync: any body with a meaningful atmosphere gets an entry here). Airless
 // bodies (Moon, Mercury, etc.) are intentionally ABSENT — the renderer draws
@@ -541,7 +530,7 @@ const PROG_BODY_ATMOSPHERE = {
   Titan: 'rgba(230,150,70,0.50)',
 };
 
-// Per-body ring systems (MISSION_MODEL_V2 §18 V2+) — same DATA palette
+// Per-body ring systems — same DATA palette
 // exemption as PROG_BODY_COLORS/PROG_BODY_ATMOSPHERE above. Real Saturn
 // proportions (equatorial R = 60,268 km): C ring 74,500-92,000 km (faint),
 // B ring 92,000-117,580 km (brightest), Cassini division 117,580-122,170 km
@@ -564,7 +553,7 @@ const PROG_BODY_RINGS = {
 // Returns { worldW, worldH, blobs:[…], pos:{id:[x,y]}, bodyCol:{} }.
 function _missionNmLayout() {
   // body order (left → right) and per-body geometry (colors from PROG_BODY_COLORS)
-  // R5 (2026-07-10): soiR is DERIVED from real SOI physics (physSoiRadius, 386)
+  // SoiR is DERIVED from real SOI physics (physSoiRadius, 386)
   // via the pure helper _nmSoiLayoutRadius (430) — log-scaled/clamped for a
   // reasonable layout; provenance, not literal km. The numeric literals below
   // are now only the FALLBACK used if physSoiRadius is unavailable.

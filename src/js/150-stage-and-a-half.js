@@ -1,10 +1,7 @@
 
 // ─── STAGE-AND-A-HALF ─────────────────────────
-// _s15BecoSplit and the stageExpandS15() expansion boundary now live in
-// 140-physics.js (UNIFICATION_AUDIT P2.1 — the S1.5 splitter used to be
-// hand-rolled independently here, in 560-fleet-editor.js, and in
-// 165-trade-study.js; a source-grep gate now forbids calling _s15BecoSplit
-// from any module but 140).
+// The S1.5 BECO splitter (_s15BecoSplit / stageExpandS15) lives in 140-physics.js;
+// a test gate forbids calling _s15BecoSplit from any other module.
 /**
  * Replace the CALCULATE button's target.
  * If any stage has s15 enabled, temporarily expands it into two virtual stages

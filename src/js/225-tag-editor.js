@@ -1,14 +1,11 @@
 
 // ─── STRUCTURED TAG EDITOR ────────────────────
-// Reusable chip editor for the controlled browse dimensions. Edits a holder
-// object's `tags[]` array IN PLACE, managing only the dimensions passed in and
-// preserving any other (freetext) tags. Writing into tags[] keeps user items in
-// the exact same shape as the built-ins — libResolveTags (205) parses them, so
-// nothing else changes. LENIENT: selecting nothing just leaves the item
-// untagged for that dimension (it lands in no facet, never blocks a save).
+// Chip editor for the browse dimensions. Edits holder.tags[] in place, managing
+// only the dimensions passed in and preserving freetext tags. Selecting nothing
+// leaves the item untagged for that dimension.
 //   holder : { tags: [...] }   (mutated in place)
 //   dims   : [{dim:'era',multi:true}, {dim:'origin',multi:false}, ...]
-//   mode   : 'veh' | 'stg'  (only affects the 'cls' vocab, rarely edited here)
+//   mode   : 'veh' | 'stg'  (only affects the 'cls' vocab)
 let _lvTagHolder = {tags:[]};    // working vehicle tags (era/origin) for Save LV + program
 let _stgTagHolder = {tags:[]};   // working stage tags (era/origin/prop) for Make Stage
 

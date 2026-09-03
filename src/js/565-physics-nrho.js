@@ -1,20 +1,8 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 565-physics-nrho.js — LEO -> lunar NRHO direct transfer + free-return solver
-//
-// OWNS: the Phase-5a direct LEO->NRHO transfer solver (physSolveNrhoTransfer) and the
-//   free-return solver (physFreeReturnSolve), plus their re-shoot cache
-//   (_physNrhoShootCache). Both drive the shared shooter in 565-physics-targeting.js.
-// CONTRACT (unchanged): no tolerances, seeds, iteration caps, or reference-orbit ids
-//   were altered; the solved trajectories remain byte-identical (pinned by the Gateway
-//   NRHO missKm golden and the free-return fingerprint).
-// Does NOT own: the differential corrector itself (565-physics-targeting.js), node
-//   burns / mission rebuild (residual 565-physics-mission.js).
-// Split out of 565-physics-mission.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 565* def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
-// ── MISSION_MODEL_V2 Phase 5a — LEO -> lunar NRHO direct transfer ────────────
-// cache: re-shoot only when the leg's signature changes (same discipline as
-// _physShootCache above).
+// ─── LEO → NRHO TRANSFER + FREE-RETURN SOLVERS ──────────────────────────────
+// physSolveNrhoTransfer, physFreeReturnSolve and their re-shoot cache
+// (_physNrhoShootCache). Both drive the shared shooter in
+// 565-physics-targeting.js. Definitions only; no load-time execution.
+// The cache re-shoots only when the leg's signature changes.
 const _physNrhoShootCache = {};
 
 // ── §20/C1 O1b — obliquity seam closes the site-7 scope cut (MATH.md §7al) ─
@@ -23,17 +11,16 @@ const _physNrhoShootCache = {};
 // solves for or accepts is AUTHORED in Earth's EQUATOR frame (fromOrbit.
 // inclination/.lan_deg, or physFreeReturnSolve's incDeg parking-orbit arg) —
 // same authoring convention as physShootLegAim's fromOrbit (565-physics-
-// targeting.js, §7al site 2). This wrapper is the ONE place a ring actually
+// targeting.js, site 2). This wrapper is the ONE place a ring actually
 // becomes a state in this module: it routes the equatorial pair through the
 // ONE C1 boundary (orbitWorldElements, 385) right before the
 // physElementsToState call, exactly physShootLegAim's aimBurnEq pattern, no
 // new math. All ~11 physAimBurnState call sites in this file (both
 // physSolveNrhoTransfer/_nrhoSolveFixedTArr and physFreeReturnSolve) route
-// through this — see MATH.md §7al's O1b audit for the site-by-site trace
+// through this
 // proving each one previously fed already-equatorial (incRad, raan) values
 // straight into physAimBurnState as if they were world.
 function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad) {
-  if (typeof orbitWorldElements !== 'function') return physAimBurnState(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanEqRad);
   const w = orbitWorldElements({ body: fromBody, inc_deg: (iEqRad || 0) * 180 / Math.PI, lan_deg: (raanEqRad || 0) * 180 / Math.PI });
   return physAimBurnState(fromBody, r1v, theta, pitch, dvv, w.incDeg * Math.PI / 180, yaw, w.lanDeg * Math.PI / 180);
 }
@@ -42,8 +29,8 @@ function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanE
  * Solve a LEO (or other Earth-centered fromOrbit) -> lunar NRHO direct
  * transfer: an Artemis-class TLI-like departure, ballistic Earth-Moon coast,
  * arriving co-orbital with (NOT phase-matched to) the NRHO's own trajectory
- * — see MATH.md §7t. This is explicitly 5a: rendezvous phase-matching and
- * multi-vehicle timing are 5b, deferred (MISSION_MODEL_V2.md §15).
+ * This is explicitly 5a: rendezvous phase-matching and
+ * multi-vehicle timing are 5b, deferred.
  *
  * Reuses physShootLegAim's machinery/patterns: physSolveNodeBurn for the
  * analytic departure seed, physAimBurnState for the burn construction,
@@ -87,9 +74,9 @@ function physAimBurnStateEq(fromBody, r1v, theta, pitch, dvv, iEqRad, yaw, raanE
 // R1's rotating-frame nearest-point machinery (_phaseVehiclePoint/_phaseNearestT,
 // 567) — an IDEALIZED STATION-KEEPING assumption (the target's clock advances
 // 1:1 with the ref's own wrapped clock; no real perturbation/closure-tolerance
-// drift is modeled — see MATH.md §7ae). This is a SELECTION layer only: no new
+// drift is modeled. This is a SELECTION layer only: no new
 // dynamics, no phasing burns (R3). Options outside a +15% dv band vs. the
-// cheapest converged candidate are dropped (documented band, MATH.md §7ae).
+// cheapest converged candidate are dropped.
 // Fails clean to 5a's own default candidate when no option converges or when
 // ctx.targetVehicle is absent/mismatched — result is BYTE-IDENTICAL to today
 // in that case (regression gate).
@@ -103,8 +90,6 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   const dv_kms = ctx.dv_kms;
   if (!fromOrbit || (fromOrbit.body || 'Earth') !== 'Earth') return { converged: false, note: 'NRHO transfer solver only models an Earth-centered fromOrbit' };
   if (!(dv_kms > 0)) return { converged: false, note: 'no burn magnitude supplied (ctx.dv_kms)' };
-  if (typeof refOrbitResolve !== 'function' || typeof refOrbitSamplePropagated !== 'function' || typeof refOrbitPropagatedStateAt !== 'function')
-    return { converged: false, note: 'reference-orbit catalog unavailable' };
   const refRes = refOrbitResolve(nrhoRefId);
   if (!refRes || refRes.kind !== 'propagated' || !refRes.seedState || !refRes.period_s)
     return { converged: false, note: 'NRHO ref-orbit entry not seeded' };
@@ -127,7 +112,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // at apolune phases), so a TLI-class departure can genuinely reach it —
   // the first 5a attempt let TOF float freely, Newton settled on apolune-
   // phase arrivals, and the transfer was physically unreachable (measured,
-  // MATH.md §7t critique 65).
+  //).
   const samples = refOrbitSamplePropagated(nrhoRefId, 96);
   if (!samples.length) return { converged: false, note: 'NRHO catalog entry has no propagated samples' };
   const P_nrho = refRes.period_s;
@@ -149,8 +134,8 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // + the Moon's own Earth-relative position). The first 5a attempt used the
   // Moon-center direction here and stalled ~14,000-25,000 km out — the NRHO
   // sample sits up to ~60,000 km off the Moon's center, a genuinely different
-  // plane a fixed-|Δv| burn's small yaw authority could not cross (MATH.md
-  // §7t critique 65's follow-on prescription — this IS that fix). With the
+  // plane a fixed-|Δv| burn's small yaw authority could not cross
+  // 's follow-on prescription — this IS that fix). With the
   // departure plane containing the actual aim point, the Newton corrector's
   // out-of-plane residual drops back into the linear regime. An AUTHORED
   // fromOrbit.lan_deg is fixed geometry (not a solve target), same precedence
@@ -172,7 +157,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // TARGET's Earth-frame direction (Stage-1 fix — the first attempt used the
   // Moon's center here; near perilune the two nearly coincide, but solving
   // against the actual aim point keeps the plane exact). Authored plane wins.
-  // §20 O1b: this cone-axis equation (n(Ω)·m̂=0) is the "known trap" the O1
+  // this cone-axis equation (n(Ω)·m̂=0) is the "known trap" the O1
   // spec flagged — it mirrors physShootLegAim's R3.0.1 raan-solve (565-
   // physics-targeting.js), which assumes m̂'s components are already in the
   // frame whose z-axis is the ring's inclination-cone axis. incRad here is
@@ -180,13 +165,13 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // centered WORLD/ecliptic direction to the NRHO target sample) must be
   // rotated into Earth's equatorial basis FIRST, exactly as site 2 does for
   // the Moon-center direction — otherwise the solved raan targets a cone
-  // around world-z instead of Earth's real pole (MATH.md §7al O1b audit).
+  // around world-z instead of Earth's real pole.
   const raanRootsFor = tArr => {
     if (raanAuthored) return [raanAuthoredRad];
     if (incRad <= 1e-6) return [0];
     const mHatWorld = targetEarthDirAt(tArr);
     if (!mHatWorld) return [0];
-    const eqB = (typeof physEqBasis === 'function') ? physEqBasis('Earth') : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+    const eqB = physEqBasis('Earth');
     const mHat = [physDot(mHatWorld, eqB.xEq), physDot(mHatWorld, eqB.yEq), physDot(mHatWorld, eqB.zEq)];
     const a = mHat[0] * Math.sin(incRad), b = -mHat[1] * Math.sin(incRad), c = -mHat[2] * Math.cos(incRad);
     const R = Math.hypot(a, b);
@@ -204,7 +189,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // above is untouched byte-for-byte (regression safety). Deliberately a
   // near-duplicate of the pipeline below rather than a shared extraction —
   // keeping the proven default path literally unmodified was judged safer
-  // than a risky refactor under this task's scope (MATH.md §7ae).
+  // than a risky refactor under this task's scope.
   function _nrhoSolveFixedTArr(tArrFixed) {
     try {
       const cheapF = (th, pitch, rn) => {
@@ -474,8 +459,8 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
   // callers/goldens that never pass ctx.targetVehicle).
   const tv = ctx.targetVehicle;
   if (!tv || !tv.propagated || tv.refId !== nrhoRefId || !tv.r ||
-      typeof _phaseVehiclePoint !== 'function' || typeof _phaseNearestT !== 'function' ||
-      typeof _phaseWrapDt !== 'function' || typeof refOrbitPropagatedStateAt !== 'function') {
+      typeof _phaseNearestT !== 'function' ||
+      typeof refOrbitPropagatedStateAt !== 'function') {
     return baseResult;
   }
   const pT = _phaseVehiclePoint(tv, tv.metAt != null ? tv.metAt : tDepart_s);
@@ -486,7 +471,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
     return baseResult;
   }
   const Pn = nT.period_s;
-  // idealized-station-keeping assumption (MATH.md §7ae): the target's along-
+  // idealized-station-keeping assumption: the target's along-
   // track clock advances 1:1 with the ref's own wrapped clock from the moment
   // it was last observed (pT.t) — no perturbation/closure-tolerance drift.
   const predictedClockAt = tArrQ => nT.tPhase + (tArrQ - pT.t);
@@ -524,7 +509,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
     return baseResult;
   }
   // dv band: options costing more than +15% over the cheapest converged
-  // candidate drop out before ranking (MATH.md §7ae — documented band).
+  // candidate drop out before ranking.
   const bestDv = Math.min.apply(null, evaluated.map(o => o.dvTotal_ms));
   const banded = evaluated.filter(o => o.dvTotal_ms <= bestDv * NRHO_PHASE_DV_BAND);
   banded.sort((a, b) => Math.abs(a.phaseErr_s) - Math.abs(b.phaseErr_s));
@@ -545,7 +530,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
 
   if (chosen.tArr === tArr) {
     // the base 5a candidate is also the phase-matched default — return it
-    // unchanged (byte-identical fields) plus the honest option list.
+    // unchanged plus the honest option list.
     baseResult.phaseOptions = phaseOptions;
     baseResult.phaseErr_s = chosen.phaseErr_s;
     baseResult.phaseErrKm = chosen.phaseErrKm;
@@ -575,7 +560,7 @@ function physSolveNrhoTransfer(fromOrbit, nrhoRefId, tDepart_s, ctx) {
  * flyby distance AND Earth return perigee inside [30, 500] km (aimed at the
  * seed's own value when already in band). Seeded from the P1 golden (apogee
  * 455,000 km energy; burn angle 4.5379 rad rotated with the Moon's rail).
- * R3: solves from an INCLINED parking orbit (incDeg, default 28.5 — pass the
+ * Solves from an INCLINED parking orbit (incDeg, default 28.5 — pass the
  * active vehicle's authored inclination; 0 for equatorial). The MNODE
  * builder honors the same inclination + theta = n·MET convention, so the
  * solved MET/Δv round-trips exactly.
@@ -685,8 +670,8 @@ function physFreeReturnSolve(leoAltKm, tDepart_s, overrides, incDeg) {
   }
   const metSeed = phiToMet(bestPhi), dvSeed = dvForApo(bestApo);
   const seedM = measure(propagate(mkState([metSeed, dvSeed])));
-  // N1: lunar-encounter scale as an explicit constant (was physSoiRadius('Moon')
-  // / ×0.15) — a target-selection heuristic, not a dynamical boundary.
+  // Lunar-encounter scale as an explicit constant (was physSoiRadius('Moon')
+  // ×0.15) — a target-selection heuristic, not a dynamical boundary.
   const dTgt = (isFinite(seedM.dMoonKm) && seedM.dMoonKm < PHYS_ENCOUNTER_SCALE_KM.Moon)
     ? seedM.dMoonKm : PHYS_ENCOUNTER_SCALE_KM.Moon * 0.15;
   const pTgt = (seedM.periAlt != null && seedM.periAlt >= 30 && seedM.periAlt <= 500) ? seedM.periAlt : 265;

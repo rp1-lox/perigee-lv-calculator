@@ -492,7 +492,7 @@ ok('_missionMigrateNodeMapCustomNodes: legacy custom-node .orbit field-renamed t
     const a = archAddNode({ name: 'LEO', body: 'Earth', orbit: leo });
     const b = archAddNode({ name: 'GEO', body: 'Earth', orbit: geo });
     const e = archAddEdge(a.id, b.id);
-    ok('archAddEdge: connects two existing nodes', e && e.fromId === a.id && e.toId === b.id && Array.isArray(e.chain) && e.chain.length === 0);
+    ok('archAddEdge: connects two existing nodes', e && e.fromId === a.id && e.toId === b.id);
     ok('archAddEdge: unknown endpoint -> null, no edge added', archAddEdge(a.id, 'nope') === null && archGet().edges.length === 1);
 
     const removed = archRemoveNode(a.id);

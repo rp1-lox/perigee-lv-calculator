@@ -181,7 +181,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
   // progVcirc/PROG_BODIES don't expose a rocket-equation propellant<->dv pair
   // (progRocketEqDv/progRocketEqPropNeeded do NOT exist in this codebase — the
   // only Program-module ΔV primitives are the orbital-mechanics helpers in
-  // 360-program-module-phase-1-delta-v-engine.js). Use rocketEq itself for a
+  // 360-delta-v-engine.js). Use rocketEq itself for a
   // round-trip: derive mf from a target ΔV, then confirm rocketEq recovers it.
   const isp = 320, m0 = 200000, dvTarget = 3000;
   const mf = m0 / Math.exp(dvTarget / (G0 * isp));
@@ -304,7 +304,7 @@ approx('lvPerformance: booster single-object vs array-of-one margin equivalence'
 // 'Saturn 1B & V S-IVB').
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const psrc = ['src/js/020-state.js', 'src/js/040-builtin-art.js', 'src/js/210-stage-library.js', 'src/js/050-builtin-presets.js']
+  const psrc = ['src/js/020-state.js', 'src/js/210-stage-library.js', 'src/js/050-builtin-presets.js']
     .map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n');
   const psb = { document: { getElementById: () => null }, console, window: {} };
   vm.createContext(psb);

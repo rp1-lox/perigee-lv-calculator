@@ -1,45 +1,17 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 565-physics-blt.js — MISSION_MODEL_V2 §21 B3: incremental BLT targeting solver
+// ─── BLT TARGETING SOLVER ────────────────────────────────────────────────────
+// physSolveBlt(givens): staged ballistic-lunar-transfer targeting following
+// Griesemer/Ocampo/Cooley (NTRS 20090016184). Not wired to any UI yet.
+// Uses _refRotBasisPair (425), the BLT_F16 families (424), physPropagateSegment
+// physAccelJacobian (386), physAimBurnState (565-physics-targeting.js).
 //
-// OWNS: physSolveBlt(givens) — the staged (Step 1-4) ballistic-lunar-capture
-//   targeting pipeline, plus its small helpers (quadrant/family selection,
-//   plane-crossing search, EM-L2 distance, rotating-frame projections local
-//   to this module). Reuses (does not duplicate): _refRotBasisPair (425),
-//   BLT_F16_FAMILY/BLT_FPRIME16_FAMILY/bltF16SelectFamily/bltNdToKm (424),
-//   physPropagateSegment/physAccelJacobian (386), physAimBurnState (565-
-//   physics-targeting.js), progVcirc (360).
-// CONTRACT: nothing in 565-physics-nrho.js / 565-physics-targeting.js / the
-//   5a shooter is touched (regression-guard gate pin below).
-// Does NOT own: any UI/node-map surface (B4, out of scope for B3).
-//
-// PROVENANCE / method decisions (see docs/MATH.md §7aj for the full writeup):
-//  - Reference: Griesemer/Ocampo/Cooley, NTRS 20090016184 ("the paper").
-//  - Step 1 (RTBP, 1 DOF |dv|): solved by STM-derivative Newton, per spec —
-//    opts.stm + opts.singleFrame on physPropagateSegment, chain-ruled through
-//    the fixed prograde burn direction. This is genuinely 1 DOF so the full
-//    STM chain rule is cheap and was implemented as specified.
-//  - Steps 2-4 (4-5 free params: alpha/beta/gamma parking-orientation angles,
-//    |dv|, tf): implemented with bounded PATTERN SEARCH (coordinate-wise
-//    golden-section descent on a penalty objective), NOT full STM-Jacobian
-//    Newton. Deviation from the spec's literal "via STM columns" wording —
-//    documented, not hidden: deriving d(initial parking state)/d(alpha,
-//    beta,gamma) and chaining it through Phi for a 3-4 body reference
-//    trajectory is a substantially larger derivation than Step 1's single
-//    scalar case, and the spec explicitly grants "measure and decide,
-//    document" latitude for Step 4's method choice; the same latitude is
-//    extended here to Steps 2-3 given the measured time budget. Pattern
-//    search is slower per-iteration but robust to the FD-noise/chaos concern
-//    B1 raised (no derivative estimation at all — direct objective sampling),
-//    so it does not reintroduce the failure mode B1/critique 62 warned about.
-//  - Combined-mass vs honest four-body for Step 1: uses ctx.bodies =
-//    ['Earth','Sun'] (Moon OMITTED) — the "combined-mass trick" approximated
-//    by dropping the Moon's perturbation entirely for the RTBP stage, since
-//    the spacecraft's Step-1 target (its own Sun-Earth-rotating x=0 crossing)
-//    is a slow secular geometry the Moon's short-period perturbation would
-//    only jitter, not shift structurally. Steps 2-4 use the full
-//    ['Earth','Moon','Sun'] force model (the "full four-body" the spec calls
-//    for at those stages).
-// ─────────────────────────────────────────────────────────────────────────────
+// Method: Step 1 (RTBP, one free parameter |dv|) is an STM-derivative Newton
+// solve with ctx.bodies = ['Earth','Sun'] (the Moon's short-period
+// perturbation only jitters the slow x=0 crossing geometry). Steps 2-4
+// (alpha/beta/gamma parking orientation, |dv|, tf) use bounded coordinate-wise
+// golden-section pattern search on a penalty objective with the full
+// ['Earth','Moon','Sun'] force model — slower per iteration than an STM
+// Newton but immune to finite-difference noise on chaotic arcs.
+// Full writeup in.
 
 'use strict';
 
@@ -77,7 +49,7 @@ function physBltInterpFamilyMember(family, rpKm) {
 
 // ── EM-L2 distance from Earth (km), runtime version of the harness's
 // collinearL — force balance along the Earth-Moon line, bisection (docs/
-// MATH.md §7aj / MISSION_MODEL_V2 §21 B3 "collinearL exists in the harness;
+// / "collinearL exists in the harness;
 // put a small runtime version in the module"). ────────────────────────────
 function physBltEmL2DistanceKm(t) {
   const earth = physBodyStateAt('Earth', t), moon = physBodyStateAt('Moon', t);
@@ -146,7 +118,7 @@ function physBltFindMoonPlaneCrossing(t0_s, targetOffsetDays, windowDays) {
 }
 
 // ── B3.1 — anchored departure seed (the coordinator-directed fix for the
-// original Step-1 non-convergence, MATH.md §7aj critique 111 resolution).
+// original Step-1 non-convergence, resolution).
 // The departure PHASE is not a free parameter: the family member's perigee
 // state in the Sun-EM rotating frame IS the seed, transformed to inertial at
 // t0. Construction:
@@ -189,7 +161,7 @@ function physBltAnchorSeed(t0_s, parkKm, member, familyIsF16) {
 // omitted — see module header). opts.stm + opts.singleFrame so Phi stays
 // valid across the whole (short, Earth-Sun-only, no SOI handoff by
 // construction since Moon isn't in the force model) segment.
-// B3.1: the seed's burn point AND direction come from physBltAnchorSeed (the
+// The seed's burn point AND direction come from physBltAnchorSeed (the
 // family member's own perigee geometry) — Step 1's only DOF is |dv| along the
 // anchored direction: state0(dv) = { r: anchor.rRel, v: anchor.vDir·(vcirc+dv) }.
 // Constraint g = the SPACECRAFT's Earth-centered Sun-Earth-rotating x at tf
@@ -224,7 +196,7 @@ function physBltStep1(setup, anchor, opts) {
     }
     return { g, yRot, dgddv, res };
   };
-  // ROOT SELECTION (B3.1, measured necessity — MATH.md §7aj): g(dv) has
+  // ROOT SELECTION: g(dv) has
   // MULTIPLE roots below the escape boundary (multi-rev low-apogee crossings
   // at ~600-800k km apogee, then the WSB-class root just under escape at
   // ~1.0-1.2M km apogee, then escape). A Newton iterate from the seed slides
@@ -310,7 +282,7 @@ function _bltPatternSearch(x0, steps0, objFn, opts) {
 
 // ── Step 2/3 — parking-orbit orientation + |dv| (B3.1: STM-chained Newton,
 // the paper's Eq. 6/7 method — pattern search retired here after measuring
-// it stall at ~280k km residuals; see MATH.md §7aj).
+// it stall at ~280k km residuals).
 //
 // Params (3, square system): [dv, gamma(=burn true anomaly theta), beta(=inc)].
 // alpha(=raan) stays anchored (the 4th DOF the paper frees; kept fixed since
@@ -323,7 +295,7 @@ function _bltPatternSearch(x0, steps0, objFn, opts) {
 // p2-class crossing, paper Fig. 9).
 // Derivatives: d(state0)/d(param) is EXACT ANALYTIC for a circular parking
 // orbit (below), chained through B1's Phi: dr(tf)/dp = Phi_rr·dr0/dp +
-// Phi_rv·dv0/dp — no finite differences anywhere (critique 62 discipline).
+// Phi_rv·dv0/dp — no finite differences anywhere.
 // Step 3's inequality (r_sc-Moon <= r_L2-Moon at tf) is checked against the
 // converged solution, not separately targeted.
 function physBltStep23(setup, dv0, opts) {
@@ -335,7 +307,7 @@ function physBltStep23(setup, dv0, opts) {
   // ladder makes the residual piecewise in dv below this scale). Step 4
   // refines against the actual physical capture metric from here, so this
   // is a hand-off tolerance, not a solution tolerance. NOT widened at run
-  // time — fixed, documented, MATH.md §7aj.
+  // time — fixed, documented,
   const tolKm = opts.tolKm || 15000;
   const { t0_s, tf_s, parkKm } = setup;
   const l2 = physBltEmL2DistanceKm(tf_s);
@@ -478,26 +450,6 @@ function physBltKeplerEnergyAtMoon(rGeoHelio, vHelio, moonState) {
   return { KE: v2 / 2 - mu / rMag, rMag, vRel, rRel };
 }
 
-/** Scan a propagated segment's samples for the first local-min |r - moon|
- *  (perilune candidate) — returns {idx,t,rMag} or null. */
-function physBltFindPerilune(res, tSearchStartFrac) {
-  const samples = res.samples || [];
-  const start = Math.floor((tSearchStartFrac || 0) * samples.length);
-  let best = null;
-  for (let i = Math.max(1, start); i < samples.length - 1; i++) {
-    const s = samples[i];
-    const helio = s.frame === 'Sun' ? s.r : physAdd(s.r, physBodyStateAt(s.frame, s.t).r);
-    const moon = physBodyStateAt('Moon', s.t);
-    const d = physMag(physSub(helio, moon.r));
-    const sPrev = samples[i - 1], sNext = samples[i + 1];
-    const helioPrev = sPrev.frame === 'Sun' ? sPrev.r : physAdd(sPrev.r, physBodyStateAt(sPrev.frame, sPrev.t).r);
-    const helioNext = sNext.frame === 'Sun' ? sNext.r : physAdd(sNext.r, physBodyStateAt(sNext.frame, sNext.t).r);
-    const dPrev = physMag(physSub(helioPrev, physBodyStateAt('Moon', sPrev.t).r));
-    const dNext = physMag(physSub(helioNext, physBodyStateAt('Moon', sNext.t).r));
-    if (d <= dPrev && d <= dNext && (!best || d < best.rMag)) best = { idx: i, t: s.t, rMag: d };
-  }
-  return best;
-}
 
 // Exact perilune state (B3.1): given the arc state at tStart, continue with a
 // FINE short prop (handoffs enabled — the Moon-frame periapsis event fires if
@@ -560,7 +512,7 @@ function physBltStep4(setup, step23, opts) {
   // ~59k-km flyby distances where KEm cannot go negative):
   //   4a: minimize perilune DISTANCE until inside the deep-capture zone
   //   4b: minimize KEm (surface-safety penalty) from there
-  // Phase 4-gate (B3.1, replaces the blind distance pattern search which was
+  // Gate (B3.1, replaces the blind distance pattern search which was
   // measured to stall at ~25k km — the Moon's own out-of-plane offset, +32k
   // km at the arrival epoch, which a fixed-node planar arc cannot chase):
   // STM-Newton the arc onto the L2 GATE POINT — Moon(t_arr) + 62k km along
@@ -639,7 +591,7 @@ function physBltStep4(setup, step23, opts) {
   }
   gb = gateBest.b; gg = gateBest.g; gdv = gateBest.dv;
 
-  // Phase 4-KE: pattern-polish KEm from the gate solution (beta, gamma, dv;
+  // KE: pattern-polish KEm from the gate solution (beta, gamma, dv;
   // alpha stays fixed — see the degeneracy note above), small steps — the
   // capture channel is measured-narrow.
   const objKE = params => {
@@ -722,19 +674,19 @@ function physSolveBlt(givens) {
   const parkKm = PROG_BODIES.Earth.R + parkingAltKm;
   const member = physBltInterpFamilyMember(family, parkKm);
   const familyIsF16 = family === BLT_F16_FAMILY;
-  // B3.1: the seed state (position, velocity DIRECTION, dv magnitude, and the
+  // The seed state (position, velocity DIRECTION, dv magnitude, and the
   // derived parking-orbit angles) all come from anchoring the family member's
   // perigee geometry at t0 — the departure phase is determined, not guessed.
   const anchor = physBltAnchorSeed(t0_s, parkKm, member, familyIsF16);
   const setup = { t0_s, tf_s: null, parkKm, incRad: anchor.inc, theta0: anchor.theta, raan0: anchor.raan, dv0_kms: anchor.dv0_kms, angleDeg, familyIsF16 };
   onProgress('setup', { angleDeg, dv0_kms: anchor.dv0_kms, anchoredInc: anchor.inc, anchoredRaan: anchor.raan, anchoredTheta: anchor.theta });
 
-  // B3.1 — arrival-crossing candidates + Step 1, per candidate. The Moon
+  // Arrival-crossing candidates + Step 1, per candidate. The Moon
   // crosses the Sun-Earth-rotating y-z plane twice a month on ALTERNATE
   // y-sides; the trajectory's own crossing must land on the SAME side as the
   // Moon, and the WSB-class root only exists at the tf whose geometry the
   // family segment actually reaches. So: enumerate the crossings around the
-  // spec's ~100 d p1-class arrival (§21 B2 "crossing nearest 100 d",
+  // spec's ~100 d p1-class arrival ( "crossing nearest 100 d",
   // half-month cadence), run Step 1's scan-bracket-bisect against each in
   // order of proximity to 100 d, and accept the first converged in-band
   // root whose arrival y-side matches the Moon's.

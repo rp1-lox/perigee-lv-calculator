@@ -1,38 +1,22 @@
 
-// ─── MISSION_MODEL_V2 Phase 3 T1 — reference-orbit catalog ──────────────────
-//
-// §4.3/§13 T1: orbits become first-class shared objects, like STAGE_LIBRARY.
-// Two tiers:
-//   - PROG_ORBIT_CATALOG_BUILTIN  — fixed builtin entries, stable string ids.
-//   - PROG_ORBIT_CATALOG_USER     — user-created one-offs, progUUID() ids.
-// refOrbitResolve(id) is the ONLY read path either T2 binding or the node map
-// should use — it returns plain Keplerian elements (or null for an unseeded
-// 'propagated' entry, Phase 4's job).
-//
-// Canon picked for the builtin tier (documented per the task):
-//   leo-185      LEO      185x185 km  @28.5   (Saturn V golden inclination)
-//   leo-400-51.6 Station  400x400 km  @51.6   ("Station" — ISS-class)
-//   sso-800      SSO      800x800 km  @98.6   (sun-synchronous canon alt/inc)
-//   gto-185      GTO      185x35786   @28.5
-//   geo          GEO      35786x35786 @0
-//   llo-100      LLO      100x100 km  @90 (polar) — polar chosen as the
-//                sensible default LLO canon (matches the existing node-map
-//                LLO node's 90 inc, Apollo used near-equatorial but polar is
-//                the more general/reusable catalog default for landing-site
-//                access; a program can always add an equatorial LLO one-off)
-//   nrho-nominal Lunar NRHO — kind:'propagated', SEEDED (Phase 4, see below).
-//
-// Persistence: user tier + program one-offs join _buildSessionObject (455)
-// and buildProgramObject/applyProgramObject (450) exactly like customThemes.
+// ─── REFERENCE-ORBIT CATALOG ────────────────────────────────────────────────
+// Orbits as first-class shared objects, in two tiers:
+//   PROG_ORBIT_CATALOG_BUILTIN — fixed entries with stable string ids
+//   PROG_ORBIT_CATALOG_USER    — user one-offs with progUUID() ids
+// refOrbitResolve(id) is the only read path; it returns plain Keplerian
+// elements, or null for an unseeded 'propagated' entry.
+// Builtins: leo-185 (185×185 @28.5), leo-400-51.6 (ISS-class), sso-800
+// (@98.6), gto-185, geo, llo-100 (polar), nrho-nominal (kind:'propagated').
+// The user tier is persisted with the session (455) and .program files (450).
 
 // ─── MISSION_MODEL_V2 §17 N2 — TRUE 9:2 NRHO seed (provenance) ─────────────
-// Superseded 2026-07-14 (N1 removed the SOI-wall constraint that forced the
-// old rp=3,000/ra=60,000, 4.71 d compromise — see git history / MATH.md §7s
-// for that context; critique 61 retired in §7v).
+// Superseded (N1 removed the SOI-wall constraint that forced the
+// old rp=3,000/ra=60,000, 4.71 d compromise — see git history /
+// for that context; retired in).
 //
 // Corrector: `node tests/corrector_harness.js nrho` (the re-runnable
-// provenance for every seed pinned here), 2026-07-14. Method that WORKED,
-// after two documented failures (§7v):
+// provenance for every seed pinned here),. Method that WORKED,
+// after two documented failures :
 //   - perilune-seeded shooting collapsed onto a small non-NRHO loop and FD
 //     Newton stalled at iteration 0 (the full-period map through perilune is
 //     so sensitive that finite-difference Jacobians are noise-dominated);
@@ -53,7 +37,7 @@
 // NOTE the INERTIAL Moon-frame closure is 27,241 km and that is CORRECT
 // PHYSICS, not an error: the rotating frame turns ~86.5° per 6.56 d rev, so a
 // rotating-frame-periodic orbit never closes inertially. Every consumer that
-// phase-wraps this orbit MUST wrap in the rotating frame (see
+// phase-wraps this orbit MUST wrap in the rotating frame
 // refOrbitPropagatedStateAt / refOrbitSamplePropagated below); the old seed
 // tolerated inertial wrapping only because it was corrected inertially.
 const NRHO_NOMINAL_SEED = {
@@ -68,7 +52,7 @@ const NRHO_NOMINAL_SEED = {
 
 // ─── §17 N2 — EML1 planar Lyapunov seed (provenance) ────────────────────────
 // Same harness (`node tests/corrector_harness.js lyap`), same rotating-frame
-// pattern search, 2026-07-14. Seed on the Earth-Moon line Moon-ward of L1
+// pattern search,. Seed on the Earth-Moon line Moon-ward of L1
 // (L1 at -55,835 km from the Moon at t0), planar (z≈0), free [vy, P].
 // CONVERGED: vy=-0.1593066 km/s, P=1,073,193 s = 12.421 d:
 //   rotating-frame closure = 47.4 km / 16.94 m/s   (tightest orbit shipped)
@@ -86,7 +70,7 @@ const EML1_LYAPUNOV_SEED = {
 
 // ─── §17 N2 — EML1/EML2 southern halo seeds (provenance) ────────────────────
 // Same harness (`node tests/corrector_harness.js eml1|eml2`), free-amplitude
-// rotating-frame pattern search + fine polish restart, 2026-07-14. These are
+// rotating-frame pattern search + fine polish restart,. These are
 // the single-shooting basin floors in the real ephemeris model — halos are
 // genuinely quasi-periodic there, and EML2's is strongly unstable:
 //   EML1 halo: closure 672.5 km / 44.12 m/s, P=11.106 d, r 51,488–61,496 km
@@ -97,7 +81,7 @@ const EML1_LYAPUNOV_SEED = {
 // most ONE period from the seed (refOrbitPropagatedStateAt /
 // refOrbitSamplePropagated) — the wrap acts as idealized station-keeping, so
 // the multi-rev divergence never reaches a user-visible path. Documented as
-// a critique in MATH.md §7v, not hidden.
+// a critique in, not hidden.
 const EML1_HALO_SEED = {
   r_km: [-45495.62608715, -28438.46343298, -30052.02700166],
   v_kms: [0.03974905976731, -0.06026969258125, -0.003142247672519],
@@ -180,7 +164,7 @@ function refOrbitIsBuiltin(id) {
 // spec is missing required fields.
 function refOrbitAdd(spec) {
   if (!spec || !spec.name || !spec.body) return null;
-  const id = (typeof progUUID === 'function') ? progUUID() : ('ref_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+  const id = progUUID();
   const entry = {
     id, name: spec.name, body: spec.body,
     kind: spec.kind === 'propagated' ? 'propagated' : 'keplerian',
@@ -199,7 +183,7 @@ function refOrbitAdd(spec) {
 
 // Builtins are immutable — update on a builtin id is a no-op (returns false).
 // Canonical-only input (periKm/apoKm/incDeg/lanDeg/argpDeg) since C2b item 2
-// (2026-07-17): the last legacy-spec caller (5746 orbit inspector) was migrated
+// the last legacy-spec caller (5746 orbit inspector) was migrated
 // to canonical, so the legacy peri/apo/inc/lan/argp input tolerance was retired
 // — the catalog store, its resolve() output, AND its add/update inputs are all
 // canonical now.
@@ -254,8 +238,8 @@ function refOrbitResolve(id) {
 // phase-wrapping MUST happen here: wrap in rotating coordinates at the
 // wrapped epoch, reconstruct inertial at the TRUE epoch. Same math as
 // tests/corrector_harness.js's emFrame/toRot/fromRot (keep in sync).
-// N3: generalized to any (primary, secondary) pair so the renderer's
-// sun-earth-rotating frame reuses this exact math (§17 N3, 574's
+// Generalized to any (primary, secondary) pair so the renderer's
+// sun-earth-rotating frame reuses this exact math (574's
 // _trajFrameBasisAt). xh points AWAY FROM primary, TOWARD secondary.
 function _refRotBasisPair(primary, secondary, t) {
   const e = physBodyStateAt(primary, t), m = physBodyStateAt(secondary, t);
@@ -284,7 +268,7 @@ function _refFromRot(rRot, vRot, t) {
 // Only Moon-frame refs get the rotating-frame treatment (the basis is the
 // Earth-Moon line; another frame would need its own primary pair).
 function _refRotCapable(res) {
-  return res.frame === 'Moon' && typeof physBodyStateAt === 'function';
+  return res.frame === 'Moon';
 }
 
 // Phase 4 U2: propagate a SEEDED propagated ref one full period, returning
@@ -292,7 +276,7 @@ function _refRotCapable(res) {
 // (ring rendering, orbit inspector, DEPLOY anchor sampling) all go through
 // this ONE function so the "what does this orbit actually look like" answer
 // never diverges. Returns [] if unseeded/unresolvable/integrator unavailable.
-// N2: samples are re-based through the rotating frame to the SEED epoch —
+// Samples are re-based through the rotating frame to the SEED epoch —
 // the drawn loop is the orbit's rotating-frame shape (which closes to the
 // corrected 345.6 km), rendered in inertial Moon axes frozen at t=0. The raw
 // inertial trace would show the ~27,000 km frame-rotation gap as a broken
@@ -300,7 +284,6 @@ function _refRotCapable(res) {
 function refOrbitSamplePropagated(id, nSamples) {
   const res = refOrbitResolve(id);
   if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return [];
-  if (typeof physPropagateSegment !== 'function') return [];
   const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
   const state0 = { r: res.seedState.r.slice(), v: res.seedState.v.slice() };
   // singleFrame (N1): the true 9:2 apolune (71,203 km) crosses the Moon-SOI
@@ -321,7 +304,7 @@ function refOrbitSamplePropagated(id, nSamples) {
 // (used by the DEPLOY anchor to place the vehicle at the right phase within
 // the period rather than always at the seed epoch). `metOffset` is seconds
 // since the deploy event; phase-wraps into [0, period_s).
-// N2: the wrap happens in the ROTATING frame — propagate to the wrapped
+// The wrap happens in the ROTATING frame — propagate to the wrapped
 // phase, take rotating coordinates at that epoch, reconstruct inertial at
 // the TRUE epoch. This makes the returned state physically sensible for
 // epochs beyond one period, and doubles as idealized station-keeping for the
@@ -329,7 +312,6 @@ function refOrbitSamplePropagated(id, nSamples) {
 function refOrbitPropagatedStateAt(id, metOffset) {
   const res = refOrbitResolve(id);
   if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return null;
-  if (typeof physPropagateSegment !== 'function') return null;
   const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
   const t = metOffset || 0;
   const phase = (t % res.period_s + res.period_s) % res.period_s;
@@ -351,16 +333,15 @@ function refOrbitPropagatedStateAt(id, metOffset) {
   return { r: back.r, v: back.v, frame: res.frame };
 }
 
-// N3: RAW propagated samples — no rotating-frame re-base to the seed epoch
+// RAW propagated samples — no rotating-frame re-base to the seed epoch
 // (compare refOrbitSamplePropagated, which freezes the drawn shape at t0 for
 // the inertial renderer). Each sample keeps its true epoch `t` and its true
 // propagated position, so a LIVE frame-aware renderer (574's
 // _trajFrameTransform, per-sample-epoch) can close the loop in the rotating
-// frame without the epoch-freeze critique 64 described (MATH.md §7v/§7x).
+// frame without the epoch-freeze described.
 function refOrbitSamplePropagatedRaw(id, nSamples) {
   const res = refOrbitResolve(id);
   if (!res || res.kind !== 'propagated' || !res.seedState || !res.period_s) return [];
-  if (typeof physPropagateSegment !== 'function') return [];
   const ctx = { center: res.frame, bodies: [res.frame, 'Earth', 'Sun'] };
   const state0 = { r: res.seedState.r.slice(), v: res.seedState.v.slice() };
   const out = physPropagateSegment(state0, 0, res.period_s, ctx, { maxSamples: nSamples || 200, singleFrame: true });

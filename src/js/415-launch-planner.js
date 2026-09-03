@@ -1,54 +1,18 @@
 
-// ─── PROGRAM MODULE — R7 phase 1: Launch-to-Destination Planner ─────────────
+// ─── LAUNCH-TO-DESTINATION PLANNER ──────────────────────────────────────────
+// Pure math, no DOM. Given a launch body, a destination and an epoch, computes
+// the ideal parking orbit (inclination, LAN, altitude) for the lowest-ΔV
+// departure, plus launch azimuth and departure C3. Derivation in.
 //
-// Pure math, no UI, no DOM. Given a launch body (Earth), a destination, and
-// an epoch, computes the IDEAL parking orbit (inclination, LAN, altitude)
-// that sets up the lowest-delta-v departure toward that destination, plus
-// the launch azimuth and the departure C3. See MATH.md §7p and
-// PHYSICS_PLAN.md "### R7 phase 1" for the full derivation/critiques.
-//
-// All dependency calls below happen at RUNTIME inside function bodies (never
-// at module-eval time), so this file's position in the concatenation order
-// only needs to be AFTER the modules it calls — it loads after 410 (per
-// filename sort) but does not actually need 410 at all; see the Lambert note
-// below.
-//
-// ── Dependencies (grepped, exact APIs) ───────────────────────────────────────
-//   - progBodyEphemState(body, t_s)                                   (360, line ~314)
-//       Heliocentric element-evaluated 3D state { r:[x,y,z] km, v:[vx,vy,vz] km/s }
-//       at t_s SECONDS PAST THE PROGRAM EPOCH (progEpochJD()). Sun -> zeros.
-//       This is THE one position/velocity source the whole program resolves
-//       through (physBodyStateAt/progBodyWorldPos are thin wrappers on it).
-//   - progLaunchAzimuthDeg(latDeg, incDeg)                            (360, line ~264)
-//       sin(az) = cos(i)/cos(lat). Returns {azNE, azSE, unreachable}.
-//   - progLaunchRaanFor(siteLatDeg, siteLonDeg, incDeg, tLaunchSec, spinFn) (360, line ~287)
-//       NOT called directly here — its signature takes a LAUNCH SITE/TIME
-//       and derives the RAAN a launch reaches, whereas this module needs the
-//       RAAN whose PLANE CONTAINS A GIVEN HYPERBOLIC-ASYMPTOTE DIRECTION —
-//       a related but distinct spherical-trig problem. Per the task brief,
-//       the SAME identity (Ω = λ − asin(tan(δ)/tan(i)), asin of a
-//       tan-ratio) is mirrored below in progIdealParkingOrbit rather than
-//       imported, because progLaunchRaanFor's λ input is a launch-site
-//       inertial longitude, not the right ascension of a heliocentric
-//       vector, and it isn't a drop-in substitution.
-//   - PROG_AU_KM, PROG_MU_SUN, PROG_BODY_ELEMENTS                     (360)
-//   - physV3/physAdd/physSub/physScale/physDot/physCross/physMag     (385)
-//   - progStumpffC/progStumpffS                                      (385, moved
-//       there from 410 specifically so both Lambert solvers can share them)
-//
-// ── Lambert solver note ──────────────────────────────────────────────────────
-// 410's progLambert2D is explicitly 2-D (drops z — see its header comment and
-// MATH.md critique 42) so it cannot supply a genuine 3-D v-infinity vector,
-// which this module needs for the declination-of-launch-asymptote (DLA) math.
-// progLambert3D below is the SAME universal-variable algorithm (Curtis,
-// Orbital Mechanics for Engineering Students §5.3, bisection on psi — the
-// exact algorithm 410 cites) ported to 3 dimensions: every step is dimension-
-// generic (dot products, vector scale/add) EXCEPT the prograde/retrograde
-// disambiguation, which — mirroring 410's existing convention exactly —
-// uses the sign of the z-component of r1 x r2 as a stand-in for "which way
-// is prograde," valid because every body in PROG_BODY_ELEMENTS has small
-// ecliptic inclination (<7 deg, Mars 1.85 deg, Venus 3.39 deg — same
-// approximation basis as critique 42).
+// Dependencies (all called at runtime, so only concatenation order after them matters):
+//   progBodyEphemState(body, t_s)          (360) heliocentric {r,v} at seconds past epoch
+//   progLaunchAzimuthDeg(latDeg, incDeg)   (360) {azNE, azSE, unreachable}
+//   PROG_AU_KM, PROG_MU_SUN, PROG_BODY_ELEMENTS (360); physV3/physAdd/... (385);
+//   progStumpffC/progStumpffS (385).
+// progLambert3D below is 410's universal-variable Lambert (Curtis,
+// bisection on psi) in three dimensions; prograde/retrograde is disambiguated
+// by the sign of the z-component of r1 × r2, valid because every body in
+// PROG_BODY_ELEMENTS has small ecliptic inclination.
 
 /**
  * Solve Lambert's problem in 3-D heliocentric space (prograde = CCW as seen
@@ -146,7 +110,7 @@ function progDepartVinf(fromBody, destBody, tDepartJD, tArrJD) {
 // TOF range, step size). Hand-picked from rough synodic periods (Mars ~780 d,
 // Venus ~584 d) and typical Hohmann-class transfer times; NOT derived from a
 // synodic-period formula in code — same "hand-tuned constant" category as
-// MATH.md's other magic-number critiques (7/24/51/52/53). Unknown bodies
+// Other magic-number critiques (7/24/51/52/53). Unknown bodies
 // fall back to a generic wide window.
 const _LP_DEFAULT_WINDOWS = {
   Mars:  { scanSpanDays: 780, tofMinDays: 150, tofMaxDays: 400, step: 8  },
@@ -202,22 +166,22 @@ function progOptimalDeparture(fromBody, destBody, epochJD, opts) {
  * the given departure v-infinity vector, for a site at siteLatDeg.
  * Returns { inc_deg, lan_deg, dla_deg, azimuthDeg, planePenalty, alt_km, note }.
  *
- * §20 OBLIQUITY: DLA (declination of the launch asymptote) and the returned
+ * OBLIQUITY: DLA (declination of the launch asymptote) and the returned
  * inc/lan are all EQUATOR-frame quantities (the user-facing authoring
  * convention every other launch/orbit inclination in the program uses) —
  * `vInfVec` (world/ecliptic frame, from progDepartVinf) is rotated into
  * `fromBody`'s equator frame via physEqBasis (385) FIRST, then the rest of
  * this function's algebra is untouched: it always operated correctly in
  * "whatever frame vInfVec's components are in," it just used to be handed
- * the ecliptic frame directly (the pre-§20 approximation — MATH.md
- * critiques 54/55/57 — now retired: real obliquity via PROG_BODY_POLES).
+ * the ecliptic frame directly (the pre-§20 approximation
+ * 55/57 — now retired: real obliquity via PROG_BODY_POLES).
  */
 function progIdealParkingOrbit(args) {
   const { vInfVec, siteLatDeg, altKm, fromBody } = args || {};
   const alt_km = isFinite(altKm) ? altKm : 185;
   const body = fromBody || 'Earth';
   const worldVec = vInfVec || [0, 0, 0];
-  const eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : { xEq: [1, 0, 0], yEq: [0, 1, 0], zEq: [0, 0, 1] };
+  const eqB = physEqBasis(body);
   const vInfEq = [physDot(worldVec, eqB.xEq), physDot(worldVec, eqB.yEq), physDot(worldVec, eqB.zEq)];
   const vInfMag = physMag(vInfEq);
 
@@ -289,8 +253,8 @@ function progPlanLaunchToDestination(args) {
     // progOptimalDeparture. The "ideal" parking orbit for a lunar transfer
     // is simply coplanar with the Moon's instantaneous orbital plane at the
     // planned TLI time (a real free-return/plane-change trade exists, but
-    // coplanar minimizes the TLI-to-LOI plane-change cost -- see MATH.md
-    // critique 58). dvDepart reuses progDvTLI (360) so the readout's ΔV
+    // coplanar minimizes the TLI-to-LOI plane-change cost -
+    // . dvDepart reuses progDvTLI (360) so the readout's ΔV
     // number matches what the mission's TLI burn will actually cost.
     const tDep = isFinite(tDepartJD) ? (tDepartJD - epochJD) * 86400 : 0;
     const plane = progMoonPlaneAt(epochJD, tDep);
@@ -300,7 +264,7 @@ function progPlanLaunchToDestination(args) {
       inc_deg, lan_deg: plane.lan_deg, alt_km, c3: null, vInfMag: null, dla_deg: null,
       azimuthDeg: progLaunchAzimuthDeg(siteLatDeg || 0, inc_deg),
       planePenalty, tDepartJD: isFinite(tDepartJD) ? tDepartJD : epochJD, tArrJD: null,
-      dvDepart: (typeof progDvTLI === 'function') ? progDvTLI(alt_km) : null,
+      dvDepart: progDvTLI(alt_km),
       note: `coplanar with the Moon's instantaneous orbital plane at TLI time (inc ${plane.inc_deg.toFixed(2)} deg vs ecliptic)`
         + (planePenalty > 0.05 ? `; site latitude exceeds the plane's inclination by ${planePenalty.toFixed(2)} deg -- dogleg required` : ''),
     };
@@ -342,7 +306,7 @@ function progPlanLaunchToDestination(args) {
 
 /**
  * Moon's instantaneous orbital-plane inclination/LAN TO EARTH'S EQUATOR
- * (§20 OBLIQUITY — this is the fix for the reported bug: plane-matching a
+ * ( OBLIQUITY — this is the fix for the reported bug: plane-matching a
  * KSC launch, which is equator-referenced, against an ECLIPTIC-frame Moon
  * plane compared a 28.5 deg site against a ~5.15 deg ecliptic target and
  * read UNREACHABLE; the real, equator-referenced figure oscillates ~18.3-
@@ -356,9 +320,9 @@ function progPlanLaunchToDestination(args) {
  * orbital plane -- it nutates with the ~18.6yr regression of nodes baked
  * into PROG_MOON_ELEMENTS.OmDot, which is physically correct for "the
  * plane at this exact epoch" but will drift over a long mission if reused
- * without recomputing at the new epoch. See MATH.md §7p critique 58.
- * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since §20).
- * C1 NOTE (2026-07-17, MISSION_MODEL_V2.md §24): this progWorldToEqElements
+ * without recomputing at the new epoch..
+ * Returns { inc_deg, lan_deg } (inc_deg is inc-TO-EQUATOR since).
+ * C1 NOTE: this progWorldToEqElements
  * call is exempt from the C1 gate's "route through orbitWorldElements"
  * requirement — it runs the INVERSE direction (a computed world-frame plane
  * reported back OUT in the user-facing equator-authoring convention), not an
@@ -377,8 +341,8 @@ function progMoonPlaneAt(epochJD, t_s) {
   // passing an epochJD different from the global got the GLOBAL epoch's plane.
   // When epochJD is absent/non-finite, fall back to the global epoch (met=t_s,
   // byte-identical to the pre-fix behavior for every normal caller that already
-  // passes epochJD == the program epoch). See MATH.md §7al / critique 120.
-  const base = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  // passes epochJD == the program epoch)..
+  const base = progEpochJD();
   const met = (t_s || 0) + (isFinite(epochJD) ? (epochJD - base) * 86400 : 0);
   const st = progBodyLocalEphemState('Moon', met);
   const h = physCross(st.r, st.v);
@@ -386,14 +350,13 @@ function progMoonPlaneAt(epochJD, t_s) {
   if (hMag < 1e-9) return { inc_deg: 0, lan_deg: 0 };
   const inc_ecl = Math.acos(Math.max(-1, Math.min(1, h[2] / hMag))) * 180 / Math.PI;
   const lan_ecl = _prog360(Math.atan2(h[0], -h[1]) * 180 / Math.PI);
-  if (typeof progWorldToEqElements !== 'function') return { inc_deg: inc_ecl, lan_deg: lan_ecl };
   const eq = progWorldToEqElements('Earth', inc_ecl, lan_ecl);
   return { inc_deg: eq.inc_deg, lan_deg: eq.lan_deg };
 }
 
 /**
  * Generic "match this plane" resolver for the launch card's plane-target
- * picker (R7 phase 2 / user feedback item 2). target is either the string
+ * picker. target is either the string
  * 'Moon' or a catalog reference-orbit object with a defined plane
  * (kind:'keplerian', inc [+ lan if pinned]).
  * Returns { inc_deg, lan_deg, source, unreachable, penalty_deg } given the

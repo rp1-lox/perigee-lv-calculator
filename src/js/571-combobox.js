@@ -1,24 +1,8 @@
-// ─── Generic search-combobox helper ────────────────────────────────────────
-// Reused by the LAUNCH card's vehicle picker and payload picker (see
-// docs/MISSION_MODEL_V2.md s12 addendum, "LAUNCH card LV/payload search").
-// Pattern follows 578-mission-epoch-picker.js: a body-appended floating
-// popover, capture-phase Escape (stopPropagation so it doesn't ALSO cancel
-// the whole pending event card via 575-mission-undo.js's document Escape
-// listener, which runs in the bubble phase), and a deferred outside-click
-// listener (deferred one tick so the click that opened the combobox doesn't
-// immediately close it).
-//
-// Regression this exists to fix: the unified pending-card LAUNCH form
-// (e1b08583f) rendered its vehicle <select> straight from `_fleetEntries`
-// (src/js/570-mission-cards.js) instead of the old dock's
-// `_missionLvPickerOptsHTML` (src/js/570-mission-manager.js), which is the
-// ONLY place that also listed Built-in/My Vehicles and snapshotted a picked
-// library vehicle into `_fleetEntries` via `_fleetVehicleSpecFromLib`
-// (`missionPickLibVehicle`, now dead code with no callers). `_fleetEntries`
-// starts empty in every fresh program, so the LAUNCH form's dropdown had
-// nothing to show and picking never fired the snapshot path -> "blank
-// dropdown, does nothing." The combobox picker below restores the
-// Built-in/My Vehicles/Program grouping AND the on-pick snapshot behavior.
+// ─── SEARCH COMBOBOX ────────────────────────────────────────────────────────
+// Generic floating search picker used by the LAUNCH card's vehicle and payload
+// pickers. Body-appended popover, capture-phase Escape (stopPropagation so the
+// pending-card Escape handler in 575 does not also fire), and an outside-click
+// listener deferred one tick so the opening click does not close it.
 
 let _comboPopEl = null;
 let _comboCloseHandlers = null;
@@ -62,7 +46,7 @@ function comboboxOpen(opts) {
   document.body.appendChild(pop);
   _comboPopEl = pop;
 
-  function esc(s) { return (typeof _mrEsc === 'function') ? _mrEsc(s) : String(s == null ? '' : s); }
+  function esc(s) { return _mrEsc(s); }
 
   function filteredGroups() {
     const q = (inputEl.value || '').trim().toLowerCase();

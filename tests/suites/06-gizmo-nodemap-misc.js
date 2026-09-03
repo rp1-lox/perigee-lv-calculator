@@ -56,19 +56,8 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
 // R6.5 (2026-07-11) — trajectory-view apse markers + occlusion (574)
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const { _trajApsePoints, _trajPointOccluded, _trajOcclusionSplitRuns } =
-    vm.runInContext('({ _trajApsePoints, _trajPointOccluded, _trajOcclusionSplitRuns })', sandbox);
-
-  // _trajApsePoints: robust min/max-radius pick, not just sample[0]/sample[N/2]
-  {
-    const el = { a: 400000, e: 0.5, i: 0.2, raan: 0.4, argp: 0.9 };
-    const { periPt, apoPt, periR, apoR } = _trajApsePoints(el, 96);
-    approx('R6.5 apse: periR = a(1-e)', periR, el.a * (1 - el.e), 1);
-    approx('R6.5 apse: apoR = a(1+e)', apoR, el.a * (1 + el.e), 1);
-    approx('R6.5 apse: periPt magnitude matches periR', Math.hypot(periPt[0], periPt[1], periPt[2]), periR, 1e-6);
-    approx('R6.5 apse: apoPt magnitude matches apoR', Math.hypot(apoPt[0], apoPt[1], apoPt[2]), apoR, 1e-6);
-    ok('R6.5 apse: apo is farther than peri', apoR > periR);
-  }
+  const { _trajPointOccluded, _trajOcclusionSplitRuns } =
+    vm.runInContext('({ _trajPointOccluded, _trajOcclusionSplitRuns })', sandbox);
 
   // _trajPointOccluded: depth-sign convention (larger depth = nearer camera,
   // painter sort ascending) — a point BEHIND the near cap (smaller depth than
@@ -116,9 +105,9 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
 // R3.3 — maneuver gizmo pure helpers (5745-maneuver-gizmo.js)
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const { _trajGizmoAxes, _trajGizmoPxToDv, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout,
+  const { _trajGizmoAxes, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout,
           _trajGizmoScreenDir, physMag, physDot } =
-    vm.runInContext('({ _trajGizmoAxes, _trajGizmoPxToDv, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout, _trajGizmoScreenDir, physMag, physDot })', sandbox);
+    vm.runInContext('({ _trajGizmoAxes, _trajGizmoNearestSampleMet, _trajGizmoFormatReadout, _trajGizmoScreenDir, physMag, physDot })', sandbox);
 
   // axes: circular-orbit state -> orthonormal-ish {rHat,vHat,hHat}
   {
@@ -130,14 +119,6 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
     approx('gizmo axes: hHat = r cross v direction (z for this planar case)', ax.hHat[2], 1, 1e-9);
     ok('gizmo axes: rHat perp hHat', Math.abs(physDot(ax.rHat, ax.hHat)) < 1e-9);
     ok('gizmo axes: degenerate state (zero v) -> null', _trajGizmoAxes([7000, 0, 0], [0, 0, 0]) === null);
-  }
-
-  // px-drag -> dv mapping: 2 m/s/px normal, 0.2 m/s/px fine (shift), sign preserved (flip past zero)
-  {
-    approx('gizmo px->dv: 100px normal = 200 m/s', _trajGizmoPxToDv(100, false), 200, 1e-9);
-    approx('gizmo px->dv: 100px shift-fine = 20 m/s', _trajGizmoPxToDv(100, true), 20, 1e-9);
-    approx('gizmo px->dv: negative px flips sign', _trajGizmoPxToDv(-50, false), -100, 1e-9);
-    ok('gizmo px->dv: zero px = zero dv', _trajGizmoPxToDv(0, false) === 0);
   }
 
   // nearest-sample MET resolution
@@ -170,17 +151,9 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
 // R3.4 — gizmo usability + KSP parity pure helpers (5745-maneuver-gizmo.js)
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const { _trajGizmoHandleSideMag, _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet,
-          _trajGizmoClosestApproach, _trajGizmoSoiEntryT, _trajGizmoPreviewFidelity, physMag } =
-    vm.runInContext('({ _trajGizmoHandleSideMag, _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet, _trajGizmoClosestApproach, _trajGizmoSoiEntryT, _trajGizmoPreviewFidelity, physMag })', sandbox);
-
-  // six-handle component mapping: pull-away semantics, never crosses zero
-  {
-    approx('gizmo handle sideMag: pull away 100px -> +200', _trajGizmoHandleSideMag(0, 100, false), 200, 1e-9);
-    approx('gizmo handle sideMag: push back toward node clamps at 0 (never negative)', _trajGizmoHandleSideMag(50, -1000, false), 0, 1e-9);
-    ok('gizmo handle sideMag: never negative regardless of input', _trajGizmoHandleSideMag(10, -9999, true) === 0);
-    approx('gizmo handle sideMag: fine (shift) drag', _trajGizmoHandleSideMag(0, 100, true), 20, 1e-9);
-  }
+  const { _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet,
+          _trajGizmoClosestApproach, _trajGizmoSoiEntryT, physMag } =
+    vm.runInContext('({ _trajGizmoCenterDragDMet, _trajGizmoOrbitPeriodMet, _trajGizmoClosestApproach, _trajGizmoSoiEntryT, physMag })', sandbox);
 
   // px -> dMET node-time drag: gain formula + clamp behavior (clamp itself lives in the caller; helper is the pure ratio)
   {
@@ -239,31 +212,20 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
 
   // determinism: same inputs -> byte-identical outputs (replay/undo safety, per the module's own contract)
   {
-    const a = _trajGizmoHandleSideMag(37, -12.5, false), b = _trajGizmoHandleSideMag(37, -12.5, false);
-    ok('gizmo determinism: handle sideMag is a pure function of its inputs', a === b);
     const s1 = [{ t: 0, r: [0, 0, 0], frame: 'Earth' }, { t: 100, r: [5000, 0, 0], frame: 'Earth' }];
     const rf = () => ({ r: [3000, 0, 0] });
     const c1 = _trajGizmoClosestApproach(s1, 'Target', rf), c2 = _trajGizmoClosestApproach(s1, 'Target', rf);
     ok('gizmo determinism: CA extraction is deterministic for identical inputs', c1.dKm === c2.dKm && c1.t === c2.t);
   }
 
-  // fidelity-ladder decision (pure state helper, per the R3.4 spec addendum — timers themselves are NOT gate-tested)
-  {
-    ok('gizmo fidelity: fresh movement (dt=0) -> cheap', _trajGizmoPreviewFidelity(1000, 1000) === 'cheap');
-    ok('gizmo fidelity: just under the debounce -> cheap', _trajGizmoPreviewFidelity(1000, 1000 + 1999) === 'cheap');
-    ok('gizmo fidelity: at the debounce boundary -> full', _trajGizmoPreviewFidelity(1000, 1000 + 2000) === 'full');
-    ok('gizmo fidelity: well past the debounce -> full', _trajGizmoPreviewFidelity(1000, 60000) === 'full');
-    ok('gizmo fidelity: custom debounceMs is honored', _trajGizmoPreviewFidelity(0, 500, 500) === 'full' && _trajGizmoPreviewFidelity(0, 499, 500) === 'cheap');
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // R3.5 — gizmo polish (user flight-test feedback, 2026-07-10) pure helpers
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  const { _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue,
-          _trajRingDirSegments, _trajGizmoPullRate } =
-    vm.runInContext('({ _trajGizmoNearestScreenMet, _trajGizmoClampCross, _trajGizmoDragComponentValue, _trajRingDirSegments, _trajGizmoPullRate })', sandbox);
+  const { _trajGizmoNearestScreenMet, _trajRingDirSegments, _trajGizmoPullRate } =
+    vm.runInContext('({ _trajGizmoNearestScreenMet, _trajRingDirSegments, _trajGizmoPullRate })', sandbox);
 
   // item 1: cursor-nearest-sample center-drag mapping
   {
@@ -272,25 +234,6 @@ const { G0, MU, RE, OMEGA_E, PROG_BODIES, PROG_HELIO_R, PROG_MU_SUN, PROG_MOON_O
     ok('gizmo nearest-screen-met: closer-to-origin cursor picks met=0', _trajGizmoNearestScreenMet(pts, 5, 5) === 0);
     ok('gizmo nearest-screen-met: works in every direction (not just along one axis)', _trajGizmoNearestScreenMet(pts, 10, 90) === 150);
     ok('gizmo nearest-screen-met: empty array -> null', _trajGizmoNearestScreenMet([], 1, 1) === null);
-  }
-
-  // item 4: opposing-handle zero-crossing clamp
-  {
-    ok('gizmo clampCross: same-sign passes through unchanged', _trajGizmoClampCross(50, 30) === 30);
-    ok('gizmo clampCross: crossing from + to - clamps to 0', _trajGizmoClampCross(50, -10) === 0);
-    ok('gizmo clampCross: crossing from - to + clamps to 0', _trajGizmoClampCross(-50, 10) === 0);
-    ok('gizmo clampCross: prev=0 lets any candidate through (new drag, free to build the opposite sign)', _trajGizmoClampCross(0, -10) === -10 && _trajGizmoClampCross(0, 10) === 10);
-
-    // composed drag-component value: grabbing the OPPOSITE handle drains an
-    // existing value to 0 and STAYS there for the rest of that same drag
-    // (does not silently continue negative) — matches the user's report.
-    approx('gizmo dragComponentValue: own-handle drag away from 0 builds normally', _trajGizmoDragComponentValue(0, 1, 200), 200, 1e-9);
-    approx('gizmo dragComponentValue: own-handle drag back floors at 0', _trajGizmoDragComponentValue(50, 1, -1000), 0, 1e-9);
-    approx('gizmo dragComponentValue: opposite-handle grab drains +50 to 0, not negative', _trajGizmoDragComponentValue(50, -1, 500), 0, 1e-9);
-    approx('gizmo dragComponentValue: opposite-handle grab even far past the drain point stays at 0', _trajGizmoDragComponentValue(50, -1, 99999), 0, 1e-9);
-    approx('gizmo dragComponentValue: a FRESH drag from 0 on the opposite handle builds negative freely', _trajGizmoDragComponentValue(0, -1, 500), -500, 1e-9);
-    ok('gizmo dragComponentValue: a "+" handle result is never negative', _trajGizmoDragComponentValue(-50, 1, -9999) === 0);
-    ok('gizmo dragComponentValue: a "-" handle result is never positive', _trajGizmoDragComponentValue(50, -1, -9999) === 0);
   }
 
   // item 2: ring direction-of-motion opacity segments

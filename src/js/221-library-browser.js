@@ -1,16 +1,11 @@
 
-// ─── LIBRARY BROWSER (v2 merged design) ───────
-// Replaces the old flat buildStageLibrary / buildPresets rendering inside
-// #lib-body on the Vehicles page. Browse by taxonomy (205-tag-schema dims) →
-// drill into a value → refine with stacked facets → search composes with the
-// current scope. A "Spotlight" surfaces a random item on the home view.
-// Vehicles ⇄ Stages is the spine. Renders into #lib-browser-body; the toggle +
-// search box live in the static HTML and call libSetMode / libSearch.
-//
-// Reuses existing card factories & behaviors: stages → makeCard() (drag/click
-// already wired), vehicles → libMakeVehicleCard(). buildStageLibrary and
-// buildPresets are reassigned to libRender at the bottom so every existing
-// refresh call-site keeps working.
+// ─── LIBRARY BROWSER ──────────────────────────
+// Vehicles-page library: browse by taxonomy (205) → drill into a value → refine
+// with stacked facets → search within the scope; a Spotlight shows a random
+// item on the home view. Renders into #lib-browser-body; the mode toggle and
+// search box live in the static HTML (libSetMode / libSearch).
+// Stage cards come from makeCard(), vehicle cards from libMakeVehicleCard();
+// buildStageLibrary and buildPresets are reassigned to libRender at the bottom.
 
 let _libMode='veh', _libQ='', _libFacets={}, _libBrowseDim=null, _libSpot=null;
 // Stages use a class-first layout (S-C): class tabs + propellant chips + a side

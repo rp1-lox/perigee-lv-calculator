@@ -1,23 +1,15 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5741-trajectory-scene-extract.js — Trajectory scene extraction + orbit records
-//
-// OWNS: the per-mission scene extractor _trajExtractMission (walks m.log into
-//   dedup'd orbit records + transfer/leg descriptors the render layer draws),
-//   orbit-record identity/labelling helpers (_trajOrbitKey, _trajCorridorMoon,
-//   _trajOrbitLabel, _trajFrameForOrbit), maneuver owner-key resolution
-//   (_trajOwnerKeysForManeuver), and the parametric ellipse geometry helper
-//   (_trajEllipseGeom).
-// Does NOT own: rendering, labels/LOD, camera, globes. Consumers live in the
-//   other 574x modules (loaded after this file).
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order among 574x def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TRAJECTORY SCENE EXTRACTION ───────────────────────────────────────────
+// _trajExtractMission walks m.log into deduplicated orbit records plus
+// transfer/leg descriptors for the render layer; orbit-record identity and
+// labelling helpers (_trajOrbitKey, _trajCorridorMoon, _trajOrbitLabel,
+// _trajFrameForOrbit), maneuver owner-key resolution, and the parametric
+// ellipse geometry helper _trajEllipseGeom.
 
 // ── mission content extraction ───────────────────────────────────────────
 // Everything below reads the REPLAYED log (m._expanded, populated by
 // missionRecompute — each entry carries e.snapshot[] of live-vehicle states
 // AFTER that event, plus e.metStart / e.dvRequired / e.dvDelivered / e.fromNode
-// / e.toNode for MANEUVER, e.days for COAST). Positions along orbits are NOT
+// e.toNode for MANEUVER, e.days for COAST). Positions along orbits are NOT
 // modeled — this is a geometry-true, time-schematic map, per the design brief.
 
 // A scene-local orbit record: { key, body, a, e, r_peri, r_apo, label, colors:Set, names:Set }
@@ -29,8 +21,8 @@ function _trajOrbitKey(body, peri, apo) {
 
 // Detects a transit-corridor snapshot (e.g. a TLC leg captured mid-coast: peri
 // near a low parking orbit, apo near a moon's orbital radius around `body`).
-// C2: corridor STATE RINGS DIE — arcs carry all transfer meaning now. This
-// detector is kept only to SUPPRESS ring generation for these snapshots (see
+// Corridor STATE RINGS DIE — arcs carry all transfer meaning now. This
+// detector is kept only to SUPPRESS ring generation for these snapshots
 // addOrbitRing below), not to relabel them. Tolerance generous (2%) since
 // these are snapshot-of-the-moment radii, not exact apsides.
 function _trajCorridorMoon(body, apo) {
@@ -56,26 +48,10 @@ function _trajOrbitLabel(body, peri, apo) {
   return Math.abs(apo - peri) < 5 ? `${prefix}${rounded}` : `${prefix}${rounded}×${Math.round(apo)}`;
 }
 
-// Which body-frame ('Sun' for interplanetary/heliocentric legs, else a body
-// name) an orbit/transit record belongs in. Renamed conceptually from "scene"
-// to "frame" in C1b (there's no scene to route to any more — this only picks
-// which body's world position the content is drawn around).
+// Which body frame an orbit/transit record is drawn around ('Sun' for
+// heliocentric legs, else the parent body).
 function _trajFrameForOrbit(o) {
-  if (!o) return null;
-  // Field is `o.type === 'transit'`, not a boolean `o.transit` — PROG_NM_NODES
-  // (430) node specs use `type:'transit'` (see e.g. mars-transfer's orbit
-  // `{type:'transit', body:'Sun', destination:'Mars'}`); fixed here (was
-  // checking a field name that's never actually set on any node, so every
-  // Sun-frame/translunar transit leg silently fell through to the plain
-  // `o.body` branch below — for a Sun-body transit that's `'Sun'` anyway
-  // (harmless), but for local-frame transits like TLC (`body:'Earth'`) it
-  // was accidentally correct too; the bug only bites callers that branch on
-  // this function's SPECIFIC transit-vs-plain distinction, e.g. the planet
-  // calibration pass added here needing to identify Sun-frame legs reliably).
-  if (o.type === 'transit' && o.body === 'Sun') return 'Sun';
-  if (o.type === 'transit') return o.body || 'Earth'; // translunar etc — parent body's local frame
-  if (o.escape) return o.body || 'Earth';
-  return o.body || 'Earth';
+  return o ? (o.body || 'Earth') : null;
 }
 
 // Walk m._expanded snapshots, building per-body-frame: orbit rings, transfer
@@ -130,10 +106,10 @@ function _trajExtractMission(m) {
     // R3.2 tier 1: an orbit spec that AUTHORED Ω/ω wins outright — stamped at
     // ring creation so the R3.1 state-derived pass below (which only sets
     // rec.elements when absent) can never override it. Precedence enforced by
-    // write order: authored (here) -> flight-derived (§7i pass) -> default
+    // write order: authored (here) -> flight-derived ( pass) -> default
     // (Ω=ω=0 convention, left as rec.elements == null for _trajRingSVG).
     if (!rec.elements && lanDeg != null) {
-      // §20/C1 OBLIQUITY (MATH.md §7al, site 11): inc/lanDeg here are
+      // C1 OBLIQUITY: inc/lanDeg here are
       // AUTHORED, i.e. EQUATOR-referenced (os.inclination/os.lan — the
       // program's authoring convention). The ring is sampled + projected in
       // the WORLD (ecliptic) frame the tilted globe and the Moon are drawn
@@ -142,7 +118,7 @@ function _trajExtractMission(m) {
       // ~23.44 deg (Earth's obliquity) off its own physics plane and off the
       // Moon — the reported "plane-match does nothing" bug, made visible once
       // O2 gave the globe a real axial tilt (site 10's rendering scope-cut in
-      // §7al assumed world==equator, which O2 retired).
+      // assumed world==equator, which O2 retired).
       const _w20 = (typeof orbitWorldElements === 'function')
         ? orbitWorldElements({ body, incDeg: inc || 0, lanDeg })
         : { incDeg: inc || 0, lanDeg };
@@ -186,7 +162,7 @@ function _trajExtractMission(m) {
       if (!v.orbit || v.orbit.surface) return;
       const o = v.orbit;
       if (o.propagated && o.refId) {
-        const refEntry = (typeof refOrbitGet === 'function') ? refOrbitGet(o.refId) : null;
+        const refEntry = refOrbitGet(o.refId);
         addPropagatedRing(o.body || 'Moon', o.refId, refEntry ? refEntry.name : null, v.owners, e._authIdx);
         return;
       }
@@ -247,7 +223,7 @@ function _trajExtractMission(m) {
   // (stability under replay) — later legs never re-orient an already-derived
   // ring. Size (peri/apo) is unchanged — orientation only (tier 2 of the
   // three-tier rule; unmatched rings keep the Ω=0 default, tier 3).
-  if (m.missionId != null && typeof _physTrajByMission !== 'undefined') {
+  if (m.missionId != null) {
     const physLegs = (_physTrajByMission[m.missionId] && _physTrajByMission[m.missionId].legs) || [];
     physLegs.forEach(L => {
       if (!L.converged || (!L.departElements && !L.arrivalElements)) return;

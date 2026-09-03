@@ -1,20 +1,8 @@
-// ──────────────────────────────────────────────────────────────────────────────────
-// 5745-maneuver-gizmo-drag.js — Gizmo drag mechanics, commit, and scratch preview
-//
-// OWNS: the interactive drag handling — Δv handle drag (pointer down/move/up, ticker,
-//   keydown, cancel: _trajGizmoHandleDown/Move/Up, _trajGizmoHandleTick,
-//   _trajGizmoStart/StopDragTicker, _trajGizmoDetachManeuverIfNeeded, _trajGizmoKeydown,
-//   _trajGizmoDragCtxMenu, _trajGizmoCancelDrag); center-knob TIME drag and MANEUVER
-//   center-drag (_trajGizmoCenterDown/Move/Up, _trajGizmoManeuverCenterDown,
-//   _trajGizmoManeuverCommitTimeDrag, _trajGizmoCancelCenterDrag); the commit path
-//   (_trajGizmoCommit); and the SCRATCH-ONLY live-preview propagation
-//   (_TRAJ_GIZMO_FULL_DEBOUNCE_MS, _trajGizmoScheduleScratch[Cheap], _trajGizmoRunScratch,
-//   _trajGizmoRepaintScenePreview).
-// Does NOT own: overlay rendering / node menu (residual core), hover placement (-hover),
-//   or pure math (-math).
-// Split out of 5745-maneuver-gizmo.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 5745* def-only modules is irrelevant.
-// ────────────────────────────────────────────────────────────────────────────
+// ─── MANEUVER GIZMO — drag mechanics, commit, scratch preview ──────────────
+// Δv handle drag (pointer down/move/up, ticker, keydown, cancel), center-knob
+// time drag and maneuver center drag, the commit path (_trajGizmoCommit), and
+// the scratch-only live-preview propagation (_trajGizmoScheduleScratch,
+// _trajGizmoRunScratch, _trajGizmoRepaintScenePreview).
 
 // ── Drag mechanics — handles (Δv) ───────────────────────────────────────────
 /** R6.2' Phase B: the first Δv-handle drag on a solved maneuver gizmo
@@ -33,7 +21,7 @@
 function _trajGizmoDetachManeuverIfNeeded() {
   const g = _trajGizmo;
   if (!g || g.kind !== 'maneuver' || g.authIdx == null) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (!m || !m.log[g.authIdx] || !_evIsSolvedManeuver(m.log[g.authIdx])) return;
   const e = m.log[g.authIdx];
   e.mode = 'manual';
@@ -45,7 +33,7 @@ function _trajGizmoDetachManeuverIfNeeded() {
   // applies the same dv vector in the same basis the solved leg really flew,
   // instead of reconstructing from mean-motion phase. Falls back silently
   // (no stamp) if the leg hasn't been computed with a burnState yet.
-  const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[g.missionId] : null;
+  const rec = _physTrajByMission[g.missionId];
   const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === g.authIdx);
   if (leg && leg.burnState && leg.burnState.r && leg.burnState.v)
     e.burnState = { r: leg.burnState.r.slice(), v: leg.burnState.v.slice() };
@@ -64,7 +52,7 @@ function _trajGizmoHandleDown(evt, key) {
   const rect = svgEl && svgEl.getBoundingClientRect();
   const geo = rect && _trajGizmoScreenGeo(g.missionId, rect);
   if (!geo) return;
-  // R3.5.1 (correction #2): compStart is still the component's RAW signed
+  // CompStart is still the component's RAW signed
   // value at grab time (used only to revert on cancel) — the live value is
   // now driven by _trajGizmoHandleTick's rate integration, not a per-move
   // px->dv conversion. curX/curY track the latest cursor position; the
@@ -74,7 +62,7 @@ function _trajGizmoHandleDown(evt, key) {
   document.addEventListener('mouseup', _trajGizmoHandleUp);
   document.addEventListener('contextmenu', _trajGizmoDragCtxMenu);
   _trajGizmoStartDragTicker();
-  // R3.5.1 (item 3 root-cause fix): arm the full-fidelity debounce right
+  // Arm the full-fidelity debounce right
   // away, same as a real move would — otherwise a user who holds a handle
   // perfectly still while the rate builds (very plausible with a hold-to-
   // accumulate control) never triggers a single 'full' scratch pass, and an
@@ -101,7 +89,7 @@ function _trajGizmoKeydown(evt) {
   else _trajGizmoClose();
 }
 
-// R3.5.1 (correction #2): mousemove during a handle drag only records the
+// Mousemove during a handle drag only records the
 // latest cursor position + shift state — the actual Δv integration happens
 // in _trajGizmoHandleTick, driven by requestAnimationFrame, so the number
 // keeps climbing even if the cursor sits still (KSP "hold to build rate").
@@ -140,7 +128,7 @@ function _trajGizmoHandleTick() {
   if (rate > 0 && dt > 0) {
     g.dv[g.drag.component] = (g.dv[g.drag.component] || 0) + g.drag.sign * rate * dt;
     _trajGizmoRepaintOverlay();
-    // R3.5.1 (item 3 note): while the ticker runs, only the CHEAP throttled
+    // While the ticker runs, only the CHEAP throttled
     // preview refreshes — the full n-body debounce is deliberately NOT
     // re-armed on every tick (it would never fire while a handle is held),
     // and the release path doesn't need it either since _trajGizmoCommit
@@ -225,7 +213,7 @@ function _trajGizmoManeuverCenterDown(evt) {
 function _trajGizmoManeuverCommitTimeDrag(dMetSec) {
   const g = _trajGizmo;
   if (!g || g.authIdx == null) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (!m || !m.log[g.authIdx] || !_evIsSolvedManeuver(m.log[g.authIdx])) return;
   const idx = g.authIdx;
   const prev = idx >= 1 ? m.log[idx - 1] : null;
@@ -252,7 +240,7 @@ function _trajGizmoCenterDown(evt) {
   const geo = rect && _trajGizmoScreenGeo(g.missionId, rect);
   if (!geo || !rect || !(rect.width > 0)) return;
   const vMagKms = physMag(g.node.v);
-  // R3.5 item 1: precompute one period's worth of ring samples in SCREEN
+  // Precompute one period's worth of ring samples in SCREEN
   // space (same projection pipeline as the rest of the overlay) so the drag
   // can snap to whichever sample is nearest the cursor (_trajGizmoNearestScreenMet)
   // instead of integrating an incremental px->MET delta along the
@@ -260,7 +248,7 @@ function _trajGizmoCenterDown(evt) {
   // approach broke down as soon as the node moved around the curve. Falls
   // back to the old projection method for a degenerate/hyperbolic node
   // (no closed ring to sample).
-  const m0 = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m0 = _missionGet(g.missionId);
   const period = _trajGizmoOrbitPeriodMet(g.node.mu, g.node.r, g.node.v);
   let ringPts = null;
   if (m0 && period > 0) {
@@ -271,7 +259,7 @@ function _trajGizmoCenterDown(evt) {
       const met = (k / N) * period;
       const node = _trajGizmoNodeState(m0, met, g.authIdx);
       if (!node) continue;
-      const bodyWorld = progBodyWorldPosCalibrated(node.body, geo.vt, {});
+      const bodyWorld = progBodyWorldPos(node.body, geo.vt);
       if (!bodyWorld) continue;
       const w = { x: bodyWorld.x + node.r[0], y: bodyWorld.y + node.r[1], z: (bodyWorld.z || 0) + (node.r[2] || 0) };
       const p = _trajProj3(w.x - camCenterKm.x, w.y - camCenterKm.y, w.z - (camCenterKm.z || 0));
@@ -304,7 +292,7 @@ function _trajGizmoCenterMove(evt) {
   }
   let newMet;
   if (cd.ringPts && cd.ringPts.length) {
-    // R3.5 item 1: snap to the ring sample nearest the CURSOR (not a
+    // Snap to the ring sample nearest the CURSOR (not a
     // projection of the drag delta) — works uniformly in every direction,
     // all the way around the loop. Stay on the same lap (orbit count) the
     // node started on; +1/-1 orbit remains the menu's job.
@@ -318,7 +306,7 @@ function _trajGizmoCenterMove(evt) {
     const dMet = _trajGizmoCenterDragDMet(pxAlong, cd.kmPerPx, cd.vMagKms);
     newMet = Math.max(0, cd.met0 + dMet);
   }
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (!m) return;
   const node = _trajGizmoNodeState(m, newMet, g.authIdx);
   if (!node) return;
@@ -342,7 +330,7 @@ function _trajGizmoCenterUp() {
   g.centerDrag = null;
   if (!cd.moved) { g.menuOpen = !g.menuOpen; _trajGizmoRepaintOverlay(); return; } // click (no drag) -> toggle the node menu
   if (cd.maneuver) { _trajGizmoManeuverCommitTimeDrag(g.met - cd.met0); return; }
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (m && g.authIdx != null && m.log[g.authIdx] && m.log[g.authIdx].type === 'MNODE') {
     m.log[g.authIdx].at = { kind: 'met', value_s: g.met };
     g.preview = null;
@@ -359,7 +347,7 @@ function _trajGizmoCancelCenterDrag() {
   const cd = g.centerDrag;
   _trajGizmoCenterEndListeners();
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   g.centerDrag = null;
   if (cd.maneuver) {
     g.met = cd.met0; // node/geometry never changed for the maneuver path — just revert the displayed MET
@@ -381,7 +369,7 @@ function _trajGizmoCancelCenterDrag() {
 function _trajGizmoCommit() {
   const g = _trajGizmo;
   if (!g) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (!m) return;
   g.preview = null;
   if (g.authIdx != null && m.log[g.authIdx] && _evIsManualBurn(m.log[g.authIdx])) {
@@ -414,7 +402,7 @@ function _trajGizmoCommit() {
 // still cheap — the expensive part of the full pass is the multi-body
 // perturbation sum, not physPropagateSegment's own overhead). Once the
 // pointer has been still for _TRAJ_GIZMO_FULL_DEBOUNCE_MS (2000, hand-tuned,
-// see MATH.md §7k), a debounce timer fires ONE full-fidelity pass (full
+// , a debounce timer fires ONE full-fidelity pass (full
 // bodies list, maxSamples 128 — identical to R3.3's original scratch) and
 // refines the preview path + CA pair. Any new move re-arms the debounce.
 const _TRAJ_GIZMO_FULL_DEBOUNCE_MS = 2000;
@@ -425,12 +413,11 @@ function _trajGizmoScheduleScratch() {
   if (g) g.lastMoveMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   if (_trajGizmoFullTimer) clearTimeout(_trajGizmoFullTimer);
   _trajGizmoFullTimer = setTimeout(() => { _trajGizmoFullTimer = null; _trajGizmoRunScratch('full'); }, _TRAJ_GIZMO_FULL_DEBOUNCE_MS);
-  if (_trajGizmoScratchTimer) return;
-  _trajGizmoScratchTimer = setTimeout(() => { _trajGizmoScratchTimer = null; _trajGizmoRunScratch('cheap'); }, 100);
+  _trajGizmoScheduleScratchCheap();
 }
 
-/** R3.5.1 (correction #2): the handle-drag ticker's per-tick scratch
- *  refresh — cheap-mode only, never arms the full debounce (see
+/** The handle-drag ticker's per-tick scratch
+ *  refresh — cheap-mode only, never arms the full debounce
  *  _trajGizmoHandleTick for why: arming it every tick would starve it from
  *  ever firing while a handle is held down). */
 function _trajGizmoScheduleScratchCheap() {
@@ -452,36 +439,36 @@ function _trajGizmoRunScratch(mode) {
     physScale(node.rHat, (g.dv.rad || 0) / 1000)),
     physScale(node.hHat, (g.dv.nrm || 0) / 1000));
   const state = { r: node.r, v: physAdd(node.v, dvVec) };
-  // N1b: full-fidelity tier through the one body-set resolver (contextual =
+  // Full-fidelity tier through the one body-set resolver (contextual =
   // the old ad-hoc list verbatim; 'full' setting unions the whole system).
   const fullBodies = (typeof physBodySetFor === 'function')
     ? physBodySetFor({ center: node.body, kind: 'local' })
-    : [...new Set([node.body, (typeof physParentOf === 'function' && physParentOf(node.body)) || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
+    : [...new Set([node.body, (physParentOf(node.body)) || 'Sun', 'Sun', node.body === 'Earth' ? 'Moon' : null].filter(Boolean))];
   const cheap = mode !== 'full';
-  // N1: the cheap drag tier's one-body list IS the explicit truncation opt-in
-  // (MISSION_MODEL_V2 §17 N1) — near-two-body scan quality while dragging;
+  // The cheap drag tier's one-body list IS the explicit truncation opt-in
+  // — near-two-body scan quality while dragging;
   // solvers and committed legs never truncate.
   const bodies = cheap ? [node.body] : fullBodies;
   const maxSamples = cheap ? 64 : 128;
   let horizon = 30 * 86400;
-  const el = (typeof physStateToElements === 'function') ? physStateToElements(state.r, state.v, node.mu) : null;
+  const el = physStateToElements(state.r, state.v, node.mu);
   const isEscape = !!el && (!(el.a > 0) || !isFinite(el.period)); // parabolic/hyperbolic result state
   if (el && el.a > 0 && isFinite(el.period)) horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
-  // R3.5 item 6: an escaping burn's preview otherwise stopped dead at the SOI
+  // An escaping burn's preview otherwise stopped dead at the SOI
   // exit — physPropagateSegment ALREADY performs the normal SOI handoff into
   // the Sun frame (ctx.bodies includes 'Sun'), the horizon just wasn't long
   // enough to show any of the resulting heliocentric arc (30d default is
   // mostly consumed by the local hyperbolic departure) and the renderer
-  // separately discarded any sample not in the node's own body frame (see
+  // separately discarded any sample not in the node's own body frame
   // _trajGizmoRepaintScenePreview). Only extend on the FULL-fidelity pass —
   // cheap mode stays single-frame/short per the fidelity ladder contract.
   if (!cheap && isEscape) horizon = 90 * 86400;
   let maxSamplesFull = (!cheap && isEscape) ? 160 : maxSamples;
   let res = physPropagateSegment(state, g.met, g.met + horizon, { center: node.body, bodies, overrides: {} }, { maxSamples: maxSamplesFull });
-  // R3.5.3: extend a full-fidelity escape preview to a full-orbit horizon
+  // Extend a full-fidelity escape preview to a full-orbit horizon
   // (shared helper physEscapeHorizonS in 565) so the heliocentric arc reads
   // as a real orbit rather than the flat 90-day quarter-arc.
-  if (!cheap && isEscape && typeof physEscapeHorizonS === 'function') {
+  if (!cheap && isEscape) {
     const fullHorizon = physEscapeHorizonS(res.samples, horizon);
     if (fullHorizon > horizon) {
       horizon = fullHorizon;
@@ -490,11 +477,11 @@ function _trajGizmoRunScratch(mode) {
     }
   }
   g.preview = { samples: res.samples, body: node.body, fidelity: mode };
-  // R3.4 item 4: closest-approach pair, recomputed alongside the preview at
+  // Closest-approach pair, recomputed alongside the preview at
   // whichever fidelity just ran — cheap-mode CA is approximate (flagged, so
   // the plate can show a "~" prefix) and gets silently refined by the next
   // full pass once the drag settles.
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   const target = _trajGizmoPickTarget(m, node, g.met);
   if (target) {
     const hit = _trajGizmoClosestApproach(res.samples, target);
@@ -515,15 +502,15 @@ function _trajGizmoRepaintScenePreview() {
   const svgEl = va && va.querySelector('svg.traj-svg');
   const sceneEl = svgEl && svgEl.querySelector('g.traj-scene');
   if (!sceneEl) return;
-  const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[g.missionId] : null;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const cam = _trajCamByMission[g.missionId];
+  const m = _missionGet(g.missionId);
   if (!cam || !m) return;
   const vt = _trajViewTime(m);
   const zoom = _trajZoomFromCam(cam);
   _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
   const camCenterKm = _trajCamCenterKm(cam, vt);
-  const bodyWorld = progBodyWorldPosCalibrated(g.node.body, vt, {});
-  // R3.5 item 6: draw through the SAME multi-frame polyline builder committed
+  const bodyWorld = progBodyWorldPos(g.node.body, vt);
+  // Draw through the SAME multi-frame polyline builder committed
   // legs use (_trajPolylineSVG + a per-frame anchorOf), instead of the old
   // single-frame loop that silently dropped every sample past an SOI exit —
   // that drop, not the propagation itself, is why an escaping preview used to
@@ -532,7 +519,7 @@ function _trajGizmoRepaintScenePreview() {
   const anchorCache = {};
   const anchorOf = frame => {
     if (anchorCache[frame]) return anchorCache[frame];
-    const w = progBodyWorldPosCalibrated(frame, vt, {});
+    const w = progBodyWorldPos(frame, vt);
     if (!w) return null;
     const q = _trajProj3(w.x - camCenterKm.x, w.y - camCenterKm.y, (w.z || 0) - (camCenterKm.z || 0));
     return (anchorCache[frame] = { x: q.x * zoom, y: q.y * zoom });
@@ -544,15 +531,15 @@ function _trajGizmoRepaintScenePreview() {
       html = `<path d="${poly.d}" fill="none" stroke="var(--accent)" stroke-width="1" stroke-dasharray="2.5,2" vector-effect="non-scaling-stroke" opacity="0.85"/>`;
     }
   }
-  // R3.4: target-at-CA ghost marker, in the SAME frame convention as the rest
+  // Target-at-CA ghost marker, in the SAME frame convention as the rest
   // of the scratch preview (only drawn when the target's own frame matches
   // the preview's drawn body — the wider committed-leg render path (565's
-  // _trajPhysLegRender) has no such limit, see MATH.md §7k).
-  if (g.ca && g.ca.frame === g.node.body && bodyWorld && typeof _trajGhostMarker === 'function') {
-    const tgtState = (typeof physBodyStateAt === 'function') ? physBodyStateAt(g.ca.target, g.ca.t, {}) : null;
+  // _trajPhysLegRender) has no such limit).
+  if (g.ca && g.ca.frame === g.node.body && bodyWorld) {
+    const tgtState = physBodyStateAt(g.ca.target, g.ca.t, {});
     if (tgtState) {
       const p = _trajProj3(tgtState.r[0] - camCenterKm.x, tgtState.r[1] - camCenterKm.y, (tgtState.r[2] || 0) - (camCenterKm.z || 0));
-      html += _trajGhostMarker(p.x * zoom, p.y * zoom, g.ca.target, zoom, 1);
+      _trajGhostMarker(p.x * zoom, p.y * zoom, g.ca.target, zoom, 1);
     }
   }
   let layer = sceneEl.querySelector('g.traj-gizmo-preview');

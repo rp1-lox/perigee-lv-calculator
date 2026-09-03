@@ -38,7 +38,7 @@ const ROOT = path.join(__dirname, '..');
 const FILES = [
   'src/js/010-constants.js',
   'src/js/140-physics.js',
-  'src/js/360-program-module-phase-1-delta-v-engine.js',
+  'src/js/360-delta-v-engine.js',
   'src/js/385-physics-core.js',
   'src/js/386-physics-integrator.js',
 ];

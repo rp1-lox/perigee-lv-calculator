@@ -1,33 +1,20 @@
 
+// ─── DEV SEED MISSIONS ──────────────────────────────────────────────────────
+// devSeedApolloMission / devSeedGatewayMission build reference missions from
+// the console for smoke testing.
+
 // Plane-matches a just-launched LAUNCH event's parking orbit to the Moon and
-// solves the launch time that reaches that plane — the SAME recipe the UI's
-// Target:"Moon" plane-match picker runs (missionLaunchMatchPlane, 570-mission-
-// events.js), reproduced here programmatically for the dev seed (no DOM).
-// Needed because a raw 185x185@28.5/LAN-0 parking orbit (the seed's old,
-// unmatched authoring) is generically NOT in the Moon's orbital plane at an
-// arbitrary epoch, so the TLC leg's shooter (physShootLegAim, 565) has no
-// departure-plane corridor to converge into — confirmed non-convergent
-// (miss ~100,000 km >> the ~66,000 km lunar SOI) after the pole-sign fix
-// (3f4350ce1) corrected the Moon's plane phase and moved the real corridor
-// away from the old hand-tuned geometry.
-// progResolvePlaneTarget('Moon', ...) returns the Moon's TRUE inclination
-// (~28.1 deg at the default 2026 epoch) even when that's below the launch
-// site's latitude (28.5 deg here) — "unreachable" in that case, by design
-// (415-launch-planner.js: never silently clamped, surfaced to the caller).
-// A site can never launch directly into a plane below its own latitude, so
-// the achievable min-penalty inclination is max(moonInc, |siteLat|); LAN
-// stays the Moon's LAN (only ~0.4 deg penalty at this epoch/site — see
-// CLAUDE.md). Mutates the LAUNCH event's orbit + launch time in place and
-// recomputes; returns the resolved {inc_deg, lan_deg, launchTime_s} for
-// callers that want to report/verify the match, or null if the required
-// helpers aren't loaded (older builds) — callers should treat null as
-// "left the seed's baseline orbit untouched".
+// solves the launch time that reaches that plane (same recipe as the UI's
+// Target:"Moon" plane-match, missionLaunchMatchLaunchPlane in 570-mission-events.js).
+// The achievable inclination is max(moonInc, |siteLat|); LAN stays the Moon's.
+// Mutates the LAUNCH event in place and recomputes; returns the resolved
+// {inc_deg, lan_deg, launchTime_s}, or null if the helpers are unavailable.
 function _devSeedPlaneMatchLaunchToMoon(m, launchEv) {
-  if (typeof progResolvePlaneTarget !== 'function' || typeof progLaunchRaanFor !== 'function'
-      || typeof progLaunchNextWindowS !== 'function' || !launchEv || !launchEv.orbit) return null;
-  const site = (typeof _missionLaunchSiteFor === 'function') ? _missionLaunchSiteFor(launchEv) : null;
+  if (typeof progLaunchRaanFor !== 'function'
+      || !launchEv || !launchEv.orbit) return null;
+  const site = _missionLaunchSiteFor(launchEv);
   if (!site || site.lon == null) return null;
-  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const epochJD = progEpochJD();
   const res = progResolvePlaneTarget('Moon', epochJD, 0, site.lat);
   if (!res) return null;
   const incUse = Math.max(res.inc_deg, Math.abs(site.lat)); // achievable floor = site latitude
@@ -50,7 +37,7 @@ function _devSeedPlaneMatchLaunchToMoon(m, launchEv) {
 // mission that already has events unless { force:true } (which resets it first).
 function devSeedApolloMission(opts) {
   opts = opts || {};
-  if (typeof missionEnsureDefault === 'function') missionEnsureDefault();
+  missionEnsureDefault();
   const m = _missions[0];
   if (!m) return { error: 'no mission' };
   if (m.log.length) {
@@ -66,7 +53,7 @@ function devSeedApolloMission(opts) {
   const lm  = _scEdSC.find(s => /lunar module|(^|\s)lm(\s|$)/i.test(s.name));
   m.payloadScIds = [csm, lm].filter(Boolean).map(s => s.spacecraftId);
   missionExecLaunch(m.missionId, { silent: true });
-  // MISSION_MODEL_V2 §13 T3 item 3: the seed's LEO parking orbit (185x185 @28.5) matches
+  // Item 3: the seed's LEO parking orbit (185x185 @28.5) matches
   // the builtin 'leo-185' catalog entry exactly — bind it so the seed exercises T2's
   // ref-binding path end to end (this also lets refOrbitUpdate/recompute verification
   // move a real seeded launch, not just a synthetic one).
@@ -97,7 +84,7 @@ function devSeedApolloMission(opts) {
 // Returns { missionId, log } or { error }.
 function devSeedGatewayMission(opts) {
   opts = opts || {};
-  if (typeof missionEnsureDefault === 'function') missionEnsureDefault();
+  missionEnsureDefault();
   const m = _missions[0];
   if (!m) return { error: 'no mission' };
   if (m.log.length) {
@@ -117,15 +104,15 @@ function devSeedGatewayMission(opts) {
   // Gateway station spacecraft — reuse one named 'Gateway' if the library
   // already has it (persisted programs), else make a minimal one on the fly.
   let gateway = _scEdSC.find(s => /gateway/i.test(s.name));
-  if (!gateway && typeof progMakeSpacecraftDefinition === 'function') {
+  if (!gateway) {
     gateway = progMakeSpacecraftDefinition('Gateway');
-    if (typeof progMakeSpacecraftStageDef === 'function') gateway.stages.push(progMakeSpacecraftStageDef('Gateway Bus'));
+    gateway.stages.push(progMakeSpacecraftStageDef('Gateway Bus'));
     _scEdSC.push(gateway);
   }
   if (!gateway) return { error: 'no Gateway spacecraft available to deploy' };
   // DEPLOY at MET 0 (the mission's own launch epoch — "at t 0" per spec),
   // mid-log so it doesn't interfere with the crewed vehicle's own log index
-  // lookups; bound to the NRHO ref via missionDeployRefPick (§14 U3 path,
+  // lookups; bound to the NRHO ref via missionDeployRefPick ( path,
   // the only ref-picker that accepts a propagated entry).
   const gwLaunchEv = m.log.find(e => e.type === 'LAUNCH');
   m.log.push({ type: 'DEPLOY', label: gateway.name, spacecraftId: gateway.spacecraftId,
@@ -136,7 +123,7 @@ function devSeedGatewayMission(opts) {
   // DEPLOY's replay makes the just-placed station the "current" vehicle
   // (same as LAUNCH does) — switch back to the crewed LV before authoring
   // ITS maneuvers, or they'd be stamped/owned by the station instead.
-  if (lvVehicleId && typeof missionSetActiveVehicle === 'function') missionSetActiveVehicle(m.missionId, lvVehicleId);
+  if (lvVehicleId) missionSetActiveVehicle(m.missionId, lvVehicleId);
   if (opts.maneuvers !== false) {
     missionExecManeuver(m.missionId, 'leo', 'tlc');    // TLI
     missionExecManeuver(m.missionId, 'tlc', 'nrho');   // NRHO insertion (physSolveNrhoTransfer)

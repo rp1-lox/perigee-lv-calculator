@@ -1,24 +1,10 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5744-trajectory-globe.js — Body discs, surfaces, textures, raster globes, 3D rings
-//
-// OWNS: everything that draws a body as more than a schematic dot — the disc-size
-//   tiering (_TRAJ_MIN_BODY_PX, _trajBodyPxR, _TRAJ_SURFACE_PX/_CHIP/_FEATURE tiers,
-//   _trajBodyDiscTiered); reference-frame basis/transform used for spin & surfaces
-//   (_trajFrameBasisAt, _trajFrameTransform, _trajFrame, trajSetFrame, _TRAJ_FRAME_KINDS,
-//   _trajFrameByMission); surface geometry (_trajSurfacePoint, hemisphere clipping,
-//   geo polygons/ellipses, spin _trajSpinRotate/_trajBodySpinAngle); atmosphere, limb
-//   gradient and terminator (_trajAtmosphereGlowSVG, _trajLimbGradientDef,
-//   _trajTerminatorNightPath, _trajSurfacedDiscSVG); the texture + cloud stores and
-//   bilinear-sampled raster globe pipeline (_trajTexStore, _trajTextureFor,
-//   _trajCloudTextureFor, _trajBilinearSample, _trajRasterGlobe, _trajRasterCache,
-//   _trajRasteredDiscDataURL, prewarm/idle/repaint scheduling, _trajReconcileGlobeLayer);
-//   and the projected 3D ring system (_TRAJ_RING_OBLIQUITY_DEG, _trajRingPlaneBasis,
-//   _trajRingAngleRuns, _trajRingBandRunPath, _trajRingsSVG). _TRAJ_SVG_NS lives here.
-// Does NOT own: schematic body glyphs (_trajGlyph stays in core), event nodes (5744-
-//   trajectory-eventnodes.js), ring/leg *orbit* geometry (5743), camera (5740).
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 574x def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TRAJECTORY GLOBES — body discs, surfaces, textures, 3D rings ──────────
+// Disc-size tiering (_trajBodyPxR, _trajBodyDiscTiered); reference-frame basis
+// used for spin and surfaces (_trajFrameBasisAt, trajSetFrame); surface
+// geometry with hemisphere clipping, geo polygons and spin; atmosphere, limb
+// gradient and terminator; the texture/cloud stores and the bilinear-sampled
+// raster globe pipeline with its cache and repaint scheduling; and the
+// projected planetary ring system (_trajRingsSVG). _TRAJ_SVG_NS lives here.
 
 // Minimum on-screen disc radius (px) a body should ever render at, converted
 // to WORLD-space svg units by dividing by zoom (so after the viewBox camera's
@@ -50,7 +36,7 @@ function _trajBodyPxR(trueR, zoom) {
 const _TRAJ_SURFACE_PX = 24;
 const _TRAJ_CHIP_PX = 2;
 const _TRAJ_CHIP_R = 7; // constant screen radius (px/render-unit) for the chip tier
-// R6.2.1: middle plain-disc tier removed (flight-test item 2) — the surfaced
+// Middle plain-disc tier removed (flight-test item 2) — the surfaced
 // disc now renders all the way down to the chip threshold. Below this radius
 // (px) the surfaced disc skips vector feature sampling (base fill + limb
 // gradient only — visually indistinguishable at that size, and keeps the
@@ -71,12 +57,12 @@ const _TRAJ_BODY_GLYPH = {
 // through its own plain-glyph path (_trajGlyph), never this ladder.
 function _trajTrueBodyRadiusKm(body) {
   if (body === 'Sun') return 696000;
-  return (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[body] && PROG_BODIES[body].R) || 3;
+  return (PROG_BODIES[body] && PROG_BODIES[body].R) || 3;
 }
 
 // lat/lon (deg) -> unit-sphere point in the body's OWN unrotated frame
 // (lon measured east from the body's lon=0 meridian, +z = spin axis).
-// APPROXIMATION (2026-07-10, presentation layer only — see MATH.md §7g): no
+// APPROXIMATION: no
 // body's axial tilt is modeled; every spin axis is assumed coincident with
 // the ecliptic normal (+z world axis), so this is a simplified top-down
 // globe, not a true axial-tilt globe.
@@ -86,14 +72,14 @@ function _trajLatLonUnit(latDeg, lonDeg) {
   return [cl * Math.cos(lon), cl * Math.sin(lon), Math.sin(lat)];
 }
 // Rotate a unit-sphere body-frame point by spin angle (rad) about the body's
-// OWN spin axis, then (§20 O2) tilt the result from the body's equatorial
+// OWN spin axis, then tilt the result from the body's equatorial
 // frame into the WORLD (ecliptic) frame via `physEqBasis(body)` — the same
 // basis 385's physics seam and the ring-plane basis above already use, so
 // coastlines/craters/cloud-bands agree with the ring tilt and the physics
 // pole exactly. Spin still happens FIRST, about equatorial-frame +z (the
 // body's own axis) — only the already-spun equatorial vector gets tilted
 // into world coordinates, matching the forward composition documented in
-// MATH.md §7al O2 (R_tilt . R_z(spin), NOT the other order). `body` is
+// (R_tilt. R_z(spin), NOT the other order). `body` is
 // optional (older/degenerate callers): omitting it, or a body absent from
 // PROG_BODY_POLES, falls back to `physEqBasis`'s own identity default
 // (xEq=[1,0,0], yEq=[0,1,0], zEq=[0,0,1]) — i.e. exactly the pre-§20-O2
@@ -102,7 +88,7 @@ function _trajLatLonUnit(latDeg, lonDeg) {
 function _trajSpinRotate(pt, spinRad, body) {
   const c = Math.cos(spinRad), s = Math.sin(spinRad);
   const ex = pt[0] * c - pt[1] * s, ey = pt[0] * s + pt[1] * c, ez = pt[2];
-  if (body && typeof physEqBasis === 'function') {
+  if (body) {
     const B = physEqBasis(body);
     return [
       ex * B.xEq[0] + ey * B.yEq[0] + ez * B.zEq[0],
@@ -123,12 +109,12 @@ function _trajBodySpinAngle(body, viewT_s) {
   const t = viewT_s || 0;
   if (body === 'Earth') return (t / 86164.1) * 2 * Math.PI;
   if (body === 'Mars') return (t / 88642.66) * 2 * Math.PI;
-  if (body === 'Moon' && typeof progBodyAngleAt === 'function') return progBodyAngleAt('Moon', t) + Math.PI;
+  if (body === 'Moon') return progBodyAngleAt('Moon', t) + Math.PI;
   return 0;
 }
 
 // ── §17 N3 — switchable reference frames (pure rendering transform) ────────
-// See MATH.md §7x for the full derivation. Frame kinds:
+// For the full derivation. Frame kinds:
 //   'inertial'            — today's rendering, B = null (identity, skipped).
 //   'body-fixed'          — B(t) = rotation about the anchor body's spin axis
 //                            by its OWN spinAngle(t) (same source the globes
@@ -147,9 +133,9 @@ function _trajBodySpinAngle(body, viewT_s) {
 function _trajFrameBasisAt(frameKind, body, t) {
   if (!frameKind || frameKind === 'inertial') return null;
   if (frameKind === 'body-fixed') {
-    const a = (typeof _trajBodySpinAngle === 'function') ? _trajBodySpinAngle(body, t) : 0;
+    const a = _trajBodySpinAngle(body, t);
     const c = Math.cos(a), s = Math.sin(a);
-    // §20 O2: a surface direction's world position is now
+    // a surface direction's world position is now
     // Tilt(body) . Rz(a) . bodyLocal (see _trajSpinRotate) instead of
     // Rz(a) . bodyLocal — so cancelling it back to a constant body-local
     // direction needs B = Tilt(body) . Rz(a), not Rz(a) alone. Columns of
@@ -162,7 +148,7 @@ function _trajFrameBasisAt(frameKind, body, t) {
     // Falls back to the untilted identity basis for bodies absent from
     // PROG_BODY_POLES (physEqBasis's own default), so this is a mechanical,
     // zero-behavior-change generalization for non-tilted anchors.
-    const eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : null;
+    const eqB = physEqBasis(body);
     const xEq = eqB ? eqB.xEq : [1, 0, 0], yEq = eqB ? eqB.yEq : [0, 1, 0], zEq = eqB ? eqB.zEq : [0, 0, 1];
     return {
       xh: [c * xEq[0] + s * yEq[0], c * xEq[1] + s * yEq[1], c * xEq[2] + s * yEq[2]],
@@ -170,17 +156,17 @@ function _trajFrameBasisAt(frameKind, body, t) {
       zh: zEq,
     };
   }
-  if (frameKind === 'earth-moon-rotating' && typeof _refRotBasisPair === 'function') {
+  if (frameKind === 'earth-moon-rotating') {
     return _refRotBasisPair('Earth', 'Moon', t);
   }
-  if (frameKind === 'sun-earth-rotating' && typeof _refRotBasisPair === 'function') {
+  if (frameKind === 'sun-earth-rotating') {
     return _refRotBasisPair('Sun', 'Earth', t);
   }
   return null;
 }
 // q(t) = B(t)^T . pRel(t) — pRel EXPRESSED IN FRAME COORDINATES AT ITS OWN
 // EPOCH, fed directly to the camera projector (_trajProjectVec). This is the
-// az-convention choice documented in MATH.md §7x: the projector's az/el rotate
+// az-convention choice documented : the projector's az/el rotate
 // the FRAME's axes, not fixed ecliptic-world axes, when a non-inertial frame
 // is active ("the frame rotates the world, the camera stays put"). Because
 // B(t) is a pure rotation, this is valid for ANY world-axis-aligned vector
@@ -188,9 +174,9 @@ function _trajFrameBasisAt(frameKind, body, t) {
 // leg-local sample, or a spin-baked surface direction) — the same one
 // function is the whole seam for (a) polyline/ring samples (call with the
 // sample's OWN t — this is what closes a rotating-frame-periodic loop live,
-// retiring MATH.md critique 64), (b) bodies/markers (called with t=viewT by
+// retiring), (b) bodies/markers (called with t=viewT by
 // the _trajProj3 default — NOT an identity no-op for non-inertial frames,
-// see the §7x critique: a body's frame-coordinates at its own current epoch
+// see the critique: a body's frame-coordinates at its own current epoch
 // are exactly what makes e.g. the Moon render at a fixed screen direction in
 // the Earth-Moon frame), (c) spin-baked surface/globe points (also default
 // t=viewT — composes with the SAME spin(t) baked into their world direction,
@@ -207,7 +193,7 @@ function _trajFrameTransform(frameKind, body, pRel, t) {
 
 // Per-mission transient view state (sibling of _trajCamByMission — NOT
 // session-persisted: the camera itself isn't persisted either, so frame
-// choice matches that existing pattern, see MATH.md §7x).
+// choice matches that existing pattern).
 let _trajFrameByMission = {};
 function _trajFrame(id) { return (_trajFrameByMission[id] && _trajFrameByMission[id].kind) || 'inertial'; }
 function trajSetFrame(id, kind) {
@@ -352,11 +338,11 @@ function _trajGeoEllipsePath(feat, spinAngle, cx, cy, rPx, body) {
 // donut (transparent -> tinted -> transparent) so it reads as a glow at the
 // edge rather than a hard ring.
 function _trajAtmosphereGlowSVG(body, cx, cy, rPx, instanceId) {
-  if (typeof PROG_BODY_ATMOSPHERE === 'undefined' || !PROG_BODY_ATMOSPHERE[body]) return '';
+  if (!PROG_BODY_ATMOSPHERE[body]) return '';
   const col = PROG_BODY_ATMOSPHERE[body];
   const gid = `traj-atmo-${(instanceId || 'x')}-${body}`;
   // Tight rim hugging the limb (NASA-Eyes look) — the first cut (1.38x outer,
-  // 0.85 peak at 1.2x) read as a fat donut, not an atmosphere (review 2026-07-14).
+  // 0.85 peak at 1.2x) read as a fat donut, not an atmosphere.
   const rOut = rPx * 1.16;
   return `<defs><radialGradient id="${gid}" cx="50%" cy="50%" r="50%">` +
     `<stop offset="80%" stop-color="${col}" stop-opacity="0"/>` +
@@ -432,9 +418,9 @@ function _trajTerminatorNightPath(sd, cx, cy, rPx) {
 // so path strings stay bounded; the base-color fill alone still reads
 // correctly at that zoom. `sunDir3` is the body->Sun WORLD-frame unit vector
 // (defect3); `instanceId` (mission id or a fixed fallback) + `body` form a
-// STABLE per-body-per-instance id for the gradient/clip defs (defect2 — see
+// STABLE per-body-per-instance id for the gradient/clip defs (defect2 —
 // _trajBodyDiscTiered).
-// NOTE (clouds, MISSION_MODEL_V2 §18 V1 follow-up): this vector-geometry
+// NOTE: this vector-geometry
 // tier has no per-pixel loop to sample a second texture into, unlike
 // _trajRasterGlobe — it draws discrete SVG shapes (coastline polygons,
 // craters), not a raster. Clouds are intentionally NOT drawn here; this is
@@ -442,7 +428,7 @@ function _trajTerminatorNightPath(sd, cx, cy, rPx) {
 // or when raster is unavailable, so the omission is brief and low-stakes.
 function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDiagPx, instanceId) {
   const style = (typeof PROG_GEO_STYLE !== 'undefined' && PROG_GEO_STYLE[body]) || {};
-  // R6.2.1 item 2: skip vector feature sampling both when the disc is
+  // Skip vector feature sampling both when the disc is
   // absurdly huge (mostly off-screen — path strings would be unbounded) AND
   // when it's small enough (< _TRAJ_FEATURE_PX) that features are invisible
   // — the surfaced tier now runs all the way to the chip threshold, so this
@@ -518,48 +504,19 @@ function _trajSurfacedDiscSVG(body, cx, cy, rPx, spinAngle, sunDir3, viewportDia
 // path until the onload fires (which invalidates the raster cache below and
 // triggers a repaint through _trajRequestRepaint).
 let _trajTexStore = {};
-function _trajTextureFor(body) {
-  if (!(typeof PROG_TEXTURES !== 'undefined' && PROG_TEXTURES[body])) return null;
-  let t = _trajTexStore[body];
-  if (t) return t;
-  t = { ready: false, imgData: null, w: 0, h: 0 };
-  _trajTexStore[body] = t;
-  const img = new Image();
-  img.onload = () => {
-    // Sampling canvas: cap width so bilinear lookups stay cheap; equirect
-    // aspect is always 2:1 for these sources.
-    const sw = Math.min(img.naturalWidth || 1024, 1024);
-    const sh = Math.round(sw / 2);
-    const sc = document.createElement('canvas');
-    sc.width = sw; sc.height = sh;
-    const sctx = sc.getContext('2d');
-    sctx.drawImage(img, 0, 0, sw, sh);
-    t.imgData = sctx.getImageData(0, 0, sw, sh);
-    t.w = sw; t.h = sh;
-    t.ready = true;
-    _trajRasterCache = {}; // stale dataURLs reference the pre-decode fallback
-    _trajRequestRepaint();
-  };
-  img.src = PROG_TEXTURES[body];
-  return t;
-}
-// Cloud layer (Earth only, V1 follow-up MISSION_MODEL_V2 §18): same lazy
-// decode-to-ImageData cache as _trajTextureFor, keyed off PROG_CLOUD_TEXTURE
-// instead of PROG_TEXTURES. Kept as a separate store/function (not folded
-// into _trajTextureFor) because clouds sample at an INDEPENDENT longitude
-// offset from the ground texture — see the cloudSpin comment in
-// _trajRasterGlobe — and only Earth has an entry, so every other body's
-// lookup is a cheap `undefined` short-circuit.
 let _trajCloudTexStore = {};
-function _trajCloudTextureFor(body) {
-  if (!(typeof PROG_CLOUD_TEXTURE !== 'undefined' && PROG_CLOUD_TEXTURE[body])) return null;
-  let t = _trajCloudTexStore[body];
+// Decode table[body] (a data-URI equirect map) into ImageData once, for
+// bilinear sampling. Decode is async: callers check .ready and use the vector
+// fallback until onload, which drops the raster cache and repaints.
+function _trajLoadTex(store, table, body) {
+  if (!table || !table[body]) return null;
+  let t = store[body];
   if (t) return t;
   t = { ready: false, imgData: null, w: 0, h: 0 };
-  _trajCloudTexStore[body] = t;
+  store[body] = t;
   const img = new Image();
   img.onload = () => {
-    const sw = Math.min(img.naturalWidth || 1024, 1024);
+    const sw = Math.min(img.naturalWidth || 1024, 1024); // 2:1 equirect
     const sh = Math.round(sw / 2);
     const sc = document.createElement('canvas');
     sc.width = sw; sc.height = sh;
@@ -571,9 +528,12 @@ function _trajCloudTextureFor(body) {
     _trajRasterCache = {};
     _trajRequestRepaint();
   };
-  img.src = PROG_CLOUD_TEXTURE[body];
+  img.src = table[body];
   return t;
 }
+function _trajTextureFor(body) { return _trajLoadTex(_trajTexStore, PROG_TEXTURES, body); }
+// Cloud layer (Earth only); samples at an independent longitude offset from the ground map.
+function _trajCloudTextureFor(body) { return _trajLoadTex(_trajCloudTexStore, PROG_CLOUD_TEXTURE, body); }
 // Bilinear sample of an ImageData at fractional pixel (fx,fy), wrapping X
 // (longitude seam) and clamping Y (poles).
 function _trajBilinearSample(imgData, w, h, fx, fy) {
@@ -593,7 +553,7 @@ function _trajBilinearSample(imgData, w, h, fx, fy) {
   return out;
 }
 // Raster an equirect texture to a shaded disc canvas via PER-PIXEL INVERSE
-// orthographic mapping. Derivation (MATH.md §7m raster addendum): the
+// orthographic mapping. Derivation: the
 // forward map _trajProjectVec rotates a WORLD unit vector (x,y,z) by az then
 // tilt t=pi/2-el and reflects screen-x:
 //   u = -(x*ca - y*sa)                         [ca=cos(az), sa=sin(az)]
@@ -627,7 +587,7 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   const t = Math.PI / 2 - (el != null ? el : Math.PI / 2);
   const ca = Math.cos(az || 0), sa = Math.sin(az || 0), ct = Math.cos(t), st = Math.sin(t);
   const spc = Math.cos(spinAngle || 0), sps = Math.sin(spinAngle || 0);
-  // §20 O2: the same body-equatorial basis _trajSpinRotate composes on the
+  // the same body-equatorial basis _trajSpinRotate composes on the
   // forward (vector-feature) path, used here in its INVERSE sense — this
   // pixel loop reconstructs the WORLD-frame surface normal (x,y,z) from the
   // screen ray first (un-tilt/un-azimuth below, unrelated to obliquity),
@@ -638,7 +598,7 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
   // dot the world vector with each basis vector. Falls back to identity for
   // bodies absent from PROG_BODY_POLES (physEqBasis's own default), so this
   // is a no-op for every body this raster path already rendered correctly.
-  const _eqB = (typeof physEqBasis === 'function') ? physEqBasis(body) : null;
+  const _eqB = physEqBasis(body);
   const eqX = _eqB ? _eqB.xEq : [1, 0, 0], eqY = _eqB ? _eqB.yEq : [0, 1, 0], eqZ = _eqB ? _eqB.zEq : [0, 0, 1];
   const iw = tex.w, ih = tex.h, id = tex.imgData;
   const ciw = cloudActive ? cloudTex.w : 0, cih = cloudActive ? cloudTex.h : 0, cid = cloudActive ? cloudTex.imgData : null;
@@ -661,7 +621,7 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
       // un-azimuth: (x,y) = R(-az) * (xa,ya)
       const x = xa * ca + ya * sa;
       const y = u * sa + ya * ca; // == -xa*sa + ya*ca
-      // un-tilt into the body's EQUATORIAL frame (§20 O2 — inverse of the
+      // un-tilt into the body's EQUATORIAL frame (inverse of the
       // forward Tilt applied by _trajSpinRotate; identity for untilted
       // bodies), THEN un-spin: body-frame = R(-spin) * (ex,ey)
       const ex = x * eqX[0] + y * eqX[1] + z * eqX[2];
@@ -714,7 +674,7 @@ function _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx) {
 // per-pixel loop every 33ms frame. Cleared whenever a texture finishes
 // decoding (fallback frames must not stick around after real data arrives).
 let _trajRasterCache = {};
-// R6.4b (user flight-test): the old 120ms raster throttle made the globe
+// The old 120ms raster throttle made the globe
 // visibly update at ~8fps while the vector layer moved at 30fps. Replaced
 // with a FIDELITY LADDER (gizmo-preview precedent): while the user is
 // interacting (rotate/zoom/scrub — see _trajMarkInteracting call sites) the
@@ -746,14 +706,14 @@ function _trajRasteredDiscDataURL(body, discPx, spinAngle, az, el, sunDir3) {
   const sunQ = sunDir3 ? [Math.round(sunDir3[0] * 10) / 10, Math.round(sunDir3[1] * 10) / 10, Math.round(sunDir3[2] * 10) / 10].join(',') : '0';
   const key = `${body}|${maxPx}|${discBucket}|${spinQ}|${azQ}|${elQ}|${sunQ}`;
   const cached = _trajRasterCache[key];
-  if (cached) return cached.url;
+  if (cached) return cached;
   const canvas = _trajRasterGlobe(body, discPx, spinAngle, az, el, sunDir3, maxPx);
   if (!canvas) return null;
   const url = canvas.toDataURL('image/png');
   // Bound the cache: quantized spin/az keys churn constantly during long
   // sessions — reset wholesale past a small cap (rasters are cheap to redo).
   if (Object.keys(_trajRasterCache).length > 64) _trajRasterCache = {};
-  _trajRasterCache[key] = { url, t: now };
+  _trajRasterCache[key] = url;
   return url;
 }
 // ── V1 idle texture pre-warm (MISSION_MODEL_V2 §18) ─────────────────────────
@@ -762,63 +722,30 @@ function _trajRasteredDiscDataURL(body, discPx, spinAngle, az, el, sunDir3) {
 // few ms once tex.ready. Kick decode for every textured body shortly after
 // app init, chunked one body per idle slice, so the view opens with
 // tex.ready already true for everything it's about to draw. No loading
-// screen (decision 2026-07-14 — pre-warm removes the wait instead of
+// screen (decision — pre-warm removes the wait instead of
 // dressing it up).
 function _trajScheduleIdle(fn) {
   if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 800 });
   else setTimeout(() => fn({ timeRemaining: () => 0, didTimeout: true }), 120);
 }
-let _trajPrewarmStats = null; // {startedAt, bodies:[{body,ms}], totalMs} — read by verification/perf checks
+// Kick off texture decodes at idle so the first textured globe appears
+// without a vector-fallback flash. Bodies touched by the first mission go first.
 function _trajPrewarmTextures() {
-  if (typeof document === 'undefined' || typeof PROG_TEXTURES === 'undefined') return;
-  // Bodies present in the active mission's touched frames take priority (the
-  // ones the user will actually see first); fall back to every textured body
-  // so a fresh/empty program still warms the common planets.
+  if (typeof document === 'undefined') return;
   let list = _trajAllBodies().filter(b => PROG_TEXTURES[b]);
-  if (typeof _missions !== 'undefined' && _missions && _missions[0]) {
+  if (_missions && _missions[0]) {
     try {
-      const m = _missions[0];
-      const frames = _trajGetExtraction ? _trajGetExtraction(m) : null;
-      if (frames) {
-        const touched = Object.keys(frames).filter(id => {
-          const sc = frames[id];
-          return sc && (sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length));
-        });
-        const parents = touched.map(id => (PROG_MOON_ORBITS[id] && PROG_MOON_ORBITS[id].parent) || id);
-        const wanted = ['Earth', ...parents, ...touched].filter(b => PROG_TEXTURES[b]);
-        if (wanted.length) list = [...new Set(wanted)].concat(list.filter(b => !wanted.includes(b)));
-      }
-    } catch (e) { /* best-effort prioritization only — never block the prewarm */ }
+      const frames = _trajGetExtraction(_missions[0]);
+      const touched = Object.keys(frames).filter(id => {
+        const sc = frames[id];
+        return sc && (sc.orbits.size || (sc.legs && sc.legs.length) || (sc.surface && sc.surface.length));
+      });
+      const parents = touched.map(id => (PROG_MOON_ORBITS[id] && PROG_MOON_ORBITS[id].parent) || id);
+      const wanted = ['Earth', ...parents, ...touched].filter(b => PROG_TEXTURES[b]);
+      if (wanted.length) list = [...new Set(wanted)].concat(list.filter(b => !wanted.includes(b)));
+    } catch (e) { /* prioritization is best-effort */ }
   }
-  let i = 0, retries = 0;
-  const startedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-  _trajPrewarmStats = { startedAt, bodies: [], totalMs: null };
-  const az = 0, el = Math.PI / 2;
-  const doOne = () => {
-    if (i >= list.length) {
-      _trajPrewarmStats.totalMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt;
-      return;
-    }
-    const body = list[i];
-    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    const tex = _trajTextureFor(body); // kicks off img decode if not already started
-    if (body === 'Earth') _trajCloudTextureFor(body); // kicks off cloud decode alongside the surface map
-    if (!tex.ready) {
-      retries++;
-      if (retries > 60) { i++; retries = 0; } // ~a few seconds of retries, then give up on this body
-      _trajScheduleIdle(doOne);
-      return;
-    }
-    // Warm both fidelity-ladder tiers at a canonical top-down orientation —
-    // this is a bonus (populates the dataURL cache for the common default
-    // view); the real win already happened above (tex.ready).
-    _trajRasterGlobe(body, _TRAJ_RASTER_LO_PX, 0, az, el, [0, 0, 1], _TRAJ_RASTER_LO_PX);
-    _trajRasterGlobe(body, 512, 0, az, el, [0, 0, 1], 512);
-    _trajPrewarmStats.bodies.push({ body, ms: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0 });
-    i++; retries = 0;
-    _trajScheduleIdle(doOne);
-  };
-  _trajScheduleIdle(doOne);
+  list.forEach(body => { _trajTextureFor(body); if (body === 'Earth') _trajCloudTextureFor(body); });
 }
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
   const kickPrewarm = () => _trajScheduleIdle(() => _trajPrewarmTextures());
@@ -835,7 +762,7 @@ function _trajRequestRepaint() {
   document.querySelectorAll('.mcc-view-area .traj-wrap[data-mid]').forEach(va => {
     const id = va.getAttribute('data-mid');
     const cam = _trajCamByMission[id];
-    if (id && cam && typeof _trajApplyCam === 'function') _trajApplyCam(id, cam);
+    if (id && cam) _trajApplyCam(id, cam);
   });
 }
 // Reconcile the persistent globe layer against _trajPendingGlobes (populated by
@@ -880,7 +807,7 @@ function _trajReconcileGlobeLayer(svgEl) {
     img.setAttribute('width', g.size.toFixed(2));
     img.setAttribute('height', g.size.toFixed(2));
     if (img.getAttribute('href') !== g.url && img.dataset.pendingHref !== g.url) {
-      // Decode-BEFORE-swap (close-zoom rotation flicker fix, 2026-07-14):
+      // Decode-BEFORE-swap:
       // setting href directly blanks the SVG <image> until the new data-URL
       // decodes — invisible for small discs, a visible flash every az/el
       // cache bucket when zoomed close (large PNG, multi-ms decode). Decode
@@ -927,7 +854,7 @@ function _trajReconcileGlobeLayer(svgEl) {
 // rotated by the same tilt) — together an orthonormal basis for the ring
 // plane, so a point at ring-plane angle phi and radius r (km) is
 // r*(cos(phi)*e1 + sin(phi)*e2) in WORLD-frame km, ready for _trajProjectVec.
-// §20 OBLIQUITY: ring tilt now SOURCED from PROG_BODY_POLES (360) instead of
+// OBLIQUITY: ring tilt now SOURCED from PROG_BODY_POLES (360) instead of
 // a local constant — unifies with physBodyPoleAt's pole table (a ring's
 // plane IS the body's equatorial plane). e1/e2 below are an orthonormal
 // in-plane basis consistent with physBodyPoleAt's own convention (pole =
@@ -937,7 +864,7 @@ function _trajReconcileGlobeLayer(svgEl) {
 // when node=0 (Saturn's only table entry, v1) — mechanical, zero behavior
 // change for Saturn.
 function _trajRingPlaneBasis(body) {
-  const p = (typeof PROG_BODY_POLES !== 'undefined') ? PROG_BODY_POLES[body] : null;
+  const p = PROG_BODY_POLES[body];
   if (!p) return null;
   const th = p.obliquity_deg * _PROG_D2R;
   const om = (p.node_deg || 0) * _PROG_D2R;
@@ -984,7 +911,6 @@ function _trajRingAngleRuns(basis, az, el, N) {
     if (runs.length && runs[0].front === cur.front) runs[0].phis = cur.phis.concat(runs[0].phis);
     else runs.push(cur);
   }
-  if (!runs.length) runs.push({ front: samples[0].d >= 0, phis: samples.map(s => s.phi).concat([samples[0].phi + 2 * Math.PI]) });
   return runs;
 }
 // One angular run (contiguous phi list, same boundary angles for every
@@ -1010,7 +936,7 @@ function _trajRingBandRunPath(basis, run, rOut, rIn, cx, cy, zoom, az, el) {
 // the sphere. Bodies absent from PROG_BODY_RINGS (everything but Saturn)
 // return empty strings — the caller reads the table, no per-body branching.
 function _trajRingsSVG(body, cx, cy, zoom, az, el) {
-  const cfg = typeof PROG_BODY_RINGS !== 'undefined' && PROG_BODY_RINGS[body];
+  const cfg = PROG_BODY_RINGS[body];
   const basis = _trajRingPlaneBasis(body);
   if (!cfg || !basis) return { behind: '', front: '' };
   const runs = _trajRingAngleRuns(basis, az, el, 120);

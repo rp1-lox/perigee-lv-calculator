@@ -1,15 +1,7 @@
 
 // ─── SHARED HTML ESCAPER ──────────────────────
-// Canonical HTML escaper (UNIFICATION_AUDIT item 5). Five ad-hoc escapers used
-// to exist: _tsEsc (165) and _orbVehEsc (167) were byte-identical 4-char
-// escapers (& < > "); _mrEsc (577) additionally escaped '; but the 3-char
-// `esc` locals in 170-save-load-lv.js and 220-launch-sites.js did NOT escape
-// double-quotes — an attribute-context injection / broken-markup vector for
-// any user-authored name interpolated into an HTML attribute. escHtml() is
-// the ONE escaper now (all five entities); the old names are thin aliases
-// (kept rather than hunting down every call site) so every one of them picks
-// up the quote-safe behavior. Loads first (015) so every later consumer can
-// reference it.
+// escHtml() escapes & < > " ' and is the one escaper; _tsEsc/_orbVehEsc/_mrEsc
+// are aliases kept for their call sites. Loads first so everything can use it.
 function escHtml(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;')
@@ -23,7 +15,6 @@ function escHtml(s) {
 // Single source of truth for the displayed version + patch notes (header button
 // opens #modal-patch-notes). Bump APP_VERSION and prepend an entry on release.
 const APP_VERSION='2.2.0';
-const APP_REPO_URL='https://github.com/rp1-lox/perigee-lv-calculator';
 const APP_CHANGELOG=[{v:'2.2.0', title:'Architecture page', date:'2026-07-21', notes:[
     'NEW Architecture page: plan your mission\'s orbit ladder and transfers before you fly it. Add named orbits (from the preset catalog or fully custom), draw transfer edges between them, and see the trip\'s delta-V budget add up automatically.',
     'The Mission page now understands your plan: a LAUNCH can target an architecture orbit directly, and "Transfer (from plan)" turns any drawn edge into a real, editable set of maneuver events.',
@@ -74,7 +65,7 @@ const APP_CHANGELOG=[{v:'2.2.0', title:'Architecture page', date:'2026-07-21', n
   ]},
 ];
 
-// Defensive by design (2026-07-21): this runs from _initVersionUI during the
+// Defensive by design: this runs from _initVersionUI during the
 // 590-init top-level sequence, so ANY throw here halts the rest of init —
 // PROG_ACTIVE_PROGRAM never gets created and every `let`/`const` declared in
 // a later module (600-architecture-model's undo stack, ...) stays in its

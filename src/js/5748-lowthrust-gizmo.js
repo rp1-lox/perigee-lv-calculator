@@ -1,41 +1,24 @@
 
-// ─── MISSION_MODEL_V2 §19 E4 — low-thrust duration-drag gizmo ───────────────
-// See MATH.md §7ab. Mirrors 5745's drag wiring (mousedown on an SVG handle ->
-// document mousemove/mouseup -> Escape cancel), but MUCH simpler: no rate
-// integration, no n-body scratch passes. Scope guard (spec, CLAUDE.md):
-// est.-lane math ONLY during the drag (ltEstimateLeg/ltApplyDvToCircularAlt —
-// NEVER physPropagateSegment in a mouse-move handler); release authors the
-// new duration_s through the sanctioned path (m.log -> missionRecompute ->
-// missionRenderDetail), and the signature/STALE machinery (568/570, §7z/§7ab)
-// invalidates any computed cache automatically — this module never touches
-// _ltComputedByMission directly.
-//
-// Handles are emitted by 574's _trajLowThrustSVG ONLY for the selected/
-// expanded LOWTHRUST event (mode-conditional: they simply don't exist in the
-// DOM outside the trajectory view, so there is nothing to guard against band/
-// nodemap views firing a drag — same "guard by non-existence" pattern as
-// 5745's overlay layer).
+// ─── LOW-THRUST DURATION-DRAG GIZMO ────────────────────────────────────────
+// Mirrors 5745's drag wiring (mousedown on an SVG handle -> document
+// mousemove/mouseup -> Escape cancel) but uses only est.-lane math during the
+// drag (never physPropagateSegment in a mouse handler). Release authors the
+// new duration_s through m.log -> missionRecompute -> missionRenderDetail; the
+// signature machinery in 568/570 invalidates any computed cache.
+// Handles exist in the DOM only for the selected LOWTHRUST event.
 
 let _ltgDrag = null; // { missionId, authIdx, x0, y0, ux, uy, baseDuration_s, ep, body, alt0Km, law, schemEl, r0Km, tickEls }
 
 const _LTG_PX_PER_DAY = 5;      // screen px of along-axis drag per day of duration change
 const _LTG_MIN_DURATION_S = 3600; // floor: never drag below 1 hour
 
-// Selection hook (called from 574's _trajSelectEventFromView, guarded by
-// typeof so this module is optional). Nothing to precompute here — the
-// handle itself only exists in the DOM when 574 re-renders with this event
-// marked `_expanded`; this hook's only job is to cancel any STALE drag left
-// over from a previous selection (see the call site's own comment).
-function _ltgOnEventSelected(id, authIdx, entry) {
-  // no persistent state needed beyond the active drag itself
-}
 
 function _ltgActiveStageEpFor(m, e) {
   const ob = e && e.orbitBefore;
   if (!ob) return null;
-  const stage = (typeof _missionActiveEpStage === 'function') ? _missionActiveEpStage(m) : null;
+  const stage = _missionActiveEpStage(m);
   if (!stage) return null;
-  const m0 = (typeof progStageMass === 'function') ? progStageMass(stage) : 0;
+  const m0 = progStageMass(stage);
   return {
     ep: { thrust_N: stage.ep_thrust_N, isp_s: stage.ep_isp_s, m0_kg: m0, mDry_kg: stage.dry_mass },
     body: ob.body,
@@ -44,9 +27,9 @@ function _ltgActiveStageEpFor(m, e) {
 }
 
 function _ltgHandleDown(evt, id, authIdx) {
-  if (typeof _missionViewMode !== 'undefined' && _missionViewMode !== 'traj') return; // mode-conditional guard
+  if (_missionViewMode !== 'traj') return; // mode-conditional guard
   evt.preventDefault();
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   const e = m && m.log && m.log[authIdx];
   if (!m || !e || e.type !== 'LOWTHRUST') return;
   const ctx = _ltgActiveStageEpFor(m, e);
@@ -128,18 +111,18 @@ function _ltgHandleMove(evt) {
 // est.-lane ONLY (scope guard) — never physPropagateSegment here.
 function _ltgLiveEstimate() {
   const g = _ltgDrag;
-  if (!g || typeof ltEstimateLeg !== 'function') return null;
+  if (!g) return null;
   return ltEstimateLeg(g.ep, g.liveDuration_s, g.throttle);
 }
 
 function _ltgRepaintSchematic() {
   const g = _ltgDrag;
-  if (!g || !g.schemEl || typeof ltApplyDvToCircularAlt !== 'function') return;
+  if (!g || !g.schemEl) return;
   const est = _ltgLiveEstimate();
   if (!est) return;
   const signedDv = (g.law === 'retrograde' ? -1 : 1) * est.dv_est_kms;
   const alt1Km = ltApplyDvToCircularAlt(g.body, g.alt0Km, signedDv);
-  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[g.body] : null;
+  const b = PROG_BODIES[g.body];
   if (!b) return;
   const r0 = b.R + g.alt0Km, r1 = b.R + alt1Km;
   const REVS = 4, STEPS = 160, thMax = REVS * 2 * Math.PI;
@@ -194,7 +177,7 @@ function _ltgUpdateReadout() {
   if (g.__r1Start == null) {
     const est0 = ltEstimateLeg(g.ep, g.baseDuration_s, g.throttle);
     const signedDv0 = (g.law === 'retrograde' ? -1 : 1) * (est0 ? est0.dv_est_kms : 0);
-    g.__r1Start = ((typeof PROG_BODIES !== 'undefined' && PROG_BODIES[g.body]) ? PROG_BODIES[g.body].R : 0) +
+    g.__r1Start = ((PROG_BODIES[g.body]) ? PROG_BODIES[g.body].R : 0) +
       ltApplyDvToCircularAlt(g.body, g.alt0Km, signedDv0);
   }
   const est = _ltgLiveEstimate();
@@ -204,7 +187,7 @@ function _ltgUpdateReadout() {
   const propKg = Math.round(est.propUsed_kg);
   const depleted = est.capped;
   const propRemainKg = Math.max(0, (g.ep.m0_kg - g.ep.mDry_kg) - propKg);
-  const arrival = (typeof progMissionTimeToDate === 'function' && typeof _missions !== 'undefined')
+  const arrival = (typeof _missions !== 'undefined')
     ? (() => {
         const m = _missions.find(x => x.missionId === g.missionId);
         const e = m && m.log[g.authIdx];
@@ -214,7 +197,7 @@ function _ltgUpdateReadout() {
     : null;
   const arrivalTxt = arrival ? arrival.toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : '—';
   // Floating readout near the handle — LAZILY CREATED (orchestrator fix
-  // 2026-07-15: nothing ever emitted this element, so the drag readout
+  // nothing ever emitted this element, so the drag readout
   // silently never appeared; the id lookup below found null every frame).
   // Lives in the traj-wrap (positioned HTML above the SVG), removed by the
   // shared drag-cleanup path.
@@ -279,7 +262,7 @@ function _ltgCancelDrag() {
   // restore the schematic to its pre-drag shape + handle position by simply
   // re-rendering the detail panel (cheap; no data was mutated).
   _ltgDrag = null;
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  missionRenderDetail();
 }
 
 function _ltgHandleUp() {
@@ -287,23 +270,23 @@ function _ltgHandleUp() {
   if (!g) return;
   _ltgEndListeners();
   _ltgClearTicks();
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   const e = m && m.log && m.log[g.authIdx];
   const finalDuration = Math.round(g.liveDuration_s);
   _ltgDrag = null;
   if (!m || !e || e.type !== 'LOWTHRUST') return;
   if (finalDuration === (e.duration_s || 0)) {
-    if (typeof missionRenderDetail === 'function') missionRenderDetail();
+    missionRenderDetail();
     return;
   }
-  // Release = author through the sanctioned path (CLAUDE.md replay
+  // Release = author through the sanctioned path (replay
   // invariant): change m.log -> missionRecompute -> missionRenderDetail. The
   // signature/STALE machinery (568 ltSignature / 570's recompute case) picks
   // up the new duration_s automatically and flips any cached computed leg
   // STALE without this module touching _ltComputedByMission at all.
   e.duration_s = finalDuration;
-  if (typeof missionRecompute === 'function') missionRecompute(m);
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  missionRecompute(m);
+  missionRenderDetail();
 }
 
 // ── E4 target-orbit mode ─────────────────────────────────────────────────
@@ -311,7 +294,7 @@ function _ltgHandleUp() {
 // (closed form) fills duration_s; unreachable targets show a var(--warn)
 // badge with the max-achievable altitude instead of silently clamping.
 function ltgSetTargetAltitude(id, idx) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(id) : (_missions || []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   const e = m && m.log && m.log[idx];
   if (!m || !e || e.type !== 'LOWTHRUST') return;
   const input = document.getElementById(`ltg-alt-${id}-${idx}`);
@@ -323,14 +306,14 @@ function ltgSetTargetAltitude(id, idx) {
     return;
   }
   const ctx = _ltgActiveStageEpFor(m, e);
-  if (!ctx || typeof ltInverseEdelbaumDuration !== 'function') {
+  if (!ctx) {
     if (badgeEl) badgeEl.innerHTML = '<span style="color:var(--warn)">no ready EP stage / current orbit to solve from</span>';
     return;
   }
   const result = ltInverseEdelbaumDuration(ctx.body, ctx.alt0Km, altKm, ctx.ep);
   if (!result) {
     const raise = altKm >= ctx.alt0Km;
-    const maxA = (typeof ltMaxAchievableAlt === 'function') ? ltMaxAchievableAlt(ctx.body, ctx.alt0Km, ctx.ep, raise) : null;
+    const maxA = ltMaxAchievableAlt(ctx.body, ctx.alt0Km, ctx.ep, raise);
     if (badgeEl) {
       badgeEl.innerHTML = (maxA && isFinite(maxA.altMax_km))
         ? `<span style="color:var(--warn)">&#9888; unreachable with available prop — max achievable &#8776; ${Math.round(maxA.altMax_km).toLocaleString()} km (full-tank &Delta;v ${Math.round(maxA.dv_max_kms * 1000).toLocaleString()} m/s)</span>`
@@ -340,6 +323,6 @@ function ltgSetTargetAltitude(id, idx) {
   }
   e.duration_s = Math.round(result.duration_s);
   e.law = result.law;
-  if (typeof missionRecompute === 'function') missionRecompute(m);
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  missionRecompute(m);
+  missionRenderDetail();
 }

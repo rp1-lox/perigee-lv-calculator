@@ -1,9 +1,7 @@
 // tests/run.js
 //
-// Parallel test-gate runner. Replaces the old single-process `node
-// tests/math.test.js` invocation: spawns one child process per suite under
-// tests/suites/ (up to a worker cap), aggregates pass/fail, and prints output
-// in deterministic suite order regardless of completion order.
+// Parallel test-gate runner: one child process per suite under tests/suites/,
+// results printed in deterministic suite order.
 //
 // Usage:
 //   node tests/run.js              parallel (default; what build.py calls)
@@ -11,25 +9,17 @@
 //                                   (easier stack traces while debugging)
 //   node tests/run.js --suite 04-targeting-corrector.js   run just one suite
 //
-// ASSERTION-PARITY FLOOR: MIN_ASSERTIONS below is the assertion count as of
-// the 2026-07-17 monolith->suite split (961, matched the old math.test.js
-// exactly at split time; +5 on 2026-07-18 for the §7al reconstruction-agreement
-// pins in suite 05, +2 same date for the site-9 committed-leg guard pair, +20
-// same date for the A1 architecture-data-model pins (600-architecture-model.js)
-// in suite 10 — 998 total). If a
-// suite is silently dropped from the manifest
-// (or a suite's require() throws before running any assertions), the
-// aggregate count drops below this floor and the gate fails even if every
-// suite that DID run reported 0 failures. Bump this value (and the comment
-// date) only when you deliberately add assertions — never lower it to make a
-// broken manifest pass.
+// ASSERTION-PARITY FLOOR: if a suite is silently dropped from the manifest (or
+// throws before asserting), the aggregate count falls below MIN_ASSERTIONS and
+// the gate fails even with zero reported failures. Bump it when you add
+// assertions; never lower it to make a broken manifest pass.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { fork } = require('child_process');
 
-const MIN_ASSERTIONS = 1048; // -46, 2026-07-21: SIM-series ascent simulator removed (suite 11 deleted with src/js/155-ascent-sim.js; findings preserved in docs/MATH.md s10)
+const MIN_ASSERTIONS = 1018;
 
 const SUITES_DIR = path.join(__dirname, 'suites');
 const WORKER = path.join(__dirname, 'worker.js');

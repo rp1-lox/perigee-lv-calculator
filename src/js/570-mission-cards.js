@@ -1,18 +1,9 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-cards.js — Mission event-log cards + inline event editing UI
-//
-// OWNS: the event-log card dispatcher (_missionLogCardHTML) and the large inline
-//   event editor (_missionEventEditFieldsHTML), plus event-list manipulation from
-//   the cards: delete/move/reorder/select and the drag-reorder handlers
-//   (missionDeleteEvent, missionMoveEvent, missionMoveEventToEnd, missionReorderEvent,
-//   missionSelectEvent, missionEvtDragStart/Over/Leave/Drop).
-// Note: per-type log-card renderers (_missionBurnLogCardHTML, _missionSeparateLogCardHTML,
-//   etc.) and per-type edit appliers live in the manager remainder; this module
-//   forward-references them (resolved at call time after all modules load).
-// Does NOT own: replay (570-mission-replay.js), band/node-map views, or event execution.
-// Split out of 570-mission-manager.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── MISSION EVENT-LOG CARDS + inline event editing ─────────────────────────
+// Card dispatcher (_missionLogCardHTML), the inline event editor
+// (_missionEventEditFieldsHTML), and list manipulation from the cards:
+// delete / move / reorder / select and drag-reorder handlers. Per-type card
+// renderers and edit appliers live in 570-mission-events.js / -manager.js and
+// are resolved at call time.
 
 function _missionLogCardHTML(entry, id, idx) {
   if (entry.type === 'BURN')     return _missionBurnLogCardHTML(entry);
@@ -73,7 +64,7 @@ function _missionLogCardHTML(entry, id, idx) {
     ${entry.boiloffKg > 0 ? `<div style="font-family:var(--mono);font-size:9px;color:var(--accent2);margin-top:2px;">boiloff &minus;${Math.round(entry.boiloffKg).toLocaleString()} kg</div>` : ''}
   </div>`;
   if (entry.type === 'DEPLOY') {
-    // §14 U3: propagated orbit (NRHO) has no periKm/apoKm — honest label.
+    // propagated orbit (NRHO) has no periKm/apoKm — honest label.
     const orbitVal = (entry.orbit && entry.orbit.propagated)
       ? 'NRHO (propagated)'
       : `${(entry.orbit&&entry.orbit.periKm||0).toLocaleString()} km${entry.orbit&&entry.orbit.apoKm&&entry.orbit.apoKm!==entry.orbit.periKm?' × '+entry.orbit.apoKm.toLocaleString():''}`;
@@ -85,7 +76,7 @@ function _missionLogCardHTML(entry, id, idx) {
   const sc = sr.status === 'SUCCESS' ? 'var(--accent3)' : 'var(--accent2)';
   const payStr = (entry.payloadNames || []).length ? entry.payloadNames.join(', ') : 'None';
   // Launch statistics (ΔV required/available/margin, per-stage prop/ΔV table)
-  // moved off this card per user feedback 2026-07-16 — that's mission STATE,
+  // moved off this card per user feedback — that's mission STATE,
   // not launch-event authoring, and now lives in the expandable HUD vehicle
   // card (_missionVehStageRowsHTML, 570-mission-panel.js). This card keeps
   // only the authored launch parameters + pass/fail badge.
@@ -107,7 +98,7 @@ function _missionLogCardHTML(entry, id, idx) {
   </div>`;
 }
 
-// 5b R3 (MATH.md §7af): "+ PHASE" affordance, placed WITH the amber finding
+// "+ PHASE" affordance, placed WITH the amber finding
 // it fixes (572's 'rendezvous-phase-error') rather than as a separate control
 // somewhere else. Only rendered when the RENDEZVOUS actually has an
 // out-of-window phase error (entry.matched && entry.phase.capture===false) —
@@ -117,11 +108,10 @@ function _missionLogCardHTML(entry, id, idx) {
 // events.js) which inserts BEFORE this RENDEZVOUS event and recomputes.
 function _missionPhasingRowHTML(entry, id, idx) {
   if (!(entry.matched && entry.phase && entry.phase.capture === false && id != null && idx != null)) return '';
-  if (typeof phasingPlanPropagated !== 'function') return '';
   const tgt = (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM.vehicles) ? PROG_ACTIVE_PROGRAM.vehicles[entry.targetVehId] : null;
   const os = tgt ? tgt.orbitState : null;
   const refId = (os && os.propagated) ? os.refId : null;
-  const opts = (typeof phasingOptionsFor === 'function') ? phasingOptionsFor(entry.phase.dt_s, refId, refId ? null : os) : [];
+  const opts = phasingOptionsFor(entry.phase.dt_s, refId, refId ? null : os);
   if (!opts.length) return '';
   const chips = opts.map(o => {
     const dvTxt = o.dvPerBurn_ms.toFixed(1);
@@ -190,8 +180,8 @@ function missionSelectEvent(id, idx) {
   // log list, same as selecting one by clicking the view directly, hands
   // view-time authority back to "state as of this event" — clear any
   // lingering manual scrub override so it doesn't silently out-rank this pick.
-  if (typeof _trajViewTimeOverride !== 'undefined') delete _trajViewTimeOverride[id];
-  // Selection stickiness fix (user-reported 2026-07-15): an event belongs to
+  delete _trajViewTimeOverride[id];
+  // Selection stickiness fix: an event belongs to
   // a vehicle — selecting it should set/keep the active vehicle (m.vehicleId,
   // the R5 one-selection state that drives the "Vehicles & Mission State"
   // panel highlight AND the ring/leg emphasis in the trajectory view) as that
@@ -277,7 +267,7 @@ function _missionEventEditFieldsHTML(m, idx) {
           <div class="cfg-item"><label class="cfg-label">To</label>
             <select id="edit-mv-to-${id}" style="${_selStyle}">${_opt(e.toNode)}</select></div>
         </div>
-        <div style="margin-bottom:8px;">${(typeof progPorkButtonHTML === 'function') ? progPorkButtonHTML(id, idx, e.toNode) : ''}</div>
+        <div style="margin-bottom:8px;">${progPorkButtonHTML(id, idx, e.toNode)}</div>
         <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:8px;">// edit the burn/separate steps on the maneuver card itself</div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyManeuverEdit('${id}',${idx})">Apply</button>
         <div class="cfg-row" style="flex-wrap:wrap;gap:10px 16px;align-items:flex-start;margin-top:10px;">
@@ -300,11 +290,11 @@ function _missionEventEditFieldsHTML(m, idx) {
   } else if (e.type === 'DEPLOY') {
     const scs = _scEdSC || [];
     const o = scs.map(s => `<option value="${s.spacecraftId}"${s.spacecraftId===e.spacecraftId?' selected':''}>${s.name}</option>`).join('');
-    // §14 U3: DEPLOY (unlike LAUNCH) MAY target a propagated ref — a station
+    // DEPLOY (unlike LAUNCH) MAY target a propagated ref — a station
     // parked on the NRHO is exactly the use case. Picking one binds
     // e.orbitRefId + e.orbit; leaving it "— default —" keeps the pre-existing
     // "orbit follows the Launch Orbit" behavior (e.orbit unset).
-    const deployRefOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList() : [];
+    const deployRefOpts = refOrbitCatalogList();
     const eOrbit = e.orbit || {};
     const deployRefSelectHTML = `
         <div class="cfg-item" style="margin-bottom:8px;"><label class="cfg-label">Ref Orbit</label>
@@ -366,7 +356,7 @@ function _missionEventEditFieldsHTML(m, idx) {
   } else if (e.type === 'LAUNCH') {
     // Rebuilt as a search combobox (see 571-combobox.js) — the plain
     // `_fleetEntries`-only <select> this used to be is the confirmed
-    // regression from e1b08583f: it never listed Built-in/My Vehicles and
+    // regression : it never listed Built-in/My Vehicles and
     // never snapshotted a picked one into `_fleetEntries`, so on a fresh
     // program (empty `_fleetEntries`) the dropdown had nothing in it.
     const _curFleet = e.fleetEntryId ? _fleetGet(e.fleetEntryId) : null;
@@ -378,7 +368,7 @@ function _missionEventEditFieldsHTML(m, idx) {
           style="margin-bottom:8px;width:100%;box-sizing:border-box;"
           onfocus="_missionLaunchLvComboOpen('${id}',${idx})" onclick="_missionLaunchLvComboOpen('${id}',${idx})">`;
     const o = e.orbit || {};
-    // Payload multi-picker: e.payloadScIds is ALREADY a list (mass = sum, see
+    // Payload multi-picker: e.payloadScIds is ALREADY a list (mass = sum,
     // 570-mission-manager.js's launch mass accounting) — only the UI needed
     // rebuilding, not the data model. Add-via-search, remove via the × on
     // each row; both mutate e.payloadScIds directly (same pre-Apply-mutation
@@ -401,12 +391,12 @@ function _missionEventEditFieldsHTML(m, idx) {
           onfocus="_missionLaunchPayComboOpen('${id}',${idx})" onclick="_missionLaunchPayComboOpen('${id}',${idx})">
         <div id="edit-launch-pay-list-${id}" style="margin-bottom:8px;">${payListHTML}</div>`;
     const lanDerived = !!(e.launchTime_s != null && o._lanFromLaunchTime);
-    // T2: reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
+    // Reference-orbit catalog pick — '— custom —' or a catalog entry. Picking one
     // sets orbitRefId + fills the fields; hand-editing a bound field clears orbitRefId
     // (see missionApplyLaunchEdit / missionLaunchOrbitDetach) and shows '(custom)'.
-    // §14 U3: a LAUNCH cannot target a propagated ref (not a launch-insertion
+    // a LAUNCH cannot target a propagated ref (not a launch-insertion
     // orbit — it's a DEPLOY/maneuver-target orbit) — filtered out of this picker.
-    const refOpts = (typeof refOrbitCatalogList === 'function') ? refOrbitCatalogList().filter(r => r.kind !== 'propagated') : [];
+    const refOpts = refOrbitCatalogList().filter(r => r.kind !== 'propagated');
     const refSelectHTML = `
         <div class="cfg-item"><label class="cfg-label">Ref Orbit</label>
           <select id="edit-launch-ref-${id}" style="${_es}" onchange="missionLaunchRefPick('${id}',${idx},this.value)">
@@ -414,9 +404,9 @@ function _missionEventEditFieldsHTML(m, idx) {
             ${refOpts.map(r => `<option value="${r.id}"${r.id === e.orbitRefId ? ' selected' : ''}>${_mrEsc(r.name)}${r.builtin ? '' : ' (user)'}</option>`).join('')}
           </select>
           <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-left:6px;">${e.orbitRefId ? '' : '(custom)'}${e._refNote ? ' // ' + _mrEsc(e._refNote) : ''}</span></div>`;
-    // Card reorg (2026-07-17, user priority): identity/context first — launch
+    // Card reorg: identity/context first — launch
     // date + site, vehicle, payloads — ALL above the orbit-element fields.
-    // The Body selector is gone (launches are Earth-only, see
+    // The Body selector is gone (launches are Earth-only,
     // missionApplyLaunchEdit); the merged Target control (plan-for-destination
     // + match-plane, unified) sits WITH the reference-orbit fields since it
     // authors them.
@@ -513,7 +503,7 @@ function _missionEventEditFieldsHTML(m, idx) {
         </div>
         <button class="act-btn" style="background:var(--accent);color:#000;font-weight:600;padding:5px 14px;" onclick="missionApplyMnodeEdit('${id}',${idx})">Apply</button>
         ${(() => {
-          // Unify-create/edit (2026-07-16): "Solve free return" used to be a
+          // Unify-create/edit: "Solve free return" used to be a
           // dock-only affordance — now lives right on the (shared) MNODE
           // form, so it works identically whether this is the pending draft
           // or an already-committed MNODE being re-edited.

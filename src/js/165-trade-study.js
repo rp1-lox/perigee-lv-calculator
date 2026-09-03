@@ -78,7 +78,7 @@ const TS_VARS={
 // branch of destOnOrbitDV() (145-dest-dv.js) with decl defaulted to siteLat (as
 // destOnOrbitDV does when dest.decl is omitted) — that default makes the plane-change
 // term (ds=|siteLat|-|decl|-0.5) always negative, so it drops out here exactly as it
-// does there. tests/math.test.js pins this against destOnOrbitDV for every escape
+// does there. tests/run.js pins this against destOnOrbitDV for every escape
 // destination in ORBIT_CATEGORIES at siteLat=that destination's own decl.
 function _tsOnOrbitDVEscapeC3(c3,parkingAlt){
   const Vesc2=2*MU/(RE+parkingAlt);
@@ -111,7 +111,7 @@ const TS_METRIC_ORDER=['maxpay','margin','payfrac','tdv','tbt','tw'];
 // evaluation (never cached) so perturbing an authored s15 field re-derives the split,
 // which is the physically-correct behavior (the BECO point is a function of those fields).
 // Thin wrapper over the ONE S1.5 expansion boundary (stageExpandS15,
-// 140-physics.js — UNIFICATION_AUDIT P2.1). This used to silently fall back
+// 140-physics.js). This used to silently fall back
 // to the raw unsplit stage on a split error (under-modeling an invalid S1.5
 // vehicle without any visible signal); now uses 'annotate' like the other
 // callers, so a bad S1.5 config is flagged (`_err`) instead of hidden.
@@ -264,7 +264,7 @@ function _tsCompareOptionsHTML(){
   return opts.join('');
 }
 
-// Thin alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+// Thin alias onto the canonical escaper.
 function _tsEsc(s){return escHtml(s);}
 
 function _tsWorksheetLabel(){return (typeof loadedVehicleName!=='undefined'&&loadedVehicleName)?loadedVehicleName:'Worksheet';}
@@ -810,7 +810,7 @@ function _tsClipSeriesAtZero(points){
   return {clipped,terminus};
 }
 
-// Transient x-domain zoom/pan state for the line chart (user 2026-07-15:
+// Transient x-domain zoom/pan state for the line chart (user :
 // "add zoom/scroll to the chart"). {x0,x1} in DATA units, or null = full
 // extent. Cleared whenever a new sweep renders (tsRenderChart). Y auto-fits
 // to the points visible in the zoomed window — that's the analysis win.
@@ -822,7 +822,7 @@ function tsRenderLineChart(res){
   const wrap=document.getElementById('ts-chart-wrap');
   // 1280-unit viewBox (was 960): the SVG scales to container width, so a
   // denser viewBox renders text/markers ~25% smaller on screen — user
-  // feedback 2026-07-15 ("everything on it is a bit big"). Line strokes are
+  // feedback ("everything on it is a bit big"). Line strokes are
   // additionally non-scaling (true px) below.
   const W=1280,H=420,ML=70,MR=26,MT=18,MB=44;
   const plotW=W-ML-MR,plotH=H-MT-MB;

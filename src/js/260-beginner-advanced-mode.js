@@ -2,28 +2,6 @@
 // ─── BEGINNER / ADVANCED MODE ─────────────────
 let vehicleMode='beginner';
 
-function setVehicleMode(mode){
-  vehicleMode=mode;
-  document.querySelectorAll('#view-mode-toggle button').forEach((b,i)=>{
-    b.classList.toggle('active',i===(mode==='beginner'?0:1));
-  });
-  const beg=document.getElementById('vehicles-beginner');
-  const adv=document.getElementById('vehicles-advanced');
-  const tbl=document.getElementById('vehicles-stage-params');
-  const perf=document.getElementById('vehicles-perf');
-  if(mode==='beginner'){
-    beg.style.display='grid';
-    adv.style.display='none';
-    tbl.style.display='none';
-    if(perf) perf.style.display='block';
-  } else {
-    beg.style.display='none';
-    adv.style.display='block';
-    tbl.style.display='block';
-    if(perf) perf.style.display='none';
-    syncAdvControls();
-  }
-}
 
 function syncAdvControls(){
   // Mirror primary controls to advanced duplicates

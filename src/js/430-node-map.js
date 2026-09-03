@@ -1,12 +1,9 @@
 
-// ─── PROGRAM MODULE — Phase 8: Node Map ──────────────────────────────────────
-//
-// Subway-style ΔV topology graph (Model 3 from conops_mockups.html).
-// Rendered as programmatic SVG in #prog-nm-canvas (viewBox 0 0 1100 520).
-// Three vertical zones: Earth | Lunar | Interplanetary.
-// Hover on edge: tooltip with ΔV.
-// Click on edge: insert BURN event in Band View with that ΔV.
-// Active mission path highlighted in vehicle color.
+// ─── NODE MAP ────────────────────────────────────────────────────────────────
+// Subway-style ΔV topology graph rendered as SVG in #prog-nm-canvas
+// (viewBox 0 0 1100 520), three zones: Earth | Lunar | Interplanetary.
+// Hover an edge for its ΔV; click an edge to insert a BURN event. The active
+// mission path is highlighted in the vehicle color.
 
 // ── Tooltip element ───────────────────────────────────────────────────────────
 
@@ -52,7 +49,7 @@ const PROG_NM_NODES = [
     orbit:{ type:'circular', body:'Moon',  periKm:100,   apoKm:100,   incDeg:90 } },
   { id:'dro',           label:'DRO',     sub:'distant retro',  zone:'lunar',  cx:483, cy:138, r:18,
     orbit:{ type:'circular', body:'Moon',  periKm:68300, apoKm:68300, incDeg:0 } },
-  // MISSION_MODEL_V2 §15 5a: Gateway NRHO destination — bound to the SEEDED
+  // 5a: Gateway NRHO destination — bound to the SEEDED
   // propagated ref-orbit catalog entry (425's 'nrho-nominal'). orbit.{perigee,
   // apogee} are the SAME approximate label-only values 425 stores (NOT
   // authoritative Keplerian truth — the real shape is the propagated
@@ -124,27 +121,11 @@ const PROG_NM_NODES = [
     orbit:{ type:'circular', body:'Pluto', periKm:1000, apoKm:1000, incDeg:0 } },
 ];
 
-// No pre-spawned edges — users draw their own via right-click → Add Edge From Here.
-const PROG_NM_EDGES = [];
 
 // ── Node Map renderer ─────────────────────────────────────────────────────────
 
 // ── Node Map helpers (updated to accept allEdges param) ───────────────────────
 
-/** Return edge IDs that appear in the current program's BURN events. */
-function _progNmActiveEdgeIds(allEdges) {
-  if (!PROG_ACTIVE_PROGRAM) return [];
-  const edges = allEdges || [...PROG_NM_EDGES, ...(PROG_ACTIVE_PROGRAM.nodeMapCustomEdges || [])];
-  const ids = [];
-  for (const ev of (PROG_ACTIVE_PROGRAM.events || [])) {
-    if (ev.type !== 'BURN') continue;
-    if (ev.fromNode && ev.toNode) {
-      const e = edges.find(ed => ed.from === ev.fromNode && ed.to === ev.toNode);
-      if (e && !ids.includes(e.id)) ids.push(e.id);
-    }
-  }
-  return ids;
-}
 
 /** Map a FlightVehicle's current OrbitalState to the nearest canonical node id. */
 function _progNmVehicleNode(fv) {
@@ -240,7 +221,7 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   }));
   // R3.2 edge-cost flag (guarded, OPT-IN, default OFF): today this transfer
   // is purely coaxial — it never charges anything for the two orbits being
-  // in different planes (critique 5's "assumes latitude-derived planes" gap,
+  // in different planes ('s "assumes latitude-derived planes" gap,
   // here it's worse — no plane term at all for same-body node edges). When
   // EITHER node's spec sets priceOrientation:true, add the REAL plane-change
   // angle between the authored {i, Ω} pairs (progDvPlaneChangeFull, spherical
@@ -262,17 +243,6 @@ function _nmCoaxialTransferDv(body, oa, ob, priceOrientation) {
   return { total_ms: best * 1000, dv1_ms: dv1b * 1000, dv2_ms: dv2b * 1000, single };
 }
 
-/**
- * ΔV (m/s) to depart from `orbit` around `body` onto a hyperbolic/escape trajectory
- * with hyperbolic excess speed v_inf_kms (km/s).  Burn happens at periapsis.
- */
-function _nmDvDepart(body, orbit, v_inf_kms) {
-  const b  = PROG_BODIES[body];
-  const r  = b.R + ((orbit.periKm ?? orbit.perigee) ?? (orbit.apoKm ?? orbit.apogee) ?? 0);
-  const v0 = _nmOrbitVAtR(body, orbit, r);
-  const ve = Math.sqrt(v_inf_kms * v_inf_kms + 2 * b.mu / r);
-  return Math.abs(ve - v0) * 1000;
-}
 
 /**
  * Compute the ΔV (m/s) for a transfer between two node objects that carry `.orbit`.
@@ -372,7 +342,7 @@ function _nmDvPhysics(nA, nB) {
       const note = t.single
         ? `${label}: ${Math.round(t.dv1_ms)} m/s at shared apsis around ${body}`
         : `${label}: ${Math.round(t.dv1_ms)} + ${Math.round(t.dv2_ms)} m/s around ${body}`;
-      // A3 (610-architecture-map.js): chain-decomposition legs, consumed by
+      // Chain-decomposition legs, consumed by
       // BOTH the mission node map (via progNmComputeEdgeDv, unaffected — it
       // never reads `.legs`) and the Architecture page's edge display. Same
       // numbers as dv1_ms/dv2_ms above — accounting-identity guard: sum(legs) === dv.
@@ -456,7 +426,7 @@ function _nmDvPhysics(nA, nB) {
     return { dv: Math.round(tli + loi),
       note: `TLI from ${h_park} km: ${Math.round(tli)} m/s  +  LOI to ${h_llo} km: ${Math.round(loi)} m/s`,
       method: 'Hohmann/patched-conic',
-      // A3: no propagated mid-course-correction estimate exists in this pure
+      // No propagated mid-course-correction estimate exists in this pure
       // patched-conic model (MCC only emerges from an actual solved physics
       // leg in a flown mission, 565 — architecture is pre-mission geometry,
       // KSP invariant: no vehicle/propagation dependency here) — the chain is
@@ -522,9 +492,9 @@ function _nmDvPhysics(nA, nB) {
 // ── R5 — node-map coherence pass ──────────────────────────────────────────────
 // The node map and trajectory view become two projections of ONE dataset.
 // These two pure helpers are extracted so the layout/annotation logic is
-// unit-testable (see tests/math.test.js) without constructing SVG or DOM.
+// unit-testable (see tests/run.js) without constructing SVG or DOM.
 
-// SOI-derived layout radius (2026-07-10, R5 item 1). Replaces the hand-set
+// SOI-derived layout radius. Replaces the hand-set
 // `soiR` constants in 570's _missionNmLayout with values DERIVED from real
 // SOI physics (physSoiRadius, 386) — log-scaled and anchored to Earth's
 // legacy 150px radius so the layout stays visually reasonable (the point is
@@ -533,7 +503,6 @@ function _nmDvPhysics(nA, nB) {
 // hand-set constant for that body; used verbatim if physSoiRadius is
 // unavailable (guard) or returns a non-finite/zero radius.
 function _nmSoiLayoutRadius(body, fallback) {
-  if (typeof physSoiRadius !== 'function') return fallback;
   let soi, soiEarth;
   try { soi = physSoiRadius(body); soiEarth = physSoiRadius('Earth'); }
   catch (err) { return fallback; }
@@ -558,7 +527,7 @@ function _nmSoiLayoutRadius(body, fallback) {
 // progNmComputeEdgeDv/dvOverride exclusively (byte-parity discipline); this
 // function only adds a display annotation alongside that number.
 function _nmEdgePhysicsAnnotation(missionId, logIdx, legLookup, caFn) {
-  const lookup = legLookup || (typeof physMissionLeg === 'function' ? physMissionLeg : null);
+  const lookup = legLookup || physMissionLeg;
   if (!lookup || missionId == null || logIdx == null) return { flown: false, label: 'estimated' };
   let leg = null;
   try { leg = lookup(missionId, logIdx); } catch (err) { leg = null; }
@@ -566,7 +535,7 @@ function _nmEdgePhysicsAnnotation(missionId, logIdx, legLookup, caFn) {
   const tofSeconds = leg.tofPhysics != null ? leg.tofPhysics : leg.tof_s;
   let closestApproachKm = null;
   if (leg.dest && leg.samples && leg.samples.length) {
-    const scan = caFn || (typeof _trajGizmoClosestApproach === 'function' ? _trajGizmoClosestApproach : null);
+    const scan = caFn || _trajGizmoClosestApproach;
     if (scan) {
       try { const ca = scan(leg.samples, leg.dest); if (ca) closestApproachKm = ca.dKm; }
       catch (err) { closestApproachKm = null; }
@@ -620,7 +589,7 @@ function _nmMatchOrbitToNode(body, periKm, apoKm, incDeg, nodes, tol) {
 function _nmClassifySettledOrbit(elements, frameBody, nodes, tol) {
   if (!elements || !frameBody) return null;
   if (elements.e >= 1 || !isFinite(elements.a) || elements.a <= 0) return null;
-  const R = (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[frameBody]) ? PROG_BODIES[frameBody].R : 0;
+  const R = (PROG_BODIES[frameBody]) ? PROG_BODIES[frameBody].R : 0;
   const periKm = elements.rp - R;
   const apoKm  = isFinite(elements.ra) ? elements.ra - R : Infinity;
   const incDeg = elements.i * 180 / Math.PI;
@@ -628,7 +597,7 @@ function _nmClassifySettledOrbit(elements, frameBody, nodes, tol) {
 }
 
 // ── MISSION_MODEL_V2 Phase 3 T3 — dwell/transit terminology ─────────────────
-// §4.4/§13 T3: "dwell = node, transit = edge." TLI/TMI/LOI/MOI etc. name BURNS
+// "dwell = node, transit = edge." TLI/TMI/LOI/MOI etc. name BURNS
 // on a transfer edge, never nodes. Pure lookup, no DOM — canon table for the
 // bodies the app models transfers to/from; generic fallback for anything else.
 const _NM_BURN_NAME_TABLE = {

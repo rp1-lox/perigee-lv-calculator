@@ -1,22 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-band.js — Mission band view (altitude-vs-event timeline) + authoring
-//
-// OWNS: the band-view data model (_missionBandModel) and SVG (_missionBandViewHTML),
-//   band scrub/lane-color/body-zone styling, the Add-Event dock (_missionAddEventHTML,
-//   missionSetAddEvt), maneuver-node (MNODE) authoring/editing from the dock
-//   (missionExecMnodeFromDock, missionSolveFreeReturn, missionApplyMnodeEdit,
-//   missionMnodeNudge, missionMnodeResolveToTarget, missionApplyMnodeCaTarget),
-//   and PNG export of the current view (missionExportPNG, _missionResolveCssVars).
-// Does NOT own: the node-map view (570-mission-nodemap.js), replay (570-mission-replay.js),
-//   or event-card rendering (still in the manager remainder for now).
-// Split out of 570-mission-manager.js (behavior-preserving move). Definitions/consts
-//   only (no load-time execution); load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
-// ── Band view data model (event-based) ──────────────────────────────────────
-function _missionAltToYFrac(alt) {
-  const a = Math.max(0, alt || 0);
-  return Math.max(0, Math.min(1, Math.log10(a + 1) / Math.log10(500000)));
-}
+// ─── MISSION BAND VIEW — altitude-vs-event timeline + authoring ─────────────
 
 // Swimlane band model: each vehicle is a horizontal lane (row); X is a timeline
 // column (simultaneous events share a column). A separated vehicle spawns on a
@@ -42,7 +24,7 @@ function _missionLaneColor(m, label, fallbackIdx, palette) {
 // on the mission object (survives save/load + autosave), captures undo, and
 // re-renders the detail view (band redraw needs the model rebuilt with the new color).
 function missionSetLaneColor(missionId, label, hex) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const m = _missionGet(missionId);
   if (!m) return;
   m.laneColors = m.laneColors || {};
   m.laneColors[label] = hex;
@@ -68,20 +50,18 @@ function _missionVehicleColor(m, vehicleKey, fallback) {
   if (!m || !vehicleKey) return fallback == null ? null : fallback;
   const directLabel = m._ownerLabels && m._ownerLabels[vehicleKey];
   if (directLabel && m.laneColors && m.laneColors[directLabel]) return m.laneColors[directLabel];
-  if (typeof _missionBandModel === 'function') {
-    try {
-      const band = _missionBandModel(m);
-      for (const L of band.lanes) {
-        if (L.points.some(p => p.vehicleId === vehicleKey) && m.laneColors && m.laneColors[L.name]) {
-          return m.laneColors[L.name];
-        }
+  try {
+    const band = _missionBandModel(m);
+    for (const L of band.lanes) {
+      if (L.points.some(p => p.vehicleId === vehicleKey) && m.laneColors && m.laneColors[L.name]) {
+        return m.laneColors[L.name];
       }
-    } catch (e) { /* best-effort only — never block the HUD render */ }
-  }
+    }
+  } catch (e) { /* best-effort only — never block the HUD render */ }
   return fallback == null ? null : fallback;
 }
 
-// HUD-swatch discoverability (workflow pass 2, user report 2026-07-15: "can't
+// HUD-swatch discoverability (workflow pass 2, user report : "can't
 // figure out how to change the color of the orbit in the trajectory map").
 // The HUD chip is vehicle-granularity but m.laneColors is owner-label-granularity
 // (see _missionVehicleColor above); this resolves the PRIMARY owner label for a
@@ -93,14 +73,12 @@ function _missionVehiclePrimaryLabel(m, vehicleKey) {
   if (!m || !vehicleKey) return null;
   const directLabel = m._ownerLabels && m._ownerLabels[vehicleKey];
   if (directLabel) return directLabel;
-  if (typeof _missionBandModel === 'function') {
-    try {
-      const band = _missionBandModel(m);
-      for (const L of band.lanes) {
-        if (L.points.some(p => p.vehicleId === vehicleKey)) return L.name;
-      }
-    } catch (e) { /* best-effort only */ }
-  }
+  try {
+    const band = _missionBandModel(m);
+    for (const L of band.lanes) {
+      if (L.points.some(p => p.vehicleId === vehicleKey)) return L.name;
+    }
+  } catch (e) { /* best-effort only */ }
   return null;
 }
 
@@ -110,13 +88,11 @@ function _missionVehicleSwatchColor(m, vehicleKey) {
   const label = _missionVehiclePrimaryLabel(m, vehicleKey);
   if (!label) return _MISSION_BAND_PALETTE[0];
   if (m.laneColors && m.laneColors[label]) return m.laneColors[label];
-  if (typeof _missionBandModel === 'function') {
-    try {
-      const band = _missionBandModel(m);
-      const L = band.lanes.find(l => l.name === label);
-      if (L) return L.color;
-    } catch (e) { /* best-effort only */ }
-  }
+  try {
+    const band = _missionBandModel(m);
+    const L = band.lanes.find(l => l.name === label);
+    if (L) return L.color;
+  } catch (e) { /* best-effort only */ }
   return _MISSION_BAND_PALETTE[0];
 }
 
@@ -125,7 +101,7 @@ function _missionVehicleSwatchColor(m, vehicleKey) {
 // the same storage + save/undo/re-render path as missionSetLaneColor — one
 // write path to m.laneColors, just the delete branch of it.
 function missionResetLaneColorForVehicle(missionId, vehicleKey) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const m = _missionGet(missionId);
   if (!m || !m.laneColors) return;
   const label = _missionVehiclePrimaryLabel(m, vehicleKey);
   if (!label || !(label in m.laneColors)) return;
@@ -139,7 +115,7 @@ function missionResetLaneColorForVehicle(missionId, vehicleKey) {
 // function the band-view legend's <input type="color"> onchange calls) —
 // resolves vehicleKey to its primary owner label first.
 function missionSetLaneColorForVehicle(missionId, vehicleKey, hex) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const m = _missionGet(missionId);
   if (!m) return;
   const label = _missionVehiclePrimaryLabel(m, vehicleKey);
   if (!label) return;
@@ -318,11 +294,6 @@ function _missionOrbitZone(o) {
   }
 }
 
-// Scrub to a band event AND open that event's card in the EVENTS panel.
-function missionBandScrubTo(id, idx) {
-  _missionBandScrub = (idx == null ? null : +idx);
-  _missionBandOpenEvent(id, idx);
-}
 
 // Click a band-view dot: select that dot's vehicle as active AND scrub to the event,
 // so you can pick a specific vehicle (even on a crowded track) just by clicking it.
@@ -409,7 +380,7 @@ const _MISSION_APPLY_BY_TYPE = {
 // lookup (_missionVehiclesBeforeEvent, _missionPreSnapStages, …) naturally
 // resolves to the CURRENT live mission state — exactly like the old dock
 // forms computed their defaults, with zero new plumbing.
-// C2b item 1 (2026-07-17): m.launchOrbit is now canonical (periKm/apoKm/incDeg/
+// M.launchOrbit is now canonical (periKm/apoKm/incDeg/
 // lanDeg) — same dialect as a fresh LAUNCH/DEPLOY draft's e.orbit — so this is
 // now a plain defensive copy. Kept as a named helper because many draft/report
 // call sites reference it; legacy-shaped m.launchOrbit blobs are renamed to
@@ -421,7 +392,7 @@ function _missionLaunchOrbitDraft(lo) {
 function _missionPendingDraft(m, dockType) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeKey = fv ? fv._originKey : null;
-  const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+  const live = _missionLiveVehicles(m);
   const label = (dockType === '__none__') ? '' : (_MISSION_PENDING_TYPES[dockType] || {}).commitLabel;
   switch (dockType) {
     case 'launch':
@@ -493,7 +464,7 @@ function missionSetAddEvt(id, type) {
   _missionAddMv = { from: null, to: null, steps: [] };   // fresh maneuver step draft each open
   _missionXferDest = null;                                // fresh prop-transfer destination each open
   if (_missionAddEvt === 'maneuver') {
-    // MISSION_MODEL_V2 §12 U3: switch to the Node map view for drawing
+    // Switch to the Node map view for drawing
     // maneuvers via the real view switch (missionSetView), not a promotion.
     if (typeof missionSetView === 'function') missionSetView(id, 'nodemap');
     else _missionViewMode = 'nodemap';
@@ -538,15 +509,15 @@ function _missionGroupFormHTML(m) {
 }
 function _missionAddEventHTML(m) {
   const id = m.missionId;
-  if (typeof _missionGroupPending !== 'undefined' && _missionGroupPending) return _missionGroupFormHTML(m);
+  if (_missionGroupPending) return _missionGroupFormHTML(m);
   if (_missionAddEvt == null) {
     return `<button class="act-btn mcc-addevt-btn" style="width:100%;background:var(--accent);color:#000;font-weight:700;padding:11px;font-size:12px;letter-spacing:.08em;" onclick="missionSetAddEvt('${id}','__menu__')">＋ ADD EVENT</button>`;
   }
   const types = [['launch','Launch'],['deploy','Place in Orbit'],['maneuver','Maneuver'],['mnode','Vector Burn'],['lowthrust','Low-Thrust'],['coast','Coast'],['separate','Separate'],['dock','Dock'],['expend','Expend'],['rendezvous','Rendezvous'],['proptransfer','Prop Transfer'],['crewtransfer','Crew Transfer'],['reenter','Reenter'],['recover','Recover']];
-  // A4 (MISSION_MODEL_V2 §26): only offered once the mission's architecture
+  // Only offered once the mission's architecture
   // has at least one edge to transfer along (KSP invariant — nothing new
   // appears for a fresh, architecture-free mission).
-  if (typeof archGet === 'function' && archGet().edges && archGet().edges.length) types.push(['archxfer', 'Transfer (from plan)']);
+  if (archGet().edges && archGet().edges.length) types.push(['archxfer', 'Transfer (from plan)']);
   const typeBtns = types.map(([t,label]) =>
     `<button class="act-btn" style="padding:3px 8px;font-size:10px;${_missionAddEvt===t?'background:var(--accent);color:#000;':''}" onclick="missionSetAddEvt('${id}','${t}')">${label}</button>`
   ).join('');
@@ -555,7 +526,7 @@ function _missionAddEventHTML(m) {
       <span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.1em;">ADD EVENT</span>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">${typeBtns}</div>`;
-  const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+  const live = _missionLiveVehicles(m);
   const selectable = live.filter(x => x.fv.status !== 'EXPENDED' && x.fv.status !== 'RECOVERED');
   let vehSel = '';
   if (selectable.length > 1) {
@@ -568,16 +539,16 @@ function _missionAddEventHTML(m) {
   if (_missionAddEvt === '__menu__') {
     form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// pick an event type above</div>`;
   } else if (_MISSION_PENDING_TYPES[_missionAddEvt]) {
-    // Unified create/edit (2026-07-16): this type creates a PENDING DRAFT card
+    // Unified create/edit: this type creates a PENDING DRAFT card
     // in the events list (same _missionLogCardHTML/_missionEventEditFieldsHTML
-    // an existing event's accordion uses) instead of a dock form — see
+    // an existing event's accordion uses) instead of a dock form —
     // missionSetAddEvt/_missionPendingDraft above. There is nothing to show here.
     form = `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);">// editing the new event above, in the events list</div>`;
   } else if (_missionAddEvt === 'burn') {
     form = _missionBurnSectionHTML(m);
   } else if (_missionAddEvt === 'lowthrust') {
     const stage = fv && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
-    const readiness = (typeof ltReadinessCheck === 'function') ? ltReadinessCheck(stage) : { ok: false, message: 'n/a' };
+    const readiness = ltReadinessCheck(stage);
     form = `<div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-bottom:6px;">// months-long electric-propulsion burn — priced instantly (est.), integrate for real via "Compute trajectory" on the card</div>
       ${!readiness.ok ? `<div style="font-family:var(--mono);font-size:10px;color:var(--warn);margin-bottom:8px;">⚠ ${readiness.message}</div>` : ''}
       <label class="cfg-label">Duration</label>
@@ -601,12 +572,12 @@ function _missionAddEventHTML(m) {
     const addevToId = 'addev-mvt-' + id;
     form = `<label class="cfg-label">From</label><select id="addev-mvf-${id}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionMvRefreshSteps('${id}')">${o}</select>
       <label class="cfg-label">To</label><select id="${addevToId}" class="mcc-field-select" style="margin-bottom:6px;" onchange="missionMvRefreshSteps('${id}');progPorkRefreshAddEvBtn('${id}')">${o}</select>
-      <div id="pork-addev-btn-${id}" style="margin-bottom:6px;">${(typeof progPorkButtonHTML === 'function') ? progPorkButtonHTML(id, -1, document.getElementById(addevToId) ? document.getElementById(addevToId).value : (nodes[0] && nodes[0].id)) : ''}</div>
+      <div id="pork-addev-btn-${id}" style="margin-bottom:6px;">${progPorkButtonHTML(id, -1, document.getElementById(addevToId) ? document.getElementById(addevToId).value : (nodes[0] && nodes[0].id))}</div>
       <div id="mv-steps-${id}">${_missionMvBuilderHTML(id, 'add')}</div>
       <button class="act-btn" style="width:100%;margin-top:6px;" onclick="missionExecManeuver('${id}',document.getElementById('addev-mvf-${id}').value,document.getElementById('addev-mvt-${id}').value)">Add Maneuver</button>
       <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);margin-top:5px;">// pick From/To (or draw a bridge on the Node Map); the steps above define how the ΔV is delivered</div>`;
   } else if (_missionAddEvt === 'archxfer') {
-    const arch = (typeof archGet === 'function') ? archGet() : { nodes: [], edges: [] };
+    const arch = archGet();
     const byId = {}; (arch.nodes || []).forEach(n => byId[n.id] = n);
     const opts = (arch.edges || []).map(e => {
       const A = byId[e.fromId], B = byId[e.toId];
@@ -659,12 +630,11 @@ function missionSolveFreeReturn(id) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const os = fv && fv.orbitState;
   if (!os || os.body !== 'Earth' || os.surface || os.transit) { say('// active vehicle must be in an Earth orbit', true); return; }
-  if (typeof physFreeReturnSolve !== 'function') { say('// physics module unavailable', true); return; }
   const alt = ((os.perigee ?? 185) + (os.apogee ?? os.perigee ?? 185)) / 2;
   const metEl = document.getElementById('edit-mnode-met-' + id);
   const tDep = metEl ? Math.max(0, parseFloat(metEl.value) || 0) : 0;
   let sol = null; // R1: calibration overrides retired — real ephemeris rails
-  // R3: solve in the active vehicle's authored orbit plane
+  // Solve in the active vehicle's authored orbit plane
   try { sol = physFreeReturnSolve(alt, tDep, {}, os.inclination ?? 28.5); } catch (err) { sol = null; }
   if (!sol || !sol.converged) {
     say(`// no free return found from ${Math.round(alt)} km at this departure — try a different MET`, true);
@@ -683,7 +653,7 @@ function missionSolveFreeReturn(id) {
 function missionApplyMnodeEdit(id, idx) {
   const m = _missionGet(id); if (!m || !m.log[idx] || !_evIsManualBurn(m.log[idx])) return;
   const e = m.log[idx];
-  if (typeof _missionApplyClearPending === 'function') _missionApplyClearPending(id, e);
+  _missionApplyClearPending(id, e);
   const gv = f => { const el = document.getElementById(`edit-mnode-${f}-${id}`); return el ? parseFloat(el.value) || 0 : 0; };
   e.at = { kind: 'met', value_s: Math.max(0, gv('met')) };
   e.dvPro_ms = gv('pro'); e.dvRad_ms = gv('rad'); e.dvNrm_ms = gv('nrm');
@@ -736,8 +706,8 @@ function missionMnodeResolveToTarget(id, idx) {
   // solver — drop the detach-time burnState stamp so a later detach re-
   // captures the (possibly different) freshly-solved state, not a stale one.
   delete e.burnState;
-  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
-    if (typeof _trajGizmoClose === 'function') _trajGizmoClose();
+  if (_trajGizmo && _trajGizmo.missionId === id && _trajGizmo.authIdx === idx) {
+    _trajGizmoClose();
   }
   missionRecompute(m);
   missionRenderDetail();

@@ -1,10 +1,8 @@
 // ─── MISSION UNDO/REDO ───
-// Per-mission undo/redo stacks over AUTHORED mission state (m.log, m.groups,
+// Per-mission undo/redo stacks over authored mission state (m.log, m.groups,
 // m.vehicleNames, m.launchOrbit, m.name, m.fleetEntryId, m.payloadScIds).
-// Snapshot capture is hooked at the end of missionRecompute (570) — every
-// mutation already follows: mutate authored state -> missionRecompute(m) ->
-// missionRenderDetail(). The undo-stack TOP is always the CURRENT state,
-// since capture runs after every recompute (including the very first one).
+// Capture is hooked at the end of missionRecompute, so the stack top is always
+// the current state.
 
 const _missionUndoStacks = {};   // missionId -> { undo: [snapshotStr...], redo: [snapshotStr...] }
 let _missionUndoRestoring = false;
@@ -35,11 +33,11 @@ function _missionUndoSerialize(m) {
     fleetEntryId: m.fleetEntryId,
     payloadScIds: m.payloadScIds || [],
     laneColors: m.laneColors || {},
-    // R1 (mission epoch UI): epochJD lives on PROG_ACTIVE_PROGRAM (a program-
+    // EpochJD lives on PROG_ACTIVE_PROGRAM (a program-
     // wide setting, not per-mission), but is captured here so an epoch change
     // is an undoable step like any other authored mutation. Guarded so a
     // pre-epoch-feature snapshot (this field simply absent) still round-trips.
-    epochJD: (typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM && isFinite(PROG_ACTIVE_PROGRAM.epochJD))
+    epochJD: (PROG_ACTIVE_PROGRAM && isFinite(PROG_ACTIVE_PROGRAM.epochJD))
       ? PROG_ACTIVE_PROGRAM.epochJD : null,
   });
 }
@@ -57,28 +55,28 @@ function missionUndoCapture(m) {
 
 function _missionUndoApply(m, snapStr) {
   const data = JSON.parse(snapStr);
-  // C2b: in-session undo/redo snapshots serialize e.orbit verbatim — a
+  // In-session undo/redo snapshots serialize e.orbit verbatim — a
   // snapshot captured before this pass's rename (or loaded from an old
   // session) may still carry legacy alt_km/apo_km/inc_deg/lan_deg. Run it
   // through the same load-time migration persistence uses (450) so restore
   // always lands on canonical field names.
-  if (Array.isArray(data.log) && typeof _missionMigrateLaunchOrbitLog === 'function') {
+  if (Array.isArray(data.log)) {
     _missionMigrateLaunchOrbitLog({ log: data.log });
   }
   m.log = data.log;
   m.groups = data.groups;
   m.vehicleNames = data.vehicleNames;
   m.launchOrbit = data.launchOrbit;
-  // C2b item 1: a pre-rename snapshot's launchOrbit may carry the legacy
+  // A pre-rename snapshot's launchOrbit may carry the legacy
   // seed-default dialect — canonicalize it the same way persistence does.
-  if (m.launchOrbit && typeof _missionMigrateOrbitFieldNames === 'function') _missionMigrateOrbitFieldNames(m.launchOrbit);
+  if (m.launchOrbit) _missionMigrateOrbitFieldNames(m.launchOrbit);
   m.name = data.name;
   m.fleetEntryId = data.fleetEntryId;
   m.payloadScIds = data.payloadScIds;
   m.laneColors = data.laneColors || {};
   // Legacy snapshots (pre-epoch-feature) have epochJD absent/null — leave the
   // current program epoch alone rather than clobbering it with null.
-  if (isFinite(data.epochJD) && typeof PROG_ACTIVE_PROGRAM !== 'undefined' && PROG_ACTIVE_PROGRAM) {
+  if (isFinite(data.epochJD) && PROG_ACTIVE_PROGRAM) {
     PROG_ACTIVE_PROGRAM.epochJD = data.epochJD;
   }
   _missionUndoRestoring = true;
@@ -91,7 +89,7 @@ function _missionUndoApply(m, snapStr) {
 }
 
 function missionUndo() {
-  const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : null;
+  const m = _missionGet(_missionSel);
   if (!m) return;
   const stack = _missionUndoGetStack(m.missionId);
   if (stack.undo.length < 2) return;   // top === current state; need a prior state to go to
@@ -102,7 +100,7 @@ function missionUndo() {
 }
 
 function missionRedo() {
-  const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : null;
+  const m = _missionGet(_missionSel);
   if (!m) return;
   const stack = _missionUndoGetStack(m.missionId);
   if (!stack.redo.length) return;
@@ -112,14 +110,14 @@ function missionRedo() {
 }
 
 function _missionUndoCanUndo() {
-  const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : null;
+  const m = _missionGet(_missionSel);
   if (!m) return false;
   const stack = _missionUndoGetStack(m.missionId);
   return stack.undo.length >= 2;
 }
 
 function _missionUndoCanRedo() {
-  const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : null;
+  const m = _missionGet(_missionSel);
   if (!m) return false;
   const stack = _missionUndoGetStack(m.missionId);
   return stack.redo.length > 0;
@@ -142,10 +140,10 @@ document.addEventListener('keydown', e => {
   const visible = cc && pageProgram
     && getComputedStyle(pageProgram).display !== 'none';
   if (!visible) return;   // mission command center not visible
-  // Unify-create/edit (2026-07-16): Escape discards the open pending event
+  // Unify-create/edit: Escape discards the open pending event
   // card, even while focus sits in one of its inputs — checked BEFORE the
   // INPUT/TEXTAREA/SELECT early-return below (which guards the Ctrl+Z/Y path).
-  if (e.key === 'Escape' && typeof _missionPendingEvent !== 'undefined' && _missionPendingEvent) {
+  if (e.key === 'Escape' && _missionPendingEvent) {
     e.preventDefault();
     missionCancelPendingEvent(_missionPendingEvent.missionId);
     return;

@@ -128,7 +128,7 @@ function _stgBgRemove() {
   if (!_editSlot || _editSlot.extraIdx == null) return;
   const i = _editSlot.extraIdx; _editSlot = null;
   closeModal('modal-add-stage');
-  if (typeof boosterGroupRemove === 'function') boosterGroupRemove(i);
+  boosterGroupRemove(i);
 }
 
 /** Live BECO split preview shown inside the edit modal. stageIdx is unused but kept for back-compat. */
@@ -145,7 +145,7 @@ function _s15UpdatePreview(_stageIdx) {
   const twr     = parseFloat(document.getElementById('stg-s15-twr')?.value)    || 1.2;
   const boostIsp = mathValue(document.getElementById('stg-s15-boost-isp')?.value,0) || 0;
   // Route through the ONE S1.5 expansion boundary (stageExpandS15,
-  // 140-physics.js — UNIFICATION_AUDIT P2.1) rather than calling
+  // 140-physics.js) rather than calling
   // _s15BecoSplit directly, so this preview stays byte-identical to what the
   // calculator will actually do with the stage (source-grep-gated: no module
   // outside 140-physics.js may call _s15BecoSplit directly).

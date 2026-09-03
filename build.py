@@ -63,9 +63,7 @@ else:
         except OSError:
             pass
 
-    # (b) run the pure-math regression tests via the parallel suite runner
-    # (tests/run.js forks one process per tests/suites/*.js file; see
-    # docs/dev_notes.md "Test suite layout" for how to add a new suite).
+    # (b) run the regression suites (tests/run.js forks one process per tests/suites/*.js)
     test_runner = os.path.join(TESTS, 'run.js')
     if not os.path.isfile(test_runner):
         print('[build] WARNING: tests/run.js not found — skipping math regression tests.')

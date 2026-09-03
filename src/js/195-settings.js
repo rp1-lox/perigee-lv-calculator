@@ -13,7 +13,7 @@ function openSettingsModal() {
 /** Reflect the current fidelity mode into the modal's radios (called on open
  *  and after a session restore so the UI can never lie about the live mode). */
 function settingsSyncUI() {
-  const mode = (typeof physFidelity === 'function') ? physFidelity() : 'contextual';
+  const mode = physFidelity();
   const rc = document.getElementById('set-fid-contextual');
   const rf = document.getElementById('set-fid-full');
   if (rc) rc.checked = mode !== 'full';
@@ -24,14 +24,12 @@ function settingsSyncUI() {
  *  mission recomputes (numbers may legitimately move; D6 discipline) and the
  *  session autosaves. */
 function settingsSetFidelity(mode) {
-  if (typeof physSetFidelity !== 'function') return;
   const changed = physSetFidelity(mode);
   if (!changed) return;
   try {
-    if (typeof _missions !== 'undefined' && typeof missionRecompute === 'function')
-      (_missions || []).forEach(m => missionRecompute(m));
-    if (typeof missionRenderDetail === 'function') missionRenderDetail();
+    (_missions || []).forEach(m => missionRecompute(m));
+    missionRenderDetail();
   } catch (err) { console.warn('fidelity recompute failed:', err); }
   settingsSyncUI(); // keep the radios honest for programmatic callers too
-  if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave();
+  autosaveScheduleSave();
 }

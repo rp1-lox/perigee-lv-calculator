@@ -1,28 +1,14 @@
 
-// ─── ARCHITECTURE DATA MODEL (A1) ────────────────────────────────────────────
-// MISSION_MODEL_V2.md §26 — the mission-planning stage that comes BEFORE
-// events: a program-level orbit ladder (nodes) + transfer edges, feeding a dV
-// budget the Mission page later executes against. A1 scope is JUST the data
-// model + its own tiny undo stack + persistence round-trip; the ladder rail
-// and node-map mount are A2/A3.
-//
-// KSP invariant: this module never touches _missions/PROG_ACTIVE_PROGRAM
-// beyond the new `.architecture` field, and nothing else reads that field
-// yet — a program with no architecture behaves exactly as before.
-//
-// PERSISTENCE: architecture is PROGRAM-level state. buildProgramObject (450)
-// already serializes the whole PROG_ACTIVE_PROGRAM object verbatim as
-// `activeProgram`, and applyProgramObject restores it the same way — so
-// `.architecture` rides along for free with no dedicated save/load code.
-// Legacy blobs simply lack the field; archGet() below creates it lazily
-// in memory ONLY (it never mutates a program object that hasn't asked for
-// one), so opening an old .program file does not spuriously add an empty
-// architecture to it.
+// ─── ARCHITECTURE DATA MODEL ─────────────────────────────────────────────────
+// A program-level orbit ladder (nodes) + transfer edges feeding a ΔV budget,
+// stored at PROG_ACTIVE_PROGRAM.architecture. Pure CRUD plus a small undo
+// stack. Persistence rides along with the program object (450/455); archGet()
+// creates the field lazily so old programs are not modified on load.
 
 /** Returns PROG_ACTIVE_PROGRAM.architecture, creating an empty
  *  {nodes:[], edges:[]} lazily on first access. Never returns null/undefined. */
 function archGet() {
-  // A4 hardening: new call sites in 570-mission-band.js/570-mission-events.js
+  // New call sites in 570-mission-band.js/570-mission-events.js
   // read archGet() from render paths that can fire during missionInit(),
   // BEFORE 590-init.js's startup IIFE assigns PROG_ACTIVE_PROGRAM — return a
   // transient empty shape instead of throwing (never persisted; the real
@@ -69,13 +55,12 @@ function archRemoveNode(id) {
   return true;
 }
 
-/** Add a transfer edge between two existing nodes. chain decomposition
- *  (depart/mcc/insert legs) is A3 scope — A1 just carries an empty chain.
+/** Add a transfer edge between two existing nodes.
  *  Returns the new edge, or null if either endpoint doesn't exist. */
 function archAddEdge(fromId, toId) {
   const arch = archGet();
   if (!arch.nodes.some(n => n.id === fromId) || !arch.nodes.some(n => n.id === toId)) return null;
-  const edge = { id: progUUID(), fromId, toId, chain: [] };
+  const edge = { id: progUUID(), fromId, toId };
   archUndoCapture();
   arch.edges.push(edge);
   return edge;
@@ -199,7 +184,7 @@ function _redoAwarePush(stack, snap) {
 }
 
 /** Reset both stacks — called when switching programs (loading a
- *  .program/session file) so undo history from the previous program can't
+ *  program/session file) so undo history from the previous program can't
  *  leak into the freshly-loaded one. */
 function archUndoReset() {
   _archUndoStack = [];

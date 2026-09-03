@@ -1,18 +1,10 @@
-// ─── R3.3/R3.4 — KSP-style maneuver gizmo for MNODE authoring (574 overlay + 565/386 physics) ───
-// See PHYSICS_PLAN.md COHERENCE SERIES R3.3 + R3.4 and MATH.md §7k.
-//
-// Two sections: (1) pure DOM-free helpers, pinned by tests/math.test.js; (2)
-// interactive plumbing (module-local render state only — NEVER on `m`, NEVER
-// in autosave/session — see MATH.md §7k / the mutation-discipline rule).
-//
-// R3.4 KSP-parity rework: (a) six pull-out handles (pro/retro, radial
-// out/in, normal/anti — each ADDS only in its own direction, no sign-flip-
-// through-zero); (b) center-knob drag slides the node in TIME along its
-// orbit + a small flyout menu (+1/-1 orbit, delete, close); (c) a
-// closest-approach pair vs. the mission's next destination body (or the
-// Moon for Earth-centric nodes), rendered on the preview + as a plate
-// readout. The camera-drag rework that makes handles reliably grabbable
-// lives in 574 (trajPanStart/Move, trajWheelZoom).
+// ─── MANEUVER GIZMO — KSP-style MNODE authoring on the trajectory overlay ──
+// Six pull-out handles (pro/retro, radial out/in, normal/anti — each adds only
+// in its own direction), a center knob that slides the node in time along its
+// orbit plus a small menu (+1/-1 orbit, delete, close), and a closest-approach
+// readout vs the mission's next destination body. Render state is module-local
+// — never on m, never in autosave. Pure math lives in -math, hover in -hover,
+// drag in -drag.
 
 
 // ── (2) Interactive plumbing (DOM/render-state, not gate-tested) ───────────
@@ -41,7 +33,7 @@ const _TRAJ_GIZMO_HANDLES = [
  *  physAimBurnState). For an EXISTING MNODE, uses the exact recorded
  *  `orbitAtBurn` (565 writes this on every replay). For a PENDING node (no
  *  log entry yet) this approximates with the vehicle's CURRENT (end-of-replay)
- *  orbitState — an intentional simplification documented in MATH.md §7k;
+ *  orbitState — an intentional simplification documented in;
  *  precise historical reconstruction would require re-replaying the log up
  *  to `met`, which the gizmo does not do. */
 function _trajGizmoNodeState(m, met, authIdx) {
@@ -51,7 +43,7 @@ function _trajGizmoNodeState(m, met, authIdx) {
     const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
     o = fv && fv.orbitState ? fv.orbitState : null;
   }
-  // R6.1.2: the actual math (mean-anomaly circular reconstruction via
+  // The actual math (mean-anomaly circular reconstruction via
   // physAimBurnState) is factored out to _trajGizmoOrbitNodeAt so a ring
   // hover/click-menu can share the identical rail without a gizmo attached.
   return _trajGizmoOrbitNodeAt(o, met);
@@ -61,7 +53,7 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  entry (as opposed to MNODE's own recorded orbitAtBurn). No side-table
  *  entry records the exact departure r/v basis physSolveNodeBurn/the P4
  *  shooter actually flew (only the solved dvVec, in 565's leg record) — so
- *  per PHYSICS_PLAN's documented fallback, this reconstructs from the
+ *  documented fallback, this reconstructs from the
  *  fromNode's authored orbit at the maneuver's own MET via the SAME
  *  mean-anomaly rail _trajGizmoOrbitNodeAt/_trajGizmoNodeState already use
  *  for MNODE. The reconstructed basis is internally consistent (orthonormal)
@@ -73,7 +65,7 @@ function _trajGizmoNodeState(m, met, authIdx) {
  *  shape as _trajGizmoNodeState, or null. */
 function _trajGizmoManeuverNodeState(m, e, missionId, authIdx) {
   if (!e || !_evIsSolvedManeuver(e) || !e.fromNode) return null;
-  const fromN = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
+  const fromN = _missionNmNodeById(e.fromNode);
   const o = fromN && fromN.orbit;
   if (!o) return null;
   const met = e.metStart != null ? e.metStart : 0;
@@ -85,7 +77,7 @@ function _trajGizmoManeuverNodeState(m, e, missionId, authIdx) {
   // available. Only the axes (rHat/vHat/hHat) + r/v are swapped; body/mu
   // stay from the fallback lookup.
   if (missionId != null && authIdx != null) {
-    const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[missionId] : null;
+    const rec = _physTrajByMission[missionId];
     const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
     if (leg && leg.burnState && leg.burnState.r && leg.burnState.v) {
       const axes = _trajGizmoAxes(leg.burnState.r, leg.burnState.v);
@@ -104,7 +96,7 @@ function _trajGizmoManeuverNodeState(m, e, missionId, authIdx) {
  *  decompose helper above — no math performed here beyond that call. */
 function _trajGizmoManeuverSolvedDv(missionId, authIdx, node) {
   if (!node) return null;
-  const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[missionId] : null;
+  const rec = _physTrajByMission[missionId];
   const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
   if (!leg || !leg.dvVec) return null;
   const axes = _trajGizmoAxes(node.r, node.v);
@@ -115,7 +107,7 @@ function _trajGizmoManeuverSolvedDv(missionId, authIdx, node) {
 /** R3.4 target selection for the closest-approach pair: scan the mission log
  *  for the next MANEUVER after `met` whose destination node names a body
  *  different from the node's own body; else fall back to the Moon for
- *  Earth-centric nodes (a sensible default per PHYSICS_PLAN R3.4 item 4);
+ *  Earth-centric nodes;
  *  else null (no CA pair shown). */
 function _trajGizmoPickTarget(m, node, met) {
   if (!m || !node) return null;
@@ -124,7 +116,7 @@ function _trajGizmoPickTarget(m, node, met) {
   // state, not persisted), then an authored `caTarget` field on the MNODE
   // log entry set via its event-card dropdown (persisted, since it's
   // authored state on the event, same as any other MNODE field).
-  const g = (typeof _trajGizmo !== 'undefined') ? _trajGizmo : null;
+  const g = _trajGizmo;
   if (g && g.manualTarget) {
     if (g.manualTarget === node.body) return null; // can't target your own body
     return g.manualTarget;
@@ -133,13 +125,11 @@ function _trajGizmoPickTarget(m, node, met) {
     const ct = m.log[g.authIdx].caTarget;
     if (ct && ct !== 'auto' && ct !== node.body) return ct;
   }
-  if (typeof _missionNmNodeById === 'function') {
-    for (const e of m.log || []) {
-      if (!_evIsSolvedManeuver(e) || !e.toNode) continue;
-      if ((e.metStart != null ? e.metStart : 0) < met) continue; // only look forward from the node
-      const n = _missionNmNodeById(e.toNode);
-      if (n && n.body && n.body !== node.body) return n.body;
-    }
+  for (const e of m.log || []) {
+    if (!_evIsSolvedManeuver(e) || !e.toNode) continue;
+    if ((e.metStart != null ? e.metStart : 0) < met) continue; // only look forward from the node
+    const n = _missionNmNodeById(e.toNode);
+    if (n && n.body && n.body !== node.body) return n.body;
   }
   if (node.body === 'Earth' && PROG_BODIES.Moon) return 'Moon';
   return null;
@@ -159,7 +149,7 @@ function _trajGizmoSetManualTarget(body) {
 }
 
 function _trajGizmoOpenPending(id, met) {
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   if (!m) return;
   const node = _trajGizmoNodeState(m, met, null);
   if (!node) return;
@@ -179,9 +169,8 @@ function _trajGizmoOpenPending(id, met) {
 // the hovered MET, so a node dropped mid-TLC gets a real cislunar state (and
 // the right frame/mu when the hovered point lies inside the Moon's SOI).
 function _trajGizmoOpenPendingOnLeg(missionId, authIdx, met) {
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
+  const m = _missionGet(missionId);
   if (!m) return;
-  if (typeof physLegStateAt !== 'function') return;
   const st = physLegStateAt(missionId, authIdx, met);
   if (!st || !st.r || !st.v || !st.frame || !PROG_BODIES[st.frame]) return;
   const axes = _trajGizmoAxes(st.r, st.v);
@@ -203,7 +192,7 @@ function _trajGizmoOpenPendingOnLeg(missionId, authIdx, met) {
 }
 
 function _trajGizmoOpenExisting(id, authIdx) {
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   if (!m || !m.log[authIdx]) return;
   let e = m.log[authIdx];
   if (_evIsSolvedManeuver(e)) {
@@ -219,7 +208,7 @@ function _trajGizmoOpenExisting(id, authIdx) {
     const met = e.metStart != null ? e.metStart : 0;
     const solved = _trajGizmoManeuverSolvedDv(id, authIdx, node) || { pro: 0, rad: 0, nrm: 0 };
     const tgt = _evManeuverTarget(e);
-    const toN = (typeof _missionNmNodeById === 'function' && tgt) ? _missionNmNodeById(tgt.toNode) : null;
+    const toN = (tgt) ? _missionNmNodeById(tgt.toNode) : null;
     const toLabel = e.toLabel || (toN && toN.label) || (tgt && tgt.toNode) || '?';
     _trajGizmo = {
       missionId: id, met, authIdx, kind: 'maneuver',
@@ -243,7 +232,7 @@ function _trajGizmoOpenExisting(id, authIdx) {
   }
 }
 
-// R3.5.2 (user flight-test): dismiss affordances beyond Escape — left-click
+// Dismiss affordances beyond Escape — left-click
 // anywhere that isn't the gizmo (its overlay layer or flyout menu) closes it,
 // as does right-click when not mid-drag. Committed MNODE edits are already in
 // the log by close time (commit happens on drag release), so closing only
@@ -261,7 +250,7 @@ function _trajGizmoDocClick(evt) {
   if (!g || g.drag || g.centerDrag) return;
   // A camera rotate-drag ends with a click too — don't treat it as dismissal.
   // (Read without consuming: trajGlyphClick owns resetting the flag.)
-  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) return;
+  if (_trajJustDragged) return;
   const t = evt.target;
   if (t && t.closest && t.closest('g.traj-gizmo-layer, .traj-gizmo-menu, .traj-body-glyph')) return;
   _trajGizmoClose();
@@ -273,13 +262,18 @@ function _trajGizmoDocCtxMenu(evt) {
   _trajGizmoClose();
 }
 
-function _trajGizmoClose() {
-  if (!_trajGizmo) return;
+// Drop the gizmo state and every document-level listener/timer it owns.
+function _trajGizmoTeardown() {
   if (_trajGizmoFullTimer) { clearTimeout(_trajGizmoFullTimer); _trajGizmoFullTimer = null; }
   document.removeEventListener('keydown', _trajGizmoKeydown);
   _trajGizmoRemoveDismissListeners();
-  const id = _trajGizmo.missionId;
   _trajGizmo = null;
+}
+
+function _trajGizmoClose() {
+  if (!_trajGizmo) return;
+  const id = _trajGizmo.missionId;
+  _trajGizmoTeardown();
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
   const overlayEl = va && va.querySelector('svg.traj-overlay');
   const layer = overlayEl && overlayEl.querySelector('g.traj-gizmo-layer');
@@ -291,14 +285,14 @@ function _trajGizmoClose() {
   if (menuEl) menuEl.remove();
 }
 
-// Dblclick affordances (per PHYSICS_PLAN R3.3 placement rule). Ring click:
+// Dblclick affordances. Ring click:
 // MET = current view time (documented simplification — the theta-inversion
 // path is skipped, see the module doc comment). Polyline click: nearest
 // sample's MET (primary path).
 function _trajGizmoRingDblClick(id, authIdx, evt) {
   if (evt) evt.stopPropagation();
   if (_trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return; // never spawn a second gizmo mid-drag
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   if (!m) return;
   _trajGizmoOpenPending(id, _trajViewTime(m));
 }
@@ -306,7 +300,7 @@ function _trajGizmoRingDblClick(id, authIdx, evt) {
 function _trajGizmoLegDblClick(id, authIdx, evt) {
   if (evt) evt.stopPropagation();
   if (_trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+  const m = _missionGet(id);
   if (!m) return;
   // R6.2' Phase A item 1: a MANEUVER leg/marker dblclick opens the SAME
   // gizmo at the maneuver's solved state (_trajGizmoOpenExisting), instead
@@ -314,7 +308,7 @@ function _trajGizmoLegDblClick(id, authIdx, evt) {
   // (which remains the fallback for other physics-leg dblclicks, e.g. an
   // arrival/exiting-corridor leg with no MANEUVER of its own at this index).
   if (m.log[authIdx] && _evIsSolvedManeuver(m.log[authIdx])) { _trajGizmoOpenExisting(id, authIdx); return; }
-  const rec = (typeof _physTrajByMission !== 'undefined') ? _physTrajByMission[id] : null;
+  const rec = _physTrajByMission[id];
   const leg = rec && rec.legs && rec.legs.find(l => l.authIdx === authIdx);
   const vt = _trajViewTime(m);
   const met = (leg && leg.samples && leg.samples.length) ? _trajGizmoNearestSampleMet(leg.samples, vt) : vt;
@@ -338,14 +332,14 @@ function _trajGizmoOnEventSelected(id, authIdx, e) {
 function _trajGizmoScreenGeo(id, rect) {
   const g = _trajGizmo;
   if (!g || g.missionId !== id || !rect || !(rect.width > 0)) return null;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
-  const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[id] : null;
+  const m = _missionGet(id);
+  const cam = _trajCamByMission[id];
   if (!m || !cam) return null;
   const vt = _trajViewTime(m);
   const zoom = _trajZoomFromCam(cam);
   _trajProjCtx = { az: cam.az || 0, el: cam.el != null ? cam.el : Math.PI / 2 };
   const camCenterKm = _trajCamCenterKm(cam, vt);
-  const bodyWorld = progBodyWorldPosCalibrated(g.node.body, vt, {});
+  const bodyWorld = progBodyWorldPos(g.node.body, vt);
   if (!bodyWorld) return null;
   const nodeWorld = { x: bodyWorld.x + g.node.r[0], y: bodyWorld.y + g.node.r[1], z: (bodyWorld.z || 0) + (g.node.r[2] || 0) };
   const dP = _trajProj3(nodeWorld.x - camCenterKm.x, nodeWorld.y - camCenterKm.y, nodeWorld.z - (camCenterKm.z || 0));
@@ -368,14 +362,8 @@ function _trajGizmoScreenGeo(id, rect) {
   return { nodeRender, nodeScreen, dirs, zoom, rect, cam, vt };
 }
 
-/** Current side-magnitude of a handle (>=0), from the gizmo's signed dv
- *  components — see _trajGizmoHandleSideMag doc. */
-function _trajGizmoHandleValue(g, h) {
-  const comp = g.dv[h.component] || 0;
-  return h.sign > 0 ? Math.max(0, comp) : Math.max(0, -comp);
-}
 
-/** R3.5.1 (2026-07-10, correction #1): KSP navball-style glyph for a handle
+/** KSP navball-style glyph for a handle
  *  knob, in the knob's own LOCAL coordinate space (origin at the knob
  *  center; screen px, y-down). `r` = the knob's visible radius; `color` =
  *  the handle's own var(--accent*) (data, not a chromatic literal — same
@@ -434,7 +422,7 @@ function _trajGizmoOverlaySVG(id, rect) {
     if (d.degenerate) {
       svg += `<rect id="${kid}" x="${(tipScreen.x - 5).toFixed(1)}" y="${(tipScreen.y - 5).toFixed(1)}" width="10" height="10" transform="rotate(45 ${tipScreen.x.toFixed(1)} ${tipScreen.y.toFixed(1)})" fill="${d.color}" opacity="${negSide ? 0.55 : 0.85}" style="pointer-events:auto;cursor:grab" onmousedown="event.stopPropagation();_trajGizmoHandleDown(event,'${h.key}')" onmouseenter="_trajGizmoHoverKnob(this,true)" onmouseleave="_trajGizmoHoverKnob(this,false)"><title>${h.label} (near edge-on at this view angle) — drag anyway</title></rect>`;
     } else {
-      // R3.5.1 (2026-07-10, correction #1): back to a circular knob (the
+      // Back to a circular knob (the
       // R3.5 arrowhead killed hover-highlight and was harder to grab) PLUS a
       // KSP navball glyph drawn inside it via _trajGizmoKnobGlyphSVG — the
       // >= 12px transparent hit circle is unchanged, and the glyph group
@@ -481,7 +469,7 @@ function _trajGizmoOverlaySVG(id, rect) {
  *  here we only draw the craft-side × (pure overlay geometry, no registry). */
 function _trajGizmoCaMarkersSVG(g, geo) {
   if (!g.ca || !g.ca.craftR) return '';
-  const bodyWorld = progBodyWorldPosCalibrated(g.ca.frame, geo.vt, {});
+  const bodyWorld = progBodyWorldPos(g.ca.frame, geo.vt);
   if (!bodyWorld) return '';
   const w = { x: bodyWorld.x + g.ca.craftR[0], y: bodyWorld.y + g.ca.craftR[1], z: (bodyWorld.z || 0) + (g.ca.craftR[2] || 0) };
   const cam = geo.cam;
@@ -509,7 +497,7 @@ function _trajGizmoCaPlateText(g) {
   return `${approx}CA ${Math.round(g.ca.dKm).toLocaleString()} km · in ${tTxt}`;
 }
 
-// R3.4: hover highlight — a plain attribute swap on the sibling visible knob
+// Hover highlight — a plain attribute swap on the sibling visible knob
 // (radius/stroke-width/opacity), NOT a re-render (spec item 2). `el` is the
 // hit circle that received the mouse event; its visible sibling shares an id
 // prefix (`tgh-<key>`) resolved from the hit circle's own title-adjacent DOM
@@ -519,7 +507,7 @@ function _trajGizmoHoverKnob(el, on) {
   const sib = el && el.nextElementSibling;
   if (!sib) return;
   if (sib.tagName === 'g') {
-    // R3.5.1 (correction #1): the glyph group scales up around its own
+    // The glyph group scales up around its own
     // anchor point on hover — translate is baked into data-tx/data-ty so a
     // trailing scale() applies around the glyph's local origin (the tip),
     // restoring the pre-R3.5 "hover expands the knob slightly" behavior.
@@ -542,7 +530,7 @@ function _trajGizmoRepaintOverlay() {
   // recomputed) log entry every repaint — item 5's "preserve an active
   // gizmo attached to a committed MNODE" rule.
   if (g.authIdx != null && !g.drag && !g.centerDrag) {
-    const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+    const m = _missionGet(g.missionId);
     const le = m && m.log[g.authIdx];
     // Solved check FIRST: a unified MNODE(mode:'solved') is still type
     // 'MNODE' at the storage level, so testing le.type alone would
@@ -564,7 +552,7 @@ function _trajGizmoRepaintOverlay() {
       if (node) g.node = node;
       g.kind = 'mnode';
     } else {
-      _trajGizmo = null; // the event was deleted/undone out from under us
+      _trajGizmoTeardown(); // the event was deleted/undone out from under us
       return;
     }
   }
@@ -592,7 +580,7 @@ function _trajGizmoRenderMenu(va, rect) {
   // R6.2' Phase A item 4: a detached MNODE (has a retained `target`) gets a
   // re-solve action right in the gizmo flyout, mirroring the MNODE card's
   // button (570).
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   const le = m && g.authIdx != null ? m.log[g.authIdx] : null;
   const resolveBtn = (le && _evIsManualBurn(le) && le.target)
     ? `<button onclick="missionMnodeResolveToTarget('${g.missionId}',${g.authIdx})">↺ Re-solve to target</button>` : '';
@@ -631,11 +619,10 @@ function _trajGizmoOrbitStep(sign) {
 function _trajGizmoDeleteNode() {
   const g = _trajGizmo;
   if (!g) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (g.authIdx != null && m && m.log[g.authIdx]) {
     m.log.splice(g.authIdx, 1);
-    _trajGizmo = null;
-    document.removeEventListener('keydown', _trajGizmoKeydown);
+    _trajGizmoTeardown();
     missionRecompute(m);
     missionRenderDetail();
     return;
@@ -650,7 +637,7 @@ function _trajGizmoDeleteNode() {
 function _trajGizmoApplyMet(newMet) {
   const g = _trajGizmo;
   if (!g) return;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === g.missionId);
+  const m = _missionGet(g.missionId);
   if (!m) return;
   const node = _trajGizmoNodeState(m, newMet, g.authIdx);
   if (!node) return;

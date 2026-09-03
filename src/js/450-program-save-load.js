@@ -1,14 +1,11 @@
 
-// ─── PROGRAM MODULE — Phase 10: Save / Load entire program ──────────────────
-//
-// A ".program" file is just JSON (renamed extension so users can tell it apart
-// from per-vehicle / per-spaceport JSON). It bundles the WHOLE program:
-// spacecraft definitions, fleet, missions, and the active program (pads etc.).
-// Load restores all of them and re-simulates each mission so the runtime
-// vehicles in PROG_ACTIVE_PROGRAM are rebuilt from each mission's log.
+// ─── PROGRAM SAVE / LOAD ─────────────────────────────────────────────────────
+// A ".program" file is JSON bundling the whole program: spacecraft definitions,
+// fleet, missions and the active program. Load restores all of them and
+// re-simulates each mission so runtime vehicles are rebuilt from its log.
 
-// Unify-create/edit (2026-07-16): a mission's log may momentarily hold a
-// PENDING draft event (mid-creation, appended to the end of m.log — see
+// Unify-create/edit: a mission's log may momentarily hold a
+// PENDING draft event (mid-creation, appended to the end of m.log —
 // 570-mission-band.js) for the accordion/card machinery to render through.
 // It must never reach a saved blob (autosave OR .program export both funnel
 // through this function) — strip any `.pending` entries from a shallow copy,
@@ -17,7 +14,7 @@ function _missionsSansPending() {
   return _missions.map(m => (m.log && m.log.some(e => e.pending)) ? { ...m, log: m.log.filter(e => !e.pending) } : m);
 }
 
-// C3 (2026-07-17, launchOrbit triplication collapse): `e.orbit` is now the
+// C3: `e.orbit` is now the
 // single authored source on a LAUNCH/DEPLOY entry — old saved logs may still
 // carry legacy `e.launchOrbit` (stamped alongside `orbit` by pre-C3 code).
 // Load-time migration only (in-memory): both present -> orbit wins (it was
@@ -25,7 +22,7 @@ function _missionsSansPending() {
 // launchOrbit-only -> copy into orbit. Either way launchOrbit is deleted, so
 // a re-save (autosave or .program export, both funnel through
 // buildProgramObject serializing the log as-is) simply stops carrying it.
-// C2b (2026-07-17, event-orbit dialect rename): e.orbit's own field names
+// E.orbit's own field names
 // moved from the legacy alt_km/apo_km/inc_deg/lan_deg dialect to canonical
 // periKm/apoKm/incDeg/lanDeg (384-orbit-canonical.js shape). Old saved logs
 // (autosave blobs, .program files) may still carry the legacy names on
@@ -33,7 +30,7 @@ function _missionsSansPending() {
 // merge above, so persistence stays untouched (writers keep emitting
 // whatever's live in memory; this is the one load-time boundary that makes
 // old blobs compatible). Canonical wins if somehow both are present.
-// C2b: absorbs BOTH legacy orbit-element dialects on a single object:
+// Absorbs BOTH legacy orbit-element dialects on a single object:
 //   - event dialect  : alt_km / apo_km / inc_deg / lan_deg   (e.orbit, m.launchOrbit)
 //   - node-map dialect: perigee / apogee / inclination / lan  (node.orbit, e.orbitAtBurn)
 // -> canonical periKm/apoKm/incDeg/lanDeg (+ argpDeg). Canonical key wins if
@@ -56,8 +53,8 @@ function _missionMigrateOrbitFieldNames(o) {
   delete o.argp_deg;
   return o;
 }
-// C2b item-3: legacy .program/autosave blobs carry custom node-map nodes whose
-// .orbit uses the node-map dialect — canonicalize their element field names on
+// Legacy .program/autosave blobs carry custom node-map nodes whose
+// orbit uses the node-map dialect — canonicalize their element field names on
 // load (the node-map dialect writers are canonical as of this pass).
 function _missionMigrateNodeMapCustomNodes(prog) {
   if (prog && Array.isArray(prog.nodeMapCustomNodes)) {
@@ -71,7 +68,7 @@ function _missionMigrateLaunchOrbitEntry(e) {
     delete e.launchOrbit;
   }
   if (e.orbit) _missionMigrateOrbitFieldNames(e.orbit);
-  // C2b item-3: e.orbitAtBurn is a canonical boundary field now — rename any
+  // E.orbitAtBurn is a canonical boundary field now — rename any
   // legacy-dialect element names on old blobs (recompute regenerates it
   // canonically too, but a consumer may read it before the load-time recompute).
   if (e.orbitAtBurn) _missionMigrateOrbitFieldNames(e.orbitAtBurn);
@@ -79,7 +76,7 @@ function _missionMigrateLaunchOrbitEntry(e) {
 }
 function _missionMigrateLaunchOrbitLog(m) {
   if (m && Array.isArray(m.log)) m.log.forEach(_missionMigrateLaunchOrbitEntry);
-  // C2b item 1 (2026-07-17): m.launchOrbit is now the canonical dialect
+  // M.launchOrbit is now the canonical dialect
   // (periKm/apoKm/incDeg/lanDeg). Old blobs carry the legacy seed-default
   // shape (alt_km/apo_km/inc_deg/lan_deg) — rename in place so the fields
   // feeding _missionOrbitFieldsHTML / missionSetOrbit / _missionLaunchOrbitDraft
@@ -97,11 +94,11 @@ function buildProgramObject() {
     fleet: _fleetEntries,
     missions: _missionsSansPending(),
     scStageLib: _scStageLib,
-    // MISSION_MODEL_V2 Phase 3 T1: user-tier reference-orbit catalog + any
+    // Phase 3 T1: user-tier reference-orbit catalog + any
     // program one-offs (both live in PROG_ORBIT_CATALOG_USER; there is no
     // separate per-program tier — a program's one-offs simply ARE user-tier
     // entries created while that program was active).
-    orbitCatalogUser: (typeof _refOrbitSessionSave === 'function') ? _refOrbitSessionSave() : null,
+    orbitCatalogUser: _refOrbitSessionSave(),
     activeProgram: PROG_ACTIVE_PROGRAM,
     sel: { fleet: _fleetSel, mission: _missionSel },
   };
@@ -137,7 +134,7 @@ function loadProgramFile(input) {
   reader.readAsText(file);
 }
 
-// MISSION_MODEL_V2 D3/Phase 2 S5: the version gate. A mission blob without
+// Phase 2 S5: the version gate. A mission blob without
 // modelVersion:2 predates the physics-primary flip (V1 accounting, possibly
 // legacy MANEUVER entries / detachedFrom fallbacks the replay no longer
 // understands) — refused outright rather than migrated (old files keep
@@ -173,12 +170,12 @@ function applyProgramObject(obj) {
   _missions     = Array.isArray(obj.missions)   ? obj.missions   : [];
   _missions.forEach(_missionMigrateLaunchOrbitLog);   // C3: legacy e.launchOrbit -> e.orbit, in memory only
   if (Array.isArray(obj.scStageLib)) _scStageLib = obj.scStageLib;
-  if (typeof _refOrbitSessionRestore === 'function') _refOrbitSessionRestore(obj.orbitCatalogUser);
+  _refOrbitSessionRestore(obj.orbitCatalogUser);
   PROG_ACTIVE_PROGRAM = obj.activeProgram || progMakeProgram('Loaded Program');
   _missionMigrateNodeMapCustomNodes(PROG_ACTIVE_PROGRAM);   // C2b item-3: legacy node.orbit dialect -> canonical
 
-  // R1: programs saved before the epoch feature get the default epoch
-  if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = (typeof PROG_DEFAULT_EPOCH_JD !== 'undefined' ? PROG_DEFAULT_EPOCH_JD : 2461230.5);
+  // Programs saved before the epoch feature get the default epoch
+  if (!isFinite(PROG_ACTIVE_PROGRAM.epochJD)) PROG_ACTIVE_PROGRAM.epochJD = PROG_DEFAULT_EPOCH_JD;
   _fleetSel   = (obj.sel && obj.sel.fleet)   || (_fleetEntries[0] && _fleetEntries[0].fleetId) || null;
   _scEdSel    = (_scEdSC[0] && _scEdSC[0].spacecraftId) || null;
   // Re-simulate every mission so PROG_ACTIVE_PROGRAM's runtime vehicles are
@@ -187,11 +184,11 @@ function applyProgramObject(obj) {
   // One mission per program: pin the UI to _missions[0] (creates a default if the
   // loaded file had none). Older multi-mission .program files keep the rest of
   // _missions in the array — just not surfaced in the UI.
-  if (typeof missionEnsureDefault === 'function') missionEnsureDefault();
-  // A1: architecture undo history is scoped to the PREVIOUS program's object
+  missionEnsureDefault();
+  // Architecture undo history is scoped to the PREVIOUS program's object
   // identity — a freshly loaded program (even an architecture-less one) must
   // not carry over undo/redo snapshots from whatever was open before.
-  if (typeof archUndoReset === 'function') archUndoReset();
+  archUndoReset();
   // Refresh all program UI.
   if (typeof scEdRenderList    === 'function') scEdRenderList();
   if (typeof scEdRenderDetail  === 'function') scEdRenderDetail();

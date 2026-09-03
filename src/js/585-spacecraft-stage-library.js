@@ -1,10 +1,8 @@
 
 // ─── SPACECRAFT STAGE LIBRARY ───────────────────────────────────────────────
-// A flat (uncategorized) library of reusable spacecraft-stage definitions.
-// Populated by "↓ Lib" on a stage card, by the "+ New Stage" standalone editor,
-// or by uploading a .scstage file. Lives in a session-global array AND travels
-// inside saved .program files (see buildProgramObject / applyProgramObject).
-// Drag a library stage into a spacecraft's stage stack to add it.
+// Flat library of reusable spacecraft-stage definitions, populated from a
+// stage card, the standalone editor, or a .scstage upload. Session-global and
+// saved inside .program files. Drag a library stage into a spacecraft to add it.
 
 let _scStageLib       = [];     // [{ libId, name, dry_mass, isp, propKg, propType, … }]
 let _scStageLibQuery  = '';     // library search text
@@ -42,7 +40,7 @@ function scStageLibSaveFromCard(scId, idx) {
 // ── use a library stage ─────────────────────────────────────────────────────
 function scStageLibAddToCraft(libId) {
   const sc = _scEdGet();
-  if (!sc) { if (typeof showAlert === 'function') showAlert('Select or create a spacecraft first.', 'No Spacecraft'); return; }
+  if (!sc) { showAlert('Select or create a spacecraft first.', 'No Spacecraft'); return; }
   const lib = _scStageLib.find(s => s.libId === libId);
   if (!lib) return;
   sc.stages.push({ stageId: progUUID(), ..._scStageSpec(lib) });

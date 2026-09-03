@@ -1,22 +1,9 @@
 
 // ─── CONDENSE RESULTS PANEL ───────────────────
-// Progressive-disclosure pass for #results-panel, run AFTER calculateWithS15()
-// (never inside calculate()/evalAtPayload() — those are untouchable). renderResults()
-// in 160-calculate.js writes a flat sequence of `.result-row` divs into #results-panel:
-//   1. Target
-//   2. Est. Max Payload        <- headline
-//   3. Capacity Range (±10%)   <- headline
-//   4. Mission Feasible?
-//   5. Total ΔV Available
-//   ... (several more .result-row)
-//   .stage-breakdown  (bars + per-stage list)
-//   .note             (method footnote)
-// This walks the rendered DOM and wraps everything AFTER "Capacity Range" in a
-// collapsible "▸ Full breakdown" section. Idempotent: if the wrapper already
-// exists it just re-collects any new trailing siblings (safe to call repeatedly,
-// e.g. after every recalculation). Remembers expanded/collapsed state for the
-// session in a module var. Safe no-op if calculate() rendered an error message
-// (no .result-row present) or if the panel is missing.
+// Runs after calculateWithS15(): wraps every .result-row after "Capacity Range"
+// in #results-panel into a collapsible "Full breakdown" section. Idempotent;
+// remembers the expanded state for the session; no-op if the panel is missing
+// or calculate() rendered an error.
 let _condenseResultsExpanded = false;
 
 function condenseResultsPanel(){

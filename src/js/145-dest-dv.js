@@ -1,11 +1,8 @@
 
 // ─── DESTINATION ΔV (pure) ────────────────────
-// Pure re-implementation of the on-orbit ΔV computation that lives inside
-// calculate() (160-calculate.js). calculate() is frozen by project invariant,
-// so this function EXACTLY mirrors its logic for use by DOM-independent
-// callers (Orbits-page vehicle selector, Trade Study destination sweeps).
-// tests/math.test.js pins this against golden values from calculate() —
-// if 160's logic ever changes, change this + the goldens together.
+// DOM-free mirror of the on-orbit ΔV logic inside calculate() (160), for the
+// Orbits-page vehicle selector and trade-study sweeps. Pinned against
+// calculate() goldens in tests/ — change both together.
 //
 // dest (orbit mode):  {mode:'orbit',  apogee, perigee, inc, parkingAlt}
 // dest (escape mode): {mode:'escape', c3, decl, perigee}   // perigee = parking perigee

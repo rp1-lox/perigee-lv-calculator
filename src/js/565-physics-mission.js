@@ -1,26 +1,18 @@
 
-// ─── PHYSICS MISSION BRIDGE (P2) — solved node burns + propagated legs ────────
+// ─── PHYSICS MISSION BRIDGE — solved node burns + propagated legs ────────────
+// Connects the physics stack (385/386) to the mission model (570).
 //
-// Connects the P0/P1 physics stack (385/386) to the mission model (570).
-// See PHYSICS_PLAN.md (P2) and MATH.md §7e.
+// DOM-free on purpose (loaded by the test harness); 570/430 functions are only
+// referenced inside function bodies, never at load time.
 //
-// DOM-FREE ON PURPOSE: this module is loaded by tests/math.test.js's vm harness
-// (which stubs only document.getElementById) — keep it free of DOM access and
-// free of top-level references to later modules (570/430 functions are only
-// touched inside functions, at call time).
-//
-// Hard rules honored here:
-//   - Results live in the module side-table `_physTrajByMission`, keyed by
-//     missionId — NEVER on the mission object `m` (autosave/undo serialize m
-//     wholesale; the m._checks leak class).
-//   - Burn MAGNITUDE always comes from the existing ΔV engine
-//     (progNmComputeEdgeDv / e.dvOverride) so ΔV accounting and propellant
-//     totals are byte-identical with physics on vs off. P2 does NOT retarget —
-//     a propagated leg that misses the Moon records converged:false and that
-//     is fine (P4's shooter refines aim).
-//   - All body positions via physBodyStateAt/progBodyAngleAt (rails), all
-//     numeric propagation via physPropagateSegment. Pure two-body legs skip
-//     the integrator and sample physKeplerPropagate instead (perf budget).
+// Rules:
+//   - Results live in the side table _physTrajByMission keyed by missionId,
+//     never on the mission object (autosave/undo serialize m wholesale).
+//   - Burn magnitude always comes from the ΔV engine (progNmComputeEdgeDv /
+//     e.dvOverride) so accounting is identical with physics on or off. A leg
+//     that misses its target records converged:false; the shooter refines aim.
+//   - Body positions via physBodyStateAt/progBodyAngleAt, propagation via
+//     physPropagateSegment; pure two-body legs sample physKeplerPropagate.
 
 const PHYS_ENABLED = true;
 
@@ -86,7 +78,7 @@ function physBodySetFor(ctx, fidelity) {
 // 360/385 constants, written out as literals: physSoiRadius itself is demoted
 // to bookkeeping (rendering/LOD seam markers, frame-CENTER selection, and
 // display-horizon classification) and no longer appears in solver acceptance
-// terms. Gate-pinned against physSoiRadius (tests/math.test.js) so a body-
+// terms. Gate-pinned against physSoiRadius (tests/run.js) so a body-
 // constant change can't silently detach the two.
 const PHYS_ENCOUNTER_SCALE_KM = {
   Moon: 66182.92233068068, Titan: 43322.31349190931,
@@ -222,15 +214,15 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
     theta = physPhaseBurnAngle(progBodyAngleAt(destPlanet, tDepart_s + coastTof));
   }
 
-  // R3: departure state in the authored orbit plane (Ω=0 convention, same as
+  // Departure state in the authored orbit plane (Ω=0 convention, same as
   // the R2 ring rendering); prograde unit = v̂ of the inclined state.
   const incRad = (((fromOrbit.incDeg ?? fromOrbit.inclination) || 0) * Math.PI) / 180;
-  // R3.2: an authored departure plane (lan_deg) is fixed geometry, not a
+  // An authored departure plane (lan_deg) is fixed geometry, not a
   // solve target — physShootLegAim's raan solve is skipped entirely for an
   // authored fromOrbit (see there); this single-burn (samebody) construction
   // just needs to honor the same authored raan for consistency.
   const raanFixed = (fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) * Math.PI) / 180 : 0;
-  // §7al site 15 (2026-07-18): the authored (inc, lan) are EQUATOR-frame. Seam
+  // site 15: the authored (inc, lan) are EQUATOR-frame. Seam
   // them to WORLD/ecliptic via the C1 boundary before physAimBurnState (a
   // world-frame constructor) — mirrors aimBurnEq (565-physics-targeting) — but
   // ONLY on the sameBody path. Rationale (measured): for moon/interplanetary
@@ -248,13 +240,13 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
   // NOT identity for Earth even at authored inc=0 (an equatorial LEO is 23.44°
   // to the ecliptic).
   let incWorldRad = incRad, raanWorldRad = raanFixed;
-  if (sameBody && typeof orbitWorldElements === 'function') {
+  if (sameBody) {
     const _w = orbitWorldElements({ body: fromBody, inc_deg: ((fromOrbit.incDeg ?? fromOrbit.inclination) || 0),
       lan_deg: ((fromOrbit.lanDeg ?? fromOrbit.lan_deg) != null ? (fromOrbit.lanDeg ?? fromOrbit.lan_deg) : 0) });
     incWorldRad = (_w.incDeg * Math.PI) / 180; raanWorldRad = (_w.lanDeg * Math.PI) / 180;
   }
   const bs = physAimBurnState(fromBody, r1, theta, 0, dv_kms, incWorldRad, 0, raanWorldRad);
-  // N1b: body set through the one resolver (contextual = the old ad-hoc lists
+  // Body set through the one resolver (contextual = the old ad-hoc lists
   // verbatim; 'full' unions the whole system). Samebody keeps [fromBody] —
   // its leg model is analytic Kepler (documented exemption, physBodySetFor).
   const bodies = destPlanet ? physBodySetFor({ center: fromBody, dest: destPlanet, kind: 'interplanetary' })
@@ -276,7 +268,7 @@ function physSolveNodeBurn(fromOrbit, toOrbit, tDepart_s, dv_kms, overrides) {
  *  Returns seconds or null (fall back to progTransferTOF). Only legs whose
  *  identity (from/to nodes) and departure MET still match are trusted. */
 function physLegTofFor(m, e, metNow) {
-  if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return null;
+  if (!PHYS_ENABLED || !m) return null;
   const t = _physPrevTrajByMission[m.missionId];
   if (!t || !t.legs) return null;
   const leg = t.legs.find(L => L.authIdx === e._authIdx && L.fromNode === e.fromNode && L.toNode === e.toNode);
@@ -298,11 +290,11 @@ function physLegTofFor(m, e, metNow) {
  * SOI-entry/periapsis timing when the trajectory actually reaches the
  * destination SOI, else the schematic Hohmann time.
  */
-// R3.5.3: dynamic full-orbit horizon for post-escape heliocentric arcs. The
+// Dynamic full-orbit horizon for post-escape heliocentric arcs. The
 // flat 90-day horizon (R3.5.2) only ever showed a quarter-orbit at 1 AU —
 // this scans a propagated leg's samples for the SOI handoff into the Sun
 // frame, estimates the heliocentric orbit there (numerically, since
-// physPropagateSegment's decimated samples carry {t,r,frame} but not v — see
+// physPropagateSegment's decimated samples carry {t,r,frame} but not v —
 // 386's return-shape comment; v is estimated by finite difference between
 // the first two consecutive Sun-frame samples, which is plenty accurate for
 // sizing a re-propagation horizon), and returns a horizon (measured from the
@@ -328,8 +320,8 @@ function physEscapeHorizonS(samples, fallbackS) {
   const dt = s1.t - s0.t;
   if (!(dt > 0)) return fallbackS;
   const v = [(s1.r[0] - s0.r[0]) / dt, (s1.r[1] - s0.r[1]) / dt, (s1.r[2] - s0.r[2]) / dt];
-  const muSun = (typeof PROG_MU_SUN !== 'undefined') ? PROG_MU_SUN : 1.32712440018e11;
-  const el = (typeof physStateToElements === 'function') ? physStateToElements(s0.r, v, muSun) : null;
+  const muSun = PROG_MU_SUN;
+  const el = physStateToElements(s0.r, v, muSun);
   let result;
   if (el && el.a > 0 && isFinite(el.period)) {
     result = (s0.t - samples[0].t) + 1.05 * el.period;
@@ -376,8 +368,8 @@ function physLegStateAt(missionId, authIdx, tQuery) {
 }
 
 function physRebuildMissionTrajectories(m) {
-  if (typeof PHYS_ENABLED === 'undefined' || !PHYS_ENABLED || !m) return;
-  // R1: planet-phase calibration retired — real ephemeris rails need no
+  if (!PHYS_ENABLED || !m) return;
+  // Planet-phase calibration retired — real ephemeris rails need no
   // per-mission overrides. Kept as an empty map so downstream signatures
   // (physSolveNodeBurn/physPropagateSegment ctx) stay unchanged.
   const calOverrides = {};
@@ -385,8 +377,8 @@ function physRebuildMissionTrajectories(m) {
   let lastTransit = null;   // pending injection leg (kind moon/interplanetary), for the exiting leg
   // destination-orbit mean altitude for a leg's dest body, from the first
   // later arrival MANEUVER into an orbit of that body (shooter target radius).
-  // R3.1: same search, but returning the actual {peri, apo} pair (not just the
-  // mean) for arrivalElements' AUTHORED SIZE (§7i) — the leg's own `toO` is
+  // Same search, but returning the actual {peri, apo} pair (not just the
+  // mean) for arrivalElements' AUTHORED SIZE — the leg's own `toO` is
   // the TRANSIT/corridor node (no perigee/apogee of its own), so the real
   // destination orbit's shape has to come from this downstream lookahead,
   // same target the shooter already searches for its radius.
@@ -405,7 +397,7 @@ function physRebuildMissionTrajectories(m) {
     const o = destOrbitFor(dest, fromIdx);
     return (o.peri + o.apo) / 2;
   };
-  // MISSION_MODEL_V2 §15 5a: the same downstream lookahead as destOrbitFor,
+  // 5a: the same downstream lookahead as destOrbitFor,
   // but for a NODE bound to a SEEDED propagated ref-orbit (the NRHO) instead
   // of a Keplerian orbit — the injection leg needs to know it's flying
   // toward the NRHO (not a generic Moon orbit) before it picks its shooter.
@@ -432,7 +424,7 @@ function physRebuildMissionTrajectories(m) {
   let lastAuthoredPlane = null;
   for (let i = 0; i < (m.log || []).length; i++) {
     const e = m.log[i];
-    // C2b item-4 (2026-07-17): e.orbit AND node.orbit are both canonical now
+    // E.orbit AND node.orbit are both canonical now
     // (periKm/apoKm/incDeg/lanDeg). lastAuthoredPlane — a 565-internal tracker
     // that is OVERLAID back onto a same-body fromO before solving — is carried
     // in the SAME canonical dialect so the overlay writes the field names the
@@ -447,7 +439,7 @@ function physRebuildMissionTrajectories(m) {
     // orbit's AUTHORED plane (R3, Ω=0 convention; mean-motion phase — same
     // convention physFreeReturnSolve solves in); Δv is applied in the orbit's
     // local frame: pro·v̂ + rad·r̂ + nrm·ĥ — the Normal component is live
-    // since R3 (MATH.md §7h).
+    // since R3.
     if (e.type === 'MNODE' && !_evIsSolvedManeuver(e)) {
       // manual burn (mode:'manual', or a classic vector MNODE with no target
       // at all) — vehicle-relative vector propagated from orbitAtBurn.
@@ -479,10 +471,10 @@ function physRebuildMissionTrajectories(m) {
         const rMean = orbitMeanRadiusKm(o, PROG_BODIES[o.body].R) ?? (PROG_BODIES[o.body].R + (((o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0) + ((o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0)) / 2); // C2: canonical mean-radius helper (fallback keeps propagated-orbit behavior byte-identical)
         const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
         const theta = (nMean * burnMet) % (2 * Math.PI);
-        // R3.2: if the vehicle's current orbit (orbitAtBurn) authored a plane,
+        // If the vehicle's current orbit (orbitAtBurn) authored a plane,
         // the MNODE builder reconstructs the burn frame in THAT plane too —
         // same precedence thread as the departure/arrival cases above.
-        // 2026-07-17 (user: solved burn ~180 deg from the placed node): this
+        // (user: solved burn ~180 deg from the placed node): this
         // used to feed o.inclination/o.lan_deg straight into physAimBurnState
         // as if they were already world-frame, skipping the eq->world seam
         // (C1, orbitWorldElements/orbitWorldState, 385-physics-core.js) that
@@ -500,7 +492,7 @@ function physRebuildMissionTrajectories(m) {
         // path. Falls back to the mean-motion basis (bs) for ordinary
         // hand-authored MNODEs, which never carry a burnState.
         let axes = null;
-        if (e.burnState && e.burnState.r && e.burnState.v && typeof _trajGizmoAxes === 'function')
+        if (e.burnState && e.burnState.r && e.burnState.v)
           axes = _trajGizmoAxes(e.burnState.r, e.burnState.v);
         rBase = axes ? e.burnState.r : bs.r;
         vBase = axes ? e.burnState.v : bs.v;
@@ -517,7 +509,7 @@ function physRebuildMissionTrajectories(m) {
         physScale(rHat, (e.dvRad_ms || 0) / 1000)),
         physScale(hHat, (e.dvNrm_ms || 0) / 1000));
       const state = { r: rBase, v: physAdd(vBase, dvVec) };
-      // N1b: local n-body set through the one resolver (same recipe as before).
+      // Local n-body set through the one resolver (same recipe as before).
       const bodies = physBodySetFor({ center: bodyForBurn, kind: 'local' });
       // horizon: 30 days, or 3 post-burn periods when the new orbit stays
       // comfortably inside this body's SOI (shows the settled orbit without
@@ -530,7 +522,7 @@ function physRebuildMissionTrajectories(m) {
       const boundLimitKm = (PHYS_ENCOUNTER_SCALE_KM[bodyForBurn] || Infinity) * 0.8;
       if (el && el.a > 0 && isFinite(el.period) && el.ra < boundLimitKm)
         horizon = Math.min(horizon, Math.max(3 * el.period, 3600));
-      // R3.5.2: escapes get 90 days so the committed heliocentric arc matches
+      // Escapes get 90 days so the committed heliocentric arc matches
       // what the gizmo's full-fidelity preview showed before commit.
       else if (el && (el.a < 0 || el.ra >= boundLimitKm)) horizon = 90 * 86400;
       // R6.2″ (round-3 item 5): cap the horizon at the NEXT authored MNODE's
@@ -540,7 +532,7 @@ function physRebuildMissionTrajectories(m) {
       if (nextMnodeMet != null && nextMnodeMet > burnMet) horizon = Math.min(horizon, nextMnodeMet - burnMet);
       let res = physPropagateSegment(state, burnMet, burnMet + horizon,
         { center: bodyForBurn, bodies, overrides: calOverrides }, { maxSamples: 256 });
-      // R3.5.3: if the 90-day pass reached heliocentric space, re-propagate
+      // If the 90-day pass reached heliocentric space, re-propagate
       // once to a full-orbit horizon (physEscapeHorizonS) so the committed
       // arc shows at least one full solar orbit instead of a quarter-orbit.
       // Skipped when a next-node cap is already in force (that cap is a hard
@@ -555,9 +547,9 @@ function physRebuildMissionTrajectories(m) {
       // known node-map nodes, for the node-map edge/chip closure + card
       // readout (570/430). Display-only — never touches ΔV accounting.
       let settleInfo = null;
-      if (typeof _nmClassifySettledOrbit === 'function' && res.stateF) {
-        const nodes = (typeof _missionNmNodes === 'function') ? _missionNmNodes() : [];
-        const fromNode = (oValid && typeof _nmMatchOrbitToNode === 'function')
+      if (res.stateF) {
+        const nodes = _missionNmNodes();
+        const fromNode = (oValid)
           ? _nmMatchOrbitToNode(o.body, (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, (o.incDeg ?? o.inclination) || 0, nodes)
           : null;
         // A frame change away from the departure body (including a handoff
@@ -617,10 +609,10 @@ function physRebuildMissionTrajectories(m) {
     // the injection leg already flew it. Physics TOF from that propagation.
     if (fromO.type === 'transit') {
       let tofPhysics = null, converged = false;
-      // MISSION_MODEL_V2 Phase 2 S2 (F1 — real arrival burns, critique 58): the
+      // Phase 2 S2: the
       // exiting leg of a transit corridor carries no propagation of its own
       // (the injection leg already flew the whole trajectory) — but under D5/
-      // §11.1 the arrival burn is now a real state-delta, not pure bookkeeping.
+      // the arrival burn is now a real state-delta, not pure bookkeeping.
       // CONVENTION (documented per the task): at the injection leg's actual
       // arrival state (physArrivalStateAt — last periapsis event in the dest
       // frame, reconstructed by finite difference), the arrival Δv VECTOR is
@@ -632,11 +624,11 @@ function physRebuildMissionTrajectories(m) {
       // authored target plane; Ω=0-convention normal, same formula as
       // planeMissKm above) — i.e. this assumes the arrival radius already
       // sits in the target plane and targets a near-periapsis/circular
-      // insertion, consistent with how the corridor was aimed (§7i). This
-      // will generally NOT equal V1's schematic dv_actual for this edge — see
-      // MISSION_MODEL_V2.md §11.1/§11.5 and MATH.md for the measured delta.
+      // insertion, consistent with how the corridor was aimed. This
+      // will generally NOT equal V1's schematic dv_actual for this edge —
+      // And for the measured delta.
       let arrivalBurn = null;
-      // MISSION_MODEL_V2 §15 5a: an injection leg solved by physSolveNrhoTransfer
+      // 5a: an injection leg solved by physSolveNrhoTransfer
       // already carries its own insertion burn (perilune-proximity target, not
       // the generic vis-viva construction below) — use it directly.
       if (lastTransit && lastTransit.kind === 'nrho' && lastTransit.nrhoInsertion &&
@@ -660,7 +652,7 @@ function physRebuildMissionTrajectories(m) {
             const ra = PROG_BODIES[lastTransit.dest].R + ((toO.apoKm ?? toO.apogee) ?? (toO.periKm ?? toO.perigee) ?? 0);
             const aTarget = (rp + ra) / 2;
             const vTargetMag = (aTarget > 0 && rMag > 0) ? Math.sqrt(Math.max(0, muDest * (2 / rMag - 1 / aTarget))) : null;
-            // §7al site 14 (2026-07-18): the target plane normal must be built
+            // site 14: the target plane normal must be built
             // in the WORLD/ecliptic frame the arrival position (arrSt.r) lives
             // in — toO's authored (inc, lan) are EQUATOR-frame, so route them
             // through the C1 boundary (orbitWorldNormal = orbitWorldElements ∘
@@ -668,7 +660,7 @@ function physRebuildMissionTrajectories(m) {
             // straight into the normal recipe (equator-as-world skip). Fallback
             // to the raw equatorial recipe only when the boundary is unavailable
             // (headless / non-Keplerian toO) — same value the old code produced.
-            let hHatT = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(toO) : null;
+            let hHatT = orbitWorldNormal(toO);
             if (!hHatT) {
               const incT = ((toO.incDeg ?? toO.inclination) || 0) * Math.PI / 180;
               const raanT = (toO.lanDeg ?? toO.lan_deg) != null ? ((toO.lanDeg ?? toO.lan_deg) * Math.PI / 180) : 0;
@@ -723,7 +715,7 @@ function physRebuildMissionTrajectories(m) {
         initState: burn.state, center: burn.center, bodies: [burn.center], dtMax: undefined });
       // R6.2' Phase B (step 2/5): display-only dv-component mirror, decomposed
       // against the leg's REAL burn state (not a mean-motion reconstruction).
-      if (e.type === 'MNODE' && burn.dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
+      if (e.type === 'MNODE' && burn.dvVec) {
         const axes = _trajGizmoAxes(burn.preState.r, burn.preState.v);
         const d = axes ? _trajGizmoDecomposeDv(burn.dvVec, axes) : null;
         if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
@@ -731,12 +723,12 @@ function physRebuildMissionTrajectories(m) {
       continue;
     }
 
-    // MISSION_MODEL_V2 §15 5a: an injection leg headed toward a node bound to
+    // 5a: an injection leg headed toward a node bound to
     // a SEEDED propagated ref-orbit (the NRHO) uses the dedicated solver
     // instead of the generic moon-leg shooter below — the NRHO isn't a
     // Keplerian target, it's a specific propagated trajectory phased to the
     // arrival epoch. physSolveNrhoTransfer owns its own solve cache.
-    // BUG FIX (2026-07-15 user report): nrhoRefAfter only ever searched LATER
+    // BUG FIX: nrhoRefAfter only ever searched LATER
     // log entries for the orbitRefId marker — the two-hop seeded pattern
     // (LEO->TLC, then TLC->NRHO) always has it on a later edge, so that was
     // the only case ever exercised. A hand-authored ONE-HOP maneuver straight
@@ -753,7 +745,7 @@ function physRebuildMissionTrajectories(m) {
       ? ((toN && toN.orbitRefId && toN.orbit && toN.orbit.body === burn.dest) ? toN.orbitRefId : nrhoRefAfter(burn.dest, i))
       : null;
     if (nrhoRef) {
-      // 5b R2 (MATH.md §7ae): if another vehicle in this mission already
+      // If another vehicle in this mission already
       // occupies the same NRHO ref (DEPLOY-stamped propagated+refId+r/metAt —
       // 570-mission-manager.js's DEPLOY branch), pass it as ctx.targetVehicle
       // so the solver evaluates the phase-matched lattice instead of any
@@ -788,7 +780,7 @@ function physRebuildMissionTrajectories(m) {
         burnState: burn.preState, initState: burn.state, center: burn.center, bodies: burn.bodies, dtMax: undefined };
       legs.push(leg);
       lastTransit = leg;
-      if (e.type === 'MNODE' && leg.dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
+      if (e.type === 'MNODE' && leg.dvVec) {
         const axes = _trajGizmoAxes(burn.preState.r, burn.preState.v);
         const d = axes ? _trajGizmoDecomposeDv(leg.dvVec, axes) : null;
         if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
@@ -803,7 +795,7 @@ function physRebuildMissionTrajectories(m) {
     const r1 = physMag(burn.state.r);
     const incLeg = ((fromO.incDeg ?? fromO.inclination) || 0);
     let raanUsed = 0;
-    // §7al site 13 (2026-07-18): WORLD/ecliptic-frame mirror of (incLeg,
+    // site 13: WORLD/ecliptic-frame mirror of (incLeg,
     // raanUsed). physShootLegAim RETURNS an EQUATORIAL raan (raan0) and seams
     // internally via aimBurnEq; the committed reconstruction below (and the
     // rendered departElements) must apply the SAME seam or the drawn/propagated
@@ -812,7 +804,7 @@ function physRebuildMissionTrajectories(m) {
     // the no-shot fallback is unchanged.
     let incLegWorldRad = incLeg * Math.PI / 180, raanWorldRad = 0;
     {
-      // R3: signature includes the departure inclination AND lan/raan —
+      // Signature includes the departure inclination AND lan/raan —
       // editing a node's inclination OR LAN must re-shoot the leg. The
       // lan_deg term was MISSING here (bug fix, feedback item 6): a LAN edit
       // changed fromO.lan_deg but left this signature identical, so the
@@ -861,7 +853,7 @@ function physRebuildMissionTrajectories(m) {
       { center: burn.center, bodies: burn.bodies, overrides: calOverrides,
         dtMax: nbDtMax }, { maxSamples: 256 });
     const converged = res.events.some(ev => ev.type === 'soi' && ev.to === burn.dest);
-    // R3.1 (MATH.md §7i): departure/arrival ORIENTATION for the state-derived
+    // Departure/arrival ORIENTATION for the state-derived
     // ring (574 consumes these; the ΔV-engine's authored {peri,apo,inc} stay
     // untouched — orientation is geometry only in this phase). Departure is
     // the exact circular-ring plane the corrector actually flew (tier 2a);
@@ -870,7 +862,7 @@ function physRebuildMissionTrajectories(m) {
     // flight truth, see the module doc comment above).
     let departElements = null, arrivalElements = null;
     if (converged) {
-      // §7al site 13: the departure ring is consumed as WORLD-frame elements by
+      // site 13: the departure ring is consumed as WORLD-frame elements by
       // 5741 (rec.elements) and 570-mission-nodemap — use the seamed world
       // (inc, raan) so the rendered ring matches the plane the leg actually flew
       // (previously eq-as-world, consistent only with the pre-seam propagation).
@@ -879,7 +871,7 @@ function physRebuildMissionTrajectories(m) {
       const oscul = muDest ? physArrivalOsculatingElements(res, burn.dest, muDest) : null;
       if (oscul && PROG_BODIES[burn.dest]) {
         const Rd = PROG_BODIES[burn.dest].R;
-        // AUTHORED target size (§7i split: size is accounting truth) — the
+        // AUTHORED target size ( split: size is accounting truth) — the
         // leg's own `toO` is the transit/corridor node and has no perigee of
         // its own, so look ahead to the real destination-orbit MANEUVER
         // (same lookahead the shooter's destAltFor already performs).
@@ -901,8 +893,8 @@ function physRebuildMissionTrajectories(m) {
       // converged (st0Pre), else the analytic seed's pre-burn state
       // (burn.preState). Consumers (5745 gizmo, this file's own dv-mirror
       // below) decompose against THIS basis instead of a mean-motion
-      // reconstruction — fixes the Phase A known limitation (PHYSICS_PLAN
-      // R6.2': Apollo TLI read pro -2085/rad +2151/nrm +950 for what is
+      // reconstruction — fixes the Phase A known limitation
+      // Apollo TLI read pro -2085/rad +2151/nrm +950 for what is
       // physically a ~pure-prograde burn).
       burnState: st0Pre,
       // R6.2″ (round-3 item 5): initial post-burn state + propagation
@@ -921,7 +913,7 @@ function physRebuildMissionTrajectories(m) {
     // the mean-motion reconstruction). No-op for a legacy MANEUVER entry (no
     // dv fields to refresh) or if 5745 hasn't loaded yet (guarded, never a
     // hard dependency).
-    if (e.type === 'MNODE' && dvVec && typeof _trajGizmoAxes === 'function' && typeof _trajGizmoDecomposeDv === 'function') {
+    if (e.type === 'MNODE' && dvVec) {
       const axes = _trajGizmoAxes(leg.burnState.r, leg.burnState.v);
       const d = axes ? _trajGizmoDecomposeDv(dvVec, axes) : null;
       if (d) { e.dvPro_ms = d.pro; e.dvRad_ms = d.rad; e.dvNrm_ms = d.nrm; }
@@ -933,7 +925,7 @@ function physRebuildMissionTrajectories(m) {
   // If any leg's physics TOF differs >1% from the duration this replay actually
   // used (and the user hasn't overridden it), re-replay ONCE so the MET chain
   // absorbs the physics timing. Depth-guarded — never loops.
-  if (!_physRecomputePass && typeof missionRecompute === 'function') {
+  if (!_physRecomputePass) {
     const stale = legs.some(L => {
       if (L.tofPhysics == null) return false;
       const auth = m.log[L.authIdx];

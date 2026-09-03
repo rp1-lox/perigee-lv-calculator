@@ -1,27 +1,17 @@
-// ─── 567: MISSION_MODEL_V2 §15 5b R1 — phase truth ───────────────────────────
-// Phase math ONLY (measurement + display support). NO solving (R2), NO
-// phasing burns (R3), NO dock links (R4) — see MATH.md §7ad for the full
-// writeup (definition, capture-window rationale, Kepler fallback, critiques).
-//
-// Two vehicles "share an orbit" in a way phase can be measured for, today, in
-// two shapes:
-//  (a) both orbitState.propagated with the SAME refId (the Gateway/NRHO
-//      case) — measured via each vehicle's nearest-point time parameter on
-//      the ref's sampled loop, in the Earth-Moon ROTATING frame (§7v: a
-//      rotating-frame-periodic orbit does not close inertially, so any
-//      "where on the loop is this" comparison MUST happen in rotating
-//      coordinates or it is comparing frame-rotation drift, not phase).
+// ─── PHASE TRUTH — orbital phase measurement ────────────────────────────────
+// Measurement and display support only; no solving. Two vehicles share an
+// orbit in two shapes:
+//  (a) both orbitState.propagated with the same refId (the NRHO case) —
+//      measured via each vehicle's nearest-point time parameter on the ref's
+//      sampled loop, in the Earth-Moon rotating frame (a rotating-frame-
+//      periodic orbit does not close inertially).
 //  (b) both classical Keplerian orbits sharing (a, e, i) within tolerance —
-//      mean-anomaly difference / mean motion. This path is pure/gate-tested
-//      but NOT wired to live UI: today's OrbitalState (360's
-//      progMakeOrbitalState) carries no mean-anomaly/epoch field for
-//      classical orbits (every classical orbitState is epoch:0, always) —
-//      there is nothing to diff. Wiring that requires adding real anomaly
-//      tracking to classical orbitState, out of R1's "measurement using
-//      EXISTING data" scope. Documented, not hidden (MATH.md §7ad critique).
+//      mean-anomaly difference / mean motion. Gate-tested but not wired to the
+//      UI: classical orbitState carries no anomaly/epoch field yet.
+// Details and critiques in.
 
 // Capture window: TIME-based, not distance-based (spec offered either).
-// Rationale (MATH.md §7ad): the NRHO is highly eccentric (perilune ~5,500 km
+// Rationale: the NRHO is highly eccentric (perilune ~5,500 km
 // vs apolune ~71,000 km from the Moon) — orbital speed varies enormously
 // around one loop, so a FIXED distance threshold would flag "captured" near
 // apolune (slow) at phase errors that are actually huge in time, and flag
@@ -56,7 +46,6 @@ function _phaseWrapDt(dt, P) {
 function _phaseVehiclePoint(os, metNow) {
   if (!os || !os.propagated || !os.refId) return null;
   if (os.r) return { r: os.r, t: (os.metAt != null ? os.metAt : (metNow || 0)) };
-  if (typeof refOrbitPropagatedStateAt !== 'function') return null;
   const st = refOrbitPropagatedStateAt(os.refId, metNow || 0);
   if (!st) return null;
   return { r: st.r, t: metNow || 0 };
@@ -65,14 +54,13 @@ function _phaseVehiclePoint(os, metNow) {
 // Nearest-point time parameter: which sample of the ref's one-period raw loop
 // (each sample keeping ITS OWN true epoch — 425's refOrbitSamplePropagatedRaw,
 // the N3 live/un-rebased source) is closest to the query point, comparing in
-// the Earth-Moon ROTATING frame at each sample's own epoch (§7v). Returns the
+// the Earth-Moon ROTATING frame at each sample's own epoch. Returns the
 // WINNING SAMPLE'S EPOCH as the vehicle's "along-track clock" reading — not a
 // literal position, a phase-position label on the loop.
 function _phaseNearestT(refId, r, t, nSamples) {
-  const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
+  const res = refOrbitResolve(refId);
   if (!res || res.kind !== 'propagated' || !res.period_s) return null;
-  if (typeof _refRotCapable !== 'function' || !_refRotCapable(res)) return null;   // only Moon-frame refs (§17 N2) get the rotating wrap
-  if (typeof refOrbitSamplePropagatedRaw !== 'function' || typeof _refToRot !== 'function') return null;
+  if (!_refRotCapable(res)) return null;   // only Moon-frame refs (§17 N2) get the rotating wrap
   const raw = refOrbitSamplePropagatedRaw(refId, nSamples || 180);
   if (!raw || !raw.length) return null;
   const qRot = _refToRot({ r, v: [0, 0, 0] }, t).r;
@@ -101,7 +89,7 @@ function phaseTruthPropagated(osA, osB, metNow) {
   const nB = _phaseNearestT(osB.refId, pB.r, pB.t);
   if (!nA || !nB) return null;
   const P = nA.period_s;
-  // 5b R3 (MATH.md §7af): os._phaseOffsetS is an OPTIONAL stamped clock
+  // Os._phaseOffsetS is an OPTIONAL stamped clock
   // correction — the recorded, guaranteed effect of an authored phasing-
   // burn pair (missionAddPhasingBurns / 570-mission-replay.js's BURN
   // branch), applied AFTER the geometric nearest-point search (never fed
@@ -116,10 +104,9 @@ function phaseTruthPropagated(osA, osB, metNow) {
   // current position vectors — exact (no linearization), since we already
   // have both real r's in hand for this path. (The Δt×local-speed framing is
   // used instead in the Keplerian fallback below, where no real vectors
-  // exist to chord between — see MATH.md §7ad for why the two paths pick
+  // exist to chord between
   // different distance framings.)
-  const distKm = (typeof physSub === 'function' && typeof physMag === 'function')
-    ? physMag(physSub(pA.r, pB.r)) : null;
+  const distKm = physMag(physSub(pA.r, pB.r));
   return { dt_s: dt, distKm, capture: Math.abs(dt) <= PHASE_CAPTURE_WINDOW_S, period_s: P };
 }
 
@@ -177,18 +164,13 @@ function _phaseFmtDistKm(distKm) {
   if (distKm == null || !isFinite(distKm)) return '—';
   return Math.round(distKm).toLocaleString() + ' km';
 }
-// The compact chip readout string itself: "Δφ 2h41m · 8,910 km".
-function _phaseChipText(phase) {
-  if (!phase) return '';
-  return `&Delta;&phi; ${_phaseFmtDt(phase.dt_s)} &middot; ${_phaseFmtDistKm(phase.distKm)}`;
-}
 
 // ─── 5b R3 (MATH.md §7af) — terminal two-impulse phasing burns ─────────────
 // Classic phasing-orbit construction: given a residual along-track offset
 // Δt_phase (R1's own measurement) and a user-chosen rev count N (1-5), the
 // phasing orbit's period is offset by ΔP = Δt_phase / N so that after N revs
 // the phasing vehicle has drifted exactly Δt_phase relative to the ref —
-// closing the gap by construction (see MATH.md §7af for why this "the
+// closing the gap by construction ( for why this "the
 // target also moves" concern is a non-issue: Δt_phase is ALREADY the
 // relative offset between the two clocks, not an absolute position).
 // Burn happens at periapsis (perilune for the NRHO case) both ways: raise/
@@ -197,7 +179,7 @@ const PHASING_MAX_N = 5;
 // |ΔP| must stay under this fraction of the reference period or the
 // "phasing orbit" is no longer a sane perturbation of the parked orbit
 // (e.g. an inverted or near-degenerate ellipse) — a documented, un-derived
-// round-number guard, same discipline as NRHO_PHASE_DV_BAND (§7ae critique 96).
+// round-number guard, same discipline as NRHO_PHASE_DV_BAND.
 const PHASING_FEASIBLE_FRAC = 0.5;
 
 // Pure construction, shared by both the propagated (NRHO) and Keplerian
@@ -206,7 +188,7 @@ const PHASING_FEASIBLE_FRAC = 0.5;
 // km^3/s^2), retime by deltaP_s = dtPhase_s / N via a periapsis-tangent
 // burn that changes ONLY the period (vis-viva at the fixed periapsis
 // radius — the two-body approximation the spec calls for; honest even
-// when the reference orbit is itself a 3-body NRHO, see MATH.md §7af).
+// when the reference orbit is itself a 3-body NRHO).
 function physPhasingSolve(P_s, dtPhase_s, N, mu, rPeri_km) {
   if (!(P_s > 0) || !(N >= 1) || !(mu > 0) || !(rPeri_km > 0)) return null;
   const aRef_km = Math.cbrt(mu * P_s * P_s / (4 * Math.PI * Math.PI));
@@ -228,9 +210,9 @@ function physPhasingSolve(P_s, dtPhase_s, N, mu, rPeri_km) {
 // since the period is the one number this whole construction must hit
 // exactly (peri/apo are secondary, approximate labels on a 3-body orbit).
 function phasingPlanPropagated(refId, dtPhase_s, N, muBody) {
-  const res = (typeof refOrbitResolve === 'function') ? refOrbitResolve(refId) : null;
+  const res = refOrbitResolve(refId);
   if (!res || res.kind !== 'propagated' || !res.period_s || !(res.periKm > 0)) return null;
-  const mu = muBody || (typeof PROG_BODIES !== 'undefined' && PROG_BODIES[res.body] && PROG_BODIES[res.body].mu);
+  const mu = muBody || (PROG_BODIES[res.body] && PROG_BODIES[res.body].mu);
   if (!mu) return null;
   return physPhasingSolve(res.period_s, dtPhase_s, N, mu, res.periKm);
 }
@@ -240,7 +222,7 @@ function phasingPlanPropagated(refId, dtPhase_s, N, muBody) {
 // (360's progMakeOrbitalState convention: apogee/perigee are ALTITUDES above
 // the body's surface).
 function phasingPlanKeplerian(orbitState, dtPhase_s, N) {
-  if (!orbitState || typeof PROG_BODIES === 'undefined') return null;
+  if (!orbitState) return null;
   const b = PROG_BODIES[orbitState.body];
   if (!b) return null;
   const rPeri_km = b.R + (orbitState.perigee ?? 0);

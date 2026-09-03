@@ -17,7 +17,7 @@ function rocketEq(isp,m0,mf){return(mf<=0||m0<=mf)?0:G0*isp*Math.log(m0/mf);}
 // implementations as a full-ascent-time correction. This term was fitted by
 // least squares against a 30-configuration black-box probe campaign of
 // Silverbird itself (19 LEO calibration + 11 higher-orbit holdout points;
-// dataset: tests/fixtures/silverbird-probes-2026-07-18.md). Chosen basis won
+// dataset: tests/fixtures/silverbird-probes-.md). Chosen basis won
 // on HOLDOUT error (fitted at LEO only, validated blind at 800 km/GTO/MEO:
 // Saturn V GTO error +29.7% -> +1.1%, MEO +32% -> -0.3%).
 //   corr = max(0, A*TaFull - C*X + B)   [multi-stage only]
@@ -35,10 +35,10 @@ const LV_MSCORR_A=1.0313, LV_MSCORR_C=1.0667, LV_MSCORR_B=-1.4664;
 // (booster-engine-cutoff) split and must move ATOMICALLY between every stage
 // record shape in the app (worksheet stageStore, library entries, fleet
 // snapshots, presets, trade-study assemblers, ...). Copying it field-by-field
-// at each call site has shipped the same drop bug 3x (see CLAUDE.md hard
-// invariant + docs/UNIFICATION_AUDIT.md item 4) — every module that needs to
+// at each call site has shipped the same drop bug 3x (hard
+// invariant +) — every module that needs to
 // carry, clear, or read-off s15 data MUST route through these three helpers
-// (grep-gated in tests/math.test.js: no other module may reference an
+// (grep-gated in tests/run.js: no other module may reference an
 // `s15_*` field name directly outside the splitters that consume it).
 const STAGE_S15_FIELDS=['s15_sust_thrust','s15_sust_isp','s15_jet_mass','s15_beco_twr','s15_boost_isp'];
 function _s15FieldDefault(f){return f==='s15_beco_twr'?1.2:0;}
@@ -132,7 +132,7 @@ function _s15BecoSplit(s) {
   };
 }
 
-// ONE S1.5 expansion boundary (UNIFICATION_AUDIT P2.1 — "S1.5 splitter shipped
+// ONE S1.5 expansion boundary ("S1.5 splitter shipped
 // 3x": calculateWithS15 (150), _fleetExpandStages (560), and _tsExpandStages
 // (165) used to each hand-roll their own stage/BECO iteration with DIVERGENT
 // output records and error policies). Every consumer of vehicle stage data now
@@ -248,7 +248,7 @@ function commitMathInput(input){
   return valid;
 }
 function gv(id){return mathValue(document.getElementById(id)?.value,0);}
-// R3.2: optional numeric read — blank input means "unauthored" (null), not 0.
+// Optional numeric read — blank input means "unauthored" (null), not 0.
 // Used for lan_deg/argp_deg fields where absence is a meaningful third state.
 function gvOpt(id){
   const el=document.getElementById(id);

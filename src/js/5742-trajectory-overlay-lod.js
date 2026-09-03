@@ -1,29 +1,12 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5742-trajectory-overlay-lod.js — Overlay projection, label registry, LOD & occlusion
+// ─── TRAJECTORY OVERLAY — projection, label registry, LOD, occlusion ───────
+// _trajWorldToScreen (render units -> overlay px); the px-native label/marker
+// registry with collision-resolved layout (_trajRegisterLabel,
+// _trajResolveLabels, ...); level-of-detail priorities and windows; viewport
+// culling; ring orientation / apse helpers; body occlusion.
 //
-// OWNS: the world->screen overlay projection (_trajWorldToScreen); the px-native
-//   label/marker registry and its collision-resolved layout (_trajLabelRegistry,
-//   _trajResetLabels, _trajRegisterLabel, _trajResolveLabels, _trajTextWidthPx);
-//   the level-of-detail priority/window model (_TRAJ_LOD_PRI, _TRAJ_LOD_*_MIN,
-//   _TRAJ_LOD_WIN, _trajWindowHi) and viewport culling (_trajCullRingByDiagonal,
-//   _trajCullByExtent, _trajCullPositionOffscreen); ring orientation + apse helpers
-//   (_trajRingOrientationFor, _trajApsePoints, _trajFmtApseDist); and body occlusion
-//   (_trajOccludeBodies, _trajPointOccluded, _trajOcclusionSplitRuns).
-// This is the OVERLAY (px-native symbology) half of the two-layer render contract;
-//   the WORLD (geometry, render-units) half lives in the rings/legs + globe modules.
-// Does NOT own: the projection SEAM itself (_trajProjectVec -> 5740-trajectory-camera.js).
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 574x def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
-// ── PROJECTION — the one function every overlay anchor goes through ───────
-// Render-space (floating-origin km * scale, same space g.traj-scene draws
-// in) -> overlay px, given the current camera and the world svg's measured
-// bounding rect. UNCHANGED signature/semantics from the two-layer refactor:
-// both the trajectory view and the mini orbit-diagram (230, fixed camera
-// {cx:0,cy:0,w:_OD_VBW}) funnel through it. `cam.cx/cam.cy` are always 0 for
-// the trajectory view's own calls post-C1b (floating origin design), but the
-// function itself stays cx/cy-general so 230's differently-centered
-// synthetic cam keeps working unmodified.
+// _trajWorldToScreen keeps a cx/cy-general camera because the mini orbit
+// diagram (230) calls it with a differently-centered synthetic cam; the
+// trajectory view's own calls always pass cx = cy = 0 (floating origin).
 function _trajWorldToScreen(x, y, cam, rect) {
   const w = rect && rect.width > 0 ? rect.width : cam.w;
   const h = rect && rect.height > 0 ? rect.height : cam.w;
@@ -124,7 +107,7 @@ function _trajResolveLabels(cam, rect) {
     kept.push({ box });
     const plateW = maxW + 6, plateH = h + 4;
     const plateX = bx1 - 3, plateY = by1 - 1;
-    // V1 label restyle (MISSION_MODEL_V2 §18): small uppercase, letter-spaced,
+    // V1 label restyle: small uppercase, letter-spaced,
     // dimmed until hover/selection, with a short leader tick from the anchor
     // point up to the text plate (match the NASA Eyes reference). Uppercasing
     // is done via CSS text-transform (not l.text.toUpperCase()) so the plate
@@ -208,8 +191,8 @@ function _trajCullPositionOffscreen(renderX, renderY, viewportDiagPx) {
 // rendering brief. This is the ring's OWN fade authority combining with the
 // LOD ramp by simple multiplication (both describe the SAME feature, not a
 // parent/child pair, so this does not violate the one-fade-authority rule).
-/** R3.2: pure orientation resolver for a ring record — the ONE place the
- *  three-tier precedence rule (MATH.md §7i) is decided, factored out so it's
+/** Pure orientation resolver for a ring record — the ONE place the
+ *  three-tier precedence rule is decided, factored out so it's
  *  unit-testable without constructing a full SVG. tier 1 (authored, source
  *  'authored') and tier 2 (state-derived, source 'flight') are both carried
  *  on rec.elements already (write-order enforced in _trajExtractMission —
@@ -223,11 +206,11 @@ function _trajRingOrientationFor(rec) {
   }
   // Tier 3 (default, Ω=ω=0): the authored inclination is EQUATOR-referenced,
   // but the ring is sampled/projected in the WORLD (ecliptic) frame, so a raw
-  // draw hugs the ecliptic instead of the body's (now-tilted, §20 O2) equator.
+  // draw hugs the ecliptic instead of the body's (now-tilted) equator.
   // Rotate through the ONE C1 boundary (orbitWorldElements, 385) the physics
   // state path uses — Ω=0 in the equator frame becomes a body-specific world
   // Ω, and the ring visibly rides ±inc of the tilted equator on screen
-  // (MATH.md §7al O2 line "28.5°-ring-vs-tilted-equator agreement" — now true
+  // ( line "28.5°-ring-vs-tilted-equator agreement" — now true
   // in the render path, not just the physics path). Identity for untilted
   // bodies.
   const incEq = (rec && rec.inc) || 0;
@@ -238,24 +221,6 @@ function _trajRingOrientationFor(rec) {
   return { i: w.incDeg * Math.PI / 180, raan: w.lanDeg * Math.PI / 180, argp: 0, source: 'default' };
 }
 
-/** R6.5 (2026-07-11): pure apsides finder — samples orbit `elements`
- *  {a,e,i,raan,argp} (radians) via progOrbitSamplePoints and picks the
- *  periapsis/apoapsis POINT by actual radius magnitude (robust against
- *  sampling-convention drift — doesn't blindly trust sample[0]/sample[N/2]
- *  even though that's what progOrbitSamplePoints's E=0/E=pi convention
- *  produces). Points are in the SAME local frame progOrbitSamplePoints
- *  returns (relative to the primary, pre-projection, real km — no `scale`
- *  applied). Pure, no DOM. Gate assertions: tests/math.test.js (2026-07-11). */
-function _trajApsePoints(elements, n) {
-  const pts = progOrbitSamplePoints(elements, n || 96);
-  let periPt = pts[0], apoPt = pts[0], periR = Infinity, apoR = -Infinity;
-  for (let k = 0; k < pts.length; k++) {
-    const r = Math.hypot(pts[k][0], pts[k][1], pts[k][2]);
-    if (r < periR) { periR = r; periPt = pts[k]; }
-    if (r > apoR) { apoR = r; apoPt = pts[k]; }
-  }
-  return { periPt, apoPt, periR, apoR };
-}
 
 /** Distance label for an apse marker. `mode:'au'` -> AU (heliocentric rings);
  *  else plain comma-grouped km (moon rings: raw body-centered distance;
@@ -278,8 +243,8 @@ let _trajOccludeBodies = [];
 /** Pure occlusion predicate: is render-space point (px,py) at camera-relative
  *  depth `pdepthKm` (km, SAME sign convention as the painter-sort depth —
  *  see _trajWorldSVG's `toRender`) hidden behind any opaque body disc in
- *  `bodies`? Derivation (empirically verified against the painter sort, see
- *  MATH.md §7m): a sphere of radius R centered at (cx,cy) with camera-axis
+ *  `bodies`? Derivation (empirically verified against the painter sort,
+ *  : a sphere of radius R centered at (cx,cy) with camera-axis
  *  depth `depth` has its NEAR cap (the side facing the camera, i.e. the
  *  LARGEST depth at a given perpendicular offset rho) at
  *  depth + sqrt(R^2 - rho^2). A point is behind that cap — occluded — iff

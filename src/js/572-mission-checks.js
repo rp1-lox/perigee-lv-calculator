@@ -1,25 +1,11 @@
 
 // ─── MISSION FLIGHT READINESS CHECKS ─────────────────────────────────────────
-// Derived, read-only diagnostics computed at the END of missionRecompute (570),
-// AFTER the existing autosave/undo hooks. Reads ONLY replay products already
-// produced by recompute — m._expanded (cached result/stagingResult/dv/prop per
-// event), each event's e.snapshot (per-event vehicle state — same data the
-// event-aware left panel / _missionSelectedEventSnapshotEntry read), and the
-// live end-state vehicles (m.vehicleIds -> PROG_ACTIVE_PROGRAM.vehicles).
-// No lvPerformance calls, no new simulation — O(events + stages).
-//
-// Result lands on m._checks = [{ id, severity, title, detail, authIdx, count }].
-// `_checks` is DERIVED STATE — it must NEVER be persisted:
-//  - Mission undo/redo (575) serializes an explicit whitelist of authored fields
-//    (log/groups/vehicleNames/launchOrbit/name/fleetEntryId/payloadScIds/laneColors)
-//    via _missionUndoSerialize, so an underscore-prefixed m._checks is already
-//    excluded there without any extra work.
-//  - Autosave / .program save (450/455) instead JSON.stringifies `_missions`
-//    (and PROG_ACTIVE_PROGRAM) directly, which WOULD pick up any own-enumerable
-//    field on `m` including m._checks. So missionRunChecks stores the result on
-//    a side table (_missionChecksById) keyed by missionId instead of directly on
-//    the mission object, and mission* accessors below read through it — this
-//    keeps `m` itself exactly as clean as before checks were added.
+// Derived, read-only diagnostics computed at the end of missionRecompute from
+// replay products only (m._expanded, per-event e.snapshot, live end-state
+// vehicles). No simulation; O(events + stages).
+// Result: [{ id, severity, title, detail, authIdx, count }], stored in the
+// side table _missionChecksById (never on m — autosave and .program save
+// JSON.stringify the mission objects directly).
 
 const _missionChecksById = {};   // missionId -> finding[]
 
@@ -68,11 +54,11 @@ function missionRunChecks(m) {
   if (!m || !m.log || !m.log.length) { delete _missionChecksById[m && m.missionId]; return; }
   const expanded = m._expanded || [];
   const findings = [];
-  // A5 (MISSION_MODEL_V2 §26): flown-vs-planned readiness checks. KSP hard
+  // Flown-vs-planned readiness checks. KSP hard
   // invariant — with no architecture authored, these are complete no-ops
   // (guarded up front, not just "usually silent"): zero new findings, zero
   // new work done, byte-identical behavior to pre-A5.
-  const _archHasNodes = (typeof archGet === 'function') && archGet().nodes.length > 0;
+  const _archHasNodes = archGet().nodes.length > 0;
   // dedupe by (id, authIdx) with a ×N count suffix for repeated-group clones
   const seen = new Map();   // key `${id}#${authIdx}` -> finding object (already pushed to findings)
   const push = (id, severity, title, detail, authIdx) => {
@@ -170,7 +156,7 @@ function missionRunChecks(m) {
         authIdx);
     }
 
-    // MISSION_MODEL_V2 §19 E2: LOWTHRUST readiness + STALE. Not-ready is a RED
+    // LOWTHRUST readiness + STALE. Not-ready is a RED
     // (the event failed to price at all — e._ltReady stamped false by 570's
     // recompute case); STALE is an INFO nudge (the est. lane still prices it,
     // just not with the last computed run's numbers) rather than a failure.
@@ -184,8 +170,8 @@ function missionRunChecks(m) {
       }
     }
 
-    // 5b R1 (MATH.md §7ad): RENDEZVOUS is co-orbital-only through R1 (the
-    // event still succeeds — matching orbits, not stations, per critique 63)
+    // RENDEZVOUS is co-orbital-only through R1 (the
+    // event still succeeds — matching orbits, not stations)
     // — this is a PLAN-QUALITY warning (AMBER), not a broken plan (RED): the
     // rendezvous itself did not fail, it just arrived out of phase, which R2/
     // R3 (deferred) are the intended fix for. e.phase is stamped in
@@ -202,7 +188,7 @@ function missionRunChecks(m) {
         authIdx);
     }
 
-    // BUG FIX (2026-07-15 user report): a solved maneuver targeting a node
+    // BUG FIX: a solved maneuver targeting a node
     // routed through the dedicated physics solver (currently NRHO transfers,
     // 565's physSolveNrhoTransfer) can fail to converge — e.g. a hand-
     // authored one-hop LEO->NRHO maneuver shot from an unfavorable MET. The
@@ -214,7 +200,7 @@ function missionRunChecks(m) {
     // it here (same RED-finding pattern as the LOWTHRUST not-ready check
     // above) so a failed/unroutable leg is always visible somewhere, never
     // silently nothing.
-    if (_evIsSolvedManeuver(e) && typeof physMissionLeg === 'function') {
+    if (_evIsSolvedManeuver(e)) {
       const physLeg = physMissionLeg(m.missionId, authIdx);
       if (physLeg && (physLeg.kind === 'nrho' || physLeg.kind === 'moon') && physLeg.converged === false) {
         push('physics-leg-unconverged', 'red', 'Transfer trajectory did not converge',
@@ -227,7 +213,7 @@ function missionRunChecks(m) {
     // #3 RED maneuver-from-mismatch: a solved maneuver whose from-node != the
     // acting vehicle's orbit state at that event (pre-event snapshot).
     if (_evIsSolvedManeuver(e) && e.fromNode) {
-      const node = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(e.fromNode) : null;
+      const node = _missionNmNodeById(e.fromNode);
       const prevSnap = (k > 0 && expanded[k - 1].snapshot) ? expanded[k - 1].snapshot : null;
       const activeKeyPrev = (k > 0) ? expanded[k - 1].activeOriginKey : null;
       const stateEntry = prevSnap && activeKeyPrev ? prevSnap.find(v => v.originKey === activeKeyPrev) : null;
@@ -260,14 +246,14 @@ function missionRunChecks(m) {
     // authored/possibly hand-edited after the plane-match ran) no longer
     // shares the node's plane. Compared via orbitWorldNormal (384/385, the
     // ONE C1 boundary) on both sides — never raw inc/lan, which would be
-    // meaningless across bodies/frames (docs/MATH.md §7al). INFO/amber only
+    // meaningless across bodies/frames. INFO/amber only
     // — a deviating plane doesn't fail the launch, it just makes the
     // architecture's dV budget for the downstream edge unreliable.
     if (_archHasNodes && e.type === 'LAUNCH' && e.planNodeId && e.orbit) {
       const node = archGet().nodes.find(n => n.id === e.planNodeId);
       if (node && node.orbit) {
-        const nA = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(node.orbit) : null;
-        const nB = (typeof orbitWorldNormal === 'function') ? orbitWorldNormal(e.orbit) : null;
+        const nA = orbitWorldNormal(node.orbit);
+        const nB = orbitWorldNormal(e.orbit);
         if (nA && nB) {
           const dot = Math.max(-1, Math.min(1, nA[0] * nB[0] + nA[1] * nB[1] + nA[2] * nB[2]));
           const deviationDeg = Math.acos(dot) * 180 / Math.PI;
@@ -291,7 +277,7 @@ function missionRunChecks(m) {
     const members = (m.log || []).map((e, i) => ({ e, i })).filter(x => x.e.groupId === gid);
     if (!members.length) return;
     const anchorIdx = members[0].i;
-    // C1: flyby — this chain USED to author an injection member (g.hadInject)
+    // Flyby — this chain USED to author an injection member (g.hadInject)
     // but no longer has one in the log (user deleted it) — the vehicle
     // honestly continues past the target on the transfer leg; INFO, not a
     // failure (a legitimate architecture, not a broken plan).
@@ -300,15 +286,15 @@ function missionRunChecks(m) {
         `${_mcEscape(g.name || 'This transfer')}'s injection burn was removed — the vehicle continues past the target on the transfer leg instead of arriving into its destination orbit.`,
         anchorIdx);
     }
-    // C2: staleness — the schematic ΔV requirement or the depart member's own
+    // Staleness — the schematic ΔV requirement or the depart member's own
     // MET has moved since this chain was last (re-)solved, and nobody has
     // clicked ↻ yet. Detail deliberately loose (destination orbit / upstream
-    // MET edits both move one of these two signals) — see docs/MATH.md §7ak
+    // MET edits both move one of these two signals)
     // for the documented scope (vehicle-mass-only changes are NOT detected,
     // a known gap).
     if (g.solved && g.route) {
       const depart = members.find(x => x.e.chainRole === 'depart') || members.find(x => x.e.chainRole === 'inject');
-      const curDv = (typeof progNmComputeEdgeDv === 'function') ? progNmComputeEdgeDv(g.route.fromNode, g.route.toNode) : null;
+      const curDv = progNmComputeEdgeDv(g.route.fromNode, g.route.toNode);
       const dvMoved = curDv && g.solved.dv != null && Math.abs(curDv.dv - g.solved.dv) > 1;
       const metMoved = depart && depart.e.metStart != null && g.solved.departMet != null && Math.abs(depart.e.metStart - g.solved.departMet) > 1;
       if (dvMoved || metMoved) {
@@ -323,7 +309,7 @@ function missionRunChecks(m) {
   // Skipped entirely if a red already suspended the scan (devil b): end-state is
   // unreliable once an earlier event already broke the plan.
   if (suspendAt < 0) {
-    const live = (typeof _missionLiveVehicles === 'function') ? _missionLiveVehicles(m) : [];
+    const live = _missionLiveVehicles(m);
 
     // #5 AMBER dead-mass: end-state stage with ~0 usable prop, never expended,
     // not a spacecraft/payload stage, not the topmost stage of its vehicle.
@@ -352,7 +338,7 @@ function missionRunChecks(m) {
       const crew = (fv.stages || []).reduce((s, st) => s + (st.crewAboard || 0), 0);
       if (crew <= 0) return;
       const os = fv.orbitState;
-      const node = (typeof _progNmVehicleNode === 'function' && os) ? _missionNmNodeById(_progNmVehicleNode(fv)) : null;
+      const node = (os) ? _missionNmNodeById(_progNmVehicleNode(fv)) : null;
       const inTransfer = node && node.orbit && node.orbit.type === 'transit';
       if (fv.status === 'EXPENDED') {
         push('crew-stranded', 'amber', 'Crew aboard an expended vehicle',
@@ -368,7 +354,7 @@ function missionRunChecks(m) {
     (m.vehicleIds || []).forEach(vid => {
       const fv = PROG_ACTIVE_PROGRAM.vehicles[vid];
       if (!fv || fv.status === 'EXPENDED' || !fv.orbitState) return;
-      const nodeId = (typeof _progNmVehicleNode === 'function') ? _progNmVehicleNode(fv) : null;
+      const nodeId = _progNmVehicleNode(fv);
       const node = nodeId ? _missionNmNodeById(nodeId) : null;
       if (node && node.orbit && node.orbit.type === 'transit') {
         push('ends-in-transfer', 'info', 'Mission ends mid-transfer',
@@ -419,7 +405,7 @@ function missionRunChecks(m) {
     // margin/rounding doesn't chatter. INFO/amber only — a real mission can
     // legitimately fly a fatter margin than its plan called for.
     if (_archHasNodes) {
-      const budget = (typeof archComputeBudget === 'function') ? archComputeBudget() : null;
+      const budget = archComputeBudget();
       if (budget && budget.total > 0) {
         let authoredDv = 0;
         expanded.forEach(e => {
@@ -462,7 +448,7 @@ function missionToggleChecksInfo(missionId) {
 
 // Click a finding: jump to its authored event (guard: not while group-picking).
 function missionChecksGoTo(missionId, authIdx) {
-  if (typeof _missionGroupMode !== 'undefined' && _missionGroupMode) return;   // don't fight the loop-picker
+  if (_missionGroupMode) return;   // don't fight the loop-picker
   if (authIdx == null) return;
   missionSelectEvent(missionId, authIdx);
   setTimeout(() => {
@@ -602,7 +588,7 @@ function _missionChecksInlineHTML(m, authIdx) {
 }
 
 function missionChecksOpenFromToolbar(missionId) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null;
+  const m = _missionGet(missionId);
   const worst = m ? _missionChecksWorstFinding(m) : null;
   // Route through the SAME shared selection path the event list itself uses —
   // no new selection machinery (deliverable A spec).

@@ -1,20 +1,8 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5744-trajectory-eventnodes.js — Event-node markers, burn glyphs, low-thrust arc
-//
-// OWNS: the per-event visual markers overlaid on the trajectory — burn glyphs
-//   (_trajBurnMarker), event-node symbology and placement (_TRAJ_EVENTNODE_TYPES,
-//   _trajEventNodeColorVar/_Label/_Info/_OrbitFor/_Body/_Pos, _trajEventNodesSVG),
-//   ghost markers (_trajGhostMarker, _TRAJ_HISTORY_ALPHA), click-to-select from the
-//   view (_trajSelectEventFromView, _trajSelectedAuthIdx); the mission extent /
-//   extraction cache used to frame those nodes (_trajMissionExtentForBody,
-//   _trajExtractionCache, _trajGetExtraction); small orbit-radius helpers
-//   (toO_peri, toO_apo, _trajTransferIsRedundant); and the low-thrust spiral arc
-//   renderer (_trajLowThrustSVG).
-// Does NOT own: ring/leg geometry (5743), globes/surfaces (5744-trajectory-globe.js),
-//   camera/projection (5740), or the per-body content orchestrator (core).
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 574x def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TRAJECTORY EVENT NODES — markers, burn glyphs, low-thrust arc ─────────
+// Burn glyphs (_trajBurnMarker), event-node symbology and placement
+// (_TRAJ_EVENTNODE_TYPES, _trajEventNodesSVG), ghost markers, click-to-select
+// (_trajSelectEventFromView), the mission extent / extraction cache used for
+// framing, and the low-thrust spiral arc renderer (_trajLowThrustSVG).
 
 // Burn marker — registers a fixed-px triangle glyph + optional dv/MET text at
 // a render-space (floating-origin) anchor. Geometry side (world layer) gets
@@ -152,7 +140,7 @@ function _trajEventNodeBody(m, idx) {
   return null;
 }
 
-// Position resolver, precedence per PHYSICS_PLAN.md R6: (a) covering physics
+// Position resolver, precedence : (a) covering physics
 // leg sample interpolation, reusing _trajPolylinePointAt exactly like the
 // physics-leg renderer does; (b) orbit-ring position at MET via the SAME
 // mean-motion/theta convention the maneuver gizmo's rail math uses
@@ -161,7 +149,7 @@ function _trajEventNodeBody(m, idx) {
 // the body-frame's own origin, correct for surface events); else null.
 function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
   // (a) physics leg covering this MET in this frame
-  if (typeof _physTrajByMission !== 'undefined' && _physTrajByMission[m.missionId]) {
+  if (_physTrajByMission[m.missionId]) {
     const legs = _physTrajByMission[m.missionId].legs || [];
     for (const L of legs) {
       const inFrame = (L.samples || []).filter(s => s.frame === body);
@@ -176,7 +164,7 @@ function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
   }
   // (b) orbit-ring position at MET
   const o = _trajEventNodeOrbitFor(m, idx, body);
-  if (o && PROG_BODIES[body] && typeof physAimBurnState === 'function') {
+  if (o && PROG_BODIES[body]) {
     const R = PROG_BODIES[body].R || 0;
     const peri = o.perigee ?? o.apogee ?? 0, apo = o.apogee ?? o.perigee ?? 0;
     const rMean = R + (peri + apo) / 2;
@@ -184,10 +172,7 @@ function _trajEventNodePos(m, idx, body, scale, zoom, ox, oy, met) {
     if (rMean > 0 && mu > 0) {
       const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
       const theta = (nMean * met) % (2 * Math.PI);
-      // §20/C1 seam: same ONE boundary (orbitWorldState, 385) as
-      // _trajGizmoOrbitNodeAt (5745-hover) — authored elements fed to
-      // physAimBurnState as if world-frame put passive event nodes off their
-      // (seam-rotated) rings.
+      // Same frame boundary (orbitWorldState) as _trajGizmoOrbitNodeAt.
       const bs = orbitWorldState(Object.assign({ body }, o), theta);
       if (bs && bs.r) {
         const q = _trajProj3(bs.r[0] * scale, bs.r[1] * scale, (bs.r[2] || 0) * scale);
@@ -220,13 +205,13 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     if (!info) return;
     const evBody = _trajEventNodeBody(m, idx);
     if (evBody !== body) return;
-    // R6.1 fix (round 2 item 1): MNODE with a resolved physics leg draws ONE
+    // MNODE with a resolved physics leg draws ONE
     // merged marker at the LEG's first-sample position (the same anchor the
     // dep burn marker would have used) instead of the independent ring
     // mean-motion position — the leg's own dep marker is suppressed for
     // MNODE legs in _trajMnodeLegsSVG so there is exactly one marker.
     let pos = null, mergedDvText = null, mergedLeg = null;
-    if (e.type === 'MNODE' && typeof physMissionLeg === 'function') {
+    if (e.type === 'MNODE') {
       mergedLeg = physMissionLeg(id, idx);
       if (mergedLeg && mergedLeg.samples && mergedLeg.samples.length) {
         const anchorOf = f => (f === body ? { x: ox, y: oy } : null);
@@ -256,7 +241,7 @@ function _trajEventNodesSVG(body, m, scale, zoom, ox, oy, id, selAuthIdx) {
     const hitR = mergedLeg ? 12 : 9; // merged MNODE marker gets a more generous hit radius
     const hit = `<circle cx="0" cy="0" r="${hitR}" fill="transparent"${clickAttr}><title>${title}</title></circle>`;
     // Merged MNODE marker: Δv text above, time plate directly below — one
-    // coherent stack (round 2 item 1). Non-merged nodes keep the plain label.
+    // coherent stack. Non-merged nodes keep the plain label.
     const lines = mergedDvText
       ? [{ text: mergedDvText, dy: -9, fontPx: 9, color }, { text: _metFmt(info.met), dy: r + 7, fontPx: 9, color: 'var(--text-dim)' }]
       : [{ text: info.label, dy: -9, fontPx: 9, color }];
@@ -282,7 +267,6 @@ function _trajGhostMarker(x, y, bodyName, zoom, parentAlpha) {
   const marker = `<circle cx="0" cy="0" r="${r.toFixed(2)}" fill="none" stroke="var(--text-dim)" stroke-width="0.8" stroke-dasharray="1.5,1.5" pointer-events="none"/>`;
   const lines = [{ text: `${bodyName} at arrival`, dy: -4 - r, fontPx: 9, color: 'var(--text-dim)' }];
   _trajRegisterLabel(x, y, lines, 'zone', { screenSize: r, minSize: 0, selected: false, marker, opacity: alpha * 0.8 });
-  return '';
 }
 
 // Click handler shared by arcs/markers/rings: selects the AUTHORED event
@@ -295,19 +279,17 @@ function _trajSelectEventFromView(id, authIdx) {
   // override would otherwise silently out-rank the selection the user just
   // made, per the "one view-time authority" integration rule.
   delete _trajViewTimeOverride[id];
-  if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
-  // R3.3: selecting an MNODE event attaches the gizmo at its recorded state;
+  missionSelectEvent(id, authIdx);
+  // Selecting an MNODE event attaches the gizmo at its recorded state;
   // selecting anything else detaches a currently-committed gizmo.
-  if (typeof _trajGizmoOnEventSelected === 'function') {
-    const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
-    _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
-  }
-  // T4: same dwell-orbit-inspector hook as the node-map click path (_missionNmSelectShared).
+  const m = _missionGet(id);
+  _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
+  // Same dwell-orbit-inspector hook as the node-map click path (_missionNmSelectShared).
   if (typeof _oiOnEventSelected === 'function') {
-    const m2 = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
+    const m2 = _missionGet(id);
     _oiOnEventSelected(id, authIdx, m2 && m2.log && m2.log[authIdx]);
   }
-  // E4 (5748): a duration-drag in progress against a DIFFERENT event is
+  // A duration-drag in progress against a DIFFERENT event is
   // stale the moment selection moves — cancel it rather than leave a
   // dangling drag targeting an event no longer shown as selected.
   if (typeof _ltgCancelDrag === 'function') _ltgCancelDrag();
@@ -323,7 +305,7 @@ function _trajMissionExtentForBody(body, m) {
   const isSun = body === 'Sun';
   const R = isSun ? 0 : ((PROG_BODIES[body] && PROG_BODIES[body].R) || 0);
   let maxR = 0;
-  // Architecture-mount extra rings (one sanctioned optional input — see
+  // Architecture-mount extra rings (one sanctioned optional input —
   // 610-architecture-map.js). Body-anchored orbit elements; contribute each
   // ring's apoapsis radius so fly-to/reset frames the authored ladder.
   if (m && m._extraRings) {
@@ -335,13 +317,13 @@ function _trajMissionExtentForBody(body, m) {
   }
   if (!sc) return maxR;
   sc.orbits.forEach(rec => {
-    // Phase 5a fix (user flight-test "corrupted Moon view"): a PROPAGATED
+    // A PROPAGATED
     // record (NRHO) has no rec.apo — `R + undefined` = NaN, which poisons
     // every Math.max downstream and lands as a NaN camera width in
     // _trajFitWKmForBody (zoom = 400/NaN → the whole scene culls to nothing).
     // Use the propagated loop's real sampled extent instead.
     if (rec.kind === 'propagated') {
-      if (typeof refOrbitSamplePropagated === 'function' && rec.refId) {
+      if (rec.refId) {
         const samples = refOrbitSamplePropagated(rec.refId, 24);
         samples.forEach(s => { const d = Math.hypot(s.r[0], s.r[1], s.r[2]); if (isFinite(d)) maxR = Math.max(maxR, d); });
       }
@@ -379,7 +361,7 @@ function _trajGetExtraction(m) {
 
 // ── Planet-phase calibration — RETIRED (R1, 2026-07-09) ─────────────────────
 // The per-mission calibration fiction (_trajGetPlanetCalibration /
-// progCalibratedTheta0, old MATH.md §7a) existed only because the rails were
+// progCalibratedTheta0, old) existed only because the rails were
 // schematic circles: a Hohmann arc could not otherwise land on its planet.
 // With real ephemeris rails (360), real phases connect (or honestly don't —
 // a leg that can't connect at its authored MET renders converged:false via
@@ -393,18 +375,12 @@ function _trajSelectedAuthIdx(m) {
   return idx >= 0 ? idx : null;
 }
 
-// Body-centered periapsis/apoapsis radius (km, including body R) for a
-// node-map orbit spec — used only by the redundancy check below (distinct
-// from _trajLocalRadius's single "mean radius" used for arc endpoints).
-function toO_peri(o, R) {
+// Body-centered periapsis/apoapsis radii (km, including body R) for a node-map
+// orbit spec, or null when the spec carries neither.
+function _trajOrbitRadii(o, R) {
   const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
   if (!o || peri == null && apo == null) return null;
-  return R + (peri ?? apo ?? 0);
-}
-function toO_apo(o, R) {
-  const peri = o && (o.periKm ?? o.perigee), apo = o && (o.apoKm ?? o.apogee);
-  if (!o || peri == null && apo == null) return null;
-  return R + (apo ?? peri ?? 0);
+  return { peri: R + (peri ?? apo ?? 0), apo: R + (apo ?? peri ?? 0) };
 }
 
 // Redundant-transfer check: a leg's transfer ellipse (rPeri..rApo) is
@@ -440,13 +416,13 @@ function _trajTransferIsRedundant(arcRPeri, arcRApo, toRPeri, toRApo) {
 // r=[R+alt,0,0], v=[0,v,0]), so a flat z=0 annulus is exact, not an
 // approximation, for every leg this pass can author; the "washer uses the
 // plane at viewT" caveat only matters if out-of-plane laws ever land
-// (documented, §7aa).
+// (documented).
 // UN-COMPUTED / STALE legs: an honest SCHEMATIC — a dashed log-spiral arc
 // from the start orbit's radius to the est.-lane end radius, var(--text-dim),
 // clearly stylized (fixed 4 revs, not a physics claim), so an authored leg
-// always has SOME visual (§19's contract) without pretending integration ran.
+// always has SOME visual ('s contract) without pretending integration ran.
 function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, selAuthIdx) {
-  if (!m || !m.log || typeof ltComputedLeg !== 'function') return '';
+  if (!m || !m.log) return '';
   const id = m.missionId;
   const bodyDef = PROG_BODIES[body];
   if (!bodyDef) return '';
@@ -544,14 +520,14 @@ function _trajLowThrustSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, oDepth, se
     }
     const stateTxt = e._ltState === 'stale' ? 'STALE — recompute' : 'est. — not computed';
     const title = `Low-thrust spiral (schematic, ${stateTxt}) &middot; ${_trajDvText(Math.round(e.dv_est || 0))} est. &middot; ${_metFmt(met0)}`;
-    // E4: schematic arc gets an id so the duration-drag gizmo (5748) can
+    // Schematic arc gets an id so the duration-drag gizmo (5748) can
     // rewrite its `d` attribute directly during a drag (est.-lane-only, no
     // recompute) without a full DOM re-render on every mouse-move frame.
     const schemId = `lt-schem-${id}-${i}`;
     out += `<path id="${schemId}" d="${d}" fill="none" stroke="var(--text-dim)" stroke-width="0.7" stroke-dasharray="4,3" opacity="${(0.7 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"${clickAttr}><title>${title}</title></path>`;
     out += `<path d="${d}" fill="none" stroke="transparent" stroke-width="8"${clickAttr}/>`;
     // E4 duration-drag handle at the schematic arc's endpoint (only for the
-    // selected/expanded event) — see MATH.md §7ab.
+    // selected/expanded event).
     if (emphasized && lastPx && prevPx && typeof _ltgHandleDown === 'function') {
       out += `<circle class="ltg-handle" cx="${lastPx.x.toFixed(2)}" cy="${lastPx.y.toFixed(2)}" r="7" data-tx="${prevPx.x.toFixed(2)}" data-ty="${prevPx.y.toFixed(2)}" data-schem="${schemId}" data-r0="${r0.toFixed(3)}" data-body="${body}" fill="var(--accent)" stroke="var(--bg)" stroke-width="1.5" style="pointer-events:auto;cursor:ew-resize" onmousedown="event.stopPropagation();_ltgHandleDown(event,'${id}',${i})"><title>Drag to scale duration (live est. — release to author)</title></circle>`;
     }

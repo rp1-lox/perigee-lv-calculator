@@ -1,27 +1,15 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5743-trajectory-rings-legs.js — World-layer ring, transfer-arc, and leg rendering
-//
-// OWNS: the render-unit (geometry) drawing of orbit rings (_trajRingSVG,
-//   _trajPropagatedRingSVG), schematic transfer arcs (_trajTransferArcPath,
-//   _trajArcProjectedPath, _trajArcRotationForTarget, _trajArcPointAt,
-//   _trajLegPathFraction), physics-propagated legs (_trajPolylineSVG,
-//   _trajPolylinePointAt, _trajPhysClipT, _trajPhysInjectionLegFor,
-//   _trajMnodeLegsSVG, _trajPhysLegRender), hyperbolic escape spurs
-//   (_trajEscapeSpurSVG), and the size->opacity LOD ramp (_trajLodOpacity).
-// This is the WORLD (geometry) half of the two-layer contract; symbology it emits
-//   is registered to the overlay via helpers in 5742-trajectory-overlay-lod.js.
-// Does NOT own: event-node markers/burn glyphs (still in core for now), body
-//   globes/surfaces, camera, or scene extraction.
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order among 574x def-only modules is irrelevant.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TRAJECTORY WORLD LAYER — rings, transfer arcs, legs ───────────────────
+// Render-unit drawing of orbit rings (_trajRingSVG, _trajPropagatedRingSVG),
+// schematic transfer arcs, physics-propagated legs (_trajPolylineSVG,
+// _trajPhysLegRender, ...), hyperbolic escape spurs, and the size->opacity LOD
+// ramp (_trajLodOpacity). Symbology is registered to the overlay via 5742.
 function _trajRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
   const zoom = opts.zoom || 1;
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const R = (PROG_BODIES[body] && PROG_BODIES[body].R) || 0;
   const emphasized = !!opts.emphasized;
-  // V1 line restyle (MISSION_MODEL_V2 §18), retoned (user report 2026-07-15,
+  // V1 line restyle, retoned (user report,
   // round 2 — the flat near-white unselected line AND the selected ring's
   // direction-fade floor both still read poorly over a bright day-side globe
   // at close zoom): SELECTED keeps its vehicle color at increased weight and
@@ -37,7 +25,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const historyMul = opts.historyAlpha != null ? opts.historyAlpha : 1;
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label}`;
-  // R6.1.2: hover ghost ball + click-to-menu placement, additive to the
+  // Hover ghost ball + click-to-menu placement, additive to the
   // existing dblclick spawn. Thread the ring's own orbit basis (body/peri/
   // apo/inc) so the hover/menu handlers can build the same mean-motion rail
   // the gizmo's center-knob drag uses (_trajGizmoOrbitNodeAt/_trajRingHoverRail).
@@ -45,7 +33,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const coastTxt = rec.coast && rec.coast.length
     ? `&#x27F3; ${Math.round(rec.coast.reduce((s, c) => s + (c.days || 0), 0))}d` : null;
   const ox = opts.originX || 0, oy = opts.originY || 0; // body's floating-origin render position
-  // R2: TRUE-GEOMETRY ring — sampled ellipse from elements {a, e from
+  // TRUE-GEOMETRY ring — sampled ellipse from elements {a, e from
   // peri/apo, i = authored inclination}, Ω = ω = 0 by convention (launch-time
   // modeling would pin RAAN; annotated in the tooltip rather than faked),
   // projected through the pass camera. Replaces the circle/ellipse emitters.
@@ -57,7 +45,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const lodAlpha = emphasized ? 1 : _trajLodOpacity(screenSize, _TRAJ_LOD_WIN.missionOrbitRing[0], _trajWindowHi(_TRAJ_LOD_WIN.missionOrbitRing[1], viewportDiagPx));
   if (lodAlpha <= 0) return '';
   const opacity = (baseOpacity * lodAlpha * historyMul).toFixed(3);
-  // R3.1: state-derived orientation override (MATH.md §7i) — a ring whose
+  // State-derived orientation override — a ring whose
   // plane was matched to a converged physics leg's departure/arrival state
   // samples with THAT (i, raan, argp) instead of the Ω=ω=0 convention; size
   // (a, e) always stays authored (rec.peri/rec.apo above — accounting truth).
@@ -65,7 +53,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const incRad = orient.i, raanRad = orient.raan, argpRad = orient.argp;
   const pts = progOrbitSamplePoints({ a, e: ecc, i: incRad, raan: raanRad, argp: argpRad }, 96);
   let topX = ox, topY = Infinity;
-  // R6.5: the body's own camera-relative depth (real km, unscaled) — threaded
+  // The body's own camera-relative depth (real km, unscaled) — threaded
   // by the caller (_trajBodyFrameContent -> oDepth) so ring points can be
   // tested against _trajOccludeBodies; Infinity (never occluded) is the safe
   // default for any call site that hasn't threaded it.
@@ -93,9 +81,9 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     : orient.source === 'flight'
     ? ` &middot; i=${(incRad * 180 / Math.PI).toFixed(1)}&deg; &Omega;=${(raanRad * 180 / Math.PI).toFixed(1)}&deg; (plane from flight)`
     : (rec.inc ? ` &middot; i=${rec.inc}&deg; (&Omega;,&omega; assumed 0)` : '');
-  // R6.5: occlusion — split into visible runs against opaque bodies drawn
+  // Occlusion — split into visible runs against opaque bodies drawn
   // this frame (a LEO ring's far side hidden by Earth is correct/desired —
-  // see MATH.md §7m). Fully-occluded ring (e.g. camera looking straight
+  // Fully-occluded ring (e.g. camera looking straight
   // through the body) renders nothing.
   const visRuns = _trajOcclusionSplitRuns(screenPts, zoom, _trajOccludeBodies);
   if (!visRuns.length) return '';
@@ -104,7 +92,7 @@ function _trajRingSVG(rec, body, scale, color, opts) {
   const lines = [{ text: rec.label, dy: -4, fontPx: 10.5, color: 'var(--nm-label)' }];
   _trajRegisterLabel(topX, topY, lines, 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
   if (coastTxt) _trajRegisterLabel(periX, periY - 6, [{ text: coastTxt, dy: 0, fontPx: 10, color: 'var(--nm-label)' }], 'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, opacity: lodAlpha * historyMul });
-  // R6.5: apoapsis/periapsis markers — altitude above `body`'s surface (the
+  // Apoapsis/periapsis markers — altitude above `body`'s surface (the
   // ring's OWN peri/apo fields already ARE altitudes, not center-distances —
   // see the rp/ra construction above). Skipped individually when their own
   // point is occluded (per-point test, not the whole-ring visRuns gate, since
@@ -122,25 +110,25 @@ function _trajRingSVG(rec, body, scale, color, opts) {
     _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: apseColor }, { text: _trajFmtApseDist(apoAlt, 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
       'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
   }
-  // R3.5 item 2: direction-of-motion cue — split each VISIBLE run into
+  // Direction-of-motion cue — split each VISIBLE run into
   // faint->bright segments (sample order = increasing eccentric anomaly =
   // prograde motion, per progOrbitSamplePoints) instead of one uniform-
   // opacity path, so which way the orbit goes is visible at a glance (KSP
   // fades the trailing side). Segmenting per-run (not across an occlusion
   // break) keeps each visible arc's own fade coherent.
-  // Casing pass (MISSION_MODEL_V2 §12 addendum): a dark underlay stroke drawn
+  // Casing pass: a dark underlay stroke drawn
   // immediately beneath the light ring stroke, per visible run — standard
   // cartographic technique so the ring reads against both space AND a bright
   // day-side globe (the thin near-white line was invisible against Earth at
-  // close zoom, user-reported 2026-07-15).
-  // BUG FIX (2026-07-15 user report, round 2): the casing used to be ONE flat-
+  // close zoom, user-reported).
+  // BUG FIX: the casing used to be ONE flat-
   // opacity path per run (`opacity`, the ring's baseOpacity*lodAlpha*historyMul)
   // while the light stroke above it is split into faint->bright direction-fade
   // SEGMENTS whose own opacity (`seg.opacity`, down to a small fraction on the
   // trailing side) further multiplies that same baseline. Fix: build the
   // casing from the SAME per-segment geometry/opacity as the light pass.
   // ROUND 3 (still not visible enough / casing still reads as a separate
-  // black line beneath the color, user-reported 2026-07-15): (1) the
+  // black line beneath the color, user-reported): (1) the
   // direction-fade floor is now raised for the SELECTED ring (fadeFloor
   // above, ~0.45 vs 0.25) so its trailing segments stay clearly visible
   // instead of nearly vanishing; (2) the casing itself is narrower (1.8x the
@@ -191,11 +179,10 @@ function _trajRingSVG(rec, body, scale, color, opts) {
 // to route through progOrbitSamplePoints.
 function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   opts = opts || {};
-  if (typeof refOrbitSamplePropagated !== 'function') return '';
   const zoom = opts.zoom || 1;
   const viewportDiagPx = opts.viewportDiagPx || Infinity;
   const emphasized = !!opts.emphasized;
-  // V1 line restyle (MISSION_MODEL_V2 §18), retoned per _trajRingSVG's round-2
+  // V1 line restyle, retoned per _trajRingSVG's round-2
   // notes above — same SELECTED/UNSELECTED treatment, kept in sync.
   const baseColorForMix = color || (rec.colors.size === 1 ? [...rec.colors][0] : 'var(--accent2)');
   const strokeColor = emphasized ? baseColorForMix : `color-mix(in srgb, ${baseColorForMix} 65%, grey 35%)`;
@@ -205,13 +192,13 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
   const names = [...rec.names].join(', ');
   const title = `${names ? names + ' — ' : ''}${rec.label} (propagated)`;
   const ox = opts.originX || 0, oy = opts.originY || 0;
-  // N3: non-inertial frames draw the LIVE loop from raw (un-rebased) samples,
+  // Non-inertial frames draw the LIVE loop from raw (un-rebased) samples,
   // each transformed at its own epoch below — this is what closes the ring in
-  // the rotating frame at any viewT (retires MATH.md critique 64). Inertial
+  // the rotating frame at any viewT. Inertial
   // keeps the existing seed-epoch-rebased shape (byte-identical, zero
   // regression) since refOrbitSamplePropagated already IS the frame-frozen
   // shape that transform is a no-op for.
-  const liveFrame = _trajProjCtx.frameKind && _trajProjCtx.frameKind !== 'inertial' && typeof refOrbitSamplePropagatedRaw === 'function';
+  const liveFrame = _trajProjCtx.frameKind && _trajProjCtx.frameKind !== 'inertial';
   const raw = liveFrame ? refOrbitSamplePropagatedRaw(rec.refId, 96) : refOrbitSamplePropagated(rec.refId, 96);
   if (!raw.length) return '';
   let maxR = 0;
@@ -257,7 +244,7 @@ function _trajPropagatedRingSVG(rec, body, scale, color, opts) {
     _trajRegisterLabel(apoPt.x, apoPt.y, [{ text: 'Ap', dy: -6, fontPx: 8.5, color: strokeColor }, { text: _trajFmtApseDist(Math.max(0, apoRLocal - R), 'km'), dy: 4, fontPx: 8, color: 'var(--text-dim)' }],
       'orbit', { screenSize, minSize: _TRAJ_LOD_RING_MIN, selected: emphasized, marker: mk, opacity: lodAlpha * historyMul });
   }
-  // Casing pass (MISSION_MODEL_V2 §12 addendum) — see _trajRingSVG for the
+  // Casing pass — see _trajRingSVG for the
   // rationale/round-2-3 retoning; same per-run dark underlay, SELECTED-only,
   // kept in sync with that function.
   const casingPaths = !emphasized ? '' : visRuns.map(run => {
@@ -297,7 +284,7 @@ function _trajTransferArcPath(r1, r2, scale, rotDeg, ox, oy) {
            depX: p1.x, depY: p1.y, arrX: p2.x, arrY: p2.y };
 }
 
-// R2: camera-projected variant of the schematic transfer arc — samples the
+// Camera-projected variant of the schematic transfer arc — samples the
 // half-ellipse (planar, ecliptic z=0) and projects each point through the
 // pass camera so unconverged/schematic legs tilt coherently with the world.
 // (_trajTransferArcPath itself stays flat — 230's mini-diagram uses it with
@@ -332,7 +319,7 @@ function _trajArcRotationForTarget(ox, oy, targetX, targetY) {
 }
 
 // Linear (schematic, NOT Kepler) fraction of a leg's path completed at time
-// viewT, clamped to [0,1]. Per MATH.md critique: real vehicles move faster
+// viewT, clamped to [0,1]. Real vehicles move faster
 // near periapsis (true-anomaly rate is non-uniform); this is a path-length
 // approximation for the schematic vehicle dot only, not a physics claim.
 function _trajLegPathFraction(metDepart, tof, viewT) {
@@ -378,7 +365,7 @@ function _trajArcPointAt(r1, r2, scale, rotDeg, ox, oy, t) {
  *  anchorOf(sample.frame) + r·zoom). A cross-frame trajectory therefore never
  *  gaps mid-flight — the old per-frame rendering vanished the Moon-frame
  *  passage whenever the Moon's ZOI fade was closed, leaving a hole exactly at
- *  the encounter (user-reported, 2026-07-09). The frame seams get a small
+ *  the encounter. The frame seams get a small
  *  kink where the two gluings disagree (the body drifted between sample.t and
  *  viewTime) — an honest patched-conic seam, preferable to a void.
  *  Samples with t > opts.clipT or an unresolvable frame are skipped (runs
@@ -398,13 +385,13 @@ function _trajPolylineSVG(physLeg, anchorOf, zoom, opts) {
     const q = _trajProj3(s.r[0], s.r[1], s.r[2] || 0, s.t); // R2: samples are 3D (Moon-frame patches carry real z); N3: sample's OWN epoch
     const x = a.x + q.x * zoom, y = a.y + q.y * zoom;
     if (!isFinite(x) || !isFinite(y)) { cur = null; continue; }
-    // R3.5.2 (viewClampUnits): drop samples far outside the viewport instead
+    // Drop samples far outside the viewport instead
     // of drawing them — keeps the on-screen portion of an oversize leg visible
     // at close zoom WITHOUT emitting huge coordinates (software-rasterizer
     // hazard, see the render-unit invariant) and without the oversize cull
     // below hiding the whole leg. The run simply breaks where it exits.
     if (opts.viewClampUnits && (Math.abs(x) > opts.viewClampUnits || Math.abs(y) > opts.viewClampUnits)) { cur = null; lastPt = null; continue; }
-    // R6.5: occlusion — a sample hidden behind an opaque body disc drawn this
+    // Occlusion — a sample hidden behind an opaque body disc drawn this
     // frame is dropped and the run breaks (same pattern as the other skip
     // conditions here). `a.depth` defaults to Infinity ("never occluded") on
     // any anchorOf that hasn't threaded real depth (backward compatible).
@@ -492,7 +479,7 @@ function _trajPhysClipT(m, physLeg) {
  *  arrival (transit -> orbit) schematic leg at arrAuthIdx — the injection leg
  *  already flew the coast, so its samples carry the body-frame approach. */
 function _trajPhysInjectionLegFor(m, arrAuthIdx, body) {
-  if (!m || arrAuthIdx == null || typeof _physTrajByMission === 'undefined') return null;
+  if (!m || arrAuthIdx == null) return null;
   const t = _physTrajByMission[m.missionId];
   if (!t || !t.legs) return null;
   let best = null;
@@ -519,9 +506,9 @@ function _trajPhysInjectionLegFor(m, arrAuthIdx, body) {
 // at opacity (1 − zoiAlpha) — so an escape trajectory stays visible at
 // heliocentric zoom where the home body's zone-of-influence content has
 // faded to nothing (the two calls cross-fade; no double-draw at either end).
-function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, selAuthIdx, onlyMultiFrame, oDepth) {
+function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, selAuthIdx, onlyMultiFrame, oDepth) {
   const id = m && m.missionId;
-  if (!id || typeof _physTrajByMission === 'undefined' || !_physTrajByMission[id]) return '';
+  if (!id || !_physTrajByMission[id]) return '';
   let out = '';
   (_physTrajByMission[id].legs || []).forEach(L => {
     if (L.kind !== 'mnode' || !L.samples || !L.samples.length) return;
@@ -532,12 +519,12 @@ function _trajMnodeLegsSVG(m, body, zoom, ox, oy, viewportDiagPx, vt, calib, sel
     const dv = (ev && ev.dvRequired) || (L.dv_ms != null ? Math.round(L.dv_ms) : null);
     const title = `Vector burn${dv ? ' &middot; ' + _trajDvText(dv) : ''}${L.met != null ? ' &middot; ' + _metFmt(L.met) : ''}`;
     const legRec = { authIdx: L.authIdx, dv, color: null, fromLabel: 'Vector burn', toLabel: '' };
-    // R6.1 fix (round 2 item 1): the merged event-node marker in
+    // The merged event-node marker in
     // _trajEventNodesSVG now draws at this leg's first-sample position and
     // carries the dv/time stack, so the leg's own dep marker is suppressed
     // here to avoid drawing two markers for the same MNODE.
     const phys = _trajPhysLegRender({ m, leg: legRec, physLeg: L, body, ox, oy, zoom, viewportDiagPx, vt, oDepth,
-      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: false, arrMarker: false, calib, noHighFade: true });
+      emphasized: selAuthIdx != null && L.authIdx === selAuthIdx, title, depMarker: false, arrMarker: false, noHighFade: true });
     if (phys) out += phys;
   });
   return out;
@@ -550,20 +537,19 @@ function _trajPhysLegRender(ctx) {
   // Frame-anchor resolver: this pass knows only ITS body's drawn position
   // (ox,oy); sibling frames' drawn positions follow from the real-ephemeris
   // world delta at viewTime × zoom (same position source as the glyphs).
-  // R6.5: each anchor also carries `depth` (real km, camera-relative, SAME
+  // Each anchor also carries `depth` (real km, camera-relative, SAME
   // convention as _trajOccludeBodies) — this body's own depth (ctx.oDepth,
   // threaded from _trajWorldSVG's toRender; Infinity/"never occluded" if the
   // caller hasn't threaded it) plus the local delta's own depth contribution
   // (depth is linear under the pass's pure-rotation projection, so this is
   // exact, not an approximation).
-  const overrides = {}; // R1: calibration retired — alias ignores this anyway
-  const bodyWorld = progBodyWorldPosCalibrated(body, vt, overrides);
+  const bodyWorld = progBodyWorldPos(body, vt);
   const oDepth = ctx.oDepth != null ? ctx.oDepth : Infinity;
   const anchorCache = {};
   const anchorOf = frame => {
     if (frame === body) return { x: ox, y: oy, depth: oDepth };
     if (anchorCache[frame]) return anchorCache[frame];
-    const w = progBodyWorldPosCalibrated(frame, vt, overrides);
+    const w = progBodyWorldPos(frame, vt);
     if (!w) return null;
     const q = _trajProj3(w.x - bodyWorld.x, w.y - bodyWorld.y, (w.z || 0) - (bodyWorld.z || 0)); // R2: 3D world delta
     return (anchorCache[frame] = { x: ox + q.x * zoom, y: oy + q.y * zoom, depth: oDepth + q.depth });
@@ -577,7 +563,7 @@ function _trajPhysLegRender(ctx) {
   const tArr = isFinite(clipT) ? clipT : poly.tLast;
   const legState = vt >= tArr ? 'history' : (vt >= tDep ? 'current' : 'planned');
   const stateAlpha = legState === 'history' ? _TRAJ_HISTORY_ALPHA : 1;
-  // R3.5.2: MNODE legs opt out of the HIGH-side fade (ctx.noHighFade) — a
+  // MNODE legs opt out of the HIGH-side fade (ctx.noHighFade) — a
   // vector burn's near-body portion is real geometry the user needs to see at
   // parking-orbit zoom (its extent is "too big" for the transferArc window
   // there, which used to fade the leg AND its burn marker to nothing until
@@ -588,7 +574,7 @@ function _trajPhysLegRender(ctx) {
   const clickIdx = leg.authIdx;
   const clickAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajSelectEventFromView('${id}',${clickIdx})" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)"` : '';
   // Same SELECTED/UNSELECTED retoning as the ring emitters above (kept in
-  // sync, round 2-3 user reports 2026-07-15): selected legs stay full vehicle
+  // sync, round 2-3 user reports): selected legs stay full vehicle
   // color at a slightly heavier stroke; unselected legs desaturate their own
   // color toward grey rather than swapping to the generic accent2 fallback.
   const legBaseColor = leg.color || 'var(--accent2)';
@@ -597,20 +583,20 @@ function _trajPhysLegRender(ctx) {
   const dashAttr = legState === 'planned' ? ` stroke-dasharray="2.5,2"` : '';
   const opacity = (alpha * (emphasized ? 1 : 0.55) * stateAlpha).toFixed(3);
   const hoverTitle = ctx.title || '';
-  // R6.2.1 (round-3 item 5): the wide hit path also carries the hover-ball /
+  // The wide hit path also carries the hover-ball /
   // placement-menu affordance (5745 _trajLegHoverMove/_trajLegClick — the
   // physics-leg equivalent of the ring hit path's R6.1.2 wiring; the handler
   // re-finds the leg via physMissionLeg(missionId, authIdx)). The visible
   // stroke keeps the plain select/dblclick attrs unchanged.
   const legHoverAttr = clickIdx != null ? ` style="cursor:pointer" onclick="_trajLegClick('${id}',${clickIdx},event)" ondblclick="_trajGizmoLegDblClick('${id}',${clickIdx},event)" onmousemove="_trajLegHoverMove(event,'${id}',${clickIdx},'${color}')" onmouseleave="_trajRingHoverLeave('${id}')"` : '';
   const hitArea = clickIdx != null ? `<path d="${poly.d}" fill="none" stroke="transparent" stroke-width="8"${legHoverAttr}/>` : '';
-  // Casing pass (MISSION_MODEL_V2 §12 addendum) — same dark underlay as the
+  // Casing pass — same dark underlay as the
   // ring casing above, reusing this leg's own polyline geometry/clipping so
   // occlusion-split runs case identically (poly.d already carries any 'M'
   // breaks from _trajPolylineSVG's run splitting). No dash pattern on the
   // casing itself — a solid underlay reads best regardless of the leg's
   // planned/history dash state. Narrower + capped opacity + SELECTED-only,
-  // same round-2/3 retoning as the ring casing (user-reported 2026-07-15).
+  // same round-2/3 retoning as the ring casing.
   const casing = !emphasized ? '' : `<path d="${poly.d}" fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="${(strokeW * 1.8).toFixed(2)}" opacity="${(alpha * 0.45 * stateAlpha).toFixed(3)}" vector-effect="non-scaling-stroke"/>`;
   let out = `${casing}<path d="${poly.d}" fill="none" stroke="${color}" stroke-width="${strokeW}"${dashAttr} opacity="${opacity}" vector-effect="non-scaling-stroke"${clickAttr}><title>${hoverTitle}</title></path>${hitArea}`;
   // SOI handoff seams: small dashed circles where the trajectory leaves one
@@ -620,7 +606,7 @@ function _trajPhysLegRender(ctx) {
     out += `<circle cx="${sm.x.toFixed(2)}" cy="${sm.y.toFixed(2)}" r="3.2" fill="none" stroke="${color}" stroke-width="0.7" stroke-dasharray="1.6,1.6" opacity="${opacity}" vector-effect="non-scaling-stroke"><title>SOI handoff: ${sm.from} → ${sm.to} · ${_metFmt(sm.t)}</title></circle>`;
   });
   const markerOpts = { emphasized, authIdx: clickIdx, missionId: id, title: hoverTitle, zoom, screenSize: poly.extentPx };
-  // Burn markers at TRUE endpoint positions (user report 2026-07-17: "the
+  // Burn markers at TRUE endpoint positions (user report : "the
   // maneuver hides behind the planet — I can't ever get on the side with
   // it"). poly.first/.last are the first/last NON-OCCLUDED samples — when
   // the burn point itself is behind the body disc the marker either jumped
@@ -721,15 +707,15 @@ function _trajPhysLegRender(ctx) {
 /** SOI escape/capture spur (P3): hyperbola from the parking-ring periapsis
  *  out to the body's SOI edge (physEscapeGeometry, 385), rotated so the far
  *  (asymptote-ward) end points along farAngleRad. `mirror` flips the sweep
- *  side (capture spurs — schematic mirror, see MATH.md §7f). Embedded
+ *  side. Embedded
  *  body-frame content: the caller's zoiAlpha <g opacity> wrapper is the one
  *  fade authority; the spur only applies its own transferArc LOD window. */
 function _trajEscapeSpurSVG(body, rpKm, c3, farAngleRad, mirror, zoom, ox, oy, viewportDiagPx, opts) {
   opts = opts || {};
   const mu = PROG_BODIES[body] && PROG_BODIES[body].mu;
-  const geo = (typeof physEscapeGeometry === 'function' && mu) ? physEscapeGeometry(rpKm, c3, mu, mirror ? -1 : 1) : null;
+  const geo = (mu) ? physEscapeGeometry(rpKm, c3, mu, mirror ? -1 : 1) : null;
   if (!geo) return null;
-  const rSoi = (typeof physSoiRadius === 'function') ? physSoiRadius(body) : 0;
+  const rSoi = physSoiRadius(body);
   if (!(rSoi > rpKm) || !isFinite(rSoi)) return null;
   const raw = geo.samplePoints(rSoi, 48);
   const far = raw[raw.length - 1];

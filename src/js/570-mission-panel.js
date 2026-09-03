@@ -1,21 +1,9 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-panel.js — Mission state panel + maneuver builder + node/edge interaction
-//
-// OWNS: the band-mode left-column "Vehicles & Mission ΔV Budget" state panel
-//   (_missionMultiVehicleHTML); view switching + scroll/render helpers
-//   (missionSetView, _missionSaveScroll/_missionRestoreScroll, _missionRerenderNodeView,
-//   _missionRenderPreserveNm, missionToggleBridgeMode); the maneuver-step builder
-//   (_missionMvBuilderHTML, missionMvStep, _missionMvCtx, _missionMvAutoSteps,
-//   _missionSimManeuverSteps, _missionManeuverSteps, _missionApplyManeuver,
-//   missionExecManeuver); node/edge click handling (missionNodeClick, missionEdgeClick,
-//   _missionNmSelectShared, _nmArrowHead); and the MANEUVER log card
-//   (_missionManeuverLogCardHTML).
-// Does NOT own: node-map SVG rendering (570-mission-nodemap.js), band SVG
-//   (570-mission-band.js), event execution (570-mission-events.js), replay
-//   (570-mission-replay.js).
-// Split out of 570-mission-manager.js (behavior-preserving move). Definitions only
-//   (no load-time execution); load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── MISSION STATE PANEL, maneuver builder, node/edge interaction ───────────
+// The band-mode "Vehicles & Mission ΔV Budget" panel (_missionMultiVehicleHTML),
+// view switching and scroll helpers (missionSetView, _missionSaveScroll, ...),
+// the maneuver-step builder (_missionMvBuilderHTML, missionMvStep,
+// _missionApplyManeuver, missionExecManeuver), node/edge click handling
+// (missionNodeClick, missionEdgeClick) and the MANEUVER log card.
 
 // Merged Vehicles + Mission ΔV Budget panel (band-mode left column). Each vehicle
 // card is the old roster row ENRICHED with that vehicle's own current orbit +
@@ -27,18 +15,18 @@
 // scrub position (_missionBandScrub only moves the scrub marker + expands the
 // matching event card — it never rewinds vehicle state), so this preserves that
 // semantic unchanged.
-// §12 U3: the vehicle-assigned color swatch, formerly on the HUD chip, moves
+// the vehicle-assigned color swatch, formerly on the HUD chip, moves
 // here (the left panel is the swatch's one home now). Same write path as
 // before — missionSetLaneColorForVehicle/missionResetLaneColorForVehicle —
 // the band-legend picker stays the single write path per the brief.
 function _missionVehSwatchHTML(m, id, vehicleKey) {
   if (!vehicleKey) return '';
-  const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, vehicleKey, null) : null;
-  const swatchColor = (typeof _missionVehicleSwatchColor === 'function') ? _missionVehicleSwatchColor(m, vehicleKey) : (accent || '#888');
+  const accent = _missionVehicleColor(m, vehicleKey, null);
+  const swatchColor = _missionVehicleSwatchColor(m, vehicleKey);
   return `<input type="color" class="mcc-veh-swatch" value="${swatchColor}" title="Vehicle color (right-click to reset)" onclick="event.stopPropagation()" onchange="event.stopPropagation();missionSetLaneColorForVehicle('${id}','${vehicleKey}',this.value)" oncontextmenu="event.preventDefault();event.stopPropagation();missionResetLaneColorForVehicle('${id}','${vehicleKey}')">`;
 }
 
-// HUD vehicle chips are click-expandable (user feedback 2026-07-16, item 3):
+// HUD vehicle chips are click-expandable:
 // clicking a vehicle reveals a per-stage breakdown (name, propellant
 // remaining/capacity, dry mass). Transient UI state only (never persisted /
 // never touches m.log) — keyed by "missionId|vehicleKey" so each vehicle's
@@ -74,7 +62,7 @@ function _missionVehStageRowsHTML(stages) {
 // Live-vehicle adapter: normalize fv.stages -> the shape _missionVehStageRowsHTML expects.
 function _missionVehStageRowsFromLive(fv) {
   const stages = (fv.stages || []).map(st => ({
-    name: (typeof _missionStageLabelById === 'function') ? _missionStageLabelById(st.stageDefinitionId) : (st.stageDefinitionId || '?'),
+    name: _missionStageLabelById(st.stageDefinitionId),
     prop: progStageRemainingProp(st),
     cap: progStageTotalCapacity(st),
     dry: st.dry_mass || 0,
@@ -109,7 +97,7 @@ function _missionMultiVehicleHTML(m) {
       const isActive = entry.activeOriginKey && v.originKey === entry.activeOriginKey;
       const expended = v.status === 'EXPENDED';
       const os = v.orbit || null;
-      const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, v.vehicleId, null) : null;
+      const accent = _missionVehicleColor(m, v.vehicleId, null);
       const orbitLine = os
         ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : os.surface ? (os.body || 'Earth') + ' surface' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
         : '';
@@ -177,7 +165,7 @@ function _missionMultiVehicleHTML(m) {
     const os = fv.orbitState || null;
     const remDv = Math.round(_missionVehicleRemainingDv(fv));
     const remProp = Math.round(fv.stages.reduce((s, st) => s + progStageRemainingProp(st), 0));
-    const accent = (typeof _missionVehicleColor === 'function') ? _missionVehicleColor(m, fv.vehicleId, null) : null;
+    const accent = _missionVehicleColor(m, fv.vehicleId, null);
     const orbitLine = os
       ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">${os.propagated ? (os.body || 'Moon') + ' · NRHO (propagated)' : `${os.body || 'Earth'} · ${Math.round(os.perigee ?? os.apogee ?? 0).toLocaleString()}×${Math.round(os.apogee ?? os.perigee ?? 0).toLocaleString()} km · ${(os.inclination || 0)}&deg;`}</span>`
       : '';
@@ -235,23 +223,23 @@ function _missionMultiVehicleHTML(m) {
 // back about a year" because each keystroke's transient (still-valid)
 // intermediate value re-rendered and killed the input's focus.
 //
-// MISSION_MODEL_V2 §12 U3: top universal strip, identical across all three
+// Top universal strip, identical across all three
 // views. Minimal by decree: MET + calendar date + a minimal scrubber
 // (reuses the UNCHANGED _trajScrubberHTML — the same scrub track/thumb/ticks
 // used everywhere else, so drag/click/arrow-key behavior is byte-identical),
 // the active-vehicle name, and — right end — the readiness counts chip.
 function _missionTopStripHTML(m) {
   const id = m.missionId;
-  const vt = (typeof _trajViewTime === 'function') ? _trajViewTime(m) : (m._metTotal || 0);
+  const vt = _trajViewTime(m);
   const dateStr = (typeof progMissionTimeToDate === 'function')
     ? progMissionTimeToDate(vt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
     : '';
-  const scrubHTML = (typeof _trajScrubberHTML === 'function') ? _trajScrubberHTML(m, id) : '';
+  const scrubHTML = _trajScrubberHTML(m, id);
   const activeFv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const activeName = activeFv ? _missionVehicleDisplayName(activeFv) : '—';
-  const readinessChip = (typeof _missionChecksToolbarChipHTML === 'function') ? _missionChecksToolbarChipHTML(m) : '';
-  // Calendar glyph: inline SVG (theme-var stroke), NOT an emoji — see
-  // 578-mission-epoch-picker.js header comment / user directive 2026-07-16.
+  const readinessChip = _missionChecksToolbarChipHTML(m);
+  // Calendar glyph: inline SVG (theme-var stroke), NOT an emoji —
+  // 578-mission-epoch-picker.js header comment / user directive.
   const _calSvg = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="display:block;" aria-hidden="true">
       <rect x="1.5" y="2.5" width="13" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
       <line x1="1.5" y1="6" x2="14.5" y2="6" stroke="currentColor" stroke-width="1.2"/>
@@ -280,21 +268,21 @@ function _missionTopStripHTML(m) {
 // autosave — see 575/455).
 function _missionEpochOpen(anchorEl) {
   if (typeof epochPickerOpen !== 'function') return;
-  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const epochJD = progEpochJD();
   epochPickerOpen({
     initialJD: epochJD,
     anchorEl: anchorEl,
     onApply: function(jd) {
       if (!isFinite(jd)) return;
       PROG_ACTIVE_PROGRAM.epochJD = jd;
-      const m = (typeof _missionGet === 'function') ? _missionGet(_missionSel) : (_missions && _missions[0]);
-      if (m && typeof missionRecompute === 'function') missionRecompute(m);
-      if (typeof missionRenderDetail === 'function') missionRenderDetail();
+      const m = _missionGet(_missionSel);
+      if (m) missionRecompute(m);
+      missionRenderDetail();
     }
   });
 }
 
-// MISSION_MODEL_V2 §12 U3: the visible tri-toggle at the top of the center
+// The visible tri-toggle at the top of the center
 // region — the primary, exclusive view switch. Replaces the U1/U2 promotion
 // selectors (which drove _missionStageSurface via _missionPromote); this one
 // drives the real _missionViewMode directly via missionSetView. Undo/redo
@@ -316,7 +304,7 @@ function _missionViewToggleHTML(m) {
 
 // ── Step 4: node-map view + MANEUVER events ───────────────────────────────────
 
-// MISSION_MODEL_V2 §12 U3: the real, authoritative view switch. Sets
+// The real, authoritative view switch. Sets
 // _missionViewMode directly and re-renders — NOT an alias onto a promotion
 // surface (U1/U2's _missionPromote/_missionStageSurface are retired).
 // Dev-seed/eval compatibility: callers keep invoking
@@ -325,7 +313,7 @@ function missionSetView(id, mode) {
   // Leaving World: drop its cached starfield size so a later switch back
   // re-measures instead of trusting a stale cache (same behavior the old
   // pre-U2 missionSetView had).
-  if (_missionViewMode === 'traj' && mode !== 'traj' && typeof _trajStarfieldUnmount === 'function') _trajStarfieldUnmount(id);
+  if (_missionViewMode === 'traj' && mode !== 'traj') _trajStarfieldUnmount(id);
   _missionViewMode  = mode;
   _missionBridgeMode = false;
   _missionBridgeFrom = null;
@@ -379,7 +367,7 @@ function _missionNodeForLaunch(m) {
   // of truth); m.launchOrbit is only a fallback for the pre-authoring case
   // (no LAUNCH/DEPLOY exists yet — nothing else to show a default node for).
   const first = (m.log || []).find(e => e.type === 'LAUNCH' || e.type === 'DEPLOY');
-  const o = (first && first.orbit) || (typeof _missionLaunchOrbitDraft === 'function' ? _missionLaunchOrbitDraft(m.launchOrbit) : m.launchOrbit) || {};
+  const o = (first && first.orbit) || _missionLaunchOrbitDraft(m.launchOrbit) || {};
   return _progNmVehicleNode({ orbitState: { body: o.body, perigee: o.periKm, apogee: o.periKm } });
 }
 
@@ -480,14 +468,14 @@ function _missionApplyManeuver(active, e) {
     if (o.type === 'surface') active.orbitState = { body: o.body, perigee: 0, apogee: 0, inclination: 0, lan: 0, epoch: 0, surface: true };
     else if (o.type === 'circular' || o.type === 'elliptic') {
       active.orbitState = { body: o.body, perigee: (o.periKm ?? o.perigee) ?? (o.apoKm ?? o.apogee) ?? 0, apogee: (o.apoKm ?? o.apogee) ?? (o.periKm ?? o.perigee) ?? 0, inclination: (o.incDeg ?? o.inclination) ?? 0, lan: 0, epoch: 0, surface: false };
-      // Phase 5a fix (user flight-test): a destination node bound to a
+      // A destination node bound to a
       // PROPAGATED catalog ref (the NRHO) must stamp propagated/refId onto the
       // arrived orbitState — the node's Kepler-ish peri/apo are label-only
       // pricing values (see 430's nrho comment). Without the stamp, snapshots
       // register a bogus Kepler ring record ("Moon 3000×60000"), the real
       // halo loop never renders after arrival, and the state panel shows
       // wrong ellipse numbers instead of "NRHO (propagated)".
-      if (node.orbitRefId && typeof refOrbitGet === 'function') {
+      if (node.orbitRefId) {
         const refE = refOrbitGet(node.orbitRefId);
         if (refE && refE.kind === 'propagated') {
           active.orbitState.propagated = true;
@@ -615,7 +603,7 @@ function missionMvRefreshSteps(id) { const el = document.getElementById('mv-step
 function progPorkRefreshAddEvBtn(id) {
   const el = document.getElementById('pork-addev-btn-' + id);
   const toSel = document.getElementById('addev-mvt-' + id);
-  if (!el || !toSel || typeof progPorkButtonHTML !== 'function') return;
+  if (!el || !toSel) return;
   el.innerHTML = progPorkButtonHTML(id, -1, toSel.value);
 }
 
@@ -675,27 +663,26 @@ function _missionMvBuilderHTML(id, token) {
     </div>${ltBtn}`;
 }
 
-// §22 TRANSFER CHAINS: |vec|*1000 (km/s vector -> m/s magnitude) — the SAME
-// convention the 5a gate (tests/math.test.js) already uses to read
+// TRANSFER CHAINS: |vec|*1000 (km/s vector -> m/s magnitude) — the SAME
+// convention the 5a gate (tests/run.js) already uses to read
 // mccBurn/insertionBurn off physSolveNrhoTransfer. Pure, no mutation.
 function _missionChainVecMs(vec) {
   return (vec && vec.length >= 3 && isFinite(vec[0])) ? Math.hypot(vec[0], vec[1], vec[2]) * 1000 : 0;
 }
 
-// §22 C1/C2: split the solver's mid-course-correction + injection components
+// C2: split the solver's mid-course-correction + injection components
 // out of the two-hop corridor pattern (entry edge solved via
 // physSolveNrhoTransfer, exit edge is the schematic 'arrival' wrapper around
 // the SAME solve — see 565's lastTransit machinery) into their own log
 // entries, in place. One-source rule: every dv/timing value comes from what
 // 565 ALREADY solved (entryLeg.mccBurn / thisLeg.arrivalBurn) — never
-// recomputed here. Scope (documented, MATH.md §7ak): only fires for the
+// recomputed here. Scope: only fires for the
 // two-hop corridor pattern (entryEntry present + thisLeg.kind==='arrival');
 // a direct one-hop solved edge (no transit hop) stays a single 'inject'
 // member, unchanged from today's accounting. Returns the mcc entry's
 // inserted index, or -1 if no mcc was produced/applicable.
 function _missionChainSplitInject(m, gid, entryIdx, injectIdx) {
   if (entryIdx == null || entryIdx < 0 || injectIdx == null || injectIdx < 0) return -1;
-  if (typeof physMissionLeg !== 'function') return -1;
   const entryEntry = m.log[entryIdx], injectEntry = m.log[injectIdx];
   if (!entryEntry || !injectEntry) return -1;
   const entryLeg = physMissionLeg(m.missionId, entryIdx);
@@ -738,7 +725,7 @@ function missionExecManeuver(id, fromId, toId) {
   const steps = (_missionAddMv && Array.isArray(_missionAddMv.steps) && _missionAddMv.steps.length)
     ? _missionAddMv.steps.map(s => ({ ...s })) : undefined;
 
-  // §22 TRANSFER CHAINS C3 (docs/MISSION_MODEL_V2.md §22): the solved from->to
+  // TRANSFER CHAINS C3: the solved from->to
   // single-node MNODE authoring path is REPLACED by a GROUPED CHAIN bound
   // through m.groups (new kind:'transfer'). Two-hop corridor pattern (LEO->
   // TLC then TLC->destination, the shape both dev seeds already author):
@@ -752,7 +739,7 @@ function missionExecManeuver(id, fromId, toId) {
       entryIdx = k; entryEntry = cand; break;
     }
   }
-  const toNodeObj = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(toId) : null;
+  const toNodeObj = _missionNmNodeById(toId);
   const toIsTransit = !!(toNodeObj && toNodeObj.orbit && toNodeObj.orbit.type === 'transit');
   // depart = a corridor-entry edge with no closing hop authored yet (expects
   // one later); inject = closes an open chain, OR a direct edge straight to a
@@ -766,7 +753,7 @@ function missionExecManeuver(id, fromId, toId) {
   // schema — MNODE(mode:'solved', target) — dv components start at 0 and are
   // refreshed from the solved leg on the very next recompute (display-only
   // mirror, see physRebuildMissionTrajectories). chainRole/groupId are new
-  // (§22) metadata only — the exec/replay path is byte-identical to before.
+  // metadata only — the exec/replay path is byte-identical to before.
   m.log.push({
     type: 'MNODE', mode: 'solved',
     target: { fromNode: fromId, toNode: toId },
@@ -808,7 +795,7 @@ function missionExecManeuver(id, fromId, toId) {
       hadInject: (chainRole === 'inject'),
     };
   }
-  // §22 C2 staleness signature — re-checked every recompute (572), rewritten
+  // staleness signature — re-checked every recompute (572), rewritten
   // by the group header's ↻ re-solve control. IMPORTANT: computed from the
   // group's OVERALL route (leo->nrho for a two-hop chain), NOT `res` (which
   // is only THIS edge's own endpoints, e.g. tlc->nrho on the closing hop) —
@@ -828,7 +815,7 @@ function missionExecManeuver(id, fromId, toId) {
   _missionRenderPreserveNm(id);
 }
 
-// §22 C2: group-header ↻ re-solve — re-run the transfer solve with CURRENT
+// group-header ↻ re-solve — re-run the transfer solve with CURRENT
 // authored inputs (departure MET, destination, vehicle state at entry) and
 // rewrite the member events in place. ONE undo capture (never implicit).
 function missionChainResolve(id, gid) {
@@ -874,7 +861,7 @@ function missionNodeClick(id, nodeId) {
   m.log.forEach((e, i) => { if (_evIsSolvedManeuver(e) && e.toNode === nodeId) target = i; });
   if (target < 0 && nodeId === _missionNodeForLaunch(m)) m.log.forEach((e, i) => { if (e.type === 'LAUNCH' || e.type === 'DEPLOY') target = i; });
   if (target >= 0) {
-    // R5 item 3: route through the shared selection model (m.log[i]._expanded,
+    // Route through the shared selection model (m.log[i]._expanded,
     // the same flag _trajSelectedAuthIdx reads) so selecting an orbit node here
     // also highlights the matching ring in the trajectory view.
     _missionNmSelectShared(id, target);
@@ -887,7 +874,7 @@ function missionNodeClick(id, nodeId) {
   }
 }
 
-// R5 item 3: single entry point both missionNodeClick and missionEdgeClick use
+// Single entry point both missionNodeClick and missionEdgeClick use
 // to select a log event through the SAME selection state the trajectory view
 // reads (_expanded → _trajSelectedAuthIdx) and the SAME gizmo hook the
 // trajectory view's own ring/arc clicks use (_trajSelectEventFromView) — so a
@@ -897,8 +884,8 @@ function _missionNmSelectShared(id, idx) {
   if (!m || !m.log[idx]) return;
   m.log.forEach(e => { e._expanded = false; });
   m.log[idx]._expanded = true;
-  if (typeof _trajGizmoOnEventSelected === 'function') _trajGizmoOnEventSelected(id, idx, m.log[idx]);
-  // T4: opens/closes the orbit inspector for dwell-orbit selections; coexists
+  _trajGizmoOnEventSelected(id, idx, m.log[idx]);
+  // Opens/closes the orbit inspector for dwell-orbit selections; coexists
   // with the gizmo hook above (different UI surfaces — see 5746).
   if (typeof _oiOnEventSelected === 'function') _oiOnEventSelected(id, idx, m.log[idx]);
 }
@@ -941,7 +928,7 @@ function _missionManeuverLogCardHTML(entry, id, idx) {
   // editable step builder (bound to this event by its index)
   const builder = (id != null && idx != null) ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">${_missionMvBuilderHTML(id, String(idx))}</div>` : '';
   const porkChip = (id != null && idx != null && typeof progPorkChipHTML === 'function') ? progPorkChipHTML(id, idx, entry.toNode) : '';
-  // 5b R2 (MATH.md §7ae): an NRHO-bound leg with a co-orbital target vehicle
+  // An NRHO-bound leg with a co-orbital target vehicle
   // carries leg.phaseOptions (565's physSolveNrhoTransfer) — surface the
   // honest lattice choices as a compact radio-chip row. No target vehicle at
   // the ref -> leg.phaseOptions is null -> this row renders '' (5a behavior
@@ -968,7 +955,7 @@ function _missionManeuverLogCardHTML(entry, id, idx) {
   </div>`;
 }
 
-// 5b R2 UI (MATH.md §7ae): "T+4.7d · 4.32 km/s · Δφ 41m" radio chips — picking
+// 5b R2 UI: "T+4.7d · 4.32 km/s · Δφ 41m" radio chips — picking
 // one persists e.arrivalOption (the option's tof_s, an AUTHORED field, replay-
 // deterministic) and re-solves via missionRecompute; "auto" clears it back to
 // the solver's own min-|Δφ| default. Follows the existing card row pattern
@@ -984,7 +971,7 @@ function _missionArrivalOptionsRowHTML(id, idx, entry, leg) {
     const isSel = selTof != null && Math.abs(o.tof_s - selTof) < 60;
     const days = (o.tof_s / 86400).toFixed(1);
     const dvKms = (o.dvTotal_ms / 1000).toFixed(2);
-    const phaseTxt = (typeof _phaseFmtDt === 'function') ? _phaseFmtDt(o.phaseErr_s) : Math.round(o.phaseErr_s) + 's';
+    const phaseTxt = _phaseFmtDt(o.phaseErr_s);
     return chipHTML(`T+${days}d &middot; ${dvKms} km/s &middot; &Delta;&phi; ${phaseTxt}`, isSel, `missionSetArrivalOption('${id}',${idx},${o.tof_s})`);
   }).join('');
   return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">

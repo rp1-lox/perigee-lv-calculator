@@ -1,27 +1,10 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 570-mission-events.js — Mission event execution, inline-edit appliers, launch
-//   planning, and per-type log cards
-//
-// OWNS: the missionExec* handlers that append a spec to m.log and recompute
-//   (burn, low-thrust, separate, dock, expend, rendezvous, prop/crew transfer,
-//   reenter, recover, coast); the missionApply*Edit appliers for inline event
-//   edits; the low-thrust compute run (ltComputeTrajectory, _ltRunState guard);
-//   the launch-window / launch-geometry / plane-match planning UI and math
-//   (_missionLaunchGeoHTML, _missionLaunchPlanHTML, missionLaunchPlanOptimize,
-//   _missionLaunchPlanReadoutHTML, missionLaunchGeoUpdate, …); separation picker +
-//   drag (_missionSepPickerHTML, _MISSION_SOI_INJECT, _missionSepIndex/_missionSepDrag);
-//   roster/owner helpers (_missionLiveVehicles, _missionStageOwner*, _missionPayloadGroups);
-//   and the per-type log-card renderers (_missionBurnLogCardHTML,
-//   _missionLowThrustLogCardHTML, _missionSeparateLogCardHTML, _missionDockLogCardHTML).
-// CONTRACT (unchanged): every exec fn mutates m.log then calls missionRecompute(m)
-//   (defined in 570-mission-replay.js) then missionRenderDetail() — never mutates
-//   runtime vehicle state in place.
-// Does NOT own: the state panel / maneuver builder (570-mission-panel.js), replay
-//   (570-mission-replay.js), event cards (570-mission-cards.js), or launch SETUP
-//   modal (still in the manager remainder).
-// Split out of 570-mission-manager.js (behavior-preserving move). Definitions/consts
-//   only (no load-time execution); load order relative to the manager is immaterial.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── MISSION EVENT EXECUTION, edit appliers, launch planning, log cards ─────
+// missionExec* handlers append a spec to m.log then call missionRecompute(m)
+// (570-mission-replay.js) and missionRenderDetail() — runtime vehicle state
+// is never mutated in place. Also: missionApply*Edit appliers, the low-thrust
+// compute run, launch-window / launch-geometry / plane-match planning
+// (_missionLaunchGeoHTML, _missionLaunchPlanHTML, missionLaunchPlanOptimize),
+// the separation picker, roster/owner helpers, and per-type log-card renderers.
 
 function missionExecBurn(id) {
   const m = _missionGet(id);
@@ -37,10 +20,10 @@ function missionExecBurn(id) {
   missionRenderDetail();
 }
 
-// 5b R3 (MATH.md §7af): author the classic two-impulse phasing burn PAIR
+// Author the classic two-impulse phasing burn PAIR
 // against a RENDEZVOUS event whose measured phase error (567's phaseTruth,
 // 572's amber finding) is out of the capture window. Decision (documented in
-// MATH.md §7af): authored as TWO plain BURN log entries (burnType:'CUSTOM',
+// : authored as TWO plain BURN log entries (burnType:'CUSTOM',
 // the sanctioned manual-ΔV lane — same path a user picks from the burn-type
 // dropdown), inserted BEFORE the RENDEZVOUS entry, pushed together and
 // recomputed ONCE so they land as a single undo capture (575's dedupe keys
@@ -49,7 +32,7 @@ function missionExecBurn(id) {
 // rendezvous-specific about their execution; only the AUTHORING affordance
 // (570-mission-cards.js's _missionPhasingRowHTML) is rendezvous-specific.
 // Timing: the rendezvous's own MET/duration is NOT auto-shifted (documented
-// choice — see §7af "Timing semantics"); the wait time is shown on the chip
+// choice — see "Timing semantics"); the wait time is shown on the chip
 // and in the burn notes so the user can adjust the rendezvous timing/
 // duration themselves via the existing duration-override field if desired.
 function missionAddPhasingBurns(id, idx, N) {
@@ -59,8 +42,8 @@ function missionAddPhasingBurns(id, idx, N) {
   const os = tgt ? tgt.orbitState : null;
   const refId = (os && os.propagated) ? os.refId : null;
   const plan = refId
-    ? (typeof phasingPlanPropagated === 'function' ? phasingPlanPropagated(refId, e.phase.dt_s, N) : null)
-    : (typeof phasingPlanKeplerian === 'function' ? phasingPlanKeplerian(os, e.phase.dt_s, N) : null);
+    ? phasingPlanPropagated(refId, e.phase.dt_s, N)
+    : phasingPlanKeplerian(os, e.phase.dt_s, N);
   if (!plan || !plan.feasible) return;
   const waitLabel = `${Math.round(plan.waitTime_s).toLocaleString()}s`;
   const burn1 = { type: 'BURN', burnType: 'CUSTOM', burnParam: plan.dvPerBurn_ms, stageId: null,
@@ -70,7 +53,7 @@ function missionAddPhasingBurns(id, idx, N) {
     activeKey: e.activeKey, activeName: e.activeName,
     // the closing burn is where the construction's guaranteed clock
     // correction lands (see 570-mission-replay.js's BURN branch + 567's
-    // _phaseVehiclePoint, MATH.md §7af) — cancels exactly the residual this
+    // _phaseVehiclePoint) — cancels exactly the residual this
     // pair was built against, by construction.
     _phaseOffsetDelta: -e.phase.dt_s,
     note: `Phasing burn 2/2 (N=${N}) — closes the phasing orbit back onto the reference` };
@@ -100,11 +83,11 @@ function _missionActiveEpStage(m) {
   const fv = m && m.vehicleId && typeof PROG_ACTIVE_PROGRAM !== 'undefined'
     ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
   const stage = fv && fv.stages && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
-  if (!stage || typeof ltReadinessCheck !== 'function') return null;
+  if (!stage) return null;
   return ltReadinessCheck(stage).ok ? stage : null;
 }
 
-// Full-form Edelbaum est. for a node-map edge (MATH.md §7aa): coplanar-ish
+// Full-form Edelbaum est. for a node-map edge: coplanar-ish
 // circular/elliptic orbits of the SAME body only (the regime Edelbaum's
 // circular-to-circular form covers — transit/escape/surface edges return
 // null, the impulsive lane is the only honest price there). PARALLEL readout
@@ -112,7 +95,7 @@ function _missionActiveEpStage(m) {
 // rule). Returns { dv_ms, tof_s, di_deg } or null.
 function _missionLtEdgeEstimate(m, fromId, toId) {
   const stage = _missionActiveEpStage(m);
-  if (!stage || typeof ltEdelbaumFullDv !== 'function') return null;
+  if (!stage) return null;
   const nA = _missionNmNodeById(fromId), nB = _missionNmNodeById(toId);
   const oa = nA && nA.orbit, ob = nB && nB.orbit;
   if (!oa || !ob || oa.body !== ob.body) return null;
@@ -156,23 +139,10 @@ function missionExecLowThrustFromEdge(id) {
   missionRenderDetail();
 }
 
-// Re-author the duration/law/throttle on an existing LOWTHRUST entry (mirrors
-// missionApplyDurationOverride's pattern) — any edit changes the est-lane
-// signature inputs, so the next recompute will find the computed cache (if
-// any) STALE via ltSignature, never silently reusing a mismatched result.
-function missionEditLowThrust(id, idx, field, val) {
-  const m = _missionGet(id); if (!m) return;
-  const e = m.log[idx]; if (!e || e.type !== 'LOWTHRUST') return;
-  if (field === 'duration_s') e.duration_s = Math.max(0, +val || 0);
-  else if (field === 'law') e.law = val === 'retrograde' ? 'retrograde' : 'prograde';
-  else if (field === 'throttle') e.throttle = Math.max(0, Math.min(1, +val || 0));
-  missionRecompute(m);
-  missionRenderDetail();
-}
 
 // "Compute trajectory" — the expensive integrated lane, run ONLY on explicit
 // user action (never inside missionRecompute; see the compute-button contract,
-// MISSION_MODEL_V2 §19). Chunked via rAF so the UI progress bar is honest and
+// . Chunked via rAF so the UI progress bar is honest and
 // the run is cancellable; the result lands in 568's signature-keyed side-table
 // and triggers exactly ONE missionRecompute on completion so downstream state
 // (budget, orbit) picks up the computed end-state (stale-by-one recompute
@@ -188,12 +158,12 @@ function ltComputeTrajectory(id, idx) {
   const fv = e.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId] : null;
   const stage = fv && fv.stages.length ? fv.stages[fv.stages.length - 1] : null;
   const ob = e.orbitBefore;
-  if (!fv || !stage || !ob || typeof physPropagateSegment !== 'function') return;
+  if (!fv || !stage || !ob) return;
 
   const body = ob.body;
   const altKm = ob.perigee ?? ob.apogee ?? 0;
   const bodyDef = PROG_BODIES[body];
-  const v0 = (typeof progVcirc === 'function') ? progVcirc(body, altKm) : 0;
+  const v0 = progVcirc(body, altKm);
   const r0 = [bodyDef.R + altKm, 0, 0];
   const v0v = [0, v0, 0];
   const m0 = progStageMass(stage);
@@ -216,8 +186,8 @@ function ltComputeTrajectory(id, idx) {
     // SOI boundaries in principle, but v1's authored use case is a body-centric
     // raise/lower, so the chunked compute pins ctx.center for the whole run
     // (opts.singleFrame, same knob E1's own gate uses) rather than handling a
-    // mid-spiral SOI handoff — a genuine gap, noted in MATH.md §7z critiques.
-    // E3: maxSamples 512/chunk (~16 samples/rev at LEO for a 2-day/~32-rev
+    // mid-spiral SOI handoff — a genuine gap, noted in critiques.
+    // MaxSamples 512/chunk (~16 samples/rev at LEO for a 2-day/~32-rev
     // chunk) so the rev-boundary resampler below has real per-rev fidelity to
     // keep for the head/tail revs — 256 was fine when nothing rendered (E2).
     const res = physPropagateSegment({ r: run.r, v: run.v, m: run.m }, run.tSim, chunkEnd, ctx, { singleFrame: true, maxSamples: 512 });
@@ -239,12 +209,11 @@ function ltComputeTrajectory(id, idx) {
     if (run.tSim >= durTotal || run.depleted) {
       const propUsed = Math.max(0, m0 - run.m);
       const sig = e._ltSig;   // signature computed by the est. lane this same recompute cycle
-      // E3: rev-boundary LOD resample (568) — head/tail keep per-rev fidelity
+      // Rev-boundary LOD resample (568) — head/tail keep per-rev fidelity
       // (first/last ~8 revs), the dense middle decimates to ~1 sample/rev for
       // the envelope-band renderer (574). body rides along so the renderer
       // knows which frame pass owns this spiral.
-      const lod = (typeof ltResampleSpiralRevs === 'function')
-        ? ltResampleSpiralRevs(run.samples, 8, 8) : { head: run.samples, mid: [], tail: [], revCount: 0 };
+      const lod = ltResampleSpiralRevs(run.samples, 8, 8);
       ltStoreComputedLeg(id, idx, { sig, dvAccum_kms: run.dvAccum || 0, mF_kg: run.m, propUsed_kg: propUsed, tof_s: run.tSim,
         body, samplesLod: lod });
       e._ltComputing = false; _ltRunState = null;
@@ -323,11 +292,6 @@ function _missionPreSnapStages(m, idx, originKey, vehId) {
   const own = pick(log[idx] && log[idx].snapshot);
   return own ? (own.stages || []) : [];
 }
-// Runtime vehicle (from the last recompute) for this mission matching an origin key.
-function _missionVehByKey(m, key) {
-  if (!key) return null;
-  return (m.vehicleIds || []).map(v => PROG_ACTIVE_PROGRAM.vehicles[v]).find(v => v && v._originKey === key) || null;
-}
 
 // ── R6.3: launch-site + launch-time -> RAAN authoring (MATH.md §7k) ──────────
 // Flat [{name,short,lat,lon}] of every built-in site, for the LAUNCH card's
@@ -346,7 +310,7 @@ function _missionLaunchSiteChoices() {
 // falls back to the same literal constant if 574 hasn't loaded yet (test
 // harness / very early UI paint) so this never throws.
 function _missionEarthSpinRad(tSec) {
-  if (typeof _trajBodySpinAngle === 'function') return _trajBodySpinAngle('Earth', tSec);
+  return _trajBodySpinAngle('Earth', tSec);
   return (tSec / 86164.1) * 2 * Math.PI;
 }
 // The site currently associated with a LAUNCH event: authored on the event
@@ -365,9 +329,8 @@ function _missionLaunchGeoHTML(m, idx, e) {
     ...choices.map(s => `<option value="${_tsEsc(s.short)}"${site && site.short === s.short ? ' selected' : ''}>${_tsEsc(s.name)} (${s.lat}&deg;, ${s.lon}&deg;)</option>`)].join('');
   const o = e.orbit || {};
   const hasTime = e.launchTime_s != null && e.launchTime_s !== '';
-  const dtVal = hasTime && typeof progMissionTimeToDate === 'function'
-    ? progDateToLocalInputValue(progMissionTimeToDate(+e.launchTime_s)) : '';
-  const epochDateTxt = (typeof progEpochJD === 'function' && typeof progJDToDate === 'function')
+  const dtVal = hasTime && progDateToLocalInputValue(progMissionTimeToDate(+e.launchTime_s));
+  const epochDateTxt = (typeof progJDToDate === 'function')
     ? progJDToDate(progEpochJD()).toUTCString().replace(':00 GMT', ' UTC')
     : '';
   const launchDateTxt = hasTime ? progJDToDate(progEpochJD() + (+e.launchTime_s) / 86400).toUTCString().replace(':00 GMT', ' UTC') : '';
@@ -398,12 +361,12 @@ function _missionLaunchLanFieldHTML(m, idx, e) {
   return `<div class="cfg-item"><label class="cfg-label">LAN &Omega; (deg)${lanDerived ? ' <span style="color:var(--text-dim);">(from launch time)</span>' : ''}</label>
     <input type="number" id="edit-launch-lan-${id}" class="field" value="${lanVal}" step="any" style="width:100px;${lanDerived ? 'color:var(--text-dim);' : ''}" oninput="missionLaunchGeoManualLan('${id}',${idx})"></div>`;
 }
-// Collapsed Target control (2026-07-17, second pass — user: "get rid of the
+// Collapsed Target control (second pass — user: "get rid of the
 // match plane only definition and just have the target thing be the
-// target"). The 2026-07-17 unify pass above merged two pickers into one
+// target"). The unify pass above merged two pickers into one
 // select with two optgroups ("Plan transfer to destination" / "Match plane
 // only"); now that plane-matching performs the COMPLETE solve (inc + LAN +
-// launch window, d3524ac65) there's no remaining reason to keep them
+// launch window, there's no remaining reason to keep them
 // visually or semantically separate — picking ANY destination immediately
 // runs the best available solve, and Optimize (unchanged) refines
 // altitude/departure timing on top. One flat list: the 8 destination bodies,
@@ -430,13 +393,13 @@ function _missionLaunchTargetHTML(m, idx, e) {
   // at a catalog ref has no Target-list equivalent (the ref picker is a
   // separate field) — tolerate it read-only below rather than force a migration.
   const legacyRefMatch = e.planeMatchTarget && e.planeMatchTarget !== 'Moon' ? e.planeMatchTarget : null;
-  // A4 (MISSION_MODEL_V2 §26): architecture nodes get their own optgroup,
+  // Architecture nodes get their own optgroup,
   // FIRST, when an architecture with nodes exists — mutually exclusive with
-  // planDest/planeMatchTarget, persisted as e.planNodeId (see
+  // planDest/planeMatchTarget, persisted as e.planNodeId
   // missionApplyLaunchEdit below). Display-tolerant: a legacy/deleted node id
   // just falls through to '' (no crash, no data loss — the raw id stays on e
   // until the user re-picks).
-  const archNodes = (typeof archGet === 'function') ? (archGet().nodes || []) : [];
+  const archNodes = (archGet().nodes || []);
   let archOptsHTML = '';
   if (archNodes.length) {
     const opts = archNodes.map(n => `<option value="node:${n.id}"${e.planNodeId === n.id ? ' selected' : ''}>${_mrEsc(n.name)} (${_mrEsc(n.body)})</option>`).join('');
@@ -462,12 +425,12 @@ function _missionLaunchTargetHTML(m, idx, e) {
     if (node) {
       const site = _missionLaunchSiteFor(e);
       const siteLat = site ? site.lat : 28.5;
-      const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+      const epochJD = progEpochJD();
       const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
       const target = { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name };
-      const res = (typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget(target, epochJD, t_s, siteLat) : null;
+      const res = progResolvePlaneTarget(target, epochJD, t_s, siteLat);
       initReadout = res
-        ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to ${_mrEsc(node.name)}`)
+        ? _missionPlaneMatchReadoutHTML(res, siteLat, '')
           + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
         : '// pick Target again to rematch';
     } else {
@@ -476,11 +439,11 @@ function _missionLaunchTargetHTML(m, idx, e) {
   } else if (e.planDest === 'Moon') {
     const site = _missionLaunchSiteFor(e);
     const siteLat = site ? site.lat : 28.5;
-    const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+    const epochJD = progEpochJD();
     const t_s = e.launchTime_s != null ? e.launchTime_s : 0;
-    const res = (typeof progResolvePlaneTarget === 'function') ? progResolvePlaneTarget('Moon', epochJD, t_s, siteLat) : null;
+    const res = progResolvePlaneTarget('Moon', epochJD, t_s, siteLat);
     initReadout = res
-      ? (typeof _missionPlaneMatchReadoutHTML === 'function' ? _missionPlaneMatchReadoutHTML(res, siteLat, '') : `// plane matched to Moon`)
+      ? _missionPlaneMatchReadoutHTML(res, siteLat, '')
         + (e.launchTime_s == null ? ' &mdash; no site/time to solve a window; pick a site to complete the match' : '')
         + ' &mdash; click Optimize to also refine parking altitude/departure timing'
       : '// pick Target again to rematch';
@@ -520,7 +483,7 @@ function missionLaunchTargetChange(id, idx, val) {
   if (depWrap) depWrap.style.display = isDest ? '' : 'none';
   if (optBtn) optBtn.style.display = isDest ? '' : 'none';
   if (isArchNode) {
-    // A4: architecture-node target runs the SAME complete plane/window solve
+    // Architecture-node target runs the SAME complete plane/window solve
     // Moon does (missionLaunchMatchPlane), against {inc,lan,name} resolved
     // from the node's canonical orbit — see _missionPlaneMatchTargetSpec.
     missionLaunchMatchPlane(id, idx, val);
@@ -547,10 +510,10 @@ function _missionPlaneMatchTargetSpec(targetVal) {
   if (targetVal === 'Moon') return 'Moon';
   if (targetVal.startsWith('node:')) {
     const nodeId = targetVal.slice('node:'.length);
-    const node = (typeof archGet === 'function') ? (archGet().nodes || []).find(n => n.id === nodeId) : null;
+    const node = (archGet().nodes || []).find(n => n.id === nodeId);
     return node ? { inc: node.orbit.incDeg || 0, lan: node.orbit.lanDeg || 0, name: node.name } : null;
   }
-  const entry = (typeof _refOrbitAllEntries === 'function') ? _refOrbitAllEntries().find(o => o.id === targetVal) : null;
+  const entry = _refOrbitAllEntries().find(o => o.id === targetVal);
   return entry ? { inc: entry.inc, lan: entry.lan, name: entry.name } : null;
 }
 // Shared readout fragment for a resolved plane-match (matched inc/LAN,
@@ -586,7 +549,7 @@ function missionLaunchMatchPlane(id, idx, targetVal) {
   const siteLat = site ? site.lat : 28.5;
   const tRaw = document.getElementById('edit-launch-time-' + id)?.dataset.rawS;
   const t_s = (tRaw !== '' && tRaw != null) ? +tRaw : 0;
-  const epochJD = (typeof progEpochJD === 'function') ? progEpochJD() : PROG_DEFAULT_EPOCH_JD;
+  const epochJD = progEpochJD();
   const target = _missionPlaneMatchTargetSpec(targetVal);
   if (!target) return;
   if (typeof progResolvePlaneTarget !== 'function') return;
@@ -650,7 +613,7 @@ function missionLaunchClearTime(id, idx) {
 }
 // Launch-time picker: the card's date field opens the SAME custom calendar
 // popover the program-epoch stamp uses (578-mission-epoch-picker.js) instead
-// of a native datetime-local — user direction 2026-07-17 ("the calendar
+// of a native datetime-local — user direction ("the calendar
 // should also be using the custom calendar gizmo we made"). Apply-only
 // commit, same as the epoch stamp; the hidden rawS/value contract that
 // missionLaunchGeoUpdate reads is preserved unchanged.
@@ -750,11 +713,11 @@ function _missionLaunchPlanReadoutHTML(plan, dest, site, m) {
     : (dest === 'Moon' && plan.dvDepart != null)
       ? `TLI &Delta;V &asymp; ${Math.round(plan.dvDepart)} m/s (geocentric departure, not a heliocentric hyperbola)`
       : 'same-body transfer (no departure hyperbola)';
-  // E3: low-thrust departure line when the mission's acting vehicle carries an
+  // Low-thrust departure line when the mission's acting vehicle carries an
   // EP stage. "Spiral to escape est." uses the standard low-thrust escape
   // limit: Δv ≈ v_circ(parking) — a many-rev Edelbaum spiral to escape spends
-  // (asymptotically) the full circular speed of the starting orbit (MATH.md
-  // §7aa). TOF from the same mass-averaged accel estimate the node-map uses.
+  // (asymptotically) the full circular speed of the starting orbit
+  // . TOF from the same mass-averaged accel estimate the node-map uses.
   let ltTxt = '';
   const epStage = (m && typeof _missionActiveEpStage === 'function') ? _missionActiveEpStage(m) : null;
   if (epStage && typeof ltEdelbaumTofEst === 'function' && typeof progVcirc === 'function') {
@@ -821,9 +784,9 @@ function missionLaunchGeoUpdate(id, idx) {
       // against the LAN this site+time actually reaches. A mismatch means
       // the launch time was changed manually AFTER the match (or the target
       // plane itself moved with epoch) — physically the match is broken, but
-      // fields stay editable per the §12 design note; just say so.
+      // fields stay editable per the design note; just say so.
       let staleTxt = '';
-      // Post-collapse (2026-07-17): Moon plane matches now live in
+      // Post-collapse: Moon plane matches now live in
       // e.planDest === 'Moon' (see the Target-control note above); legacy
       // missions may still carry e.planeMatchTarget (Moon or a catalog ref) —
       // check either so the staleness readout keeps working for both.
@@ -871,7 +834,7 @@ function missionLaunchGeoManualLan(id, idx) {
   if (out) out.innerHTML = _missionLaunchGeoReadoutHTML(site, incDeg, null, lanField ? lanField.value : null);
 }
 
-// T2: picking a catalog entry binds orbitRefId + fills the inline fields (which become
+// Picking a catalog entry binds orbitRefId + fills the inline fields (which become
 // its cached resolution). Re-renders the card so the fields reflect the pick immediately.
 function missionLaunchRefPick(id, idx, refId) {
   const m = _missionGet(id); if (!m) return;
@@ -885,7 +848,7 @@ function missionLaunchRefPick(id, idx, refId) {
     o.body = res.body; o.periKm = res.periKm; o.apoKm = res.apoKm; o.incDeg = res.incDeg;
     if (res.lanDeg != null) o.lanDeg = res.lanDeg;
     delete e._refNote;
-    // Target-collapse follow-up (2026-07-17): a catalog ref with a PINNED LAN
+    // Target-collapse follow-up: a catalog ref with a PINNED LAN
     // is the plane-target use case the retired "Match plane only" optgroup
     // used to cover — solve the launch window that reaches it, same recipe
     // as missionLaunchMatchPlane, so binding the ref alone reaches the
@@ -904,7 +867,7 @@ function missionLaunchRefPick(id, idx, refId) {
   missionRecompute(m);
   missionRenderDetail();
 }
-// §14 U3: DEPLOY equivalent of missionLaunchRefPick — the only ref-picker path
+// DEPLOY equivalent of missionLaunchRefPick — the only ref-picker path
 // that accepts a propagated ref (a LAUNCH never can, see the filtered picker
 // above). Binds e.orbitRefId; e.orbit gets the resolved fields (or the
 // propagated marker) on the NEXT missionRecompute (the T2 resolution block).
@@ -916,7 +879,7 @@ function missionDeployRefPick(id, idx, refId) {
   missionRecompute(m);
   missionRenderDetail();
 }
-// Hand-editing a bound field detaches it to a one-off (explicit, per §13 T2 spec).
+// Hand-editing a bound field detaches it to a one-off (explicit, per spec).
 function missionLaunchOrbitDetach(id, idx) {
   const m = _missionGet(id); if (!m) return;
   const e = m.log[idx]; if (!e || e.type !== 'LAUNCH' || !e.orbitRefId) return;
@@ -1020,7 +983,7 @@ function _missionLaunchSyncDraft(id, idx) {
   const lv = document.getElementById('edit-launch-lv-' + id)?.value;
   if (lv) { e.fleetEntryId = lv; const f = _fleetGet(lv); if (f) e.label = f.name; }
   const o = e.orbit || (e.orbit = {});
-  // Body selector removed from the LAUNCH card (2026-07-17 layout reorg) —
+  // Body selector removed from the LAUNCH card —
   // launches are from Earth, full stop. The orbit-state data model still
   // carries a body field (other event types do target other bodies).
   o.body = 'Earth';
@@ -1078,7 +1041,7 @@ function _missionLaunchSyncDraft(id, idx) {
     e.planDepJD = (depPick !== '' && depPick != null && isFinite(+depPick)) ? +depPick : null;
   }
 }
-// Apply == commit (2026-07-17 root-cause fix): a pending draft's Apply used
+// Apply == commit: a pending draft's Apply used
 // to mutate the draft but leave pending:true — and _missionEffectiveLog
 // filters pending entries from replay, so recompute changed NOTHING visible
 // ("the apply button just doesn't do anything", user). Every missionApply*Edit
@@ -1201,7 +1164,7 @@ function _missionBurnLogCardHTML(entry) {
   </div>`;
 }
 
-// MISSION_MODEL_V2 §19 E2 — LOWTHRUST event card. Shows the est./computed/
+// — LOWTHRUST event card. Shows the est./computed/
 // STALE lane state (568/572), a live progress bar while computing, and the
 // Compute/Cancel buttons. v1 rendering note (E3 defers spiral polylines/LOD):
 // this card shows NUMBERS only — no schematic dashed-spiral glyph yet.
@@ -1314,19 +1277,6 @@ function _missionStageOwner(stageDefId) {
   for (const sc of _scEdSC) if ((sc.stages || []).some(d => d.stageId === stageDefId)) return sc;
   return null;
 }
-// Contiguous spacecraft payload groups within a vehicle's stack.
-function _missionPayloadGroups(fv) {
-  const groups = [];
-  let cur = null;
-  (fv.stages || []).forEach((s, idx) => {
-    const sc = _missionStageOwner(s.stageDefinitionId);
-    if (sc) {
-      if (cur && cur.scId === sc.spacecraftId) cur.endIndex = idx;
-      else { cur = { scId: sc.spacecraftId, scName: sc.name, startIndex: idx, endIndex: idx }; groups.push(cur); }
-    } else cur = null;
-  });
-  return groups;
-}
 
 function _missionSepPickerHTML(m) {
   const fv = m.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId] : null;
@@ -1390,23 +1340,6 @@ function missionSepDragEnd() {
   _missionSepDrag = null;
 }
 
-function missionExecSeparate(id, sepIndex) {
-  const m = _missionGet(id);
-  if (!m || !m.vehicleId) return;
-  const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId];
-  if (!fv) return;
-  const idx = +sepIndex;
-  const ev = progMakeEvent('SEPARATE', { vehicleId: m.vehicleId, separationIndex: idx });
-  const res = progDispatchEvent(PROG_ACTIVE_PROGRAM, ev);
-  if (res.result !== 'SUCCESS') {
-    m.log.push({ type: 'SEPARATE', result: 'FAILED', warnings: ev.warnings || [], parentName: fv.name });
-    missionRenderDetail();
-    return;
-  }
-  m.log.push({ type: 'SEPARATE', result: 'SUCCESS', sepIndex: idx, parentName: fv.name, activeKey: fv._originKey });
-  _missionAddEvt = null;  _missionExpandLast(m);  missionRecompute(m);
-  missionRenderDetail();
-}
 
 function missionExecDock(id, targetVehId) {
   const m = _missionGet(id);
@@ -1450,15 +1383,6 @@ function missionExecRendezvous(id, targetVid) {
   const act = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId];
   m.log.push({ type: 'RENDEZVOUS', targetKey: tgt ? tgt._originKey : null, activeKey: act ? act._originKey : null, targetName: tgt ? _missionVehicleDisplayName(tgt) : '?', activeName: act ? _missionVehicleDisplayName(act) : '?' });
   _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
-}
-// Set the prop-transfer mass field to the selected source stage's full remaining propellant.
-function missionPropXferMax(id) {
-  const m = _missionGet(id); if (!m || !m.vehicleId) return;
-  const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId]; if (!fv) return;
-  const si = parseInt(document.getElementById('xfer-src-' + id)?.value, 10);
-  const ss = fv.stages[si]; if (!ss) return;
-  const el = document.getElementById('xfer-mass-' + id);
-  if (el) el.value = Math.round(progStageRemainingProp(ss));
 }
 
 // Apply a propellant transfer between two stages of `fv`, addressed by INDEX so
@@ -1515,22 +1439,6 @@ function _missionApplyCrewTransfer(fv, e) {
   e.result = 'SUCCESS'; e.transferred = move; e.warnings = move < (e.count || 0) ? ['⚠ Only ' + move + ' crew available'] : [];
 }
 
-function missionExecPropTransfer(id) {
-  const m = _missionGet(id); if (!m) return;
-  const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId]; if (!fv) return;
-  const srcI = parseInt(document.getElementById('xfer-src-' + id)?.value, 10);
-  const dstI = parseInt(document.getElementById('xfer-dst-' + id)?.value, 10);
-  const mass = parseFloat(document.getElementById('xfer-mass-' + id)?.value) || 0;
-  const destKey = document.getElementById('xfer-destveh-' + id)?.value || fv._originKey;
-  const sameVeh = !destKey || destKey === fv._originKey;
-  const destFv = sameVeh ? fv : (_missionVehByKey(m, destKey) || fv);
-  const ss = fv.stages[srcI];
-  const pt = (ss && ss.tanks && ss.tanks[0]) ? ss.tanks[0].propellantType : null;
-  m.log.push({ type: 'TRANSFER_PROPELLANT', sourceIndex: srcI, destIndex: dstI, propellantType: pt, mass_kg: mass,
-    activeKey: fv._originKey, activeName: _missionVehicleDisplayName(fv),
-    destVehicleKey: sameVeh ? null : destKey, destName: sameVeh ? null : _missionVehicleDisplayName(destFv) });
-  _missionAddEvt = null; _missionXferDest = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
-}
 function missionExecCrewTransfer(id) {
   const m = _missionGet(id); if (!m) return;
   const fv = PROG_ACTIVE_PROGRAM.vehicles[m.vehicleId]; if (!fv) return;
@@ -1550,15 +1458,6 @@ function missionExecRecover(id, vehId) {
   const m = _missionGet(id); if (!m || !vehId) return;
   const fv = PROG_ACTIVE_PROGRAM.vehicles[vehId];
   m.log.push({ type: 'RECOVER', targetKey: fv ? fv._originKey : null, vehicleName: fv ? _missionVehicleDisplayName(fv) : '?' });
-  _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
-}
-// T2: COAST — the only event type where the user authors time directly.
-function missionExecCoast(id) {
-  const m = _missionGet(id); if (!m) return;
-  const days = parseFloat(document.getElementById('addev-coast-days-' + id)?.value);
-  if (!(days > 0)) return;
-  const label = (document.getElementById('addev-coast-label-' + id)?.value || '').trim();
-  m.log.push({ type: 'COAST', days, label: label || null });
   _missionAddEvt = null; _missionExpandLast(m); missionRecompute(m); missionRenderDetail();
 }
 function missionApplyCoastEdit(id, idx) {

@@ -35,7 +35,7 @@ function _lvUpdateSourceIdx(){
 // Show/hide + label the "Update ..." button in the Save LV modal based on provenance.
 // When provenance exists, Update is the PRIMARY (accent) action and Save becomes the
 // secondary "Save as new" — editing an existing saved vehicle should never force the
-// user through save-as-new (see 2026-07-16 library-management rework).
+// user through save-as-new.
 function refreshLVUpdateButton(){
   const btn=document.getElementById('lv-update-btn');
   const saveBtn=document.getElementById('lv-save-btn');
@@ -146,7 +146,7 @@ function libDeleteVehicleCard(key){
 function refreshLVSaveSummary(){
   const el=document.getElementById('lv-save-summary');
   if(!el)return;
-  // Alias onto the canonical escaper (escHtml, 015-version.js — UNIFICATION_AUDIT item 5).
+  // Alias onto the canonical escaper.
   // The old local `esc` here did NOT escape double-quotes (attribute-context unsafe).
   const esc=s=>escHtml(s);
   const stages=(typeof numStages!=='undefined')?numStages:1;
@@ -167,16 +167,16 @@ function refreshLVSaveSummary(){
 /**
  * "Use in Program" button handler.
  * Loads the current vehicle configuration into the active Program's vehicleDefinitions[].
- * Spec §5 / Phase 10 item 3.
+ * Spec / Phase 10 item 3.
  */
 function progUseCurrentVehicle() {
-  if (typeof PROG_ACTIVE_PROGRAM === 'undefined' || !PROG_ACTIVE_PROGRAM) {
+  if (!PROG_ACTIVE_PROGRAM) {
     showAlert('No active Program. Open the Program tab first.', 'No Program');
     return;
   }
   const name = (loadedVehicleName || document.getElementById('lv-save-name')?.value || 'Vehicle').trim() || 'Vehicle';
   const obj  = buildLVObject(name, '');
-  obj.refId  = typeof progUUID === 'function' ? progUUID() : (Date.now().toString(36));
+  obj.refId  = progUUID();
   const _doAdd = () => {
     if (typeof progRenderVehicleList === 'function') progRenderVehicleList();
     showAlert('Added "' + obj.name + '" to Program vehicle definitions.', 'Vehicle Added');
@@ -213,7 +213,7 @@ function downloadLVAsJSON(){
   const obj=buildLVObject(name,note);
   downloadJSON(obj,name.replace(/[^a-z0-9_-]/gi,'_').toLowerCase()+'.vehicle');
 }
-function savePerformance(){openSaveCaseModal();} // legacy alias
+ // legacy alias
 // Shared apply path for a single-vehicle object, used by loadLVFile and the
 // consolidated library Load button's routing.
 function applyLVFileObject(obj){

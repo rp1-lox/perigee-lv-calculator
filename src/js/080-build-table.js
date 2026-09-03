@@ -71,7 +71,7 @@ function buildTable(){
   ROWS.forEach(row=>{
     const tr=document.createElement('tr');
     // Isp now routes through the same expression parser as the mass/thrust
-    // fields (UNIFICATION_AUDIT item — Isp inputs used to be a bare
+    // fields (item — Isp inputs used to be a bare
     // type="number" field, so "311*0.98"-style expressions silently failed
     // where they work in mass fields). commitMathInput()/the global focusout
     // handler (590-init.js) already generically handle any `.math-input`

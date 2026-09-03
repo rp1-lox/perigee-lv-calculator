@@ -1,14 +1,10 @@
 
-// ─── MISSION_MODEL_V2 §19 E2 — electric propulsion event model (pure core) ──
-// Consumes E1's substrate (386: ctx.thrust on physPropagateSegment; see
-// MATH.md §7y). This module is the "est." accounting lane (Edelbaum /
-// rocket-equation, cheap, synchronous) plus the signature machinery that
-// gates the "computed" lane (integrated, expensive, behind a UI button in
-// 570/572 — see MATH.md §7z for the full boundary write-up).
-//
-// Hard invariant (CLAUDE.md): physics results never live on `m` — the
-// integrated-leg cache is a side-table sibling to _physTrajByMission (565),
-// declared here and consulted by 570's LOWTHRUST recompute case.
+// ─── LOW THRUST — electric propulsion event model (pure core) ───────────────
+// The "est." accounting lane (Edelbaum / rocket equation, cheap, synchronous)
+// plus the signature machinery that gates the "computed" lane (integrated via
+// ctx.thrust on physPropagateSegment, behind a UI button in 570/572).
+// The integrated-leg cache is a side table next to _physTrajByMission; physics
+// results never live on m.
 
 // side-table: computed low-thrust legs, keyed missionId -> { [authIdx]: record }.
 // record = { sig, samples, dvAccum_kms, mF_kg, propUsed_kg, tof_s }
@@ -32,11 +28,10 @@ function ltClearMissionCache(missionId) {
 }
 
 // ── est. lane: Edelbaum / rocket-equation analytic pricing ──────────────────
-//
-// Approximation (documented, MATH.md §7z): the authored duration prices as a
+// Approximation: the authored duration prices as a
 // straight rocket-equation burn at the throttled thrust/Isp — i.e. the SAME
 // mass-depletion math E1 validated exactly for a continuous thrust arc
-// (§7y "Mass-coupling exactness"), NOT a full Edelbaum multi-rev spiral
+// ( "Mass-coupling exactness"), NOT a full Edelbaum multi-rev spiral
 // integral. This is the "Edelbaum-ish" est. the spec calls for: cheap,
 // synchronous, and exact for the one thing that matters for budgeting
 // (prop consumed -> dv via Isp*g0*ln(m0/mF)) while remaining honest that a
@@ -59,13 +54,13 @@ function ltEstimateLeg(ep, duration_s, throttle) {
   const propUsed = Math.min(propWanted, propAvail);
   const capped = propWanted > propAvail;
   const mF = m0 - propUsed;
-  // rocket equation for the dv this prop mass buys — exact per §7y's telescoping
+  // rocket equation for the dv this prop mass buys — exact per 's telescoping
   // per-step-log argument, independent of how the burn is chunked in time.
   const dv_ms = (mF > 0 && mF < m0) ? Isp * PHYS_G0_MS2 * Math.log(m0 / mF) : 0;
   return { dv_est_kms: dv_ms / 1000, propUsed_kg: propUsed, mF_kg: mF, capped, tof_s: dur };
 }
 
-/** Planar Edelbaum circular-to-circular Δv (Δi=0 reduction, MATH.md §7y/§7z):
+/** Planar Edelbaum circular-to-circular Δv:
  *  the "required" pricing lane for node-map/UI display, independent of the
  *  above rocket-eq burn estimate (which prices the AUTHORED duration, not a
  *  target orbit change). v0,v1 in km/s. */
@@ -74,17 +69,16 @@ function ltEdelbaumPlanarDv(v0_kms, v1_kms) {
 }
 
 // ── E3: full-form Edelbaum (circular-to-circular, plane change included) ────
-//
-// MATH.md §7aa. Δv = sqrt(v0^2 + v1^2 - 2*v0*v1*cos(pi/2 * di)), the standard
+// Δv = sqrt(v0^2 + v1^2 - 2*v0*v1*cos(pi/2 * di)), the standard
 // circular-orbit Edelbaum result (di in DEGREES, full 90 deg = orthogonal
 // planes costs the quadrature sum v0^2+v1^2 rather than a naive |v0-v1|+
 // plane-change add). di=0 degenerates exactly to ltEdelbaumPlanarDv's
-// |v0-v1| (verified by gate). Node-map est. lane ONLY (§19 E3) — NEVER feeds
-// progNmComputeEdgeDv's impulsive accounting (frozen, CLAUDE.md).
+// |v0-v1| (verified by gate). Node-map est. lane ONLY — NEVER feeds
+// progNmComputeEdgeDv's impulsive accounting.
 // di_deg: total relative inclination change between the two circular orbits,
-// in DEGREES (0-180). Interpretation (documented, MATH.md §7aa): the angle
+// in DEGREES (0-180). Interpretation: the angle
 // argument is the plane-change angle itself in radians -- di_deg=0 -> cos=1
-// -> exact |v0-v1| (matches ltEdelbaumPlanarDv, gate-pinned); di_deg=90 ->
+// -> exact |v0-v1|; di_deg=90 ->
 // cos=0 -> sqrt(v0^2+v1^2) (orthogonal planes, pure quadrature); di_deg=180
 // -> cos=-1 -> v0+v1 (opposite planes, full retrograde re-launch cost). This
 // is the standard law-of-cosines closure between two circular-orbit velocity
@@ -102,11 +96,10 @@ function ltEdelbaumFullDv(v0_kms, v1_kms, di_deg) {
 }
 
 // ── E3: TOF estimate for a priced Edelbaum-style leg ────────────────────────
-//
 // tof_s = dv_ms / (T_N / mBar_kg), a mass-averaged constant-acceleration
 // estimate (mBar = (m0+mF)/2, mF from the SAME rocket-eq relation ltEstimateLeg
 // uses, so the TOF and the dv/prop numbers stay internally consistent). Not
-// exact (real accel rises through the burn as mass depletes -- see §7y), but
+// exact (real accel rises through the burn as mass depletes --), but
 // consistent with the est. lane's existing honesty boundary. Returns
 // {tof_s, mF_kg, propUsed_kg} or nulls if the burn can't be completed with
 // available prop (dv exceeds what the tank can deliver at that Isp).
@@ -126,8 +119,7 @@ function ltEdelbaumTofEst(dv_kms, ep) {
 }
 
 // ── est-orbit approximation: apply a planar dv to a circular-orbit alt ──────
-//
-// Documented approximation (MATH.md §7z): treats the vehicle's current orbit
+// Documented approximation: treats the vehicle's current orbit
 // as circular at its mean altitude, applies the estimated dv as a single
 // TANGENTIAL impulse at that radius (v1 = v_circ +/- dv), then uses the
 // resulting specific orbital energy to back-solve a new semi-major axis via
@@ -135,8 +127,8 @@ function ltEdelbaumTofEst(dv_kms, ep) {
 // "circular" altitude. This is the standard quasi-circular-spiral proxy: a
 // real continuous low-thrust burn keeps the orbit nearly circular while its
 // mean radius (~ a) grows/shrinks, so pricing off the post-impulse a (not a
-// literal same-radius circular re-solve, which would invert the sign — see
-// MATH.md §7z critique 75) matches the INTUITIVE raise/lower direction a user
+// literal same-radius circular re-solve, which would invert the sign —
+//) matches the INTUITIVE raise/lower direction a user
 // expects from prograde/retrograde while remaining honest that it is not a
 // real spiral (no eccentricity growth tracked). body: PROG_BODIES key.
 // altKm: current mean altitude. dv_kms: signed (positive = prograde/raise,
@@ -144,7 +136,7 @@ function ltEdelbaumTofEst(dv_kms, ep) {
 // (e.g. dv driving the orbit hyperbolic/negative-radius) leave altitude
 // unchanged rather than lie.
 function ltApplyDvToCircularAlt(body, altKm, dv_kms) {
-  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  const b = PROG_BODIES[body];
   if (!b) return altKm;
   const R = b.R, mu = b.mu;
   const r0 = R + Math.max(0, altKm || 0);
@@ -159,8 +151,7 @@ function ltApplyDvToCircularAlt(body, altKm, dv_kms) {
 }
 
 // ── E4: target-orbit mode — inverse Edelbaum + max-achievable altitude ──────
-//
-// MATH.md §7ab. "Target altitude…" affordance on the LOWTHRUST card: given a
+// "Target altitude…" affordance on the LOWTHRUST card: given a
 // target circular altitude, solve duration_s from the est. lane's own
 // closed-form relations (no search/iteration — everything below composes
 // exactly-invertible pieces already pinned elsewhere in this module).
@@ -172,7 +163,7 @@ function ltApplyDvToCircularAlt(body, altKm, dv_kms) {
 // convention — never returns NaN/negative silently).
 //
 // EXACT inverse of ltApplyDvToCircularAlt, not the naive |v_circ(r0)-v_circ(r1)|
-// planar-Edelbaum triangle (documented departure, MATH.md §7ab): the est.
+// planar-Edelbaum triangle: the est.
 // lane's own forward function treats a dv as a single tangential impulse
 // delivered AT r0 whose resulting vis-viva SMA is reported as the new
 // "altitude" (aNew = -mu/(v1^2-2mu/r0)) — that is NOT the same v1 as
@@ -187,7 +178,7 @@ function ltApplyDvToCircularAlt(body, altKm, dv_kms) {
 // unphysical "lower to below half the current radius via a single tangential
 // impulse" case, handled below by the guard the sqrt would otherwise NaN on).
 function ltInverseEdelbaumDuration(body, alt0Km, alt1Km, ep) {
-  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  const b = PROG_BODIES[body];
   if (!b || !(alt0Km >= 0) || !(alt1Km >= 0)) return null;
   const r0 = b.R + alt0Km, r1 = b.R + alt1Km;
   const v0 = Math.sqrt(b.mu / r0);
@@ -207,11 +198,11 @@ function ltInverseEdelbaumDuration(body, alt0Km, alt1Km, ep) {
 // (m0 -> mDry, same relation ltEstimateLeg/E1 pin exactly); the resulting
 // circular altitude re-uses ltApplyDvToCircularAlt's vis-viva back-solve
 // (the SAME est-orbit approximation the rest of the est. lane already
-// commits to, MATH.md §7z critique 75) rather than a second orbit model.
+// commits to) rather than a second orbit model.
 // raiseDirection: true = prograde (raise), false = retrograde (lower).
 // Returns { dv_max_kms, altMax_km } or null if the stage can't produce any dv.
 function ltMaxAchievableAlt(body, alt0Km, ep, raiseDirection) {
-  const b = (typeof PROG_BODIES !== 'undefined') ? PROG_BODIES[body] : null;
+  const b = PROG_BODIES[body];
   if (!b || !(alt0Km >= 0)) return null;
   const Isp = (ep && ep.isp_s) || 0, m0 = Math.max(0, (ep && ep.m0_kg) || 0), mDry = Math.max(0, (ep && ep.mDry_kg) || 0);
   if (!(Isp > 0) || !(m0 > mDry)) return null;
@@ -223,7 +214,6 @@ function ltMaxAchievableAlt(body, alt0Km, ep, raiseDirection) {
 }
 
 // ── signature (stale-detection) ──────────────────────────────────────────────
-//
 // Deterministic string hash (FNV-1a, 32-bit) over the JSON of the rounded
 // inputs that define a computed leg's validity. Any authored/upstream field
 // change -> different signature -> the cached computed leg is STALE.
@@ -239,7 +229,7 @@ function _ltFnv1a(str) {
 // fields: { r:[x,y,z], v:[vx,vy,vz], m0_kg, thrust_N, isp_s, throttle, law,
 //           duration_s, fidelity, metStart_s }
 //
-// E4 (MATH.md §7ab, closes critique 86): metStart_s joins the signature,
+// MetStart_s joins the signature,
 // rounded to whole 60s buckets — a computed leg's per-sample epochs are
 // rebased onto e.metStart at render time (574's `toLeg`), so a time-SHIFT
 // of an otherwise-identical leg (an earlier event's duration edit sliding
@@ -268,7 +258,6 @@ function ltSignature(fields) {
 }
 
 // ── readiness (572 pattern: {ok, message}) ───────────────────────────────────
-//
 // activeStage: the SC LiveStage (or its stageDef) at the point of the event —
 // same "active stage at that point in the log" convention as any other burn.
 // Looks for propType==='XENON_EP' plus positive ep_thrust_N/ep_isp_s.
@@ -286,10 +275,9 @@ function ltReadinessCheck(activeStage) {
 }
 
 // ── E3: rev-boundary resampler for LOD spiral rendering ─────────────────────
-//
-// MATH.md §7aa. ltComputeTrajectory's raw samples are near-uniform in TIME
+// LtComputeTrajectory's raw samples are near-uniform in TIME
 // (E1/E2, up to maxSamples decimation) -- a multi-hundred-rev spiral drawn as
-// a plain polyline through those aliases into visual noise (E2 critique 79).
+// a plain polyline through those aliases into visual noise.
 // This function re-expresses the samples by ORBITAL REV instead: detect rev
 // boundaries via accumulated winding angle (theta = atan2(y,x) in the orbit
 // plane, unwrapped), keep every sample for the first `headRevs` and last
@@ -299,7 +287,7 @@ function ltReadinessCheck(activeStage) {
 //
 // samples: [{t, r:[x,y,z], ...}] time-ordered, r relative to the body center,
 // SAME plane assumption ltApplyDvToCircularAlt already makes (planar spiral;
-// out-of-plane wobble isn't tracked by winding angle -- documented, §7aa
+// out-of-plane wobble isn't tracked by winding angle -- documented,
 // critique). Returns { head:[...], mid:[...], tail:[...], revCount }.
 // Degenerate inputs (< 2 samples, zero revs) fall back to returning
 // everything in `head` with revCount 0 rather than throwing.

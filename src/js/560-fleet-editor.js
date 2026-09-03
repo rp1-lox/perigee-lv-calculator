@@ -5,58 +5,7 @@ let _fleetEntries = [];   // FleetEntry[]
 let _fleetSel     = null; // selected fleetId
 let _fleetLibQuery = '';  // search text for the inline Vehicle Library panel
 
-function fleetOpenImportModal() {
-  document.getElementById('fleet-import-search').value = '';
-  fleetImportRenderList();
-  openModal('modal-fleet-import');
-  setTimeout(() => document.getElementById('fleet-import-search')?.focus(), 100);
-}
 
-function fleetImportRenderList() {
-  const el = document.getElementById('fleet-import-list');
-  if (!el) return;
-  const q = (document.getElementById('fleet-import-search')?.value ?? '').toLowerCase();
-
-  let html = '';
-
-  // User-saved / loaded vehicles first
-  const myVehicles = userLVs.filter(v => !q || v.name.toLowerCase().includes(q));
-  if (myVehicles.length) {
-    html += '<div style="padding:6px 14px 3px;font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.15em;text-transform:uppercase;border-bottom:1px solid var(--border);">My Vehicles</div>';
-    html += myVehicles.map(v => {
-      const i = userLVs.indexOf(v);
-      const n = (v.stageData || v.stageNames || []).length;
-      return `<div class="fleet-import-item" onclick="fleetImportVehicle('user',${i})">
-        <span class="fleet-import-name">${v.name}</span>
-        <span class="fleet-import-sub">${n} stage${n !== 1 ? 's' : ''}</span>
-      </div>`;
-    }).join('');
-  }
-
-  // Built-in library
-  const builtins = BUILTIN_PRESETS.filter(v => !q ||
-    v.name.toLowerCase().includes(q) ||
-    (v.note || '').toLowerCase().includes(q) ||
-    (v.tags || []).some(t => t.toLowerCase().includes(q)));
-  if (builtins.length) {
-    html += `<div style="padding:6px 14px 3px;font-family:var(--mono);font-size:9px;color:var(--text-dim);letter-spacing:.15em;text-transform:uppercase;border-bottom:1px solid var(--border);${myVehicles.length ? 'margin-top:4px;' : ''}">Vehicle Library</div>`;
-    html += builtins.map(v => {
-      const idx = BUILTIN_PRESETS.indexOf(v);
-      const n   = (v.stageNames || []).length;
-      const tags = (v.tags || []).map(t => `<span class="fleet-import-tag">${t}</span>`).join(' ');
-      const note = v.note ? v.note.split('.')[0] : '';
-      return `<div class="fleet-import-item" onclick="fleetImportVehicle('builtin',${idx})">
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
-          <span class="fleet-import-name">${v.name}</span>${tags}
-        </div>
-        <span class="fleet-import-sub">${n} stage${n !== 1 ? 's' : ''}${note ? ' &nbsp;&middot;&nbsp; ' + note : ''}</span>
-      </div>`;
-    }).join('');
-  }
-
-  if (!html) html = '<div style="padding:20px 16px;font-family:var(--mono);font-size:10px;color:var(--text-dim);">No vehicles match.</div>';
-  el.innerHTML = html;
-}
 
 // Copy a stage record into the fleet's stage shape, PRESERVING stage-and-a-half
 // (S1.5) fields so library/imported/snapshotted vehicles keep their BECO config.
@@ -70,7 +19,7 @@ function _fleetStageCopy(s) {
 // stage splits into Phase 1 (booster pack) + Phase 2 (sustainer), mirroring
 // calculateWithS15() so fleet numbers match the LV calculator.
 // Thin wrapper over the ONE S1.5 expansion boundary (stageExpandS15,
-// 140-physics.js — UNIFICATION_AUDIT P2.1). Normalizes the fleet's stage
+// 140-physics.js). Normalizes the fleet's stage
 // records (default res=2, matching this caller's pre-existing behavior) and
 // keeps the 'annotate' error policy this module already had (push the raw
 // unsplit stage decorated with _err, continue).
@@ -93,27 +42,14 @@ function _fleetVehicleSpecFromLib(source, idx) {
     boosterName: p.boosterName || null,
     boosterData: boosterData || null,
     boosterGroups: Array.isArray(p.boosterGroups) ? p.boosterGroups.map(g => ({ ...g })) : null,
-    // R6.3: carry the vehicle's launch site through to the fleet entry so a
+    // Carry the vehicle's launch site through to the fleet entry so a
     // mission LAUNCH event can default its site/lon without re-picking it —
     // lon may be null on sites saved before R6.3 (graceful degrade, see 220).
     site: p.site ? { ...p.site } : null,
   };
 }
 
-function fleetImportVehicle(source, idx) {
-  fleetAddVehicleToFleet(source, idx);
-  closeModal('modal-fleet-import');
-}
 
-// Add a library vehicle as a NEW fleet entry (used by the modal + add-drop zone).
-function fleetAddVehicleToFleet(source, idx) {
-  const spec = _fleetVehicleSpecFromLib(source, idx);
-  if (!spec) return;
-  const entry = { fleetId: progUUID(), ...spec, payloads: [] };
-  _fleetEntries.push(entry);
-  _fleetSel = entry.fleetId;
-  fleetRender();
-}
 
 // Swap the launch vehicle of an existing entry (keeps its payloads).
 function fleetSwapVehicle(fleetId, source, idx) {
@@ -144,11 +80,6 @@ function _fleetParseDrag(e) {
 }
 function fleetDragOver(e)   { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('drop-hot'); }
 function fleetDragLeave(e)  { e.currentTarget.classList.remove('drop-hot'); }
-function fleetLibAddDrop(e) {
-  e.preventDefault(); e.currentTarget.classList.remove('drop-hot');
-  const p = _fleetParseDrag(e); if (!p) return;
-  fleetAddVehicleToFleet(p.source, p.idx);
-}
 function fleetVehSwapDrop(e, fleetId) {
   e.preventDefault(); e.currentTarget.classList.remove('drop-hot');
   const p = _fleetParseDrag(e); if (!p) return;
@@ -244,10 +175,6 @@ function fleetLibInfo(source, idx) {
     <div class="panel" style="padding:12px;">${_fleetBudgetHTML(tmp)}</div>`;
   openModal('modal-fleet-vehinfo');
 }
-function fleetVehInfoAdd() {
-  if (_fleetVehInfoSel) fleetAddVehicleToFleet(_fleetVehInfoSel.source, _fleetVehInfoSel.idx);
-  closeModal('modal-fleet-vehinfo');
-}
 
 function fleetInit() {
   _fleetEntries = [];
@@ -259,7 +186,7 @@ function _fleetGet(id) {
   return _fleetEntries.find(e => e.fleetId === (id ?? _fleetSel)) ?? null;
 }
 
-function fleetRender() { fleetRenderList(); fleetRenderDetail(); if (typeof autosaveScheduleSave === 'function') autosaveScheduleSave(); }
+function fleetRender() { fleetRenderList(); fleetRenderDetail(); autosaveScheduleSave(); }
 
 function fleetRenderList() {
   const el = document.getElementById('fleet-list');
@@ -281,20 +208,6 @@ function fleetRenderList() {
 
 function fleetSelect(id) { _fleetSel = id; fleetRenderList(); fleetRenderDetail(); }
 
-function fleetNew() {
-  const entry = {
-    fleetId: progUUID(),
-    name: 'New Launch Vehicle',
-    stageNames: ['Stage 1'],
-    stageData: [{ dry: 5000, prop: 50000, isp: 311, thrust: 1000, res: 2 }],
-    boosterName: null,
-    boosterData: null,
-    payloads: [],
-  };
-  _fleetEntries.push(entry);
-  _fleetSel = entry.fleetId;
-  fleetRender();
-}
 
 function fleetDelete(id) {
   _fleetEntries = _fleetEntries.filter(e => e.fleetId !== id);
@@ -302,66 +215,7 @@ function fleetDelete(id) {
   fleetRender();
 }
 
-function fleetSnapshotCurrent() {
-  if (typeof saveStoreFromDOM === 'function') saveStoreFromDOM();
-  const stages = [];
-  const names  = [];
-  for (let s = 0; s < (typeof numStages !== 'undefined' ? numStages : 0); s++) {
-    const st = stageStore[s] || {};
-    const base = { dry: parseFloat(st.dry)||0, prop: parseFloat(st.prop)||0, isp: mathValue(st.isp,0)||1, thrust: parseFloat(st.thrust)||0, res: parseFloat(st.res)||2 };
-    stageCarryS15(base, st);
-    stages.push(_fleetStageCopy(base));
-    names.push((typeof currentStageNames !== 'undefined' && currentStageNames[s]) ? currentStageNames[s] : ('Stage ' + (s+1)));
-  }
-  if (!stages.length) { alert('No stages in LV Calc — configure a vehicle on the Vehicles page first.'); return; }
-  const lvName = (typeof loadedVehicleName !== 'undefined' && loadedVehicleName) ? loadedVehicleName : 'Snapshot ' + new Date().toLocaleDateString();
-  const entry = {
-    fleetId: progUUID(),
-    name: lvName,
-    stageNames: names,
-    stageData: stages,
-    boosterName: (typeof currentBoosterName !== 'undefined' && currentBoosterName) ? currentBoosterName : null,
-    boosterData: (typeof useBooster !== 'undefined' && useBooster) ? (() => {
-      const b = document.getElementById('b_dry');
-      return b ? { dry: parseFloat(document.getElementById('b_dry').value)||0, prop: parseFloat(document.getElementById('b_prop').value)||0, isp: mathValue(document.getElementById('b_isp').value,0)||1, thrust: parseFloat(document.getElementById('b_thrust').value)||0, res: parseFloat(document.getElementById('b_res').value)||0, count: parseInt(document.getElementById('num-boosters').value)||0, ...(typeof boosterModeFromDOM==='function'?boosterModeFromDOM():{}) } : null;
-    })() : null,
-    boosterGroups: (typeof useBooster !== 'undefined' && useBooster && typeof lvBoosterGroups === 'function') ? (() => { const g = lvBoosterGroups(); return g.length > 1 ? g : null; })() : null,
-    payloads: [],
-  };
-  _fleetEntries.push(entry);
-  _fleetSel = entry.fleetId;
-  fleetRender();
-}
 
-function fleetLoadJSON(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const obj = JSON.parse(e.target.result);
-      if (!obj.stageData && !obj.stages) { alert('Invalid LV JSON'); return; }
-      // Support both program fleet format and LV calc save format
-      const stages = obj.stageData || [];
-      const names  = obj.stageNames || stages.map((_,i) => 'Stage '+(i+1));
-      const entry = {
-        fleetId: progUUID(),
-        name: obj.name || obj.vehicleName || file.name.replace(/\.json$/i,''),
-        stageNames: names,
-        stageData: stages.map(_fleetStageCopy),
-        boosterName: obj.boosterName || null,
-        boosterData: obj.boosterData || null,
-        boosterGroups: Array.isArray(obj.boosterGroups) ? obj.boosterGroups : null,
-        payloads: Array.isArray(obj.payloads) ? obj.payloads : [],
-      };
-      _fleetEntries.push(entry);
-      _fleetSel = entry.fleetId;
-      fleetRender();
-    } catch(err) { alert('Failed to parse JSON: ' + err.message); }
-  };
-  reader.readAsText(file);
-  input.value = '';
-}
 
 function fleetSaveJSON(id) {
   const e = _fleetGet(id);

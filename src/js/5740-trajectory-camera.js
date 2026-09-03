@@ -1,20 +1,10 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// 5740-trajectory-camera.js — Trajectory-view camera, projection seam, and pan/zoom
-//
-// OWNS: per-mission camera state (_trajCamByMission) and its zoom clamps
-//   (_TRAJ_VB, _TRAJ_WKM_MIN/MAX); the SINGLE projection seam _trajProjectVec
-//   (+ _trajProj3/_trajProjLocal and the _trajProjCtx az/el/frame context);
-//   camera framing/centering (_trajCamCenterKm, _trajFitWKmForBody, trajSetFocus,
-//   trajResetView, _trajApplyCam) and the fly-to animation (_trajFlyTo,
-//   _trajCancelFlyTo, _trajEaseCubicInOut); wheel-zoom and pan interaction
-//   (trajWheelZoom, trajPanStart/Move/End); plus the small body-color/moons
-//   lookups (_trajBodyColor, _trajAllBodies, _trajMoonsOf).
-// Does NOT own: world/overlay rendering, rings/legs, globes, event nodes — those
-//   are the other 574x trajectory modules, all of which load AFTER this file.
-// Split out of 574-trajectory-view.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among the 574x def-only modules is
-//   behavior-irrelevant. The residual 574-trajectory-view.js keeps the file header.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TRAJECTORY CAMERA — state, projection seam, pan/zoom ──────────────────
+// Per-mission camera state (_trajCamByMission) and zoom clamps; the single
+// projection seam _trajProjectVec (+ _trajProj3/_trajProjLocal and the az/el
+// context _trajProjCtx); framing (_trajCamCenterKm, _trajFitWKmForBody,
+// trajSetFocus, trajResetView, _trajApplyCam) and fly-to animation; wheel-zoom
+// and pan interaction; body-color / moons lookups. Loads before the other
+// 574x modules.
 
 // Camera per mission: { anchorBody, relOffsetKm:{x,y}, wKm }.
 //   anchorBody   — body name the camera tracks ('Sun' or any PROG_BODIES key)
@@ -40,7 +30,7 @@ let _trajExtraMissions = {};
 // routes through this so the World renderer works for the Architecture stub
 // too — behavior is byte-identical for real missions (find still wins).
 function _trajMissionById(id) {
-  const arr = (typeof _missions !== 'undefined' && _missions) ? _missions : [];
+  const arr = (_missions) ? _missions : [];
   const found = arr.find(mm => mm.missionId === id);
   if (found) return found;
   return (_trajExtraMissions && _trajExtraMissions[id]) || null;
@@ -61,8 +51,8 @@ function _trajFindWrap(id) {
 // Architecture-page stub re-mounts through archMapRender(). (trajSetFocus needs
 // a full re-mount for the instant floating-origin re-center on the new anchor.)
 function _trajRequestRerender(id) {
-  if (id === '__arch__' && typeof archMapRender === 'function') { archMapRender(); return; }
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  if (id === '__arch__') { archMapRender(); return; }
+  missionRenderDetail();
 }
 
 // Fixed reference viewBox size in RENDER units (floating-origin km, i.e. 1
@@ -80,8 +70,8 @@ function _trajBodyColor(body) {
   // Shared per-body DATA palette (570's PROG_BODY_COLORS) so glyphs, rings and
   // labels here match the same body's color in the orbit map. Unlisted moons
   // (e.g. Titan) fall back to the Moon's hue; anything else to the theme accent2.
-  if (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS[body]) return PROG_BODY_COLORS[body];
-  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return (typeof PROG_BODY_COLORS !== 'undefined' && PROG_BODY_COLORS.Moon) || 'var(--nm-lunar)';
+  if (PROG_BODY_COLORS[body]) return PROG_BODY_COLORS[body];
+  if (PROG_MOON_ORBITS && PROG_MOON_ORBITS[body]) return (PROG_BODY_COLORS.Moon) || 'var(--nm-lunar)';
   return 'var(--nm-interp)';
 }
 
@@ -117,31 +107,31 @@ function _trajProjectVec(x, y, z, az, el) {
   const ca = Math.cos(az || 0), sa = Math.sin(az || 0);
   const ct = Math.cos(t), st = Math.sin(t);
   const xa = x * ca - y * sa, ya = x * sa + y * ca;
-  // R6.3 handedness fix (2026-07-11): world coords use the standard
+  // R6.3 handedness fix: world coords use the standard
   // right-handed ecliptic convention (+z north, CCW prograde motion/east
   // longitude as seen from +z looking down: x-right, y-UP). SVG screen space
   // is y-DOWN, so plotting world-y directly as screen-y is a reflection —
   // it mirrored geography (Australia rendered left of Asia) AND orbital
   // motion (prograde appeared clockwise) system-wide, since every consumer
   // (surface points, gizmo, hover rails, ring tangents) routes through this
-  // one seam. R6.3b (user flight-test): the first fix negated screen-Y, which
+  // one seam. R6.3b: the first fix negated screen-Y, which
   // repairs chirality but points north DOWN at tilted views (the tilt term's
   // sign flipped with it) — the world read as "flipped 180°". Negating
   // screen-X instead is the other det=−1 reflection: chirality fixed AND the
   // north pole tilts toward the TOP of the screen (+z → v=−z·st → up in SVG's
-  // y-down space). See MATH.md §7o.
+  // y-down space).
   return { x: -xa, y: ya * ct - (z || 0) * st, depth: ya * st + (z || 0) * ct };
 }
 // Per-render-pass projection context (set by _trajWorldSVG from the camera;
 // helpers below read it so every emission site shares ONE projection).
-// N3: frameKind/frameBody/viewT added — 'inertial' (default) is a no-op path
+// FrameKind/frameBody/viewT added — 'inertial' (default) is a no-op path
 // (frameKind check short-circuits below, zero overhead, byte-identical to
 // pre-N3 rendering).
 let _trajProjCtx = { az: 0, el: Math.PI / 2, frameKind: 'inertial', frameBody: 'Earth', viewT: 0 };
 /** Project a 3D vector (any consistent units) through the pass camera. `t` is
  *  the vector's OWN epoch (seconds); omitted for content already evaluated
  *  "now" (bodies, glyphs, spin-baked surface points) — defaults to viewT.
- *  See MATH.md §7x for why t=viewT is NOT an identity no-op for non-inertial
+ *  For why t=viewT is NOT an identity no-op for non-inertial
  *  frames (that's what makes e.g. the Moon render frame-fixed). */
 function _trajProj3(x, y, z, t) {
   const ctx = _trajProjCtx;
@@ -161,7 +151,7 @@ function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProj
 // z rides along (R2): the anchor body's real out-of-plane position keeps it
 // centered under tilt. `overrides` is a retired R1 vestige, ignored.
 //
-// Maneuver-gizmo camera-follow RETIRED (2026-07-17, user-reported "camera
+// Maneuver-gizmo camera-follow RETIRED (user-reported "camera
 // keeps recentering on the node" — the follow was itself a workaround for an
 // earlier bug, "node disappears when I zoom in", from when wheel-zoom always
 // shrank the view around the ANCHOR BODY'S center: a LEO node ~6,500+ km from
@@ -175,12 +165,12 @@ function _trajProjLocal(dx, dy) { const p = _trajProjectVec(dx, dy, 0, _trajProj
 // problem, but drifted the camera off the anchor body onto an arbitrary
 // point in space, which the user also rejected ("the render should be
 // centered on a planet, not a random point in space") — RETIRED in turn on
-// 2026-07-17. trajWheelZoom is back to pure wKm contraction about the anchor
+// trajWheelZoom is back to pure wKm contraction about the anchor
 // body's center; relOffsetKm is permanently {0,0} again (drag-pan stays cut,
 // same as R3.4). The original reachability problem is moot now that the
 // gizmo draws on top, on the real orbit plane, always clickable regardless
 // of zoom.
-function _trajCamCenterKm(cam, viewT, overrides) {
+function _trajCamCenterKm(cam, viewT) {
   const p = progBodyWorldPos(cam.anchorBody, viewT);
   const off = cam.relOffsetKm || { x: 0, y: 0 };
   return { x: p.x + off.x, y: p.y + off.y, z: p.z || 0 };
@@ -240,7 +230,7 @@ function _trajFitWKmForBody(body, m) {
 // of snapping. The floating-origin design re-centers on the new anchor body
 // INSTANTLY (that's a precision requirement, not a style choice — see the
 // module header), so what eases here is wKm (zoom) and az/el (orientation);
-// a true zoom-out/arc/zoom-in path between distant bodies is V2+ (spec §18).
+// a true zoom-out/arc/zoom-in path between distant bodies is V2+ (spec).
 // Interrupted cleanly by any user drag/wheel interaction mid-flight
 // (trajPanStart/trajWheelZoom cancel the animation for that mission id).
 let _trajFlyAnim = {}; // id -> requestAnimationFrame handle
@@ -331,11 +321,11 @@ function _trajApplyCam(id, cam) {
       overlayEl.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
       const renderCam = { cx: 0, cy: 0, w: _TRAJ_VB };
       overlayEl.innerHTML = _trajResolveLabels(renderCam, rect);
-      if (typeof _trajGizmoRepaintOverlay === 'function') _trajGizmoRepaintOverlay();
-      // R3.5.2: the world re-render just rebuilt g.traj-scene, wiping the
+      _trajGizmoRepaintOverlay();
+      // The world re-render just rebuilt g.traj-scene, wiping the
       // gizmo's scene-space preview path — repaint it too, or the previewed
       // trajectory vanishes the moment the user zooms/rotates to look at it.
-      if (typeof _trajGizmoRepaintScenePreview === 'function') _trajGizmoRepaintScenePreview();
+      _trajGizmoRepaintScenePreview();
     }
   }
   const footEl = va.querySelector('.traj-footer'); // R2: keep the az/el readout live
@@ -347,7 +337,7 @@ function _trajApplyCam(id, cam) {
   // would break repeat presses) — the drag path re-queries the track fresh
   // each tick instead of holding a reference, for the same reason.
   const scrubEl = va.querySelector('.traj-scrubber');
-  if (scrubEl && typeof _missions !== 'undefined') {
+  if (scrubEl) {
     const mm = (_missions || []).find(x => x.missionId === id);
     if (mm) {
       const hadFocus = scrubEl.contains(document.activeElement);
@@ -362,13 +352,13 @@ function _trajApplyCam(id, cam) {
 
 function trajWheelZoom(ev, id) {
   ev.preventDefault();
-  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: wheel interrupts an in-flight ease
-  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
+  _trajCancelFlyTo(id); // V1: wheel interrupts an in-flight ease
+  _trajMarkInteracting();
   const cam = _trajCam(id);
   const dir = ev.deltaY < 0 ? 1 : -1;
   const nextW = Math.max(_TRAJ_WKM_MIN, Math.min(_TRAJ_WKM_MAX, cam.wKm * (1 - dir * 0.15)));
   if (nextW === cam.wKm) return;
-  // Strict body-centered zoom (restored 2026-07-17, see the module-header
+  // Strict body-centered zoom (restored, see the module-header
   // note above the retired cursor-anchored attempt): wKm contraction only,
   // about the ANCHOR BODY's center. relOffsetKm stays permanently {0,0} —
   // if a camera somehow carries a stale nonzero offset (e.g. from an older
@@ -383,17 +373,14 @@ let _trajDrag = null;
 // disambiguation, per the node map / library-browser _didDrag pattern).
 let _trajJustDragged = false;
 function trajPanStart(ev, id) {
-  // R3.4 (KSP semantics): plain left-drag ROTATES by default now (the enabler
-  // for a grabbable gizmo — see PHYSICS_PLAN R3.4 item 1). Shift-drag / right-
+  // Plain left-drag ROTATES by default now (the enabler
+  // for a grabbable gizmo. Shift-drag / right-
   // button drag remain aliases for rotate (kept for muscle-memory / R2 users).
   // Drag-PAN is retired entirely — relOffsetKm is only ever written as {0,0}
   // (see _trajCam / trajResetView / trajSetFocus) but the field stays on the
   // camera struct because the fit/zoom math still reads it.
-  const mode = 'rotate';
-  if (typeof _trajCancelFlyTo === 'function') _trajCancelFlyTo(id); // V1: a drag interrupts an in-flight ease cleanly
-  _trajDrag = { id, mode, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false, rectW: null, rectH: null };
-  const svgEl = ev.currentTarget && ev.currentTarget.querySelector ? ev.currentTarget.querySelector('svg.traj-svg') : null;
-  if (svgEl) { const r = svgEl.getBoundingClientRect(); _trajDrag.rectW = r.width; _trajDrag.rectH = r.height; }
+  _trajCancelFlyTo(id); // V1: a drag interrupts an in-flight ease cleanly
+  _trajDrag = { id, x0: ev.clientX, y0: ev.clientY, cam0: Object.assign({}, _trajCam(id), { relOffsetKm: Object.assign({}, _trajCam(id).relOffsetKm) }), moved: false };
   ev.preventDefault();
 }
 // Rotate re-renders per move (same cost class as wheel zoom); throttle to
@@ -401,11 +388,11 @@ function trajPanStart(ev, id) {
 let _trajRotLastMs = 0;
 function trajPanMove(ev) {
   if (!_trajDrag) return;
-  if (typeof _trajMarkInteracting === 'function') _trajMarkInteracting();
+  _trajMarkInteracting();
   const dx = ev.clientX - _trajDrag.x0, dy = ev.clientY - _trajDrag.y0;
   if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _trajDrag.moved = true;
   const cam0 = _trajDrag.cam0;
-  // R3.5 (user flight-test item 3): az already wrapped freely (JS `%` on a
+  // Az already wrapped freely (JS `%` on a
   // growing/shrinking value just cycles, negative results are harmless to
   // sin/cos) — the actual clamp bug was el being pinned to [0.087, π/2], i.e.
   // ONE quarter-turn of tilt only (top-down to just-above-the-horizon), so

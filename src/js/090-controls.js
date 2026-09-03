@@ -1,6 +1,5 @@
 
 // ─── CONTROLS ─────────────────────────────────
-function onStageCountInput(v){const n=Math.max(1,Math.min(MAX_STAGES,parseInt(v)||1));if(n!==numStages)setStages(n,false);}
 function setStages(n,updateInput=true){
   n=Math.max(1,Math.min(MAX_STAGES,n));numStages=n;
   if(updateInput)document.getElementById('stage-count-input').value=n;

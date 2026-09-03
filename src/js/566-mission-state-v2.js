@@ -1,15 +1,13 @@
 
-// ─── 566: MISSION MODEL V2 — Phase 1 shadow state ─────────────────────────
-// See MISSION_MODEL_V2.md §10. PROMOTE, don't recompute: stitches existing
-// _physTrajByMission legs (565) + the V1 replay's own per-event results (570)
-// into a per-vehicle VehicleState timeline, side-tabled by missionId. Read
-// ONLY by the reconciliation tooling below — zero user-visible change, and
-// NEVER persisted on `m` (§8 invariant; autosave-leak guard). Loads after 565.
+// ─── MISSION STATE V2 — per-vehicle state timeline ──────────────────────────
+// Stitches _physTrajByMission legs (565) and the replay's per-event results
+// (570) into a per-vehicle VehicleState timeline, side-tabled by missionId.
+// Read only by the reconciliation tooling below; never persisted on m.
 
 // Side-table: _v2StateByMission[missionId] = { vehicles: { [ownerKey]: { anchors: [V2Anchor...] } }, builtJD }
 var _v2StateByMission = {};
 
-// D6 reconciliation margins (MISSION_MODEL_V2.md §0 D6): per-burn max(1%, 5 m/s); totals 1%.
+// D6 reconciliation margins: per-burn max(1%, 5 m/s); totals 1%.
 const V2_DV_MARGIN_REL = 0.01;
 const V2_DV_MARGIN_ABS_MS = 5;
 function _v2Margin(v1dv) { return Math.max(V2_DV_MARGIN_ABS_MS, V2_DV_MARGIN_REL * Math.abs(v1dv || 0)); }
@@ -91,15 +89,15 @@ function v2BuildShadow(m) {
         // ARE no Kepler elements for this orbit).
         if (os.r && os.v) { r = os.r; v = os.v; frame = os.frame || os.body; }
         else note = 'propagated orbit — sampled state unavailable this replay';
-      } else if (os && !os.surface && typeof PROG_BODIES !== 'undefined' && PROG_BODIES[os.body] && typeof physElementsToState === 'function') {
+      } else if (os && !os.surface && PROG_BODIES[os.body]) {
         try {
           const bodyMeta = PROG_BODIES[os.body];
-          // C2: mean radius via the canonical helper (was an inline mean-alt
+          // Mean radius via the canonical helper (was an inline mean-alt
           // derivation); fallback keeps behavior byte-identical if 384 is absent.
           const aMean = orbitMeanRadiusKm(os, bodyMeta.R) ?? (bodyMeta.R + (((os.apogee != null ? os.apogee : os.perigee || 0) + (os.perigee != null ? os.perigee : os.apogee || 0)) / 2));
           // Same elements->state reconstruction the leg builders use (565's MNODE
           // path); reused rather than forked. Mean-motion phase, Ω from lan.
-          // §20/C1: os.inclination/os.lan are authored in os.body's EQUATOR
+          // C1: os.inclination/os.lan are authored in os.body's EQUATOR
           // frame; routed through the ONE C1 boundary (orbitWorldElements, 385)
           // before physElementsToState (which is world-frame).
           const _w20 = (typeof orbitWorldElements === 'function')
@@ -116,7 +114,7 @@ function v2BuildShadow(m) {
         note = 'surface/pre-orbit state at ' + e.type + ' — r,v not modeled (D5 point-mass has no launch-pad frame)';
       }
       const mass = { perStage: _v2StageSnapshot(fv) };
-      // MISSION_MODEL_V2 Phase 2 S3 (F2, critique 60): the launch anchor
+      // Phase 2 S3: the launch anchor
       // carries ascentDv, sourced from the SAME staging result V1 stamps
       // today (e.stagingResult.dvDelivered — read, never recomputed). Ascent
       // is sub-orbital LV-calculator territory (the state timeline begins at
@@ -130,11 +128,11 @@ function v2BuildShadow(m) {
       });
 
     } else if (e.type === 'BURN' || e.type === 'MNODE') {
-      const leg = (typeof physMissionLeg === 'function') ? physMissionLeg(missionId, authIdx) : null;
+      const leg = physMissionLeg(missionId, authIdx);
       const fv = e.vehicleId ? PROG_ACTIVE_PROGRAM.vehicles[e.vehicleId] : null;
       let r = null, v = null, frame = null, dvApplied = null, note = null, legRef = null;
       if (leg && leg.burnState && leg.burnState.r && leg.burnState.v) {
-        // MNODE (solved): §10.3 — pre-state from leg.burnState, dvApplied =
+        // MNODE (solved): — pre-state from leg.burnState, dvApplied =
         // leg.dvVec, legRef = its leg. "Read what the leg RECORDED" — never
         // re-derive a different basis. Covers both samebody and n-body
         // (moon/interplanetary) solved legs, which both stamp burnState.
@@ -142,7 +140,7 @@ function v2BuildShadow(m) {
         frame = leg.center || leg.homeFrame || (leg.frames && leg.frames[0]) || null;
         dvApplied = leg.dvVec || null; legRef = authIdx;
       } else if (leg && leg.kind === 'mnode' && leg.dvVec && leg.initState && leg.initState.r && leg.initState.v) {
-        // MNODE (manual): §10.3 — the manual-burn leg builder (565) stamps
+        // MNODE (manual): — the manual-burn leg builder (565) stamps
         // dvVec + a POST-burn initState but no burnState field (that field is
         // solved-maneuver-only). Pre-burn state = initState minus the SAME
         // dvVec the leg recorded (impulsive burn, position unchanged) — a
@@ -155,13 +153,13 @@ function v2BuildShadow(m) {
         r = leg.initState.r; v = leg.initState.v; frame = leg.center || null; legRef = authIdx;
         note = 'leg carries no burnState/dvVec — anchored from initState only, no dv attributed here';
       } else if (leg && leg.kind === 'arrival' && leg.arrivalBurn && leg.arrivalBurn.dvVec) {
-        // MISSION_MODEL_V2 Phase 2 S2 (F1, critique 58 resolved): the exiting
+        // Phase 2 S2: the exiting
         // leg of a transit corridor now carries a real arrival-burn record
         // (565's physRebuildMissionTrajectories) — promote it exactly like a
         // solved MNODE burn. Pre-state = the burn's PRE-burn arrival state
         // (arrivalBurn.vPre), dvApplied = the real Δv vector. This is the
         // first place physics disagrees with V1's schematic dv_actual for
-        // this edge on purpose — see MISSION_MODEL_V2.md §11.1/§11.5.
+        // this edge on purpose.
         r = leg.arrivalBurn.r; v = leg.arrivalBurn.vPre;
         frame = leg.arrivalBurn.frame; dvApplied = leg.arrivalBurn.dvVec; legRef = authIdx;
       } else if (leg && leg.kind === 'arrival') {
@@ -188,7 +186,7 @@ function v2BuildShadow(m) {
       Object.keys(ownerKeys).forEach(function (k) {
         const fv = ownerKeys[k];
         const prev = lastAnchorOf(k);
-        // §10.3: r,v carried through from the prior anchor (state is trajectory-
+        // r,v carried through from the prior anchor (state is trajectory-
         // neutral for composition events, D5); mass/composition delta from V1's
         // own post-event snapshot. New owner keys (e.g. a freshly separated
         // stage) inherit the parent's last-known state this same way.
@@ -205,7 +203,7 @@ function v2BuildShadow(m) {
         timelineFor(k).anchors.push(_v2MakeAnchor(met, null, null, null, 'terminal', authIdx, mass, null, null, null));
       });
     }
-    // COAST: no anchor when a leg already covers the span (§10.1/§10.3) — gap
+    // COAST: no anchor when a leg already covers the span — gap
     // coasts are handled on demand by v2StateAt, never eagerly propagated here.
   }
 
@@ -217,7 +215,7 @@ function v2BuildShadow(m) {
  *  latest anchor at/before t; if it has a legRef, reuse physLegStateAt's
  *  machinery (no duplicate propagation); else Kepler/physPropagateSegment
  *  from the anchor for an un-legged gap (the ONE propagation entry point,
- *  §8). Returns {frame, r, v, mass} or null pre-launch/post-terminal/unknown. */
+ *  . Returns {frame, r, v, mass} or null pre-launch/post-terminal/unknown. */
 function v2StateAt(missionId, ownerKey, t) {
   const md = _v2StateByMission[missionId];
   const tl = md && md.vehicles[ownerKey];
@@ -228,7 +226,7 @@ function v2StateAt(missionId, ownerKey, t) {
   for (let i = 0; i < anchors.length; i++) { if (anchors[i].t <= t + 1e-6) idx = i; else break; }
   if (idx < 0) return null;
   // Bracketing must skip USELESS anchors (no state and no leg — e.g. the
-  // note-only anchor of an unaccounted corridor-exit edge, MATH.md critique
+  // note-only anchor of an unaccounted corridor-exit edge, critique
   // 58) and fall back to the last usable one — otherwise two same-time
   // departures (the Apollo seed's stacked maneuvers at t=1048) null out the
   // whole following span. Terminal anchors still end the timeline: never
@@ -237,11 +235,11 @@ function v2StateAt(missionId, ownerKey, t) {
   while (idx > 0 && (!a.r || !a.v) && a.legRef == null && a.kind !== 'terminal') a = anchors[--idx];
   if (!a.r || !a.v) return null; // pre-launch/terminal/unknown-state anchor
   if (Math.abs(t - a.t) < 1e-6) return { frame: a.frame, r: a.r, v: a.v, mass: a.mass };
-  if (a.legRef != null && typeof physLegStateAt === 'function') {
+  if (a.legRef != null) {
     const st = physLegStateAt(missionId, a.legRef, t);
     if (st) return { frame: st.frame, r: st.r, v: st.v, mass: a.mass };
   }
-  if (typeof physPropagateSegment === 'function' && typeof PROG_BODIES !== 'undefined' && a.frame && PROG_BODIES[a.frame]) {
+  if (a.frame && PROG_BODIES[a.frame]) {
     try {
       const res = physPropagateSegment({ r: a.r, v: a.v }, a.t, t,
         { center: a.frame, bodies: [a.frame], overrides: {} }, { maxSamples: 8 });
@@ -256,7 +254,7 @@ function v2StateAt(missionId, ownerKey, t) {
  *  V1 uses (progRocketEqPropNeeded) on the anchor's pre-burn mass snapshot,
  *  against the highest-remaining-prop stage carrying an isp (best-effort
  *  single-active-stage assumption — Phase 1 doesn't track which stage fired;
- *  a genuine limitation, not a bug, see MATH.md). */
+ *  a genuine limitation, not a bug). */
 function v2DeriveBudget(missionId) {
   const md = _v2StateByMission[missionId];
   const perBurn = []; let dvTotal = 0, propTotal = 0, ascent = 0;
@@ -269,7 +267,7 @@ function v2DeriveBudget(missionId) {
   // sums m.log once per entry, not once per stage. Dedupe by authIdx, keeping
   // the first owner's anchor (arbitrary but stable — they all carry the same
   // dvApplied/mass-derived dv_ms by construction). Same dedupe discipline
-  // applies to 'launch' anchors' ascentDv (§11.1 F2/S3) — a multi-stage
+  // applies to 'launch' anchors' ascentDv (/S3) — a multi-stage
   // vehicle's stages all get a 'launch' anchor for the same authIdx.
   const seenAuth = {};
   const seenLaunchAuth = {};
@@ -285,14 +283,14 @@ function v2DeriveBudget(missionId) {
       if (seenAuth[a.authIdx]) return;
       seenAuth[a.authIdx] = true;
       if (!a.dvApplied) {
-        // §10.3 rule of the phase: never silently skip. A burn anchor with no
+        // rule of the phase: never silently skip. A burn anchor with no
         // promotable dv (e.g. a corridor/arrival edge, see v2BuildShadow) is
         // surfaced as an unaccounted row (dv_ms: null) instead of vanishing
         // from the readout — v2Reconcile flags it as NOT within margin.
         perBurn.push({ authIdx: a.authIdx, ownerKey: k, dv_ms: null, prop_kg: null, note: a.note });
         return;
       }
-      const dv_ms = (typeof physMag === 'function' ? physMag(a.dvApplied) : Math.hypot(a.dvApplied[0], a.dvApplied[1], a.dvApplied[2])) * 1000;
+      const dv_ms = physMag(a.dvApplied) * 1000;
       const stages = a.mass.perStage || [];
       const wet = stages.reduce(function (s, st) { return s + st.dry + st.prop; }, 0);
       const burning = stages.filter(function (st) { return st.isp > 0; }).sort(function (x, y) { return y.prop - x.prop; })[0];
@@ -312,7 +310,7 @@ function v2DeriveBudget(missionId) {
  *  MNODE alike) and compares totals against missionBudget(m). D6 margins:
  *  per-burn max(1%, 5 m/s); totals 1%. */
 function v2Reconcile(missionId) {
-  const m = (typeof _missionGet === 'function') ? _missionGet(missionId) : null; // 570-mission-lifecycle.js
+  const m = _missionGet(missionId); // 570-mission-lifecycle.js
   const budget = v2DeriveBudget(missionId);
   const rows = [];
   if (m) {
@@ -320,7 +318,7 @@ function v2Reconcile(missionId) {
       const auth = m.log[b.authIdx];
       const v1_dv = auth ? (auth.dv_actual || 0) : 0;
       if (b.dv_ms == null) {
-        // §10.3: unaccounted finding (no promotable leg dv) — never silently
+        // unaccounted finding (no promotable leg dv) — never silently
         // dropped; always reported as outside margin so it can't hide inside
         // an "allWithin: true" result.
         rows.push({ authIdx: b.authIdx, v1_dv: v1_dv, v2_dv: null, delta: null, withinMargin: false, note: b.note });

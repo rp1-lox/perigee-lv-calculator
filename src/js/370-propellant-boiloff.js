@@ -1,6 +1,5 @@
 
 // ─── PROGRAM MODULE — Phase 2: Propellant & Boiloff ────────────────────────────
-//
 // Structs: Tank, LiveStage.
 // Boiloff runs only during COAST events (Rule 4); not during burns, docking, or assembly.
 
@@ -107,8 +106,3 @@ function progStageTotalCapacity(liveStage) {
   return liveStage.tanks.reduce((sum, t) => sum + t.capacity, 0);
 }
 
-/** Propellant load fraction for a stage (0 = empty, 1 = full). */
-function progStageFillFraction(liveStage) {
-  const cap = progStageTotalCapacity(liveStage);
-  return cap > 0 ? progStageRemainingProp(liveStage) / cap : 0;
-}

@@ -1,18 +1,7 @@
-// ──────────────────────────────────────────────────────────────────────────────────
-// 5745-maneuver-gizmo-hover.js — Hover-ball + placement-menu subsystem (rings & legs)
-//
-// OWNS: the KSP-style hover ghost-ball and node-placement menu shared by orbit
-//   rings and physics legs — rail nearest-point + ring/leg hover rails
-//   (_trajRingHoverRail, _trajLegHoverRail, _trajRailNearestPoint, _trajGizmoOrbitNodeAt),
-//   the hover ghost-ball paint/move/leave state (_trajRingHover*, _trajLegHoverMove),
-//   the placement menu (_trajRingMenu*, _trajRingMenuPlaceNode, _trajRingMenuUseAddEvent,
-//   _missionPendingEventMet — the MET handed to "Use time in Add Event"), and the
-//   ring/leg click entry points (_trajRingClick, _trajLegClick).
-// Does NOT own: the gizmo overlay/handles/drag (residual core + -drag module) or the
-//   pure math (-math module).
-// Split out of 5745-maneuver-gizmo.js (behavior-preserving move). Definitions/decls
-//   only (no load-time execution); load order among 5745* def-only modules is irrelevant.
-// ────────────────────────────────────────────────────────────────────────────
+// ─── MANEUVER GIZMO — hover ball + placement menu (rings & legs) ───────────
+// Rail nearest-point and ring/leg hover rails, the hover ghost-ball state, the
+// placement menu (_trajRingMenu*, _trajRingMenuPlaceNode,
+// _trajRingMenuUseAddEvent), and the ring/leg click entry points.
 
 // ── R6.1.2: KSP-style hover ball + placement menu on ring hit paths ────────
 // Reuses the exact rail math the center-knob drag already validated (mean-
@@ -30,7 +19,7 @@ function _trajGizmoOrbitNodeAt(o, met) {
   if (!(rMean > 0)) return null;
   const nMean = Math.sqrt(mu / (rMean * rMean * rMean));
   const theta = (nMean * met) % (2 * Math.PI);
-  // §20/C1 seam (2026-07-17, user: gizmo "not on a real orbit... covered up
+  // C1 seam (user: gizmo "not on a real orbit... covered up
   // by the Earth"): authored inc/lan are EQUATOR-referenced; physAimBurnState
   // wants world-frame. Routed through the ONE C1 boundary (orbitWorldState,
   // 385) — the single source for the gizmo node, center-knob rail, and hover
@@ -43,8 +32,7 @@ function _trajGizmoOrbitNodeAt(o, met) {
 
 /** Nearest point (full {x,y,met}) in a screen-space rail — the shared
  *  distance metric behind both the center-knob drag snap and ring hover.
- *  _trajGizmoNearestScreenMet (above) is now a thin wrapper over this so
- *  there is exactly one "nearest sample" implementation. */
+ */
 function _trajRailNearestPoint(pts, x, y) {
   if (!pts || !pts.length) return null;
   let best = Infinity, bestPt = pts[0];
@@ -62,10 +50,10 @@ function _trajRailNearestPoint(pts, x, y) {
  *  independent of any active gizmo. Mirrors _trajGizmoCenterDown's ringPts
  *  precompute 1:1 so hover/click-menu/drag all agree on the same rail. */
 function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect) {
-  const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[missionId] : null;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
+  const cam = _trajCamByMission[missionId];
+  const m = _missionGet(missionId);
   if (!cam || !m || !rect || !(rect.width > 0)) return null;
-  // lanDeg threaded from rec.lan (2026-07-18): the rail used to hardcode
+  // lanDeg threaded from rec.lan: the rail used to hardcode
   // lan:0, putting the hover ball / placement menu / drag rail on a DIFFERENT
   // plane than any plane-matched ring (user-reported "node on a different
   // place from the orbit"). Same eq-authored convention as the ring itself;
@@ -84,7 +72,7 @@ function _trajRingHoverRail(missionId, body, periKm, apoKm, incDeg, lanDeg, rect
     const met = (k / N) * period;
     const node = _trajGizmoOrbitNodeAt(o, met);
     if (!node) continue;
-    const bodyWorld = progBodyWorldPosCalibrated(node.body, vt, {});
+    const bodyWorld = progBodyWorldPos(node.body, vt);
     if (!bodyWorld) continue;
     const w = { x: bodyWorld.x + node.r[0], y: bodyWorld.y + node.r[1], z: (bodyWorld.z || 0) + (node.r[2] || 0) };
     const p = _trajProj3(w.x - camCenterKm.x, w.y - camCenterKm.y, w.z - (camCenterKm.z || 0));
@@ -118,7 +106,7 @@ function _trajRingHoverPaint(missionId) {
 /** Wired from the ring hit path's onmousemove. Throttled ~30ms; no-op while
  *  a gizmo drag/menu owns the pointer so the two affordances never fight. */
 function _trajRingHoverMove(evt, missionId, body, periKm, apoKm, incDeg, lanDeg, color) {
-  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
+  if (_trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
   const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
   if (now - _trajRingHoverLastMs < 30) return;
   _trajRingHoverLastMs = now;
@@ -226,14 +214,12 @@ function _trajRingMenuUseAddEvent() {
  *  capture-phase _trajGizmoDocClick listener already closed it by the time
  *  this (bubble-phase inline onclick) fires, so the menu opens cleanly. */
 function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg, lanDeg) {
-  const dragged = (typeof _trajJustDragged !== 'undefined') ? _trajJustDragged : false;
+  const dragged = _trajJustDragged;
   _trajJustDragged = false;
   if (dragged) return;
-  if (typeof missionSelectEvent === 'function') missionSelectEvent(id, authIdx);
-  if (typeof _trajGizmoOnEventSelected === 'function') {
-    const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === id);
-    _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
-  }
+  missionSelectEvent(id, authIdx);
+  const m = _missionGet(id);
+  _trajGizmoOnEventSelected(id, authIdx, m && m.log && m.log[authIdx]);
   evt.stopPropagation();
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
   const svgEl = va && va.querySelector('svg.traj-svg');
@@ -267,9 +253,9 @@ function _trajRingClick(id, authIdx, evt, body, periKm, apoKm, incDeg, lanDeg) {
 // (Projection is linear, so proj(bodyWorld(vt)+r−camCenter) ≡ the renderer's
 // anchorOf(frame) + proj(r)·zoom — the rail lands exactly on the drawn path.)
 function _trajLegHoverRail(missionId, authIdx, rect) {
-  const cam = (typeof _trajCamByMission !== 'undefined') ? _trajCamByMission[missionId] : null;
-  const m = (typeof _missions !== 'undefined' ? _missions : []).find(x => x.missionId === missionId);
-  const L = (typeof physMissionLeg === 'function') ? physMissionLeg(missionId, authIdx) : null;
+  const cam = _trajCamByMission[missionId];
+  const m = _missionGet(missionId);
+  const L = physMissionLeg(missionId, authIdx);
   if (!cam || !m || !L || !L.samples || !L.samples.length || !rect || !(rect.width > 0)) return null;
   const vt = _trajViewTime(m);
   const zoom = _trajZoomFromCam(cam);
@@ -279,7 +265,7 @@ function _trajLegHoverRail(missionId, authIdx, rect) {
   const pts = [];
   for (const s of L.samples) {
     let bw = anchorCache[s.frame];
-    if (bw === undefined) bw = anchorCache[s.frame] = (progBodyWorldPosCalibrated(s.frame, vt, {}) || null);
+    if (bw === undefined) bw = anchorCache[s.frame] = (progBodyWorldPos(s.frame, vt) || null);
     if (!bw) continue;
     const p = _trajProj3(bw.x + s.r[0] - camCenterKm.x, bw.y + s.r[1] - camCenterKm.y,
       (bw.z || 0) + (s.r[2] || 0) - (camCenterKm.z || 0));
@@ -293,7 +279,7 @@ function _trajLegHoverRail(missionId, authIdx, rect) {
  *  ~30ms throttle + gizmo-drag no-op as the ring version; shares
  *  _trajRingHover/_trajRingHoverPaint/_trajRingHoverLeave wholesale. */
 function _trajLegHoverMove(evt, missionId, authIdx, color) {
-  if (typeof _trajGizmo !== 'undefined' && _trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
+  if (_trajGizmo && (_trajGizmo.drag || _trajGizmo.centerDrag)) return;
   const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
   if (now - _trajRingHoverLastMs < 30) return;
   _trajRingHoverLastMs = now;
@@ -322,7 +308,7 @@ function _trajLegClick(id, authIdx, evt) {
   // Same drag guard the ring/glyph clicks use — a camera rotate ends with a
   // click too; consume the flag and bail (we no longer call
   // _trajSelectEventFromView, which used to reset it as a side effect).
-  if (typeof _trajJustDragged !== 'undefined' && _trajJustDragged) { _trajJustDragged = false; return; }
+  if (_trajJustDragged) { _trajJustDragged = false; return; }
   evt.stopPropagation();
   const va = document.querySelector(`.mcc-view-area .traj-wrap[data-mid="${id}"]`);
   const svgEl = va && va.querySelector('svg.traj-svg');

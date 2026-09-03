@@ -1,14 +1,10 @@
 
-// ─── PROGRAM MODULE — Phase 6: Pork Chop Plotter ─────────────────────────────
-//
+// ─── PORK CHOP PLOTTER ───────────────────────────────────────────────────────
 // Lambert solver → C3 departure grid → canvas heatmap → click-to-select window.
-// Selected window sets PROG_ACTIVE_PROGRAM.launchWindow which drives COAST duration.
-//
-// Planet model (R1, 2026-07-09): REAL ephemeris (progBodyEphemState, 360),
-// PROJECTED TO THE ECLIPTIC PLANE (z dropped) because progLambert2D is 2D —
-// a small error for the planets plotted (i ≤ 7°; Mars 1.85°, Venus 3.39°),
-// critiqued in MATH.md. dep_day = days since the PROGRAM EPOCH
-// (PROG_ACTIVE_PROGRAM.epochJD) — departure days are now REAL dates.
+// The selected window sets PROG_ACTIVE_PROGRAM.launchWindow, which drives COAST
+// duration. Planets use the real ephemeris (progBodyEphemState, 360) projected
+// to the ecliptic plane because progLambert2D is 2D (small error for i ≤ 7°).
+// dep_day = days since the program epoch (PROG_ACTIVE_PROGRAM.epochJD).
 
 const PROG_PORK_MU = 1.32712440018e11;   // km³/s² — Sun
 
@@ -18,7 +14,7 @@ const PROG_PORK_MU = 1.32712440018e11;   // km³/s² — Sun
 
 // ── Lambert solver (universal variable method, bisection) ─────────────────────
 // Algorithm: Universal Variable Method, bisection on ψ.
-// Source: Curtis, H. (2013). Orbital Mechanics for Engineering Students, §5.3.
+// Source: Curtis, H. (2013). Orbital Mechanics for Engineering Students,
 //         Butterworth-Heinemann. The same algorithm is used in
 //         EGPAerospace/LambertCalculator (MIT) and is the textbook foundation
 //         for Gooding (1990) and Izzo (2015).
@@ -159,7 +155,7 @@ const PROG_PORK_DESTINATIONS = ['Mars', 'Venus'];
 // ---- Canvas rendering -------------------------------------------------------
 
 /** Map C3 to a CSS colour string (blue=low, red=high, black=Infinity).
- *  Fixed perceptual ramp used as DATA (theming exemption -- see CLAUDE.md
+ *  Fixed perceptual ramp used as DATA (theming exemption --
  *  Theming rules: series/heatmap palettes are exempt chrome-vs-data). */
 function progPorkC3Color(c3, c3_min, c3_max) {
   if (!isFinite(c3)) return '#000000';
@@ -263,7 +259,7 @@ let _porkUI = { missionId: null, evtIdx: null, destination: null, pending: null 
 /** True when a maneuver's To-node is a porkchop-supported interplanetary leg.
  *  Returns the destination name ('Mars'/'Venus') or null. */
 function progPorkDestinationForNode(toNodeId) {
-  const node = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(toNodeId) : null;
+  const node = _missionNmNodeById(toNodeId);
   const o = node && node.orbit;
   if (!o || o.type !== 'transit' || o.body !== 'Sun' || !o.destination) return null;
   return PROG_PORK_DESTINATIONS.indexOf(o.destination) >= 0 ? o.destination : null;
@@ -369,9 +365,9 @@ function progPorkApplySelection() {
     progPorkSetWindow(pend.destination, pend.dep_day, pend.tof_days, pend.c3);
   }
   progPorkCloseModal();
-  const m = (typeof _missionGet === 'function' && _porkUI.missionId) ? _missionGet(_porkUI.missionId) : null;
-  if (m && typeof missionRecompute === 'function') missionRecompute(m);
-  if (typeof missionRenderDetail === 'function') missionRenderDetail();
+  const m = (_porkUI.missionId) ? _missionGet(_porkUI.missionId) : null;
+  if (m) missionRecompute(m);
+  missionRenderDetail();
 }
 
 /** Small chip HTML for a maneuver card showing the active window (or default).
@@ -390,7 +386,7 @@ function progPorkChipHTML(missionId, evtIdx, toNodeId) {
  *  tooltip for non-porkchop destinations (per-spec: Mars/Venus supported). */
 function progPorkButtonHTML(missionId, evtIdx, toNodeId) {
   const dest = progPorkDestinationForNode(toNodeId);
-  const node = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(toNodeId) : null;
+  const node = _missionNmNodeById(toNodeId);
   const isTransit = node && node.orbit && node.orbit.type === 'transit' && node.orbit.body === 'Sun';
   if (!isTransit) return '';
   if (!dest) {

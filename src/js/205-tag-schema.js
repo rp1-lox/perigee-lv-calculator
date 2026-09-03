@@ -1,15 +1,10 @@
 
 // ─── LIBRARY TAG SCHEMA ───────────────────────
-// Single source of truth for the 4 structured browse dimensions used by the
-// redesigned Vehicles-page library (see 220-library-browser.js).
+// The four browse dimensions used by the library browser (221):
 //   era · origin · prop · cls   (cls vocab differs vehicle vs stage)
-// LENIENT by design: nothing is forced. Values are resolved from any explicit
-// structured field (lib_era / lib_origin / lib_prop / lib_cls) first, then by
-// parsing the item's existing flat tags[] against the controlled vocab below
-// (which intentionally REUSES the legacy FILTER_TREE / VEHICLE_FILTER_TREE
-// strings so no data rewrite is needed), and finally falls back to 'Unspecified'.
-// All dimensions resolve to an ARRAY of values (an item can be e.g. both 1990s
-// and 2000s) — facet matching is includes() semantics.
+// Lenient: values come from explicit lib_* fields first, then from parsing the
+// item's flat tags[] against the vocab below, else 'Unspecified'. Every
+// dimension resolves to an array (an item can be both 1990s and 2000s).
 
 const LIB_DIMS = ['era','origin','prop','cls'];
 const LIB_DIMLBL = {era:'Era', origin:'Origin', prop:'Propellant', cls:'Class'};
@@ -59,10 +54,6 @@ function libResolveTags(item, dim, mode){
   });
 }
 
-// All four dims for an item at once → {era:[],origin:[],prop:[],cls:[]}
-function libItemTags(item, mode){
-  const o={}; LIB_DIMS.forEach(d=>o[d]=libResolveTags(item,d,mode)); return o;
-}
 
 // ── Phase 1 verification: how cleanly do the built-ins resolve? ──
 // Call libTagCoverageReport() from the console; logs Unspecified counts per dim

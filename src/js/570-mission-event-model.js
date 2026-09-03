@@ -28,7 +28,7 @@ function _missionNaturalDurationUnit(sec) {
 function _missionSecondsToUnitValue(sec, unit) { return sec == null ? 0 : +(sec / (_MISSION_DURATION_UNITS[unit] || 1)).toFixed(4); }
 
 // ── R6.2' Phase B — maneuver unification predicates ──────────────────────────
-// MISSION_MODEL_V2 Phase 2 S5 (D3): the legacy MANEUVER type is retired
+// Phase 2 S5 (D3): the legacy MANEUVER type is retired
 // outright — the version gate (see applyProgramObject/_applySessionObject)
 // refuses any mission blob that could carry one, so no live m.log entry can
 // ever have type 'MANEUVER' again. These predicates are simplified to the
@@ -54,7 +54,6 @@ function _evIsManualBurn(e) {
 // persisted beyond the transient card/node-map render. null if no leg (e.g.
 // propagation not yet run) or no propagable orbit at burn.
 function _missionMnodeSettleInfo(missionId, idx) {
-  if (typeof physMissionLeg !== 'function') return null;
   const leg = physMissionLeg(missionId, idx);
   return (leg && leg.settleInfo) || null;
 }
@@ -65,7 +64,7 @@ function _missionMnodeSettleLabel(missionId, idx) {
   if (!info) return null;
   if (info.kind === 'escape') return `escapes ${info.body} SOI`;
   if (info.kind === 'node') {
-    const n = (typeof _missionNmNodeById === 'function') ? _missionNmNodeById(info.nodeId) : null;
+    const n = _missionNmNodeById(info.nodeId);
     return n ? (n.sub ? `${n.label} (${n.sub})` : n.label) : info.nodeId;
   }
   if (info.kind === 'orbit') {
